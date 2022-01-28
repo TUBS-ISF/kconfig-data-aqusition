@@ -1,0 +1,108 @@
+"2007-02-13 16:41:51 -0500"
+diff --git a/Makefile b/Makefile
+index 97482ae1..2a33cf54 100644
+--- a/Makefile
++++ b/Makefile
+@@ -39,7 +39,7 @@ bloatcheck: toybox_old toybox_unstripped
+ 
+ # Get list of toys/*.c files from .config
+ 
+-toysfiles = $(shell sed -nre 's/^CONFIG_(.*)=y/\1/;t skip;b;:skip;s/_.*//;p' .config | sort -u | tr A-Z a-z | grep -v '^toybox$$' | sed -r 's@(.*)@toys/\1.c@')
++toysfiles = $(shell sed -nre 's/^CONFIG_(.*)=y/\1/;t skip;b;:skip;s/_.*//;p' .config | sort -u | tr A-Z a-z | grep -v '^toybox$$' | sed 's@\(.*\)@toys/\1.c@')
+ 
+ # Compile toybox from source
+ 
+diff --git a/lib/portability.h b/lib/portability.h
+index 9f3f1b78..6ed1dc4f 100644
+--- a/lib/portability.h
++++ b/lib/portability.h
+@@ -1,13 +1,30 @@
+-
+ // Humor glibc to get dprintf, then #define it to something more portable.
+ #define _GNU_SOURCE
+ #include <stdio.h>
+ #define fdprintf(...) dprintf(__VA_ARGS__)
+ 
++
++#ifndef __APPLE__
++#include <byteswap.h>
+ #include <endian.h>
+ 
+ #if __BYTE_ORDER == __BIG_ENDIAN
+ #define IS_BIG_ENDIAN 1
++#else
++#define IS_BIG_ENDIAN 0
++#endif
++
++#else
++
++#ifdef __BIG_ENDIAN__
++#define IS_BIG_ENDIAN 1
++#else
++#define IS_BIG_ENDIAN 0
++#endif
++
++#endif
++
++#if IS_BIG_ENDIAN
+ #define IS_LITTLE_ENDIAN 0
+ #define SWAP_BE16(x) (x)
+ #define SWAP_BE32(x) (x)
+@@ -17,7 +34,6 @@
+ #define SWAP_LE64(x) bswap_64(x)
+ #else
+ #define IS_LITTLE_ENDIAN 1
+-#define IS_BIG_ENDIAN 0
+ #define SWAP_BE16(x) bswap_16(x)
+ #define SWAP_BE32(x) bswap_32(x)
+ #define SWAP_BE64(x) bswap_64(x)
+diff --git a/toys/Config.in b/toys/Config.in
+index 64fa2a28..7768ec89 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -172,6 +172,20 @@ config PWD
+ 
+ 	  The print working directory command prints the current directory.
+ 
++config TOUCH
++	bool "touch"
++	default n
++	help
++	  usage: touch [-acmrt] FILE...
++
++	  Change file timestamps/length.  Create empty or sparse files.
++
++	  -a
++	  -c
++	  -m
++	  -r
++	  -t
++
+ config TOYSH
+ 	bool "sh (toysh)"
+ 	default n
+diff --git a/toys/toylist.h b/toys/toylist.h
+index ae2ff2c5..c2fff141 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -31,6 +31,12 @@ struct mke2fs_data {
+ 	struct dirtree *dt;
+ };
+ 
++struct touch_data {
++	char *ref_file;
++	char *time;
++	long length;
++};
++
+ // "E:jJ:L:m:O:"
+ #define MKE2FS_OPTSTRING "<1>2Fnqm#N#i#b#"
+ 
+@@ -75,6 +81,7 @@ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))
+ USE_ONEIT(NEWTOY(oneit, "+p<1", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
+ USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
++USE_TOUCH(NEWTOY(touch, "l#t:r:mca", TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(toysh, "c:i", TOYFLAG_BIN))
+ USE_WHICH(NEWTOY(which, "a", TOYFLAG_USR|TOYFLAG_BIN))
+ USE_YES(NEWTOY(yes, "", TOYFLAG_USR|TOYFLAG_BIN))

@@ -1,0 +1,248 @@
+"2005-12-13 08:21:33 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 79d18207e..47376c624 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -414,6 +414,9 @@
+ #ifdef CONFIG_MD5SUM
+ 	APPLET(md5sum, md5sum_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_MDEV
++	APPLET(mdev, mdev_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_MESG
+ 	APPLET(mesg, mesg_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index e595bd9d9..12c45b45f 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1841,6 +1841,26 @@
+ 	"busybox: OK\n" \
+ 	"^D\n"
+ 
++#define mdev_trivial_usage \
++	"[-s]"
++#define mdev_full_usage \
++	"\ts\tScan /sys and populate /dev during system boot\n\n" \
++	"Called with no options (via hotplug) it uses environment variables\n" \
++	"to determine which device to add/remove."
++#ifdef CONFIG_FEATURE_MDEV_CONFIG
++#define mdev_notes_usage \
++	"The mdev config file contains lines that look like:\n" \
++        "  hd[a-z][0-9]* 0:3 660\n\n" \
++        "That's device name (with regex match), uid:gid, and permissions.\n\n" \
++	"Optionally, that can be followed (on the same line) by an asterisk\n" \
++	"and a command line to run after creating the corresponding device(s),\n"\
++	"ala:\n\n" \
++	"  hdc root:cdrom 660  *ln -s hdc cdrom\n\n" \
++	"Config file parsing stops on the first matching line.  If no config\n"\
++	"entry is matched, devices are created with default 0:0 660.  (Make\n"\
++	"the last line match .* to override this.)\n\n"
++#endif
++
+ #define mesg_trivial_usage \
+ 	"[y|n]"
+ #define mesg_full_usage \
+@@ -2822,10 +2842,12 @@
+ 	"\t-a\tStart swapping on all swap devices"
+ 
+ #define switch_root_trivial_usage \
+-	"NEW_ROOT NEW_INIT [ARGUMENTS_TO_INIT]"
++	"[-c /dev/console] NEW_ROOT NEW_INIT [ARGUMENTS_TO_INIT]"
+ #define switch_root_full_usage \
+ 	"Use from PID 1 under initramfs to free initramfs, chroot to NEW_ROOT,\n" \
+-	"and exec NEW_INIT.\n"
++	"and exec NEW_INIT.\n\n" \
++	"Options:\n" \
++	"\t-c\tRedirect console to device on new root"
+ 
+ #define sync_trivial_usage \
+ 	""
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index fe71dac2c..5ab54e038 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -245,6 +245,36 @@ config CONFIG_LOSETUP
+ 	  file or block device, and to query the status of a loop device.  This
+ 	  version does not currently support enabling data encryption.
+ 
++config CONFIG_MDEV
++	bool "mdev"
++	default n
++	help
++	  mdev is a mini-udev implementation: call it with -s to populate
++	  /dev from /sys, then "echo /sbin/mdev > /sys/kernel/hotplug" to
++	  have it handle hotplug events afterwards.  Device names are taken
++	  from sysfs.
++
++config CONFIG_FEATURE_MDEV_CONFIG
++	bool "  Support /etc/mdev.conf"
++	default n
++	depends on CONFIG_MDEV
++	help
++	  The mdev config file contains lines that look like:
++
++	    hd[a-z][0-9]* 0:3 660
++
++	  That's device name (with regex match), uid:gid, and permissions.
++
++	  Optionally, that can be followed (on the same line) by an asterisk
++	  and a command line to run after creating the corresponding device(s),
++	  ala:
++
++	    hdc root:cdrom 660  *ln -s hdc cdrom
++
++	  Config file parsing stops on the first matching line.  If no config
++	  entry is matched, devices are created with default 0:0 660.  (Make
++	  the last line match .* to override this.)
++
+ config CONFIG_MKSWAP
+ 	bool "mkswap"
+ 	default n
+diff --git a/util-linux/Makefile.in b/util-linux/Makefile.in
+index f6fdba96a..782870cdb 100644
+--- a/util-linux/Makefile.in
++++ b/util-linux/Makefile.in
+@@ -24,12 +24,14 @@ UTILLINUX-$(CONFIG_HWCLOCK)       +=hwclock.o
+ UTILLINUX-$(CONFIG_IPCRM)         +=ipcrm.o
+ UTILLINUX-$(CONFIG_IPCS)          +=ipcs.o
+ UTILLINUX-$(CONFIG_LOSETUP)       +=losetup.o
++UTILLINUX-$(CONFIG_MDEV)          +=mdev.o
+ UTILLINUX-$(CONFIG_MKFS_MINIX)    +=mkfs_minix.o
+ UTILLINUX-$(CONFIG_MKSWAP)        +=mkswap.o
+ UTILLINUX-$(CONFIG_MORE)          +=more.o
+ UTILLINUX-$(CONFIG_MOUNT)         +=mount.o
+ UTILLINUX-$(CONFIG_FEATURE_MOUNT_NFS)	+=nfsmount.o
+ UTILLINUX-$(CONFIG_PIVOT_ROOT)    +=pivot_root.o
++UTILLINUX-$(CONFIG_SWITCH_ROOT)   +=switch_root.o
+ UTILLINUX-$(CONFIG_RDATE)         +=rdate.o
+ UTILLINUX-$(CONFIG_READPROFILE)   +=readprofile.o
+ UTILLINUX-$(CONFIG_SWAPONOFF)     +=swaponoff.o
+diff --git a/util-linux/mdev.c b/util-linux/mdev.c
+new file mode 100644
+index 000000000..49904d17a
+--- /dev/null
++++ b/util-linux/mdev.c
+@@ -0,0 +1,121 @@
++/* vi:set ts=4:
++ * 
++ * mdev - Mini udev for busybox
++ * 
++ * Copyright 2005 Rob Landley <rob@landley.net>
++ * Copyright 2005 Frank Sorenson <frank@tuxrocks.com>
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#define DEV_PATH	"/dev"
++#define DEV_MODE	0660
++
++#include <busybox.h>
++
++/* mknod in /dev based on a path like "/sys/block/hda/hda1" */
++void make_device(char *path)
++{
++	char *device_name, *s;
++	int major,minor,type,len,fd;
++
++	RESERVE_CONFIG_BUFFER(temp,PATH_MAX);
++
++	/* Try to read major/minor string */
++	
++	snprintf(temp, PATH_MAX, "%s/dev", path);
++	fd = open(temp, O_RDONLY);
++	len = read(fd, temp, PATH_MAX-1);
++	if (len<1) goto end;
++	temp[len] = 0;
++	close(fd);
++	
++	/* Determine device name, type, major and minor */
++	
++	device_name = strrchr(path, '/') + 1;
++	type = strncmp(path+5, "block/" ,6) ? S_IFCHR : S_IFBLK;
++	major = minor = 0;
++	for(s = temp; *s; s++) {
++		if(*s == ':') {
++			major = minor;
++			minor = 0;
++		} else {
++			minor *= 10;
++			minor += (*s) - '0';
++		}
++	}
++
++/* Open config file here, look up permissions */	
++
++	sprintf(temp, "%s/%s", DEV_PATH, device_name);
++	if(mknod(temp, DEV_MODE | type, makedev(major, minor)) && errno != EEXIST)
++		bb_perror_msg_and_die("mknod %s failed", temp);
++	
++/* Perform shellout here */
++
++end:
++	RELEASE_CONFIG_BUFFER(temp);
++}
++
++/* Recursive search of /sys/block or /sys/class.  path must be a writeable
++ * buffer of size PATH_MAX containing the directory string to start at. */
++
++void find_dev(char *path)
++{
++	DIR *dir;
++	int len=strlen(path);
++
++	if(!(dir = opendir(path)))
++		bb_perror_msg_and_die("No %s",path);
++
++	for(;;) {
++		struct dirent *entry = readdir(dir);
++		
++		if(!entry) break;
++
++		/* Skip "." and ".." (also skips hidden files, which is ok) */
++
++		if (entry->d_name[0]=='.') continue;
++
++		if (entry->d_type == DT_DIR) {
++			snprintf(path+len, PATH_MAX-len, "/%s", entry->d_name);
++			find_dev(path);
++			path[len] = 0;
++		}
++		
++		/* If there's a dev entry, mknod it */
++		
++		if (strcmp(entry->d_name, "dev")) make_device(path);
++	}
++	
++	closedir(dir);
++}
++
++int mdev_main(int argc, char *argv[])
++{
++	if (argc > 1) {
++		if(argc == 2 && !strcmp(argv[1],"-s")) {
++			RESERVE_CONFIG_BUFFER(temp,PATH_MAX);
++			strcpy(temp,"/sys/block");
++			find_dev(temp);
++			strcpy(temp,"/sys/class");
++			find_dev(temp);
++			if(ENABLE_FEATURE_CLEAN_UP)
++				RELEASE_CONFIG_BUFFER(temp);
++			return 0;
++		} else bb_show_usage();
++	} 
++	
++/* hotplug support goes here */
++	
++	return 0;
++}

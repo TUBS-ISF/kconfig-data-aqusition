@@ -1,0 +1,145 @@
+"2002-11-20 10:41:04 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 99f60dfff..3b5fcf1f5 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -34,6 +34,21 @@ config BUILD_UCLIBC_LDSO
+ 	  be built for your target architecture.  If this option is available,
+ 	  to you, then you almost certainly want to answer Y.
+ 
++config FORCE_SHAREABLE_TEXT_SEGMENTS
++	bool "Only load shared libraries which can share their text segment"
++	depends on BUILD_UCLIBC_LDSO && UCLIBC_COMPLETELY_PIC
++	default n
++	help
++	  If you answer Y here, the uClibc native shared library loader will
++	  only load shared libraries, which do not need to modify any non-writable
++	  segments. These libraries haven't set the DT_TEXTREL tag in the dynamic
++	  section (==> objdump). So all your libraries must be compiled with
++	  -fPIC or -fpic, and all assembler function must be written as position
++	  independend code (PIC). 
++	  Enabling this option will makes uClibc's shared library loader a
++	  little bit smaller and guarantee that no memory will be wasted by badly
++	  coded shared libraries.
++
+ config LDSO_LDD_SUPPORT
+ 	bool "Native shared library loader 'ldd' support"
+ 	depends on BUILD_UCLIBC_LDSO
+diff --git a/extra/Configs/Config.sh b/extra/Configs/Config.sh
+index 4bc77625b..45aed28f5 100644
+--- a/extra/Configs/Config.sh
++++ b/extra/Configs/Config.sh
+@@ -24,6 +24,10 @@ config HAVE_DOT_HIDDEN
+         bool
+ 	default y
+ 
++config UCLIBC_COMPLETELY_PIC
++        bool
++	default y
++
+ choice
+ 	prompt "Target Processor Type"
+ 	default CONFIG_SH4
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index 53c3c6385..13063616f 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -55,6 +55,9 @@ ifeq ($(strip $(SUPPORT_LD_DEBUG_EARLY)),y)
+ XXFLAGS+=-D__SUPPORT_LD_DEBUG_EARLY__
+ endif
+ 
++ifeq ($(strip $(FORCE_SHAREABLE_TEXT_SEGMENTS)),y)
++XXFLAGS+=-DFORCE_SHAREABLE_TEXT_SEGMENTS
++endif
+ 
+ all: lib
+ 
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index b259da401..7a0e3fcef 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -573,7 +573,7 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 	   back again later. */
+ 
+ 	if (dynamic_info[DT_TEXTREL]) {
+-#ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
++#ifndef FORCE_SHAREABLE_TEXT_SEGMENTS
+ 		ppnt = (elf_phdr *)(intptr_t) & header[epnt->e_phoff];
+ 		for (i = 0; i < epnt->e_phnum; i++, ppnt++) {
+ 			if (ppnt->p_type == PT_LOAD && !(ppnt->p_flags & PF_W))
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index c83c5cbb2..01ec298c2 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -30,10 +30,6 @@
+  * SUCH DAMAGE.
+  */
+ 
+-/* Enable mprotect protection munging.  ARM and MIPS Linux needs this
+- * it seems, so leave this enabled by default */
+-#define FORCE_SHAREABLE_TEXT_SEGMENTS
+-
+ // Support a list of library preloads in /etc/ld.so.preload
+ //#define SUPPORT_LDSO_PRELOAD_FILE
+ 
+@@ -434,7 +430,7 @@ LD_BOOT(unsigned long args)
+ 					}
+ 					app_tpnt->dynamic_info[dpnt->d_tag] = dpnt->d_un.d_val;
+ 					if (dpnt->d_tag == DT_DEBUG)
+-#ifndef FORCE_SHAREABLE_TEXT_SEGMENTS
++#ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
+ 						dpnt->d_un.d_val = (unsigned long) debug_addr;
+ #else
+ 						dpnt_debug = dpnt;
+@@ -455,7 +451,7 @@ LD_BOOT(unsigned long args)
+ 	tpnt->elf_buckets = hash_addr;
+ 	hash_addr += tpnt->nbucket;
+ 
+-#ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
++#ifndef FORCE_SHAREABLE_TEXT_SEGMENTS
+ 	/* Ugly, ugly.  We need to call mprotect to change the protection of
+ 	   the text pages so that we can do the dynamic linking.  We can set the
+ 	   protection back again once we are done */
+@@ -1186,7 +1182,7 @@ static void _dl_get_ready_to_run(struct elf_resolve *tpnt, struct elf_resolve *a
+ 		*_dl_envp = (unsigned long) envp;
+ 	}
+ 
+-#ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
++#ifndef FORCE_SHAREABLE_TEXT_SEGMENTS
+ 	{
+ 		unsigned int j;
+ 		elf_phdr *myppnt;
+diff --git a/ldso/ldso/linuxelf.h b/ldso/ldso/linuxelf.h
+index 5a6e8b85f..26d3937c4 100644
+--- a/ldso/ldso/linuxelf.h
++++ b/ldso/ldso/linuxelf.h
+@@ -31,7 +31,15 @@ extern int _dl_linux_resolve(void);
+ 
+ 
+ #ifndef SVR4_BUGCOMPAT
+-#define SVR4_BUGCOMPAT 1
++# ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
++#  define SVR4_BUGCOMPAT 0
++# else
++#  define SVR4_BUGCOMPAT 1
++# endif
++#else
++# ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
++#  error option SVR4_BUGCOMPAT combined with option FORCE_SHAREABLE_TEXT_SEGMENTS makes no sense
++# endif
+ #endif
+ 
+ #if ELF_CLASS == ELFCLASS32
+diff --git a/ldso/ldso/readelflib1.c b/ldso/ldso/readelflib1.c
+index b259da401..7a0e3fcef 100644
+--- a/ldso/ldso/readelflib1.c
++++ b/ldso/ldso/readelflib1.c
+@@ -573,7 +573,7 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 	   back again later. */
+ 
+ 	if (dynamic_info[DT_TEXTREL]) {
+-#ifdef FORCE_SHAREABLE_TEXT_SEGMENTS
++#ifndef FORCE_SHAREABLE_TEXT_SEGMENTS
+ 		ppnt = (elf_phdr *)(intptr_t) & header[epnt->e_phoff];
+ 		for (i = 0; i < epnt->e_phnum; i++, ppnt++) {
+ 			if (ppnt->p_type == PT_LOAD && !(ppnt->p_flags & PF_W))

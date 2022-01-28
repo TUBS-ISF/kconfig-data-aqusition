@@ -1,0 +1,166 @@
+"2006-06-07 15:44:59 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index d020c5f89..c9d5ac162 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -262,6 +262,7 @@ USE_BB_SYSCTL(APPLET(sysctl, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_SYSLOGD(APPLET(syslogd, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_TAIL(APPLET(tail, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TAR(APPLET(tar, _BB_DIR_BIN, _BB_SUID_NEVER))
++USE_TASKSET(APPLET(taskset, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TEE(APPLET(tee, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TELNET(APPLET(telnet, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TELNETD(APPLET(telnetd, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 239bbb373..9bdfb3fe0 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2955,6 +2955,23 @@ USE_FEATURE_DATE_ISOFMT( \
+ 	"$ zcat /tmp/tarball.tar.gz | tar -xf -\n" \
+ 	"$ tar -cf /tmp/tarball.tar /usr/local\n"
+ 
++#define taskset_trivial_usage \
++	"[OPTIONS] [mask] [pid | command [arg]...]"
++#define taskset_full_usage \
++	"Set or get CPU affinity.\n\n" \
++	"Options:\n" \
++	"\t-p\toperate on an existing PID"
++#define taskset_example_usage \
++	"$ taskset 0x7 ./dgemm_test&\n" \
++	"$ taskset -p 0x1 $!\n" \
++	"pid 4790's current affinity mask: 7\n" \
++	"pid 4790's new affinity mask: 1\n" \
++	"$ taskset 0x7 /bin/sh -c './taskset -p 0x1 $$'\n" \
++	"pid 6671's current affinity mask: 1\n" \
++	"pid 6671's new affinity mask: 1\n" \
++	"$ taskset -p 1\n"
++	"pid 1's current affinity mask: 3\n"
++
+ #define tee_trivial_usage \
+ 	"[OPTION]... [FILE]..."
+ #define tee_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index fc90b5447..37c1de8b9 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -291,6 +291,12 @@ config CONFIG_SETSID
+ 	help
+ 	  setsid runs a program in a new session
+ 
++config CONFIG_TASKSET
++	bool "taskset"
++	default n
++	help
++	  Retrieve or set a processes's CPU affinity (on linux)
++
+ config CONFIG_TIME
+ 	bool "time"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index a0b6b7233..d60d687b0 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -28,6 +28,7 @@ MISCUTILS-$(CONFIG_RUNLEVEL)    += runlevel.o
+ MISCUTILS-$(CONFIG_RX)          += rx.o
+ MISCUTILS-$(CONFIG_SETSID)      += setsid.o
+ MISCUTILS-$(CONFIG_STRINGS)     += strings.o
++MISCUTILS-$(CONFIG_TASKSET)     += taskset.o
+ MISCUTILS-$(CONFIG_TIME)        += time.o
+ MISCUTILS-$(CONFIG_WATCHDOG)    += watchdog.o
+ 
+diff --git a/miscutils/taskset.c b/miscutils/taskset.c
+new file mode 100644
+index 000000000..a72f3ff53
+--- /dev/null
++++ b/miscutils/taskset.c
+@@ -0,0 +1,67 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * taskset - retrieve or set a processes's CPU affinity
++ * Copyright (c) 2006 Bernhard Fischer
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++
++#include "busybox.h"
++#include <sched.h>
++#include <unistd.h>
++#include <getopt.h> /* optind */
++
++int taskset_main(int argc, char** argv)
++{
++	cpu_set_t mask, new_mask;
++	pid_t pid = 0;
++	unsigned long ul;
++	const char *state = "current\0new";
++	char *p_opt = NULL, *aff = NULL;
++
++	ul = bb_getopt_ulflags(argc, argv, "+p:", &p_opt);
++#define TASKSET_OPT_p (1)
++
++	if (ul & TASKSET_OPT_p) {
++		if (argc == optind+1) { /* -p <aff> <pid> */
++			aff = p_opt;
++			p_opt = argv[optind];
++		}
++		argv += optind; /* me -p <arg> */
++		pid = bb_xgetularg10_bnd(p_opt, 1, ULONG_MAX); /* -p <pid> */
++	} else
++		aff = *++argv; /* <aff> <cmd...> */
++	if (aff) {
++/*		to_cpuset(bb_xgetularg_bnd(aff, 16, 1, ULONG_MAX), &new_mask); */
++		unsigned i = 0;
++		unsigned long l = bb_xgetularg_bnd(aff, 16, 1, ULONG_MAX);
++
++		CPU_ZERO(&new_mask);
++		while (i < CPU_SETSIZE && l >= (1<<i)) {
++			if ((1<<i) & l)
++				CPU_SET(i, &new_mask);
++			++i;
++		}
++	}
++
++	if (ul & TASKSET_OPT_p) {
++print_aff:
++		if (sched_getaffinity(pid, sizeof (mask), &mask) < 0)
++			bb_perror_msg_and_die("Failed to %cet pid %d's affinity", 'g', pid);
++		bb_printf("pid %d's %s affinity mask: %x\n", /* %x .. perhaps _FANCY */
++				pid, state, mask);
++		if (!*argv) /* no new affinity given or we did print already, done. */
++			return EXIT_SUCCESS;
++	}
++
++	if (sched_setaffinity(pid, sizeof (new_mask), &new_mask))
++		bb_perror_msg_and_die("Failed to %cet pid %d's affinity", 's', pid);
++	if (ul & TASKSET_OPT_p) {
++		state += 8;
++		++argv;
++		goto print_aff;
++	}
++	++argv;
++	execvp(*argv, argv);
++	bb_perror_msg_and_die("%s", *argv);
++}
+diff --git a/testsuite/taskset.tests b/testsuite/taskset.tests
+new file mode 100755
+index 000000000..6001c3e32
+--- /dev/null
++++ b/testsuite/taskset.tests
+@@ -0,0 +1,17 @@
++#!/bin/sh
++
++# Copyright 2006 Bernhard Fischer
++# Licensed under GPL v2 or later, see file LICENSE for details.
++
++. testing.sh
++a="taskset"
++
++# testing "test name"              "opts" "expected result" "file inp" "stdin"
++testing "taskset (get from pid 1)" "$a -p1 >/dev/null;echo \$?" "0\n" "" ""
++testing "taskset (invalid pid)"    "$a -p0 >/dev/null 2>&1;echo \$?" "1\n" "" ""
++testing "taskset (set_aff, needs CAP_SYS_NICE)" \
++                                   "$a 0x1 $SHELL -c $a\ -p\ \$$\|grep\ \"current\ affinity\ mask:\ 1\" >/dev/null;echo \$?" \
++				                                "0\n" "" ""
++
++unset a
++exit $FAILCOUNT

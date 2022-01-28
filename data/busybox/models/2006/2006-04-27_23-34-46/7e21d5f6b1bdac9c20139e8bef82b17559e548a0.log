@@ -1,0 +1,217 @@
+"2006-04-27 23:34:46 +0000"
+diff --git a/Config.in b/Config.in
+index b23ec2ce1..6dd4c58e7 100644
+--- a/Config.in
++++ b/Config.in
+@@ -56,6 +56,14 @@ config CONFIG_FEATURE_VERBOSE_USAGE
+ 	  busybox binary.  In the default configuration, this will add about
+ 	  13k, but it can add much more depending on your configuration.
+ 
++config CONFIG_FEATURE_COMPRESS_USAGE
++	bool "Store applet usage messages in compressed form"
++	default y
++	depends on CONFIG_SHOW_USAGE
++	help
++	  Store usage messages in compressed form, uncompress them on-the-fly
++	  when <applet> --help is called.
++
+ config CONFIG_FEATURE_INSTALLER
+ 	bool "Support --install [-s] to install applet links at runtime"
+ 	default n
+diff --git a/Makefile b/Makefile
+index bcf25fe6d..e8730bfd0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -405,6 +405,13 @@ include/bbconfigopts.h: .config
+ 	$(Q)$(top_srcdir)/scripts/config/mkconfigs > $@
+ endif
+ 
++scripts/usage: $(top_srcdir)/scripts/usage.c .config
++	$(HOSTCC) $(HOSTCFLAGS) -I$(top_srcdir)/include -o $@ $<
++
++DEP_INCLUDES += include/usage_compressed.h
++include/usage_compressed.h: .config scripts/usage
++	$(Q)sh $(top_srcdir)/scripts/usage_compressed "$(top_srcdir)/scripts" > $@
++
+ depend dep: .depend
+ .depend: scripts/bb_mkdep $(DEP_INCLUDES)
+ 	$(disp_gen)
+diff --git a/applets/applets.c b/applets/applets.c
+index 77e4fdbfe..387ddce84 100644
+--- a/applets/applets.c
++++ b/applets/applets.c
+@@ -32,24 +32,20 @@
+ #include <assert.h>
+ #include "busybox.h"
+ 
+-#if ENABLE_SHOW_USAGE
+-const char usage_messages[] =
+-
++#if ENABLE_SHOW_USAGE && !ENABLE_FEATURE_COMPRESS_USAGE
++static const char usage_messages[] =
+ #define MAKE_USAGE
+ #include "usage.h"
+-
+ #include "applets.h"
+-
+ ;
+-
+ #undef MAKE_USAGE
+ #endif /* ENABLE_SHOW_USAGE */
++
+ #undef APPLET
+ #undef APPLET_NOUSAGE
+ #undef PROTOTYPES
+ #include "applets.h"
+ 
+-
+ static struct BB_applet *applet_using;
+ 
+ /* The -1 arises because of the {0,NULL,0,-1} entry above. */
+@@ -405,27 +401,69 @@ static void check_suid (struct BB_applet *applet)
+ 
+ 
+ 
++#if ENABLE_FEATURE_COMPRESS_USAGE
+ 
++#include "usage_compressed.h"
++#include "unarchive.h"
+ 
+-void bb_show_usage (void)
++static const char *unpack_usage_messages(void)
+ {
+-#if ENABLE_SHOW_USAGE
+-  const char *format_string;
+-  const char *usage_string = usage_messages;
+-  int i;
+-
+-  for (i = applet_using - applets; i > 0;) {
+-	if (!*usage_string++) {
+-	  --i;
++	int input[2], output[2], pid;
++	char *buf;
++
++	if(pipe(input) < 0 || pipe(output) < 0)
++		exit(1);
++
++	pid = fork();
++	switch (pid) {
++	case -1: /* error */
++		exit(1);
++	case 0: /* child */
++		close(input[1]);
++		close(output[0]);
++		uncompressStream(input[0], output[1]);
++		exit(0);
+ 	}
+-  }
++	/* parent */
++
++	close(input[0]);
++	close(output[1]);
++	pid = fork();
++	switch (pid) {
++	case -1: /* error */
++		exit(1);
++	case 0: /* child */
++		bb_full_write(input[1], packed_usage, sizeof(packed_usage));
++		exit(0);
++	}
++	/* parent */
++	close(input[1]);
+ 
+-  format_string = "%s\n\nUsage: %s %s\n\n";
+-  if (*usage_string == '\b')
+-	format_string = "%s\n\nNo help available.\n\n";
+-  fprintf (stderr, format_string, bb_msg_full_version, applet_using->name,
+-		   usage_string);
+-#endif /* ENABLE_SHOW_USAGE */
++	buf = xmalloc(SIZEOF_usage_messages);
++	bb_full_read(output[0], buf, SIZEOF_usage_messages);
++	return buf;
++}
++
++#else
++#define unpack_usage_messages() usage_messages;
++#endif /* ENABLE_FEATURE_COMPRESS_USAGE */
++
++void bb_show_usage (void)
++{
++	if (ENABLE_SHOW_USAGE) {
++		const char *format_string;
++		const char *usage_string = unpack_usage_messages();
++		int i;
++
++		for (i = applet_using - applets; i > 0;)
++			if (!*usage_string++) --i;
++
++		format_string = "%s\n\nUsage: %s %s\n\n";
++		if (*usage_string == '\b')
++			format_string = "%s\n\nNo help available.\n\n";
++		fprintf (stderr, format_string, bb_msg_full_version,
++			applet_using->name, usage_string);
++	}
+ 
+   exit (bb_default_error_retval);
+ }
+diff --git a/archival/libunarchive/Makefile.in b/archival/libunarchive/Makefile.in
+index 9bb91563d..928e5bf8b 100644
+--- a/archival/libunarchive/Makefile.in
++++ b/archival/libunarchive/Makefile.in
+@@ -67,6 +67,7 @@ LIBUNARCHIVE-$(CONFIG_FEATURE_TAR_GZIP) += $(GUNZIP_FILES) get_header_tar_gz.o
+ LIBUNARCHIVE-$(CONFIG_FEATURE_TAR_COMPRESS) += decompress_uncompress.o
+ LIBUNARCHIVE-$(CONFIG_UNCOMPRESS) += decompress_uncompress.o
+ LIBUNARCHIVE-$(CONFIG_UNZIP) += $(GUNZIP_FILES)
++LIBUNARCHIVE-$(CONFIG_FEATURE_COMPRESS_USAGE) += decompress_bunzip2.o
+ 
+ 
+ LIBUNARCHIVE-y:=$(sort $(LIBUNARCHIVE-y))
+diff --git a/include/applets.h b/include/applets.h
+index 059472248..06bd9e7f5 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -19,7 +19,6 @@
+ # define APPLET(a,b,c,d) extern int b(int argc, char **argv);
+ # define APPLET_NOUSAGE(a,b,c,d) extern int b(int argc, char **argv);
+ # define APPLET_ODDNAME(a,b,c,d,e) extern int b(int argc, char **argv);
+-  extern const char usage_messages[];
+ #elif defined(MAKE_USAGE)
+ # ifdef CONFIG_FEATURE_VERBOSE_USAGE
+ #  define APPLET(a,b,c,d) a##_trivial_usage "\n\n" a##_full_usage "\0"
+diff --git a/scripts/usage.c b/scripts/usage.c
+new file mode 100644
+index 000000000..06f059acd
+--- /dev/null
++++ b/scripts/usage.c
+@@ -0,0 +1,14 @@
++#include <unistd.h>
++#include "busybox.h"
++
++static const char usage_messages[] =
++#define MAKE_USAGE
++#include "usage.h"
++#include "applets.h"
++;
++
++int main(void)
++{
++	write(1, usage_messages, sizeof(usage_messages));
++	return 0;
++}
+diff --git a/scripts/usage_compressed b/scripts/usage_compressed
+new file mode 100644
+index 000000000..fa12e4063
+--- /dev/null
++++ b/scripts/usage_compressed
+@@ -0,0 +1,11 @@
++#!/bin/sh
++
++loc="$1"
++
++test "$loc" || loc=.
++
++echo 'static const char packed_usage[] = '
++"$loc"/usage | bzip2 -9 | od -v -t x1 \
++| sed -e 's/^[^ ]*//' -e 's/ \(..\)/\\x\1/g' -e 's/^\(.*\)$/"\1"/'
++echo ';'
++echo '#define SIZEOF_usage_messages' $((0 + `"$loc"/usage | wc -c `))

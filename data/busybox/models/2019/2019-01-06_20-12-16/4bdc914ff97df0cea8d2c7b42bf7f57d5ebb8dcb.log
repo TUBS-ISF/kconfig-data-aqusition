@@ -1,0 +1,92 @@
+"2019-01-06 20:12:16 +0100"
+diff --git a/Config.in b/Config.in
+index 01680af1f..1a44c5b6d 100644
+--- a/Config.in
++++ b/Config.in
+@@ -12,7 +12,7 @@ config HAVE_DOT_CONFIG
+ menu "Settings"
+ 
+ config DESKTOP
+-	bool "Enable compatibility for full-blown desktop systems"
++	bool "Enable compatibility for full-blown desktop systems (8kb)"
+ 	default y
+ 	help
+ 	Enable applet options and features which are not essential.
+diff --git a/scripts/basic/split-include.c b/scripts/basic/split-include.c
+index e328788e2..791d142a8 100644
+--- a/scripts/basic/split-include.c
++++ b/scripts/basic/split-include.c
+@@ -131,7 +131,8 @@ int main(int argc, const char * argv [])
+ 	is_same = 0;
+ 	if ((fp_target = fopen(ptarget, "r")) != NULL)
+ 	{
+-	    fgets(old_line, buffer_size, fp_target);
++	    if (!fgets(old_line, buffer_size, fp_target))
++		ERROR_EXIT(ptarget);
+ 	    if (fclose(fp_target) != 0)
+ 		ERROR_EXIT(ptarget);
+ 	    if (!strcmp(line, old_line))
+diff --git a/scripts/kconfig/conf.c b/scripts/kconfig/conf.c
+index 57734b590..866a7c544 100644
+--- a/scripts/kconfig/conf.c
++++ b/scripts/kconfig/conf.c
+@@ -142,7 +142,8 @@ static void conf_askvalue(struct symbol *sym, const char *def)
+ 		check_stdin();
+ 	case ask_all:
+ 		fflush(stdout);
+-		fgets(line, 128, stdin);
++		if (!fgets(line, 128, stdin))
++			exit(1);
+ 		return;
+ 	case set_default:
+ 		printf("%s\n", def);
+@@ -390,7 +391,8 @@ static int conf_choice(struct menu *menu)
+ 			check_stdin();
+ 		case ask_all:
+ 			fflush(stdout);
+-			fgets(line, 128, stdin);
++			if (!fgets(line, 128, stdin))
++				exit(1);
+ 			strip(line);
+ 			if (line[0] == '?') {
+ 				printf("\n%s\n", menu->sym->help ?
+diff --git a/scripts/kconfig/lxdialog/lxdialog.c b/scripts/kconfig/lxdialog/lxdialog.c
+index 79f6c5fb5..5b8e3e947 100644
+--- a/scripts/kconfig/lxdialog/lxdialog.c
++++ b/scripts/kconfig/lxdialog/lxdialog.c
+@@ -189,7 +189,7 @@ int j_inputbox(const char *t, int ac, const char *const *av)
+ 	int ret = dialog_inputbox(t, av[2], atoi(av[3]), atoi(av[4]),
+ 				  ac == 6 ? av[5] : (char *)NULL);
+ 	if (ret == 0)
+-		fprintf(stderr, dialog_input_result);
++		fprintf(stderr, "%s", dialog_input_result);
+ 	return ret;
+ }
+ 
+diff --git a/scripts/kconfig/mconf.c b/scripts/kconfig/mconf.c
+index adba1141b..c3a837a14 100644
+--- a/scripts/kconfig/mconf.c
++++ b/scripts/kconfig/mconf.c
+@@ -482,7 +482,8 @@ static int exec_conf(void)
+ 
+ 	*argptr++ = NULL;
+ 
+-	pipe(pipefd);
++	if (pipe(pipefd))
++		_exit(EXIT_FAILURE);
+ 	pid = fork();
+ 	if (pid == 0) {
+ 		sigprocmask(SIG_SETMASK, &osset, NULL);
+@@ -846,9 +847,11 @@ static void conf(struct menu *menu)
+ static void show_textbox(const char *title, const char *text, int r, int c)
+ {
+ 	int fd;
++	int len = strlen(text);
+ 
+ 	fd = creat(".help.tmp", 0777);
+-	write(fd, text, strlen(text));
++	if (write(fd, text, len) != len)
++		exit(1);
+ 	close(fd);
+ 	show_file(".help.tmp", title, r, c);
+ 	unlink(".help.tmp");

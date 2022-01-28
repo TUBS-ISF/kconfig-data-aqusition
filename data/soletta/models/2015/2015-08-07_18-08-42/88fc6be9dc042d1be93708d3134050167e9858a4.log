@@ -1,0 +1,445 @@
+"2015-08-07 18:08:42 -0300"
+diff --git a/data/jsons/platform_detect.json b/data/jsons/board_detect.json
+similarity index 87%
+rename from data/jsons/platform_detect.json
+rename to data/jsons/board_detect.json
+index 4e6b2b06..057c2d1a 100644
+--- a/data/jsons/platform_detect.json
++++ b/data/jsons/board_detect.json
+@@ -1,6 +1,6 @@
+ {
+-  "$schema": "http://solettaproject.github.io/soletta/schemas/platform-detect.schema",
+-  "platforms": [
++  "$schema": "http://solettaproject.github.io/soletta/schemas/board-detect.schema",
++  "boards": [
+     {
+      "name": "intel-galileo-rev-d",
+      "validation": [
+diff --git a/data/schemas/platform-detect.schema b/data/schemas/board-detect.schema
+similarity index 86%
+rename from data/schemas/platform-detect.schema
+rename to data/schemas/board-detect.schema
+index 0de39385..0e5a4b43 100644
+--- a/data/schemas/platform-detect.schema
++++ b/data/schemas/board-detect.schema
+@@ -1,6 +1,6 @@
+ {
+   "$schema": "http://json-schema.org/draft-04/schema#",
+-  "description": "Soletta's platform detection file",
++  "description": "Soletta's board detection file",
+ 
+   "definitions": {
+     "regex_array": {
+@@ -28,7 +28,7 @@
+       "items": { "$ref": "#/definitions/rule" }
+     },
+ 
+-    "platform": {
++    "board": {
+       "type": "object",
+       "additionalProperties": false,
+       "properties": {
+@@ -46,10 +46,10 @@
+   "additionalProperties": false,
+   "properties": {
+     "$schema": { "type": "string", "format": "uri" }
+-    "platforms": {
++    "boards": {
+       "type": "array",
+-      "items": { "$ref": "#/definitions/platform" }
++      "items": { "$ref": "#/definitions/board" }
+     }
+   },
+-  "required": [ "$schema", "platforms" ]
++  "required": [ "$schema", "boards" ]
+ }
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 786963e6..2f064f99 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -1,18 +1,17 @@
+-config PLATFORM_NAME
+-	string "Platform Name"
++config BOARD_NAME
++	string "Board Name"
+ 	default ""
+ 	help
+-            Some parts of Soletta uses a "platform name" string from
+-            sol_platform_get_name() to improve platform
+-            behavior. Namely Pin Multiplexer will load modules based
+-            on the platform name.
+-
+-            Usually the platform name is detected using either
+-            SOL_PLATFORM_NAME environment variable or the rules defined in
+-            'platform_detect.json'. Soletta searches for 'platform_detect.json'
+-            first at PKGSYSCONFDIR ('/etc/soletta' in most cases) and then at
+-            '$PREFIX/share/soletta/', but some platforms such as RIOT may not
+-            provide it, then this string is used as a fallback.
++            Some parts of Soletta uses a "board name" string from
++            'sol_platform_get_board_name()' to improve board behavior.
++            Namely Pin Multiplexer will load modules based on the board name.
++
++            Usually the board name is detected using either SOL_BOARD_NAME
++            environment variable or the rules defined in 'board_detect.json'.
++            Soletta searches for 'board_detect.json' first at PKGSYSCONFDIR
++            ('/etc/soletta' in most cases) and then at '$PREFIX/share/soletta/',
++            but some platforms such as RIOT may not provide it,
++            then this string is used as a fallback.
+ 
+ config PLATFORM_LINUX
+ 	bool
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index 28d3ddb4..7c8713a1 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -52,7 +52,7 @@ obj-core-$(PLATFORM_CONTIKI) += \
+ 
+ obj-core-$(PLATFORM_LINUX) += \
+     sol-platform-linux-common.o \
+-    sol-platform-detect.o
++    sol-board-detect.o
+ obj-core-$(PLATFORM_LINUX)-extra-cflags += $(SYSTEMD_CFLAGS)
+ obj-core-$(PLATFORM_LINUX)-extra-ldflags += $(SYSTEMD_LDFLAGS)
+ 
+diff --git a/src/lib/common/include/sol-platform.h b/src/lib/common/include/sol-platform.h
+index a5371499..d96627d4 100644
+--- a/src/lib/common/include/sol-platform.h
++++ b/src/lib/common/include/sol-platform.h
+@@ -59,7 +59,7 @@ extern "C" {
+  */
+ #define CHUNK_MAX_TIME_NS (20 * (NSEC_PER_MSEC))
+ 
+-const char *sol_platform_get_name(void);
++const char *sol_platform_get_board_name(void);
+ 
+ enum sol_platform_state {
+     SOL_PLATFORM_STATE_INITIALIZING,
+diff --git a/src/lib/common/sol-platform-detect.c b/src/lib/common/sol-board-detect.c
+similarity index 87%
+rename from src/lib/common/sol-platform-detect.c
+rename to src/lib/common/sol-board-detect.c
+index 0e04fb18..73559837 100644
+--- a/src/lib/common/sol-platform-detect.c
++++ b/src/lib/common/sol-board-detect.c
+@@ -37,16 +37,16 @@
+ 
+ #define SOL_LOG_DOMAIN &_log_domain
+ #include "sol-log-internal.h"
+-SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "platform-detect");
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "board-detect");
+ 
+ #include "sol-file-reader.h"
+ #include "sol-json.h"
+-#include "sol-platform-detect.h"
++#include "sol-board-detect.h"
+ #include "sol-str-slice.h"
+ #include "sol-util.h"
+ #include "sol-vector.h"
+ 
+-#define PLATFORM_JSON "/platform_detect.json"
++#define BOARD_JSON "/board_detect.json"
+ 
+ static bool
+ _check_rule(const char *path, const struct sol_vector *match, const struct sol_vector *dont_match)
+@@ -135,10 +135,10 @@ _parse_regex_array(struct sol_json_token *array, struct sol_vector *vector)
+ }
+ 
+ static bool
+-_platform_validation(const struct sol_json_token *validation)
++_board_validation(const struct sol_json_token *validation)
+ {
+     char *path;
+-    bool is_platform = false;
++    bool is_board = false;
+     struct sol_vector match, dont_match;
+     struct sol_json_scanner scanner;
+     struct sol_json_token token, key, value, file_path;
+@@ -177,10 +177,10 @@ _platform_validation(const struct sol_json_token *validation)
+ 
+         if (file_path.start) {
+             path = strndup(file_path.start + 1, file_path.end - file_path.start - 2);
+-            is_platform = _check_rule(path, &match, &dont_match);
++            is_board = _check_rule(path, &match, &dont_match);
+             free(path);
+ 
+-            if (!is_platform)
++            if (!is_board)
+                 break;
+         }
+     }
+@@ -188,7 +188,7 @@ _platform_validation(const struct sol_json_token *validation)
+ clear:
+     sol_vector_clear(&match);
+     sol_vector_clear(&dont_match);
+-    return is_platform;
++    return is_board;
+ }
+ 
+ static struct sol_file_reader *
+@@ -208,27 +208,27 @@ _json_open_doc(const char *path, struct sol_json_scanner *scanner)
+ }
+ 
+ char *
+-sol_platform_detect(void)
++sol_board_detect(void)
+ {
+     bool found = false;
+-    char *platform = NULL;
++    char *board = NULL;
+     struct sol_file_reader *json_doc;
+     struct sol_json_scanner scanner;
+-    struct sol_json_token token, key, value, platform_name = { NULL };
++    struct sol_json_token token, key, value, board_name = { NULL };
+     enum sol_json_loop_reason reason;
+ 
+-    json_doc = _json_open_doc(PKGSYSCONFDIR PLATFORM_JSON, &scanner);
++    json_doc = _json_open_doc(PKGSYSCONFDIR BOARD_JSON, &scanner);
+     if (!json_doc) {
+-        json_doc = _json_open_doc(SOL_DATADIR PLATFORM_JSON, &scanner);
++        json_doc = _json_open_doc(SOL_DATADIR BOARD_JSON, &scanner);
+         if (!json_doc) {
+-            SOL_INF(PLATFORM_JSON " could not be found. Searched paths:\n.%s\n%s",
++            SOL_INF(BOARD_JSON " could not be found. Searched paths:\n.%s\n%s",
+                 PKGSYSCONFDIR, DATADIR);
+             return NULL;
+         }
+     }
+ 
+     SOL_JSON_SCANNER_OBJECT_LOOP (&scanner, &token, &key, &value, reason) {
+-        if (SOL_JSON_TOKEN_STR_LITERAL_EQ(&token, "platforms")) {
++        if (SOL_JSON_TOKEN_STR_LITERAL_EQ(&token, "boards")) {
+             found = true;
+             break;
+         }
+@@ -238,37 +238,37 @@ sol_platform_detect(void)
+ 
+     sol_json_scanner_init_from_token(&scanner, &value);
+     SOL_JSON_SCANNER_ARRAY_LOOP (&scanner, &token, SOL_JSON_TYPE_OBJECT_START, reason) {
+-        platform_name = (struct sol_json_token) {NULL, NULL };
++        board_name = (struct sol_json_token) {NULL, NULL };
+         found = false;
+ 
+         SOL_JSON_SCANNER_OBJECT_LOOP_NEST (&scanner, &token, &key, &value, reason) {
+             if (SOL_JSON_TOKEN_STR_LITERAL_EQ(&key, "name")) {
+                 if (sol_json_token_get_type(&value) != SOL_JSON_TYPE_STRING)
+                     continue;
+-                platform_name = value;
++                board_name = value;
+             }
+ 
+             if (SOL_JSON_TOKEN_STR_LITERAL_EQ(&key, "validation")) {
+                 if (sol_json_token_get_type(&value) != SOL_JSON_TYPE_ARRAY_START)
+                     continue;
+-                found = _platform_validation(&value);
++                found = _board_validation(&value);
+             }
+         }
+ 
+-        if (platform_name.start && found)
++        if (board_name.start && found)
+             break;
+     }
+ 
+-    if (platform_name.start && found)
+-        platform = strndup(platform_name.start + 1, platform_name.end - platform_name.start - 2);
++    if (board_name.start && found)
++        board = strndup(board_name.start + 1, board_name.end - board_name.start - 2);
+ 
+ end:
+     sol_file_reader_close(json_doc);
+-    return platform;
++    return board;
+ }
+ 
+ bool
+-sol_platform_invalid_name(const char *name)
++sol_board_invalid_name(const char *name)
+ {
+     unsigned int i;
+ 
+diff --git a/src/lib/common/sol-platform-detect.h b/src/lib/common/sol-board-detect.h
+similarity index 95%
+rename from src/lib/common/sol-platform-detect.h
+rename to src/lib/common/sol-board-detect.h
+index 3f69ddcf..2e945ca5 100644
+--- a/src/lib/common/sol-platform-detect.h
++++ b/src/lib/common/sol-board-detect.h
+@@ -34,5 +34,5 @@
+ 
+ #include <stdbool.h>
+ 
+-char *sol_platform_detect(void);
+-bool sol_platform_invalid_name(const char *name);
++char *sol_board_detect(void);
++bool sol_board_invalid_name(const char *name);
+diff --git a/src/lib/common/sol-pin-mux.c b/src/lib/common/sol-pin-mux.c
+index 0669d0c3..735f8b88 100644
+--- a/src/lib/common/sol-pin-mux.c
++++ b/src/lib/common/sol-pin-mux.c
+@@ -150,7 +150,7 @@ sol_pin_mux_init(void)
+ {
+     sol_log_domain_init_level(SOL_LOG_DOMAIN);
+ 
+-    if (!sol_pin_mux_select_mux(sol_platform_get_name())) {
++    if (!sol_pin_mux_select_mux(sol_platform_get_board_name())) {
+         SOL_WRN("Pin Multiplexer found, but failed to be loaded.");
+         return -1;
+     }
+diff --git a/src/lib/common/sol-platform.c b/src/lib/common/sol-platform.c
+index 5d3b3f8b..c1317b99 100644
+--- a/src/lib/common/sol-platform.c
++++ b/src/lib/common/sol-platform.c
+@@ -40,16 +40,16 @@
+ #include "sol-macros.h"
+ #include "sol-monitors.h"
+ #ifdef SOL_PLATFORM_LINUX
+-#include "sol-platform-detect.h"
++#include "sol-board-detect.h"
+ #endif
+ #include "sol-platform.h"
+ #include "sol-util.h"
+ 
+-#define SOL_PLATFORM_NAME_ENVVAR "SOL_PLATFORM_NAME"
++#define SOL_BOARD_NAME_ENVVAR "SOL_BOARD_NAME"
+ 
+ SOL_LOG_INTERNAL_DECLARE(_sol_platform_log_domain, "platform");
+ 
+-static char *platform_name = NULL;
++static char *board_name = NULL;
+ 
+ struct service_monitor {
+     struct sol_monitors_entry base;
+@@ -83,37 +83,37 @@ sol_platform_init(void)
+ void
+ sol_platform_shutdown(void)
+ {
+-    free(platform_name);
++    free(board_name);
+     sol_monitors_clear(&_ctx.state_monitors);
+     sol_monitors_clear(&_ctx.service_monitors);
+     sol_platform_impl_shutdown();
+ }
+ 
+ SOL_API const char *
+-sol_platform_get_name(void)
++sol_platform_get_board_name(void)
+ {
+-    if (platform_name)
+-        return platform_name;
++    if (board_name)
++        return board_name;
+ 
+ #ifdef SOL_PLATFORM_LINUX
+-    platform_name = getenv(SOL_PLATFORM_NAME_ENVVAR);
+-    if (platform_name && *platform_name != '\0')
+-        platform_name = strdup(platform_name);
++    board_name = getenv(SOL_BOARD_NAME_ENVVAR);
++    if (board_name && *board_name != '\0')
++        board_name = strdup(board_name);
+     else
+-        platform_name = sol_platform_detect();
++        board_name = sol_board_detect();
+ 
+-    if (platform_name && sol_platform_invalid_name(platform_name)) {
+-        free(platform_name);
+-        platform_name = NULL;
++    if (board_name && sol_board_invalid_name(board_name)) {
++        free(board_name);
++        board_name = NULL;
+     }
+ #endif
+ 
+-#ifdef PLATFORM_NAME
+-    if (!platform_name)
+-        platform_name = strdup(PLATFORM_NAME);
++#ifdef BOARD_NAME
++    if (!board_name)
++        board_name = strdup(BOARD_NAME);
+ #endif
+ 
+-    return platform_name;
++    return board_name;
+ }
+ 
+ SOL_API int
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+index 0033d096..4f5e6a23 100644
+--- a/src/lib/io/Kconfig
++++ b/src/lib/io/Kconfig
+@@ -43,9 +43,9 @@ menuconfig USE_PIN_MUX
+           as dynamically loadable modules at
+           $PREFIX/lib/soletta/modules/pin-mux/<module>.so
+ 
+-          Pin mux modules are used based on the platform-detect logic
+-          defined in $PREFIX/share/soletta/platform_detect.json or
+-          statically defined PLATFORM_NAME.
++          Pin mux modules are used based on the board-detect logic
++          defined in $PREFIX/share/soletta/board_detect.json or
++          statically defined BOARD_NAME.
+ 
+           If unsure, say Y.
+ 
+diff --git a/tools/build/Makefile.rules b/tools/build/Makefile.rules
+index 3fcadbda..f98a9dbb 100644
+--- a/tools/build/Makefile.rules
++++ b/tools/build/Makefile.rules
+@@ -355,7 +355,7 @@ $(2): $(1)
+ endef
+ 
+ $(eval $(call install-resource,$(NODE_TYPE_SCHEMA),$(NODE_TYPE_SCHEMA_DEST)))
+-$(eval $(call install-resource,$(PLATFORM_DETECT),$(PLATFORM_DETECT_DEST)))
++$(eval $(call install-resource,$(BOARD_DETECT),$(BOARD_DETECT_DEST)))
+ $(eval $(call install-resource,$(GDB_AUTOLOAD_PY),$(GDB_AUTOLOAD_PY_DEST)))
+ 
+ $(MODULES_OK_FILE):
+diff --git a/tools/build/Makefile.targets b/tools/build/Makefile.targets
+index d31feebb..131d4d8b 100644
+--- a/tools/build/Makefile.targets
++++ b/tools/build/Makefile.targets
+@@ -82,7 +82,7 @@ samples: $(SOL_LIB_SO) $(SOL_LIB_AR) $(samples-out)
+ PHONY += samples
+ 
+ PRE_INSTALL := $(PC_GEN) $(SOL_LIB_SO) $(SOL_LIB_AR) $(bins-out) $(modules-out) $(all-mod-descs)
+-PRE_INSTALL += $(NODE_TYPE_SCHEMA_DEST) $(PLATFORM_DETECT_DEST) $(GDB_AUTOLOAD_PY_DEST)
++PRE_INSTALL += $(NODE_TYPE_SCHEMA_DEST) $(BOARD_DETECT_DEST) $(GDB_AUTOLOAD_PY_DEST)
+ 
+ ifneq (,$(strip $(builtin-flows)))
+ PRE_GEN += $(FLOW_BUILTINS_DESC)
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 8264a91d..539ad2aa 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -166,20 +166,8 @@ endif
+ 
+ endif #LOG
+ 
+-ifeq (,$(PLATFORM_NAME))
+-ifeq (y,$(PLATFORM_LINUX))
+-PLATFORM_NAME = linux
+-endif
+-ifeq (y,$(PLATFORM_RIOTOS))
+-PLATFORM_NAME = riotos
+-endif
+-ifeq (y,$(PLATFORM_CONTIKI))
+-PLATFORM_NAME = contiki
+-endif
+-endif #!PLATFORM_NAME
+-
+-ifneq (,$(PLATFORM_NAME))
+-COMMON_CFLAGS += -DPLATFORM_NAME=\"$(PLATFORM_NAME)\"
++ifneq (,$(BOARD_NAME))
++COMMON_CFLAGS += -DBOARD_NAME=\"$(BOARD_NAME)\"
+ endif
+ 
+ ifneq (,$(filter %coverage,$(MAKECMDGOALS)))
+@@ -229,8 +217,8 @@ PIN_MUX_BUILTINS_H := $(top_srcdir)src/lib/common/sol-pin-mux-builtins-gen.h
+ NODE_TYPE_SCHEMA := $(top_srcdir)data/schemas/node-type-genspec.schema
+ NODE_TYPE_SCHEMA_DEST := $(build_flowdatadir)schemas/node-type-genspec.schema
+ 
+-PLATFORM_DETECT := $(top_srcdir)data/jsons/platform_detect.json
+-PLATFORM_DETECT_DEST := $(build_datadir)platform_detect.json
++BOARD_DETECT := $(top_srcdir)data/jsons/board_detect.json
++BOARD_DETECT_DEST := $(build_datadir)board_detect.json
+ 
+ FLOW_NODE_TYPE_FIND := $(SCRIPTDIR)sol-flow-node-type-find.py
+ FLOW_NODE_TYPE_FIND_IN := $(addsuffix .in,$(FLOW_NODE_TYPE_FIND))

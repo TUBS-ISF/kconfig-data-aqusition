@@ -1,0 +1,133 @@
+"2006-02-27 15:09:48 +0000"
+diff --git a/Makefile.in b/Makefile.in
+index aea087848..ea580411c 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -174,9 +174,11 @@ ifneq ($(UCLIBC_HAS_GLOB),y)
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/glob.h
+ endif
+ ifneq ($(UCLIBC_HAS_GNU_GETOPT),y)
++ifneq ($(UCLIBC_HAS_GETOPT_LONG),y)
+ 	# Remove getopt header since gnu getopt support is disabled.
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/getopt.h
+ endif
++endif
+ ifneq ($(HAS_SHADOW),y)
+ 	# Remove shadow header since shadow password support is disabled.
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/shadow.h
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index bc57a730a..1a34cf750 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1086,6 +1086,16 @@ config UCLIBC_HAS_GNU_GETOPT
+ 
+ 	  Most people will answer Y.
+ 
++config UCLIBC_HAS_GETOPT_LONG
++	bool "Support getopt_long/getopt_long_only"
++	depends !UCLIBC_HAS_GNU_GETOPT
++	default y
++	help
++	  Answer Y if you want to include getopt_long[_only() used by many
++	  apps, even busybox.
++
++	  Most people will answer Y.
++
+ config UCLIBC_HAS_GNU_GETSUBOPT
+ 	bool "Support glibc getsubopt"
+ 	default y
+diff --git a/libc/sysdeps/linux/common/bits/getopt.h b/libc/sysdeps/linux/common/bits/getopt.h
+index 6d1ebcf13..a28d0a40b 100644
+--- a/libc/sysdeps/linux/common/bits/getopt.h
++++ b/libc/sysdeps/linux/common/bits/getopt.h
+@@ -157,7 +157,7 @@ extern int getopt (int ___argc, char *const *___argv, const char *__shortopts)
+ extern int getopt ();
+ #endif /* __GNU_LIBRARY__ */
+ 
+-#ifdef __UCLIBC_HAS_GNU_GETOPT__
++#if defined __UCLIBC_HAS_GNU_GETOPT__ || defined __UCLIBC_HAS_GETOPT_LONG__
+ #ifndef __need_getopt
+ extern int getopt_long (int ___argc, char *const *___argv,
+ 			const char *__shortopts,
+diff --git a/libc/unistd/Makefile.in b/libc/unistd/Makefile.in
+index 5bd612465..6e85e10c9 100644
+--- a/libc/unistd/Makefile.in
++++ b/libc/unistd/Makefile.in
+@@ -19,9 +19,12 @@ CSRC := $(filter-out daemon.c,$(CSRC))
+ endif
+ 
+ ifeq ($(UCLIBC_HAS_GNU_GETOPT),y)
+-CSRC := $(filter-out getopt-susv3.c,$(CSRC))
++CSRC := $(filter-out getopt-susv3.c getopt_long-susv3.c,$(CSRC))
+ else
+ CSRC := $(filter-out getopt.c,$(CSRC))
++ifneq ($(UCLIBC_HAS_GETOPT_LONG),y)
++CSRC := $(filter-out getopt_long-susv3.c,$(CSRC))
++endif
+ endif
+ 
+ ifeq ($(UCLIBC_HAS_GNU_GETSUBOPT),y)
+diff --git a/libc/unistd/getopt_long-susv3.c b/libc/unistd/getopt_long-susv3.c
+new file mode 100644
+index 000000000..9bae3d845
+--- /dev/null
++++ b/libc/unistd/getopt_long-susv3.c
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (C) 2006 Rich Felker <dalias@aerifal.cx>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <stddef.h>
++#include <getopt.h>
++#include <stdio.h>
++
++libc_hidden_proto(getopt)
++
++static int __getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx, int longonly)
++{
++	if (optind >= argc || !argv[optind] || argv[optind][0] != '-') return -1;
++	if ((longonly && argv[optind][1]) ||
++		(argv[optind][1] == '-' && argv[optind][2]))
++	{
++		int i;
++		char *opt = argv[optind]+2;
++		for (i=0; longopts[i].name; i++) {
++			const char *name = longopts[i].name;
++			while (*name && *name++ == *opt++);
++			if (*name && *opt != '=') continue;
++			if (*opt == '=') {
++				if (!longopts[i].has_arg) continue;
++				optarg = opt+1;
++			} else {
++				if (longopts[i].has_arg == required_argument) {
++					if (!(optarg = argv[++optind]))
++						return ':';
++				} else optarg = NULL;
++			}
++			optind++;
++			if (idx) *idx = i;
++			if (longopts[i].flag) {
++				*longopts[i].flag = longopts[i].val;
++				return 0;
++			}
++			return longopts[i].val;
++		}
++		if (argv[optind][1] == '-') {
++			optind++;
++			return '?';
++		}
++	}
++	return getopt(argc, argv, optstring);
++}
++
++int getopt_long(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx)
++{
++	return __getopt_long(argc, argv, optstring, longopts, idx, 0);
++}
++
++int getopt_long_only(int argc, char *const *argv, const char *optstring, const struct option *longopts, int *idx)
++{
++	return __getopt_long(argc, argv, optstring, longopts, idx, 1);
++}

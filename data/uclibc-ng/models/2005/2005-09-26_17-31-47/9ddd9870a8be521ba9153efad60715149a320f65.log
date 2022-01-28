@@ -1,0 +1,461 @@
+"2005-09-26 17:31:47 +0000"
+diff --git a/Makefile b/Makefile
+index 46af77a59..78d8700dd 100644
+--- a/Makefile
++++ b/Makefile
+@@ -243,6 +243,15 @@ ifeq ($(strip $(HAVE_SHARED)),y)
+ 		$(LN) -sf $(RUNTIME_PREFIX_LIB_FROM_DEVEL_PREFIX_LIB)$$i.$(MAJOR_VERSION) \
+ 		$(PREFIX)$(DEVEL_PREFIX)lib/$$i; \
+ 	done;
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)lib/libc.so
++	sed -e '/^GROUP/d' $(TOPDIR)lib/libc.so > $(PREFIX)$(DEVEL_PREFIX)lib/libc.so
++ifeq ($(strip $(COMPAT_ATEXIT)),y)
++	echo "GROUP ( $(DEVEL_PREFIX)lib/$(NONSHARED_LIBNAME) $(RUNTIME_PREFIX)lib/$(SHARED_MAJORNAME) )" >> \
++		$(PREFIX)$(DEVEL_PREFIX)lib/libc.so
++else
++	echo "GROUP ( $(RUNTIME_PREFIX)lib/$(SHARED_MAJORNAME) $(DEVEL_PREFIX)lib/$(NONSHARED_LIBNAME) )" >> \
++		$(PREFIX)$(DEVEL_PREFIX)lib/libc.so
++endif
+ ifeq ($(strip $(PTHREADS_DEBUG_SUPPORT)),y)
+ 	$(LN) -sf $(RUNTIME_PREFIX_LIB_FROM_DEVEL_PREFIX_LIB)libthread_db.so.1 \
+ 		$(PREFIX)$(DEVEL_PREFIX)lib/libthread_db.so
+@@ -255,6 +264,7 @@ endif
+ 			| sed -e 's/\.a$$/_pic.a/'`; \
+ 	done ; \
+ 	fi
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)lib/uclibc_nonshared_pic.a
+ 	# Ugh!!! Remember that libdl.a and libdl_pic.a are different.  Since
+ 	# libdl is pretty small, and not likely to benefit from mklibs.py and
+ 	# similar, lets just remove libdl_pic.a and avoid the issue
+diff --git a/Rules.mak b/Rules.mak
+index c79b36c97..c48b45a27 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -70,6 +70,7 @@ export MAJOR_VERSION MINOR_VERSION SUBLEVEL VERSION LC_ALL
+ SHARED_FULLNAME:=libuClibc-$(MAJOR_VERSION).$(MINOR_VERSION).$(SUBLEVEL).so
+ SHARED_MAJORNAME:=libc.so.$(MAJOR_VERSION)
+ UCLIBC_LDSO:=ld-uClibc.so.$(MAJOR_VERSION)
++NONSHARED_LIBNAME:=uclibc_nonshared.a
+ LIBNAME:=libc.a
+ LIBC:=$(TOPDIR)libc/$(LIBNAME)
+ 
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 018f6a0ee..bb2d9017c 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -419,6 +419,12 @@ config UCLIBC_DYNAMIC_ATEXIT
+ 
+ 	  Unless you use uClibc with C++, you should probably answer N.
+ 
++config COMPAT_ATEXIT
++	bool "Old (visible) atexit Support"
++	default n
++	help
++	  Enable this option if you want to update from 0.9.28 to svn/0.9.29, else
++	  you will be missing atexit() until you rebuild all apps.
+ 
+ config HAS_SHADOW
+ 	bool "Shadow Password Support"
+diff --git a/libc/Makefile b/libc/Makefile
+index cfb4840b4..4d528af8f 100644
+--- a/libc/Makefile
++++ b/libc/Makefile
+@@ -86,8 +86,19 @@ shared: shared_$(LIBNAME)
+ 	$(INSTALL) -d $(TOPDIR)lib
+ 	$(RM) $(TOPDIR)lib/$(SHARED_FULLNAME)
+ 	$(INSTALL) -m 644 $(SHARED_FULLNAME) $(TOPDIR)lib
+-	$(LN) -sf $(SHARED_FULLNAME) $(TOPDIR)lib/libc.so
+ 	$(LN) -sf $(SHARED_FULLNAME) $(TOPDIR)lib/$(SHARED_MAJORNAME)
++	$(AR) $(ARFLAGS) $(TOPDIR)lib/$(NONSHARED_LIBNAME) `cat nonshared_obj.*`
++	$(RANLIB) $(TOPDIR)lib/$(NONSHARED_LIBNAME)
++	echo "/* GNU ld script" > $(TOPDIR)lib/libc.so
++	echo " * Use the shared library, but some functions are only in" >> $(TOPDIR)lib/libc.so
++	echo " * the static library, so try that secondarily. */" >> $(TOPDIR)lib/libc.so
++	#OUT_FORMAT:=$(shell $(LD) --verbose | grep OUTPUT_FORMAT | awk -F '"' '{print $2}')
++	#echo "OUTPUT_FORMAT($(OUT_FORMAT))" >> $(TOPDIR)lib/libc.so
++ifeq ($(strip $(COMPAT_ATEXIT)),y)
++	echo "GROUP ( $(TOPDIR)lib/$(NONSHARED_LIBNAME) $(TOPDIR)lib/$(SHARED_MAJORNAME) )" >> $(TOPDIR)lib/libc.so
++else
++	echo "GROUP ( $(TOPDIR)lib/$(SHARED_MAJORNAME) $(TOPDIR)lib/$(NONSHARED_LIBNAME) )" >> $(TOPDIR)lib/libc.so
++endif
+ 
+ halfclean:
+ 	$(RM) $(LIBNAME) shared_$(LIBNAME) $(SHARED_FULLNAME)
+@@ -96,7 +107,7 @@ tags:
+ 	ctags -R
+ 
+ clean: subdirs_clean halfclean
+-	$(RM) obj.*
++	$(RM) obj.* nonshared_obj.*
+ 
+ subdirs: $(patsubst %, _dir_%, $(DIRS))
+ subdirs_clean: $(patsubst %, _dirclean_%, $(DIRS))
+diff --git a/libc/stdlib/Makefile b/libc/stdlib/Makefile
+index 210a2eeba..49d739703 100644
+--- a/libc/stdlib/Makefile
++++ b/libc/stdlib/Makefile
+@@ -79,7 +79,10 @@ endif
+ # wcstod wcstof wcstold
+ 
+ MSRC2 = atexit.c
+-MOBJ2 = atexit.o on_exit.o __exit_handler.o exit.o
++MOBJ2 = on_exit.o __cxa_atexit.o __cxa_finalize.o __exit_handler.o exit.o
++ifeq ($(COMPAT_ATEXIT),y)
++MOBJ2 += old_atexit.o
++endif
+ 
+ CSRC = \
+ 	abort.c getenv.c mkdtemp.c mktemp.c realpath.c mkstemp.c mkstemp64.c \
+@@ -95,13 +98,20 @@ COBJS=$(patsubst %.c,%.o, $(CSRC))
+ 
+ OBJS=$(MOBJ) $(MOBJx) $(MOBJ1) $(MOBJ1x) $(MOBJ2) $(COBJS)
+ 
++NONSHARED_OBJS=atexit.o
++
+ OBJ_LIST=../obj.stdlib
+ 
+-all: $(OBJ_LIST) subdirs
++NONSHARED_OBJ_LIST=../nonshared_obj.stdlib
++
++all: $(OBJ_LIST) $(NONSHARED_OBJ_LIST) subdirs
+ 
+ $(OBJ_LIST): $(OBJS)
+ 	echo $(patsubst %, stdlib/%, $(OBJS)) > $(OBJ_LIST)
+ 
++$(NONSHARED_OBJ_LIST): $(NONSHARED_OBJS)
++	echo $(patsubst %, stdlib/%, $(NONSHARED_OBJS)) > $(NONSHARED_OBJ_LIST)
++
+ $(MOBJ): $(MSRC)
+ 	$(CC) $(CFLAGS) -DL_$* $< -c -o $*.o
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+@@ -118,7 +128,7 @@ $(MOBJ1x): $(MSRC1)
+ 	$(CC) $(CFLAGS) -DL_$* -D__UCLIBC_DO_XLOCALE $< -c -o $*.o
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+-$(MOBJ2): $(MSRC2)
++$(MOBJ2) atexit.o: $(MSRC2)
+ 	$(CC) $(CFLAGS) -DL_$* $< -c -o $*.o
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+diff --git a/libc/stdlib/atexit.c b/libc/stdlib/atexit.c
+index 1962c1b63..e9710b038 100644
+--- a/libc/stdlib/atexit.c
++++ b/libc/stdlib/atexit.c
+@@ -32,6 +32,9 @@
+  * August 2002    Erik Andersen
+  *   Added locking so atexit and friends can be thread safe
+  *
++ * August 2005    Stephen Warren
++ *   Added __cxa_atexit and __cxa_finalize support
++ *
+  */
+ 
+ #define _GNU_SOURCE
+@@ -39,7 +42,7 @@
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <errno.h>
+-
++#include <atomic.h>
+ 
+ #ifdef __UCLIBC_HAS_THREADS__
+ #include <pthread.h>
+@@ -54,9 +57,12 @@ extern pthread_mutex_t mylock;
+ 
+ typedef void (*aefuncp) (void);         /* atexit function pointer */
+ typedef void (*oefuncp) (int, void *);  /* on_exit function pointer */
++typedef void (*cxaefuncp) (void *);     /* __cxa_atexit function pointer */
+ typedef enum {
+-	ef_atexit,
+-	ef_on_exit
++    ef_free,
++    ef_in_use,
++    ef_on_exit,
++    ef_cxa_atexit
+ } ef_type; /* exit function types */
+ 
+ /* this is in the L_exit object */
+@@ -67,13 +73,21 @@ extern int __exit_slots;
+ extern int __exit_count;
+ extern void __exit_handler(int);
+ struct exit_function {
+-	ef_type type;	/* ef_atexit or ef_on_exit */
++        /*
++         * 'type' should be of type of the 'enum ef_type' above but since we
++         * need this element in an atomic operation we have to use 'long int'.
++         */
++        long int type; /* enum ef_type */
+ 	union {
+-		aefuncp atexit;
+-		struct {
+-			oefuncp func;
+-			void *arg;
+-		} on_exit;
++                struct {
++                        oefuncp func;
++                        void *arg;
++                } on_exit;
++                struct {
++                        cxaefuncp func;
++                        void *arg;
++                        void* dso_handle;
++                } cxa_atexit;
+ 	} funcs;
+ };
+ #ifdef __UCLIBC_DYNAMIC_ATEXIT__
+@@ -81,46 +95,37 @@ extern struct exit_function *__exit_function_table;
+ #else
+ extern struct exit_function __exit_function_table[__UCLIBC_MAX_ATEXIT];
+ #endif
++extern struct exit_function *__new_exitfn (void);
+ 
+-#ifdef L_atexit
+-	/*
++/* this is in the L___cxa_atexit object */
++extern int __cxa_atexit (cxaefuncp, void *arg, void *dso_handle);
++
++
++/* remove old_atexit after 0.9.29 */
++#if defined(L_atexit) || defined(L_old_atexit)
++extern void *__dso_handle __attribute__ ((__weak__));
++
++/*
+  * register a function to be called at normal program termination
+  * (the registered function takes no arguments)
+-	 */
+-int atexit(aefuncp func)
+-{
+-    struct exit_function *efp;
+-
+-    LOCK;
+-    if (func) {
+-#ifdef __UCLIBC_DYNAMIC_ATEXIT__
+-	/* If we are out of function table slots, make some more */
+-	if (__exit_slots < __exit_count+1) {
+-	    efp=realloc(__exit_function_table, 
+-					(__exit_slots+20)*sizeof(struct exit_function));
+-	    if (efp==NULL) {
+-		UNLOCK;
+-		__set_errno(ENOMEM);
+-		return -1;
+-	    }
+-		__exit_function_table = efp;
+-	    __exit_slots+=20;
+-	}
++ */
++#ifdef L_atexit
++int attribute_hidden atexit(aefuncp func)
+ #else
+-	if (__exit_count >= __UCLIBC_MAX_ATEXIT) {
+-	    UNLOCK;
+-	    __set_errno(ENOMEM);
+-	    return -1;
+-	}
++int old_atexit(aefuncp func)
+ #endif
+-	__exit_cleanup = __exit_handler; /* enable cleanup */
+-	efp = &__exit_function_table[__exit_count++];
+-	efp->type = ef_atexit;
+-	efp->funcs.atexit = func;
+-    }
+-    UNLOCK;
+-    return 0;
++{
++    /*
++     * glibc casts aefuncp to cxaefuncp.
++     * This seems dodgy, but I guess callling a function with more
++     * parameters than it needs will work everywhere?
++     */
++    return __cxa_atexit((cxaefuncp)func, NULL,
++                        &__dso_handle == NULL ? NULL : __dso_handle);
+ }
++#ifndef L_atexit
++weak_alias(old_atexit,atexit);
++#endif
+ #endif
+ 
+ #ifdef L_on_exit
+@@ -133,41 +138,92 @@ int atexit(aefuncp func)
+ int on_exit(oefuncp func, void *arg)
+ {
+     struct exit_function *efp;
++    
++    if (func == NULL) {
++        return 0;
++    }
+ 
+-    LOCK;
+-    if (func) {
+-#ifdef __UCLIBC_DYNAMIC_ATEXIT__
+-	/* If we are out of function table slots, make some more */
+-	if (__exit_slots < __exit_count+1) {
+-	    efp=realloc(__exit_function_table, 
+-					(__exit_slots+20)*sizeof(struct exit_function));
+-	    if (efp==NULL) {
+-		UNLOCK;
+-		__set_errno(ENOMEM);
+-		return -1;
+-	    }
+-		__exit_function_table=efp;
+-	    __exit_slots+=20;
+-	}
+-#else
+-	if (__exit_count >= __UCLIBC_MAX_ATEXIT) {
+-	    UNLOCK;
+-	    __set_errno(ENOMEM);
+-	    return -1;
+-	}
++    efp = __new_exitfn();
++    if (efp == NULL) {
++        return -1;
++    }
++
++    efp->funcs.on_exit.func = func;
++    efp->funcs.on_exit.arg = arg;
++    /* assign last for thread safety, since we're now unlocked */
++    efp->type = ef_on_exit;
++
++    return 0;
++}
+ #endif
+ 
+-	__exit_cleanup = __exit_handler; /* enable cleanup */
+-	efp = &__exit_function_table[__exit_count++];
+-	efp->type = ef_on_exit;
+-	efp->funcs.on_exit.func = func;
+-	efp->funcs.on_exit.arg = arg;
++#ifdef L___cxa_atexit
++extern int __cxa_atexit (cxaefuncp func, void *arg, void *dso_handle)
++{
++    struct exit_function *efp;
++    
++    if (func == NULL) {
++        return 0;
+     }
+-    UNLOCK;
++
++    efp = __new_exitfn();
++    if (efp == NULL) {
++        return -1;
++    }
++
++    efp->funcs.cxa_atexit.func = func;
++    efp->funcs.cxa_atexit.arg = arg;
++    efp->funcs.cxa_atexit.dso_handle = dso_handle;
++    /* assign last for thread safety, since we're now unlocked */
++    efp->type = ef_cxa_atexit;
++
+     return 0;
+ }
+ #endif
+ 
++#ifdef L___cxa_finalize
++/*
++ * If D is non-NULL, call all functions registered with `__cxa_atexit'
++ *  with the same dso handle.  Otherwise, if D is NULL, call all of the
++ *  registered handlers.
++ */
++void __cxa_finalize (void *dso_handle)
++{
++    struct exit_function *efp;
++    int exit_count_snapshot = __exit_count;
++
++    /* In reverse order */
++    while (exit_count_snapshot) {
++        efp = &__exit_function_table[--exit_count_snapshot];
++
++        /*
++         * We check dso_handle match before we verify the type of the union entry.
++         * However, the atomic_exchange will validate that we were really "allowed"
++         * to read dso_handle...
++         */
++        if ((dso_handle == NULL || dso_handle == efp->funcs.cxa_atexit.dso_handle)
++            /* We don't want to run this cleanup more than once. */
++            && !atomic_compare_and_exchange_bool_acq(&efp->type, ef_free, ef_cxa_atexit)
++           ) {
++            /* glibc passes status (0) too, but that's not in the prototype */
++            (*efp->funcs.cxa_atexit.func)(efp->funcs.cxa_atexit.arg);
++        }
++    }
++
++#if 0 /* haven't looked into this yet... */
++    /*
++     * Remove the registered fork handlers. We do not have to
++     * unregister anything if the program is going to terminate anyway.
++     */
++#ifdef UNREGISTER_ATFORK
++    if (d != NULL) {
++        UNREGISTER_ATFORK (d);
++    }
++#endif
++#endif
++}
++#endif
++
+ #ifdef L___exit_handler
+ int __exit_count = 0; /* Number of registered exit functions */
+ #ifdef __UCLIBC_DYNAMIC_ATEXIT__
+@@ -177,6 +233,45 @@ int __exit_slots = 0; /* Size of __exit_function_table */
+ struct exit_function __exit_function_table[__UCLIBC_MAX_ATEXIT];
+ #endif
+ 
++/*
++ * Find and return a new exit_function pointer, for atexit,
++ * onexit and __cxa_atexit to initialize
++ */
++struct exit_function *__new_exitfn(void)
++{
++    struct exit_function *efp;
++
++    LOCK;
++
++#ifdef __UCLIBC_DYNAMIC_ATEXIT__
++    /* If we are out of function table slots, make some more */
++    if (__exit_slots < __exit_count+1) {
++        efp=realloc(__exit_function_table, 
++                    (__exit_slots+20)*sizeof(struct exit_function));
++        if (efp == NULL) {
++            UNLOCK;
++            __set_errno(ENOMEM);
++            return 0;
++        }
++        __exit_function_table = efp;
++        __exit_slots += 20;
++    }
++#else
++    if (__exit_count >= __UCLIBC_MAX_ATEXIT) {
++        UNLOCK;
++        __set_errno(ENOMEM);
++        return 0;
++    }
++#endif
++
++    __exit_cleanup = __exit_handler; /* enable cleanup */
++    efp = &__exit_function_table[__exit_count++];
++    efp->type = ef_in_use;
++
++    UNLOCK;
++
++    return efp;
++}
+ 
+ /*
+  * Handle the work of executing the registered exit functions
+@@ -196,11 +291,12 @@ void __exit_handler(int status)
+ 				(efp->funcs.on_exit.func) (status, efp->funcs.on_exit.arg);
+ 			}
+ 			break;
+-		case ef_atexit:
+-			if (efp->funcs.atexit) {
+-				(efp->funcs.atexit) ();
+-			}
+-			break;
++                case ef_cxa_atexit:
++                        if (efp->funcs.cxa_atexit.func) {
++                                /* glibc passes status too, but that's not in the prototype */
++                                (efp->funcs.cxa_atexit.func) (efp->funcs.cxa_atexit.arg);
++                        }
++                        break;
+ 		}
+ 	}
+ #ifdef __UCLIBC_DYNAMIC_ATEXIT__

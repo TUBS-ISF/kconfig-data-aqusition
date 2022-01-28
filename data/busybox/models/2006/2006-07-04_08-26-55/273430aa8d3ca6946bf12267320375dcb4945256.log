@@ -1,0 +1,104 @@
+"2006-07-04 08:26:55 +0000"
+diff --git a/Config.in b/Config.in
+index b664508f6..3a661e274 100644
+--- a/Config.in
++++ b/Config.in
+@@ -289,24 +289,6 @@ config CONFIG_LFS
+ 	  cp, mount, tar, and many others.  If you want to access files larger
+ 	  than 2 Gigabytes, enable this option.  Otherwise, leave it set to 'N'.
+ 
+-config USING_CROSS_COMPILER
+-	bool "Do you want to build BusyBox with a Cross Compiler?"
+-	default n
+-	help
+-	  Do you want to build BusyBox with a Cross Compiler?  If so,
+-	  then enable this option.  Otherwise leave it set to 'N'.
+-
+-config CROSS_COMPILER_PREFIX
+-	string "Cross Compiler prefix"
+-	default "/usr/i386-linux-uclibc/bin/i386-uclibc-"
+-	depends on USING_CROSS_COMPILER
+-	help
+-	  If you want to build BusyBox with a cross compiler, then you
+-	  will need to set this to the cross-compiler prefix.  For example,
+-	  if my cross-compiler is /usr/i386-linux-uclibc/bin/i386-uclibc-gcc
+-	  then I would enter '/usr/i386-linux-uclibc/bin/i386-uclibc-' here,
+-	  which will ensure the correct compiler is used.
+-
+ config CONFIG_BUILD_AT_ONCE
+ 	bool "Compile all sources at once"
+ 	default n
+diff --git a/Makefile b/Makefile
+index 82bcca62f..e5f31d85e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -216,8 +216,6 @@ randconfig: scripts/config/conf
+ 
+ allyesconfig: scripts/config/conf
+ 	@./scripts/config/conf -y $(CONFIG_CONFIG_IN) > /dev/null
+-	@$(SED) -i -r -e "s/^(USING_CROSS_COMPILER)=.*/# \1 is not set/" .config
+-	@./scripts/config/conf -o $(CONFIG_CONFIG_IN) > /dev/null
+ 
+ allnoconfig: scripts/config/conf
+ 	@./scripts/config/conf -n $(CONFIG_CONFIG_IN) > /dev/null
+@@ -228,13 +226,13 @@ allnoconfig: scripts/config/conf
+ 
+ defconfig: scripts/config/conf
+ 	@./scripts/config/conf -y $(CONFIG_CONFIG_IN) > /dev/null
+-	@$(SED) -i -r -e "s/^(USING_CROSS_COMPILER|CONFIG_(DEBUG.*|STATIC|SELINUX|BUILD_(AT_ONCE|LIBBUSYBOX)|FEATURE_(DEVFS|FULL_LIBBUSYBOX|SHARED_BUSYBOX|MTAB_SUPPORT|CLEAN_UP|UDHCP_DEBUG)|INSTALL_NO_USR))=.*/# \1 is not set/" .config
++	@$(SED) -i -r -e "s/^(CONFIG_(DEBUG.*|STATIC|SELINUX|BUILD_(AT_ONCE|LIBBUSYBOX)|FEATURE_(DEVFS|FULL_LIBBUSYBOX|SHARED_BUSYBOX|MTAB_SUPPORT|CLEAN_UP|UDHCP_DEBUG)|INSTALL_NO_USR))=.*/# \1 is not set/" .config
+ 	@./scripts/config/conf -o $(CONFIG_CONFIG_IN) > /dev/null
+ 
+ 
+ allbareconfig: scripts/config/conf
+ 	@./scripts/config/conf -y $(CONFIG_CONFIG_IN) > /dev/null
+-	@$(SED) -i -r -e "s/^(USING_CROSS_COMPILER|CONFIG_(DEBUG|STATIC|SELINUX|DEVFSD|NC_GAPING_SECURITY_HOLE|BUILD_AT_ONCE)).*/# \1 is not set/" .config
++	@$(SED) -i -r -e "s/^(CONFIG_(DEBUG|STATIC|SELINUX|DEVFSD|NC_GAPING_SECURITY_HOLE|BUILD_AT_ONCE)).*/# \1 is not set/" .config
+ 	@$(SED) -i -e "/FEATURE/s/=.*//;/^[^#]/s/.*FEATURE.*/# \0 is not set/;" .config
+ 	@echo "CONFIG_FEATURE_BUFFERS_GO_ON_STACK=y" >> .config
+ 	@yes n | ./scripts/config/conf -o $(CONFIG_CONFIG_IN) > /dev/null
+diff --git a/Rules.mak b/Rules.mak
+index 61f056661..58a4c3e70 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -24,22 +24,20 @@ BUILDTIME := $(shell TZ=UTC date -u "+%Y.%m.%d-%H:%M%z")
+ # With a modern GNU make(1) (highly recommended, that's what all the
+ # developers use), all of the following configuration values can be
+ # overridden at the command line.  For example:
+-#   make CROSS=powerpc-linux- top_srcdir="$HOME/busybox" PREFIX=/mnt/app
++#   make CROSS_COMPILE=powerpc-linux- top_srcdir="$HOME/busybox" PREFIX=/mnt/app
+ #--------------------------------------------------------
+ 
+-# If you are running a cross compiler, you will want to set 'CROSS'
++# If you are running a cross compiler, you will want to set CROSS_COMPILE
+ # to something more interesting...  Target architecture is determined
+ # by asking the CC compiler what arch it compiles things for, so unless
+ # your compiler is broken, you should not need to specify TARGET_ARCH
+-CROSS          =$(strip $(subst ",, $(strip $(CROSS_COMPILER_PREFIX))))
+-# be gentle to vi coloring.. "))
+-CC             = $(CROSS)gcc
+-AR             = $(CROSS)ar
+-AS             = $(CROSS)as
+-LD             = $(CROSS)ld
+-NM             = $(CROSS)nm
+-STRIP          = $(CROSS)strip
+-ELF2FLT        = $(CROSS)elf2flt
++CC             = $(CROSS_COMPILE)gcc
++AR             = $(CROSS_COMPILE)ar
++AS             = $(CROSS_COMPILE)as
++LD             = $(CROSS_COMPILE)ld
++NM             = $(CROSS_COMPILE)nm
++STRIP          = $(CROSS_COMPILE)strip
++ELF2FLT        = $(CROSS_COMPILE)elf2flt
+ CPP            = $(CC) -E
+ SED           ?= sed
+ BZIP2         ?= bzip2
+@@ -64,7 +62,7 @@ CC_MAJOR:=$(shell printf "%02d" $(shell echo __GNUC__ | $(CC) -E -xc - | tail -n
+ CC_MINOR:=$(shell printf "%02d" $(shell echo __GNUC_MINOR__ | $(CC) -E -xc - | tail -n 1))
+ 
+ #--------------------------------------------------------
+-export VERSION BUILDTIME HOSTCC HOSTCFLAGS CROSS CC AR AS LD NM STRIP CPP
++export VERSION BUILDTIME HOSTCC HOSTCFLAGS CROSS_COMPILE CC AR AS LD NM STRIP CPP
+ ifeq ($(strip $(TARGET_ARCH)),)
+ TARGET_ARCH:=$(shell $(CC) -dumpmachine | $(SED) -e s'/-.*//' \
+ 		-e 's/i.86/i386/' \

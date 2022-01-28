@@ -1,0 +1,328 @@
+"2006-11-29 11:09:43 +0000"
+diff --git a/Config.in b/Config.in
+index 7e20e162b..5e70a523a 100644
+--- a/Config.in
++++ b/Config.in
+@@ -112,13 +112,11 @@ config LOCALE_SUPPORT
+ 	  busybox to support locale settings.
+ 
+ config GETOPT_LONG
+-	bool
++	bool "Enable support for --long-options"
+ 	default y
+-#	bool "Enable support for --long-options"
+-#	default n
+-#	help
+-#	  Enable this if you want busybox applets to use the gnu --long-option
+-#	  style, in addition to single character -a -b -c style options.
++	help
++	  Enable this if you want busybox applets to use the gnu --long-option
++	  style, in addition to single character -a -b -c style options.
+ 
+ config FEATURE_DEVPTS
+ 	bool "Use the devpts filesystem for Unix98 PTYs"
+diff --git a/archival/tar.c b/archival/tar.c
+index ca6c1696e..6a4c4e7e8 100644
+--- a/archival/tar.c
++++ b/archival/tar.c
+@@ -721,8 +721,6 @@ static const struct option tar_long_options[] = {
+ # endif
+ 	{ 0,                    0, 0, 0 }
+ };
+-#else
+-#define tar_long_options	0
+ #endif
+ 
+ int tar_main(int argc, char **argv)
+@@ -750,8 +748,9 @@ int tar_main(int argc, char **argv)
+ 		USE_FEATURE_TAR_CREATE("c:") "t:x:" // at least one of these is reqd
+ 		USE_FEATURE_TAR_CREATE("c--tx:t--cx:x--ct") // mutually exclusive
+ 		SKIP_FEATURE_TAR_CREATE("t--x:x--t"); // mutually exclusive
+-	if (ENABLE_FEATURE_TAR_LONG_OPTIONS)
+-		applet_long_options = tar_long_options;
++#if ENABLE_FEATURE_TAR_LONG_OPTIONS
++	applet_long_options = tar_long_options;
++#endif
+ 	opt = getopt32(argc, argv,
+ 		"txC:f:Opvk"
+ 		USE_FEATURE_TAR_CREATE(  "ch"  )
+diff --git a/coreutils/ls.c b/coreutils/ls.c
+index 79e47ee6b..960c161b0 100644
+--- a/coreutils/ls.c
++++ b/coreutils/ls.c
+@@ -648,10 +648,12 @@ static int list_single(struct dnode *dn)
+ #endif
+ 		case LIST_FILENAME:
+ 			errno = 0;
++#if ENABLE_FEATURE_LS_COLOR
+ 			if (show_color && !lstat(dn->fullname, &info)) {
+ 				printf("\033[%d;%dm", bgcolor(info.st_mode),
+ 						fgcolor(info.st_mode));
+ 			}
++#endif
+ 			column += printf("%s", dn->name);
+ 			if (show_color) {
+ 				printf("\033[0m");
+@@ -667,11 +669,13 @@ static int list_single(struct dnode *dn)
+ 					append = append_char(info.st_mode);
+ 				}
+ #endif
++#if ENABLE_FEATURE_LS_COLOR
+ 				if (show_color) {
+ 					errno = 0;
+ 					printf("\033[%d;%dm", bgcolor(info.st_mode),
+ 						   fgcolor(info.st_mode));
+ 				}
++#endif
+ 				column += printf("%s", lpath) + 4;
+ 				if (show_color) {
+ 					printf("\033[0m");
+diff --git a/coreutils/od_bloaty.c b/coreutils/od_bloaty.c
+index dff7e3f50..b818521e4 100644
+--- a/coreutils/od_bloaty.c
++++ b/coreutils/od_bloaty.c
+@@ -858,6 +858,8 @@ format_address_std(off_t address, char c)
+ 	printf(address_fmt, address_pad_len, address);
+ }
+ 
++#if ENABLE_GETOPT_LONG
++/* only used with --traditional */
+ static void
+ format_address_paren(off_t address, char c)
+ {
+@@ -872,7 +874,7 @@ format_address_label(off_t address, char c)
+ 	format_address_std(address, ' ');
+ 	format_address_paren(address + pseudo_offset, c);
+ }
+-
++#endif
+ 
+ static void
+ dump_hexl_mode_trailer(size_t n_bytes, const char *block)
+@@ -978,6 +980,7 @@ get_lcm(void)
+ 	return l_c_m;
+ }
+ 
++#if ENABLE_GETOPT_LONG
+ /* If S is a valid traditional offset specification with an optional
+    leading '+' return nonzero and set *OFFSET to the offset it denotes.  */
+ 
+@@ -1011,6 +1014,7 @@ parse_old_offset(const char *s, off_t *offset)
+ 
+ 	return (*offset >= 0);
+ }
++#endif
+ 
+ /* Read a chunk of size BYTES_PER_BLOCK from the input files, write the
+    formatted block to standard output, and repeat until the specified
+@@ -1235,8 +1239,9 @@ od_main(int argc, char **argv)
+ 		OPT_s = 1 << 15,
+ 		OPT_S = 1 << 16,
+ 		OPT_w = 1 << 17,
+-		OPT_traditional = 1 << 18,
++		OPT_traditional = (1 << 18) * ENABLE_GETOPT_LONG,
+ 	};
++#if ENABLE_GETOPT_LONG
+ 	static const struct option long_options[] = {
+ 		{ "skip-bytes",    required_argument, NULL, 'j' },
+ 		{ "address-radix", required_argument, NULL, 'A' },
+@@ -1248,6 +1253,7 @@ od_main(int argc, char **argv)
+ 		{ "traditional",   no_argument,       NULL, 0xff },
+ 		{ NULL, 0, NULL, 0 }
+ 	};
++#endif
+ 	char *str_A, *str_N, *str_j, *str_S;
+ 	char *str_w = NULL;
+ 	llist_t *lst_t = NULL;
+@@ -1260,7 +1266,9 @@ od_main(int argc, char **argv)
+ 
+ 	/* Parse command line */
+ 	opt_complementary = "t::"; // list
++#if ENABLE_GETOPT_LONG
+ 	applet_long_options = long_options;
++#endif
+ 	opt = getopt32(argc, argv, "A:N:abcdfhij:lot:vxsS:"
+ 		"w::", // -w with optional param
+ 		// -S was -s and also had optional parameter
+@@ -1333,6 +1341,7 @@ od_main(int argc, char **argv)
+ 	 * FIXME: POSIX 1003.1-2001 with XSI requires support for the
+ 	 * traditional syntax even if --traditional is not given.  */
+ 
++#if ENABLE_GETOPT_LONG
+ 	if (opt & OPT_traditional) {
+ 		off_t o1, o2;
+ 
+@@ -1388,6 +1397,7 @@ od_main(int argc, char **argv)
+ 			}
+ 		}
+ 	}
++#endif
+ 
+ 	if (limit_bytes_to_format) {
+ 		end_offset = n_bytes_to_skip + max_bytes_to_format;
+diff --git a/include/libbb.h b/include/libbb.h
+index baab74878..f891e1bc4 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -333,7 +333,9 @@ extern unsigned uidgid_get(struct bb_uidgid_t*, const char* /*, unsigned*/);
+ 
+ enum { BB_GETOPT_ERROR = 0x80000000 };
+ extern const char *opt_complementary;
++#if ENABLE_GETOPT_LONG
+ extern const struct option *applet_long_options;
++#endif
+ extern uint32_t option_mask32;
+ extern uint32_t getopt32(int argc, char **argv, const char *applet_opts, ...);
+ 
+@@ -369,7 +371,7 @@ extern void bb_herror_msg_and_die(const char *s, ...) __attribute__ ((noreturn,
+ extern void bb_perror_nomsg_and_die(void) ATTRIBUTE_NORETURN;
+ extern void bb_perror_nomsg(void);
+ extern void bb_info_msg(const char *s, ...) __attribute__ ((format (printf, 1, 2)));
+-/* These two are used internally -- you shouldn't need to use them */
++/* These are used internally -- you shouldn't need to use them */
+ extern void bb_verror_msg(const char *s, va_list p, const char *strerr);
+ extern void bb_vperror_msg(const char *s, va_list p);
+ extern void bb_vinfo_msg(const char *s, va_list p);
+diff --git a/networking/ftpgetput.c b/networking/ftpgetput.c
+index 1facfa3d8..223d2435c 100644
+--- a/networking/ftpgetput.c
++++ b/networking/ftpgetput.c
+@@ -264,15 +264,13 @@ int ftp_send(ftp_host_info_t *server, FILE *control_stream,
+ 
+ #if ENABLE_FEATURE_FTPGETPUT_LONG_OPTIONS
+ static const struct option ftpgetput_long_options[] = {
+-	{"continue", 1, NULL, 'c'},
+-	{"verbose", 0, NULL, 'v'},
+-	{"username", 1, NULL, 'u'},
+-	{"password", 1, NULL, 'p'},
+-	{"port", 1, NULL, 'P'},
+-	{0, 0, 0, 0}
++	{ "continue", 1, NULL, 'c' },
++	{ "verbose", 0, NULL, 'v' },
++	{ "username", 1, NULL, 'u' },
++	{ "password", 1, NULL, 'p' },
++	{ "port", 1, NULL, 'P' },
++	{ 0, 0, 0, 0 }
+ };
+-#else
+-#define ftpgetput_long_options 0
+ #endif
+ 
+ int ftpgetput_main(int argc, char **argv)
+@@ -307,9 +305,9 @@ int ftpgetput_main(int argc, char **argv)
+ 	/*
+ 	 * Decipher the command line
+ 	 */
+-	if (ENABLE_FEATURE_FTPGETPUT_LONG_OPTIONS)
+-		applet_long_options = ftpgetput_long_options;
+-
++#if ENABLE_FEATURE_FTPGETPUT_LONG_OPTIONS
++	applet_long_options = ftpgetput_long_options;
++#endif
+ 	opt = getopt32(argc, argv, "cvu:p:P:", &server->user, &server->password, &port);
+ 
+ 	/* Process the non-option command line arguments */
+diff --git a/networking/ipcalc.c b/networking/ipcalc.c
+index 909373cbb..0ee9646c2 100644
+--- a/networking/ipcalc.c
++++ b/networking/ipcalc.c
+@@ -64,19 +64,18 @@ int get_prefix(unsigned long netmask);
+ 
+ #if ENABLE_FEATURE_IPCALC_LONG_OPTIONS
+ 	static const struct option long_options[] = {
+-		{"netmask",		no_argument, NULL, 'm'},
+-		{"broadcast",	no_argument, NULL, 'b'},
+-		{"network",		no_argument, NULL, 'n'},
+-#ifdef CONFIG_FEATURE_IPCALC_FANCY
+-		{"prefix",		no_argument, NULL, 'p'},
+-		{"hostname",	no_argument, NULL, 'h'},
+-		{"silent",		no_argument, NULL, 's'},
+-#endif
+-		{NULL, 0, NULL, 0}
++		{ "netmask",     no_argument, NULL, 'm' },
++		{ "broadcast",   no_argument, NULL, 'b' },
++		{ "network",     no_argument, NULL, 'n' },
++# if ENABLE_FEATURE_IPCALC_FANCY
++		{ "prefix",      no_argument, NULL, 'p' },
++		{ "hostname",	 no_argument, NULL, 'h' },
++		{ "silent",      no_argument, NULL, 's' },
++# endif
++		{ NULL, 0, NULL, 0 }
+ 	};
+-#else
+-#define long_options 0
+ #endif
++
+ int ipcalc_main(int argc, char **argv)
+ {
+ 	unsigned opt;
+@@ -85,9 +84,9 @@ int ipcalc_main(int argc, char **argv)
+ 	struct in_addr a;
+ 	char *ipstr;
+ 
+-	if (ENABLE_FEATURE_IPCALC_LONG_OPTIONS)
+-		applet_long_options = long_options;
+-
++#if ENABLE_FEATURE_IPCALC_LONG_OPTIONS
++	applet_long_options = long_options;
++#endif
+ 	opt = getopt32(argc, argv, "mbn" USE_FEATURE_IPCALC_FANCY("phs"));
+ 	argc -= optind;
+ 	argv += optind;
+diff --git a/networking/udhcp/dhcpc.c b/networking/udhcp/dhcpc.c
+index f69b687b2..71315ff0a 100644
+--- a/networking/udhcp/dhcpc.c
++++ b/networking/udhcp/dhcpc.c
+@@ -160,6 +160,7 @@ int udhcpc_main(int argc, char *argv[])
+ 		OPT_t = 1 << 16,
+ 		OPT_v = 1 << 17,
+ 	};
++#if ENABLE_GETOPT_LONG
+ 	static const struct option arg_options[] = {
+ 		{ "clientid",   required_argument,      0, 'c' },
+ 		{ "clientid-none", no_argument,         0, 'C' },
+@@ -181,7 +182,7 @@ int udhcpc_main(int argc, char *argv[])
+ 		{ "retries",    required_argument,      0, 't' },
+ 		{ 0, 0, 0, 0 }
+ 	};
+-
++#endif
+ 	/* Default options. */
+ 	client_config.interface = "eth0";
+ 	client_config.script = DEFAULT_SCRIPT;
+@@ -191,7 +192,9 @@ int udhcpc_main(int argc, char *argv[])
+ 	/* Parse command line */
+ 	opt_complementary = "?:c--C:C--c" // mutually exclusive
+ 	                    ":hH:Hh"; // -h and -H are the same
++#if ENABLE_GETOPT_LONG
+ 	applet_long_options = arg_options;
++#endif
+ 	opt = getopt32(argc, argv, "c:CV:fbH:h:F:i:np:qRr:s:T:t:v",
+ 		&str_c, &str_V, &str_h, &str_h, &str_F,
+ 		&client_config.interface, &client_config.pidfile, &str_r,
+diff --git a/scripts/kconfig/zconf.tab.c_shipped b/scripts/kconfig/zconf.tab.c_shipped
+index ea7755da8..e14eafa6c 100644
+--- a/scripts/kconfig/zconf.tab.c_shipped
++++ b/scripts/kconfig/zconf.tab.c_shipped
+@@ -1949,7 +1949,7 @@ void conf_parse(const char *name)
+ 	sym_init();
+ 	menu_init();
+ 	modules_sym = sym_lookup("MODULES", 0);
+-	rootmenu.prompt = menu_add_prompt(P_MENU, "Linux Kernel Configuration", NULL);
++	rootmenu.prompt = menu_add_prompt(P_MENU, "Busybox Configuration", NULL);
+ 
+ #if YYDEBUG
+ 	if (getenv("ZCONF_DEBUG"))
+diff --git a/scripts/kconfig/zconf.y b/scripts/kconfig/zconf.y
+index 1f61fba6a..0a7a79664 100644
+--- a/scripts/kconfig/zconf.y
++++ b/scripts/kconfig/zconf.y
+@@ -459,7 +459,7 @@ void conf_parse(const char *name)
+ 	sym_init();
+ 	menu_init();
+ 	modules_sym = sym_lookup("MODULES", 0);
+-	rootmenu.prompt = menu_add_prompt(P_MENU, "Linux Kernel Configuration", NULL);
++	rootmenu.prompt = menu_add_prompt(P_MENU, "Busybox Configuration", NULL);
+ 
+ #if YYDEBUG
+ 	if (getenv("ZCONF_DEBUG"))

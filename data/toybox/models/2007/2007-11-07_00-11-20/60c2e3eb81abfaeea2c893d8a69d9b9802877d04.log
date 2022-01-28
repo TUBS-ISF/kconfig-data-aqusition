@@ -1,0 +1,95 @@
+"2007-11-07 00:11:20 +0000"
+diff --git a/toys/Config.in b/toys/Config.in
+index fbc633fe..e9ab177d 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -189,6 +189,17 @@ config MKE2FS_EXTENDED
+ 	     journal_dev  Set by -J device=XXX
+ 	     sparse_super Don't allocate huge numbers of redundant superblocks
+ 
++config MKFIFO
++	bool "mkfifo"
++	default y
++	help
++	  usage: mkfifo [-m mode] name...
++
++	  Makes a named pipe at name.
++
++	  -m mode	The mode of the pipe(s) created by mkfifo. It defaults to 0644.
++				The format is in octal, optionally preceded by a leading zero.
++
+ config ONEIT
+ 	bool "oneit"
+ 	default y
+diff --git a/toys/mkfifo.c b/toys/mkfifo.c
+new file mode 100644
+index 00000000..f7cc5b6b
+--- /dev/null
++++ b/toys/mkfifo.c
+@@ -0,0 +1,39 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * mkfifo.c: Create a named pipe.
++ */
++
++#include "toys.h"
++
++int mkfifo_main(void)
++{
++	char *arg;
++	int i;
++	mode_t mode;
++
++	if (toys.optflags) {
++		long temp;
++		char *end;
++		int len = strlen(toy.mkfifo.mode);
++		temp = strtol(toy.mkfifo.mode, &end, 8);
++		switch (temp) {
++			case LONG_MAX:
++			case LONG_MIN:
++			case 0:
++				if (!errno)
++					break;
++				error_exit("Invalid mode");
++		}
++		if (temp > 0777 || *end || len < 3 || len > 4)
++			error_exit("Invalid mode");
++		mode = (mode_t)temp;
++	} else {
++		mode = 0644;
++	}
++
++	for (i = 0; (arg = toys.optargs[i]); i++)
++		if (mkfifo(arg, mode))
++			perror_exit(arg);
++
++	return 0;
++}
+diff --git a/toys/toylist.h b/toys/toylist.h
+index b717c93b..2c308ef7 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -61,9 +61,14 @@ struct toysh_data {
+ 	char *command;
+ };
+ 
++struct mkfifo_data {
++	char *mode;
++};
++
+ extern union toy_union {
+ 	struct df_data df;
+ 	struct mke2fs_data mke2fs;
++	struct mkfifo_data mkfifo;
+ 	struct sleep_data sleep;
+ 	struct touch_data touch;
+ 	struct toysh_data toysh;
+@@ -104,6 +109,7 @@ USE_FALSE(NEWTOY(false, NULL, TOYFLAG_BIN))
+ USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_USR|TOYFLAG_BIN))
+ USE_HELP(NEWTOY(help, "<1", TOYFLAG_BIN))
+ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))
++USE_MKFIFO(NEWTOY(mkfifo, "<1m:", TOYFLAG_BIN))
+ USE_ONEIT(NEWTOY(oneit, "+<1p", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
+ USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))

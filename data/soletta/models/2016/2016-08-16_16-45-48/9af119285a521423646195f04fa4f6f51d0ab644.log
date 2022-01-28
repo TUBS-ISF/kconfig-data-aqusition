@@ -1,0 +1,70 @@
+"2016-08-16 16:45:48 -0300"
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index d59d301a..13d6ff98 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -16,6 +16,13 @@ config DTLS
+ 
+ 	    If unsure, say N.
+ 
++config DTLS_EXTRAS
++	bool "Enable some DTLS extra features used by OIC"
++	default n
++	depends on DTLS
++	help
++            This is needed when one wants OIC to support crypto.
++
+ config BLUETOOTH
+        bool
+ 
+diff --git a/src/lib/comms/sol-socket-dtls-impl-tinydtls.c b/src/lib/comms/sol-socket-dtls-impl-tinydtls.c
+index 026dda20..25171609 100644
+--- a/src/lib/comms/sol-socket-dtls-impl-tinydtls.c
++++ b/src/lib/comms/sol-socket-dtls-impl-tinydtls.c
+@@ -729,7 +729,9 @@ sol_socket_dtls_set_handshake_cipher(struct sol_socket *s,
+     enum sol_socket_dtls_cipher cipher)
+ {
+     static const dtls_cipher_t conv_tbl[] = {
++#ifdef DTLS_EXTRAS
+         [SOL_SOCKET_DTLS_CIPHER_ECDH_ANON_AES128_CBC_SHA256] = TLS_ECDH_anon_WITH_AES_128_CBC_SHA_256,
++#endif
+         [SOL_SOCKET_DTLS_CIPHER_PSK_AES128_CCM8] = TLS_PSK_WITH_AES_128_CCM_8,
+         [SOL_SOCKET_DTLS_CIPHER_ECDHE_ECDSA_AES128_CCM8] = TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8
+     };
+@@ -737,6 +739,13 @@ sol_socket_dtls_set_handshake_cipher(struct sol_socket *s,
+ 
+     SOL_INT_CHECK(socket->dtls_magic, != dtls_magic, -EINVAL);
+ 
++#ifndef DTLS_EXTRAS
++    if (cipher == SOL_SOCKET_DTLS_CIPHER_ECDH_ANON_AES128_CBC_SHA256) {
++        SOL_WRN("To enable SOL_SOCKET_DTLS_CIPHER_ECDH_ANON_AES128_CBC_SHA256 compile Soletta with DTLS Extras");
++        return -EINVAL;
++    }
++#endif
++
+     if ((size_t)cipher >= sol_util_array_size(conv_tbl))
+         return -EINVAL;
+ 
+@@ -745,6 +754,7 @@ sol_socket_dtls_set_handshake_cipher(struct sol_socket *s,
+     return 0;
+ }
+ 
++#ifdef DTLS_EXTRAS
+ int
+ sol_socket_dtls_set_anon_ecdh_enabled(struct sol_socket *s, bool setting)
+ {
+@@ -757,6 +767,14 @@ sol_socket_dtls_set_anon_ecdh_enabled(struct sol_socket *s, bool setting)
+ 
+     return 0;
+ }
++#else
++int
++sol_socket_dtls_set_anon_ecdh_enabled(struct sol_socket *s, bool setting)
++{
++    SOL_WRN("To enable sol_socket_dtls_set_anon_ecdh_enabled() compile Soletta with DTLS Extras");
++    return -ENOSYS;
++}
++#endif
+ 
+ int
+ sol_socket_dtls_prf_keyblock(struct sol_socket *s,

@@ -1,0 +1,127 @@
+"2003-10-09 09:43:18 +0000"
+diff --git a/include/usage.h b/include/usage.h
+index ba808d39a..c109d0cf6 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2214,6 +2214,11 @@
+ 	"Write all buffered filesystem blocks to disk."
+ 
+ 
++#ifdef CONFIG_FEATURE_ROTATE_LOGFILE
++	#define USAGE_ROTATE_LOGFILE(a) a
++#else
++	#define USAGE_ROTATE_LOGFILE(a) 
++#endif
+ #ifdef CONFIG_FEATURE_REMOTE_LOG
+   #define USAGE_REMOTE_LOG(a) a
+ #else
+@@ -2234,6 +2239,9 @@
+ 	"\t-m NUM\t\tInterval between MARK lines (default=20min, 0=off)\n" \
+ 	"\t-n\t\tRun as a foreground process\n" \
+ 	"\t-O FILE\t\tUse an alternate log file (default=/var/log/messages)" \
++	USAGE_ROTATE_LOGFILE( \
++	"\n\t-s SIZE\t\tMax size (KB) bevor rotate (default=200KB, 0=off)\n" \
++	"\t-b NUM\t\tNumber of rotated log files (default=1, 0=purge log)") \
+ 	USAGE_REMOTE_LOG( \
+ 	"\n\t-R HOST[:PORT]\tLog to IP or hostname on PORT (default PORT=514/UDP)\n" \
+ 	"\t-L\t\tLog locally and via network logging (default is network only)") \
+diff --git a/sysklogd/Config.in b/sysklogd/Config.in
+index 87b9ed7ac..83640bb3f 100644
+--- a/sysklogd/Config.in
++++ b/sysklogd/Config.in
+@@ -20,6 +20,14 @@ config CONFIG_SYSLOGD
+ 	  wrong.  And something almost always will go wrong if
+ 	  you wait long enough....
+ 
++config CONFIG_FEATURE_ROTATE_LOGFILE
++	bool "  Rotate message files"
++	default n
++	depends on CONFIG_SYSLOGD
++	help
++	  This enables syslogd to rotate the message files
++	  on his own. No need to use an external rotatescript.
++
+ config CONFIG_FEATURE_REMOTE_LOG
+ 	bool "  Remote Log support"
+ 	default n
+diff --git a/sysklogd/syslogd.c b/sysklogd/syslogd.c
+index 3ba239882..74b242c42 100644
+--- a/sysklogd/syslogd.c
++++ b/sysklogd/syslogd.c
+@@ -58,6 +58,14 @@ static char lfile[MAXPATHLEN];
+ 
+ static const char *logFilePath = __LOG_FILE;
+ 
++#ifdef CONFIG_FEATURE_ROTATE_LOGFILE
++/* max size of message file bevor being rotated */
++static int logFileSize = 200 * 1024;
++
++/* number of rotated message files */
++static int logFileRotate = 1;
++#endif
++
+ /* interval between marks in seconds */
+ static int MarkInterval = 20 * 60;
+ 
+@@ -305,6 +313,36 @@ static void message(char *fmt, ...)
+ 							 O_NONBLOCK)) >= 0) {
+ 		fl.l_type = F_WRLCK;
+ 		fcntl(fd, F_SETLKW, &fl);
++#ifdef CONFIG_FEATURE_ROTATE_LOGFILE
++		if ( logFileSize > 0 ) {
++			struct stat statf;
++			int r = fstat(fd, &statf);
++			if( !r && (statf.st_mode & S_IFREG)
++				&& (lseek(fd,0,SEEK_END) > logFileSize) ) {
++				if(logFileRotate > 0) {
++					int i;
++					char oldFile[(strlen(logFilePath)+3)], newFile[(strlen(logFilePath)+3)];
++					for(i=logFileRotate-1;i>0;i--) {
++						sprintf(oldFile, "%s.%d", logFilePath, i-1);
++						sprintf(newFile, "%s.%d", logFilePath, i);
++						rename(oldFile, newFile);
++					}
++					sprintf(newFile, "%s.%d", logFilePath, 0);
++					fl.l_type = F_UNLCK;
++					fcntl (fd, F_SETLKW, &fl);
++					close(fd);
++					rename(logFilePath, newFile);
++					fd = device_open (logFilePath,
++						   O_WRONLY | O_CREAT | O_NOCTTY | O_APPEND |
++						   O_NONBLOCK);
++					fl.l_type = F_WRLCK;
++					fcntl (fd, F_SETLKW, &fl);
++				} else {
++					ftruncate( fd, 0 );
++				}
++			}
++		}
++#endif
+ 		va_start(arguments, fmt);
+ 		vdprintf(fd, fmt, arguments);
+ 		va_end(arguments);
+@@ -578,7 +616,7 @@ extern int syslogd_main(int argc, char **argv)
+ 	char *p;
+ 
+ 	/* do normal option parsing */
+-	while ((opt = getopt(argc, argv, "m:nO:R:LC::")) > 0) {
++	while ((opt = getopt(argc, argv, "m:nO:s:b:R:LC::")) > 0) {
+ 		switch (opt) {
+ 		case 'm':
+ 			MarkInterval = atoi(optarg) * 60;
+@@ -589,6 +627,15 @@ extern int syslogd_main(int argc, char **argv)
+ 		case 'O':
+ 			logFilePath = optarg;
+ 			break;
++#ifdef CONFIG_FEATURE_ROTATE_LOGFILE
++		case 's':
++			logFileSize = atoi(optarg) * 1024;
++			break;
++		case 'b':
++			logFileRotate = atoi(optarg);
++			if( logFileRotate > 99 ) logFileRotate = 99;
++			break;
++#endif
+ #ifdef CONFIG_FEATURE_REMOTE_LOG
+ 		case 'R':
+ 			RemoteHost = bb_xstrdup(optarg);

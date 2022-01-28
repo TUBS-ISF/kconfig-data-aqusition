@@ -1,0 +1,233 @@
+"2014-12-12 16:18:12 +0100"
+diff --git a/Makefile.in b/Makefile.in
+index 3b8e04348..5d60ddaba 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -276,7 +276,7 @@ HEADERS_RM-$(UCLIBC_HAS_GETTEXT_AWARENESS)   += libintl.h
+ HEADERS_RM-$(UCLIBC_HAS_GLIBC_CUSTOM_PRINTF) += printf.h
+ HEADERS_RM-$(UCLIBC_HAS_GLOB)                += glob.h
+ HEADERS_RM-$(UCLIBC_HAS_GNU_ERROR)           += error.h
+-HEADERS_RM-$(UCLIBC_HAS_GNU_GETOPT)$(UCLIBC_HAS_GETOPT_LONG) += getopt.h
++HEADERS_RM-$(UCLIBC_HAS_GETOPT_LONG)         += getopt.h
+ HEADERS_RM-$(UCLIBC_HAS_IPV6)                += netinet/ip6.h netinet/icmp6.h
+ HEADERS_RM-$(UCLIBC_HAS_BACKTRACE)           += execinfo.h
+ HEADERS_RM-$(UCLIBC_HAS_LOCALE)              += iconv.h bits/uClibc_ctype.h
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 00480e9eb..8e603b2ad 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1893,25 +1893,25 @@ config UCLIBC_HAS_GNU_GETOPT
+ 	help
+ 	  Answer Y if you want to include full gnu getopt() instead of a
+ 	  (much smaller) SUSv3 compatible getopt().
++	  Note that getopt_long, getopt_long_only as well as getsubopt
++	  are implemented on top of this choice.
+ 
+ 	  Most people will answer Y.
+ 
+ config UCLIBC_HAS_GETOPT_LONG
+-	bool "Support getopt_long/getopt_long_only"
+-	depends on !UCLIBC_HAS_GNU_GETOPT
++	bool "Support getopt_long/getopt_long_only (glibc-compat)"
+ 	default y
+ 	help
+-	  Answer Y if you want to include getopt_long[_only() used by many
+-	  apps, even busybox.
++	  Answer Y if you want to include getopt_long[_only()] used by many
++	  apps.
+ 
+ 	  Most people will answer Y.
+ 
+ config UCLIBC_HAS_GNU_GETSUBOPT
+-	bool "Support glibc getsubopt"
++	bool "Support getsubopt"
+ 	default y
+ 	help
+-	  Answer Y if you want to include glibc getsubopt() instead of a
+-	  smaller SUSv3 compatible getsubopt().
++	  Answer Y if you want to include getsubopt().
+ 
+ 	  Most people will answer Y.
+ endmenu
+diff --git a/extra/config/conf.c b/extra/config/conf.c
+index db0905319..b24c1c355 100644
+--- a/extra/config/conf.c
++++ b/extra/config/conf.c
+@@ -10,7 +10,6 @@
+ #include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+-#include <getopt.h>
+ #include <sys/stat.h>
+ #include <sys/time.h>
+ #include <errno.h>
+@@ -447,7 +446,7 @@ static void check_conf(struct menu *menu)
+ }
+ 
+ #if 00 // || !defined __UCLIBC__ || \
+-	(defined UCLIBC_HAS_GETOPT_LONG || defined UCLIBC_HAS_GNU_GETOPT)
++	defined __UCLIBC_HAS_GETOPT_LONG__
+ static struct option long_opts[] = {
+ 	{"oldaskconfig",    no_argument,       NULL, oldaskconfig},
+ 	{"oldconfig",       no_argument,       NULL, oldconfig},
+@@ -526,7 +525,7 @@ int main(int ac, char **av)
+ 	tty_stdio = isatty(0) && isatty(1) && isatty(2);
+ 
+ #if 00// !defined __UCLIBC__ || \
+-	(defined UCLIBC_HAS_GETOPT_LONG || defined UCLIBC_HAS_GNU_GETOPT)
++	defined __UCLIBC_HAS_GETOPT_LONG__
+ 	while ((opt = getopt_long(ac, av, "", long_opts, NULL)) != -1)
+ #else
+ 	char *gch = "asonymArDSld";
+diff --git a/include/getopt.h b/include/getopt.h
+index a682f9ca8..de9da2686 100644
+--- a/include/getopt.h
++++ b/include/getopt.h
+@@ -1,4 +1,4 @@
+-/* This file will not be installed if not using gnu getopt. */
++/* This file will not be installed if not using getopt_long. */
+ 
+ #include <bits/getopt.h>
+ 
+diff --git a/libc/sysdeps/linux/common/bits/getopt.h b/libc/sysdeps/linux/common/bits/getopt.h
+index a49f023ce..dababe07d 100644
+--- a/libc/sysdeps/linux/common/bits/getopt.h
++++ b/libc/sysdeps/linux/common/bits/getopt.h
+@@ -126,7 +126,7 @@ extern int getopt (int ___argc, char *const *___argv, const char *__shortopts)
+        __THROW;
+ libc_hidden_proto(getopt)
+ 
+-#if defined __UCLIBC_HAS_GNU_GETOPT__ || defined __UCLIBC_HAS_GETOPT_LONG__
++#if defined __UCLIBC_HAS_GETOPT_LONG__
+ #ifndef __need_getopt
+ extern int getopt_long (int ___argc, char *const *___argv,
+ 			const char *__shortopts,
+diff --git a/libc/unistd/Makefile.in b/libc/unistd/Makefile.in
+index b15d60a16..659008d4d 100644
+--- a/libc/unistd/Makefile.in
++++ b/libc/unistd/Makefile.in
+@@ -16,10 +16,16 @@ OMIT-$(ARCH_USE_MMU) += __exec_alloc.c
+ OMIT-$(if $(UCLIBC_SUSV3_LEGACY),,y) += ualarm.c usleep.c
+ #OMIT-$(UCLIBC_HAS_THREADS_NATIVE) += sleep.c
+ 
+-# XXX: GNU_GETOPT comes with getopt_long unconditionally, which is wrong
+-GO_LONG := $(if $(UCLIBC_HAS_GNU_GETOPT),getopt_long-simple.c)
+-OMIT-y += $(if $(UCLIBC_HAS_GNU_GETOPT),getopt-susv3.c $(GO_LONG),getopt.c)
+-OMIT-y += $(if $(UCLIBC_HAS_GNU_GETSUBOPT),getsubopt-susv3.c,getsubopt.c)
++ifeq ($(UCLIBC_HAS_GNU_GETOPT),y)
++# GNU getopt family
++OMIT-y += getopt-susv3.c getopt_long-simple.c getsubopt-susv3.c
++OMIT-y += $(if $(UCLIBC_HAS_GNU_GETSUBOPT),,getsubopt.c)
++else
++# SuS getopt family
++OMIT-y += getopt.c getsubopt.c
++OMIT-y += $(if $(UCLIBC_HAS_GETOPT_LONG),,getopt_long-simple.c)
++OMIT-y += $(if $(UCLIBC_HAS_GNU_GETSUBOPT),,getsubopt-susv3.c)
++endif
+ 
+ CSRC-y := $(filter-out $(OMIT-y),$(CSRC-y))
+ 
+diff --git a/libc/unistd/getopt.c b/libc/unistd/getopt.c
+index 3944c7c1f..f63482bc8 100644
+--- a/libc/unistd/getopt.c
++++ b/libc/unistd/getopt.c
+@@ -1162,6 +1162,7 @@ getopt (int argc, char *const *argv, const char *optstring)
+ }
+ libc_hidden_def(getopt)
+ 
++#if defined __UCLIBC_HAS_GETOPT_LONG__
+ int
+ getopt_long (int argc, char *const *argv, const char *options,
+ 	     const struct option *long_options, int *opt_index)
+@@ -1180,5 +1181,6 @@ getopt_long_only (int argc, char *const *argv, const char *options,
+ {
+   return _getopt_internal (argc, argv, options, long_options, opt_index, 1);
+ }
++#endif /* __UCLIBC_HAS_GETOPT_LONG__ */
+ 
+ #endif	/* Not ELIDE_CODE.  */
+diff --git a/test/nptl/tst-cancel7.c b/test/nptl/tst-cancel7.c
+index 3bdfa9fa6..fe543f73f 100644
+--- a/test/nptl/tst-cancel7.c
++++ b/test/nptl/tst-cancel7.c
+@@ -196,13 +196,16 @@ do_cleanup (void)
+ #define OPT_COMMAND	10000
+ #define OPT_PIDFILE	10001
+ #define CMDLINE_OPTIONS \
++	"c:p:"
++/*
+   { "command", required_argument, NULL, OPT_COMMAND },	\
+   { "pidfile", required_argument, NULL, OPT_PIDFILE },
++*/
+ #define CMDLINE_PROCESS \
+-  case OPT_COMMAND:	\
++  case 'c':	\
+     command = optarg;	\
+     break;		\
+-  case OPT_PIDFILE:	\
++  case 'p':	\
+     pidfile = optarg;	\
+     break;
+ // #define CLEANUP_HANDLER do_cleanup ()
+diff --git a/test/nptl/tst-mqueue7.c b/test/nptl/tst-mqueue7.c
+index e8d53ad83..01d7cd7d6 100644
+--- a/test/nptl/tst-mqueue7.c
++++ b/test/nptl/tst-mqueue7.c
+@@ -32,10 +32,12 @@
+ static mqd_t after_exec = (mqd_t) -1;
+ 
+ #define CMDLINE_OPTIONS \
++	"a:"
++/*
+   { "after-exec", required_argument, NULL, OPT_AFTEREXEC },
+-
++*/
+ #define CMDLINE_PROCESS \
+-  case OPT_AFTEREXEC:					\
++  case 'a':					\
+     after_exec = (mqd_t) strtoul (optarg, NULL, 0);	\
+     break;
+ 
+diff --git a/test/test-skeleton.c b/test/test-skeleton.c
+index 6d4a8b636..743339f8d 100644
+--- a/test/test-skeleton.c
++++ b/test/test-skeleton.c
+@@ -18,7 +18,6 @@
+    <http://www.gnu.org/licenses/>.  */
+ 
+ #include <errno.h>
+-#include <getopt.h>
+ #include <malloc.h>
+ #include <search.h>
+ #include <signal.h>
+@@ -46,6 +45,7 @@
+ #define OPT_DIRECT 1000
+ #define OPT_TESTDIR 1001
+ 
++#if 0 /* Not used in uClibc */
+ static struct option options[] =
+ {
+ #ifdef CMDLINE_OPTIONS
+@@ -55,6 +55,7 @@ static struct option options[] =
+   { "test-dir", required_argument, NULL, OPT_TESTDIR },
+   { NULL, 0, NULL, 0 }
+ };
++#endif
+ 
+ /* PID of the test itself.  */
+ static pid_t pid;
+@@ -234,7 +235,14 @@ main (int argc, char *argv[])
+   setbuf (stdout, NULL);
+ #endif
+ 
++#if 0 /* Not used in uClibc */
+   while ((opt = getopt_long (argc, argv, "+", options, NULL)) != -1)
++#else
++# ifndef CMDLINE_OPTIONS
++#  define CMDLINE_OPTIONS ""
++# endif
++  while ((opt = getopt (argc, argv, "+" CMDLINE_OPTIONS)) >= 0)
++#endif
+     switch (opt)
+       {
+       case '?':

@@ -1,0 +1,981 @@
+"2017-08-20 12:53:17 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 59ef31c47..ce832b55b 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -250,7 +250,6 @@ config TARGET_SUBARCH
+ 	default "i486" if CONFIG_486
+ 	default "i586" if CONFIG_586
+ 	default "i686" if CONFIG_686
+-	default "arcv2" if CONFIG_ARC_CPU_HS
+ 	default ""
+ 
+ source "extra/Configs/Config.in.arch"
+diff --git a/libc/string/arc/arcv2/memcpy.S b/libc/string/arc/arcv2/memcpy.S
+deleted file mode 100644
+index ba29e8790..000000000
+--- a/libc/string/arc/arcv2/memcpy.S
++++ /dev/null
+@@ -1,236 +0,0 @@
+-/*
+- * Copyright (C) 2014-15 Synopsys, Inc. (www.synopsys.com)
+- *
+- * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
+- */
+-
+-#include <features.h>
+-#include <sysdep.h>
+-
+-#ifdef __LITTLE_ENDIAN__
+-# define SHIFT_1(RX,RY,IMM)	asl	RX, RY, IMM	; <<
+-# define SHIFT_2(RX,RY,IMM)	lsr	RX, RY, IMM	; >>
+-# define MERGE_1(RX,RY,IMM)	asl	RX, RY, IMM
+-# define MERGE_2(RX,RY,IMM)
+-# define EXTRACT_1(RX,RY,IMM)	and	RX, RY, 0xFFFF
+-# define EXTRACT_2(RX,RY,IMM)	lsr	RX, RY, IMM
+-#else
+-# define SHIFT_1(RX,RY,IMM)	lsr	RX, RY, IMM	; >>
+-# define SHIFT_2(RX,RY,IMM)	asl	RX, RY, IMM	; <<
+-# define MERGE_1(RX,RY,IMM)	asl	RX, RY, IMM	; <<
+-# define MERGE_2(RX,RY,IMM)	asl	RX, RY, IMM	; <<
+-# define EXTRACT_1(RX,RY,IMM)	lsr	RX, RY, IMM
+-# define EXTRACT_2(RX,RY,IMM)	lsr	RX, RY, 0x08
+-#endif
+-
+-#if defined(__LL64__) || defined(__ARC_LL64__)
+-# define PREFETCH_READ(RX)	prefetch [RX, 56]
+-# define PREFETCH_WRITE(RX)	prefetchw [RX, 64]
+-# define LOADX(DST,RX)		ldd.ab	DST, [RX, 8]
+-# define STOREX(SRC,RX)		std.ab	SRC, [RX, 8]
+-# define ZOLSHFT		5
+-# define ZOLAND			0x1F
+-#else
+-# define PREFETCH_READ(RX)	prefetch [RX, 28]
+-# define PREFETCH_WRITE(RX)	prefetchw [RX, 32]
+-# define LOADX(DST,RX)		ld.ab	DST, [RX, 4]
+-# define STOREX(SRC,RX)		st.ab	SRC, [RX, 4]
+-# define ZOLSHFT		4
+-# define ZOLAND			0xF
+-#endif
+-
+-ENTRY(memcpy)
+-	prefetch  [r1]		; Prefetch the read location
+-	prefetchw [r0]		; Prefetch the write location
+-	mov.f	0, r2
+-;;; if size is zero
+-	jz.d	[blink]
+-	mov	r3, r0		; don't clobber ret val
+-
+-;;; if size <= 8
+-	cmp	r2, 8
+-	bls.d	@.Lsmallchunk
+-	mov.f	lp_count, r2
+-
+-	and.f	r4, r0, 0x03
+-	rsub	lp_count, r4, 4
+-	lpnz	@.Laligndestination
+-	;; LOOP BEGIN
+-	ldb.ab	r5, [r1,1]
+-	sub	r2, r2, 1
+-	stb.ab	r5, [r3,1]
+-.Laligndestination:
+-
+-;;; Check the alignment of the source
+-	and.f	r4, r1, 0x03
+-	bnz.d	@.Lsourceunaligned
+-
+-;;; CASE 0: Both source and destination are 32bit aligned
+-;;; Convert len to Dwords, unfold x4
+-	lsr.f	lp_count, r2, ZOLSHFT
+-	lpnz	@.Lcopy32_64bytes
+-	;; LOOP START
+-	LOADX (r6, r1)
+-	PREFETCH_READ (r1)
+-	PREFETCH_WRITE (r3)
+-	LOADX (r8, r1)
+-	LOADX (r10, r1)
+-	LOADX (r4, r1)
+-	STOREX (r6, r3)
+-	STOREX (r8, r3)
+-	STOREX (r10, r3)
+-	STOREX (r4, r3)
+-.Lcopy32_64bytes:
+-
+-	and.f	lp_count, r2, ZOLAND ;Last remaining 31 bytes
+-.Lsmallchunk:
+-	lpnz	@.Lcopyremainingbytes
+-	;; LOOP START
+-	ldb.ab	r5, [r1,1]
+-	stb.ab	r5, [r3,1]
+-.Lcopyremainingbytes:
+-
+-	j	[blink]
+-;;; END CASE 0
+-
+-.Lsourceunaligned:
+-	cmp	r4, 2
+-	beq.d	@.LunalignedOffby2
+-	sub	r2, r2, 1
+-
+-	bhi.d	@.LunalignedOffby3
+-	ldb.ab	r5, [r1, 1]
+-
+-;;; CASE 1: The source is unaligned, off by 1
+-	;; Hence I need to read 1 byte for a 16bit alignment
+-	;; and 2bytes to reach 32bit alignment
+-	ldh.ab	r6, [r1, 2]
+-	sub	r2, r2, 2
+-	;; Convert to words, unfold x2
+-	lsr.f	lp_count, r2, 3
+-	MERGE_1 (r6, r6, 8)
+-	MERGE_2 (r5, r5, 24)
+-	or	r5, r5, r6
+-
+-	;; Both src and dst are aligned
+-	lpnz	@.Lcopy8bytes_1
+-	;; LOOP START
+-	ld.ab	r6, [r1, 4]
+-	prefetch [r1, 28]	;Prefetch the next read location
+-	ld.ab	r8, [r1,4]
+-	prefetchw [r3, 32]	;Prefetch the next write location
+-
+-	SHIFT_1	(r7, r6, 24)
+-	or	r7, r7, r5
+-	SHIFT_2	(r5, r6, 8)
+-
+-	SHIFT_1	(r9, r8, 24)
+-	or	r9, r9, r5
+-	SHIFT_2	(r5, r8, 8)
+-
+-	st.ab	r7, [r3, 4]
+-	st.ab	r9, [r3, 4]
+-.Lcopy8bytes_1:
+-
+-	;; Write back the remaining 16bits
+-	EXTRACT_1 (r6, r5, 16)
+-	sth.ab	r6, [r3, 2]
+-	;; Write back the remaining 8bits
+-	EXTRACT_2 (r5, r5, 16)
+-	stb.ab	r5, [r3, 1]
+-
+-	and.f	lp_count, r2, 0x07 ;Last 8bytes
+-	lpnz	@.Lcopybytewise_1
+-	;; LOOP START
+-	ldb.ab	r6, [r1,1]
+-	stb.ab	r6, [r3,1]
+-.Lcopybytewise_1:
+-	j	[blink]
+-
+-.LunalignedOffby2:
+-;;; CASE 2: The source is unaligned, off by 2
+-	ldh.ab	r5, [r1, 2]
+-	sub	r2, r2, 1
+-
+-	;; Both src and dst are aligned
+-	;; Convert to words, unfold x2
+-	lsr.f	lp_count, r2, 3
+-#ifdef __BIG_ENDIAN__
+-	asl.nz	r5, r5, 16
+-#endif
+-	lpnz	@.Lcopy8bytes_2
+-	;; LOOP START
+-	ld.ab	r6, [r1, 4]
+-	prefetch [r1, 28]	;Prefetch the next read location
+-	ld.ab	r8, [r1,4]
+-	prefetchw [r3, 32]	;Prefetch the next write location
+-
+-	SHIFT_1	(r7, r6, 16)
+-	or	r7, r7, r5
+-	SHIFT_2	(r5, r6, 16)
+-
+-	SHIFT_1	(r9, r8, 16)
+-	or	r9, r9, r5
+-	SHIFT_2	(r5, r8, 16)
+-
+-	st.ab	r7, [r3, 4]
+-	st.ab	r9, [r3, 4]
+-.Lcopy8bytes_2:
+-
+-#ifdef __BIG_ENDIAN__
+-	lsr.nz	r5, r5, 16
+-#endif
+-	sth.ab	r5, [r3, 2]
+-
+-	and.f	lp_count, r2, 0x07 ;Last 8bytes
+-	lpnz	@.Lcopybytewise_2
+-	;; LOOP START
+-	ldb.ab	r6, [r1,1]
+-	stb.ab	r6, [r3,1]
+-.Lcopybytewise_2:
+-	j	[blink]
+-
+-.LunalignedOffby3:
+-;;; CASE 3: The source is unaligned, off by 3
+-;;; Hence, I need to read 1byte for achieve the 32bit alignment
+-
+-	;; Both src and dst are aligned
+-	;; Convert to words, unfold x2
+-	lsr.f	lp_count, r2, 3
+-#ifdef __BIG_ENDIAN__
+-	asl.ne	r5, r5, 24
+-#endif
+-	lpnz	@.Lcopy8bytes_3
+-	;; LOOP START
+-	ld.ab	r6, [r1, 4]
+-	prefetch [r1, 28]	;Prefetch the next read location
+-	ld.ab	r8, [r1,4]
+-	prefetchw [r3, 32]	;Prefetch the next write location
+-
+-	SHIFT_1	(r7, r6, 8)
+-	or	r7, r7, r5
+-	SHIFT_2	(r5, r6, 24)
+-
+-	SHIFT_1	(r9, r8, 8)
+-	or	r9, r9, r5
+-	SHIFT_2	(r5, r8, 24)
+-
+-	st.ab	r7, [r3, 4]
+-	st.ab	r9, [r3, 4]
+-.Lcopy8bytes_3:
+-
+-#ifdef __BIG_ENDIAN__
+-	lsr.nz	r5, r5, 24
+-#endif
+-	stb.ab	r5, [r3, 1]
+-
+-	and.f	lp_count, r2, 0x07 ;Last 8bytes
+-	lpnz	@.Lcopybytewise_3
+-	;; LOOP START
+-	ldb.ab	r6, [r1,1]
+-	stb.ab	r6, [r3,1]
+-.Lcopybytewise_3:
+-	j	[blink]
+-
+-END(memcpy)
+-libc_hidden_def(memcpy)
+diff --git a/libc/string/arc/arcv2/memset.S b/libc/string/arc/arcv2/memset.S
+deleted file mode 100644
+index 343cfaf81..000000000
+--- a/libc/string/arc/arcv2/memset.S
++++ /dev/null
+@@ -1,115 +0,0 @@
+-
+-/*
+- * Copyright (C) 2014-15 Synopsys, Inc. (www.synopsys.com)
+- *
+- * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
+- */
+-
+-#include <features.h>
+-#include <sysdep.h>
+-
+-#ifdef DONT_USE_PREALLOC
+-#define PREWRITE(A,B)	prefetchw [(A),(B)]
+-#else
+-#define PREWRITE(A,B)	prealloc [(A),(B)]
+-#endif
+-
+-ENTRY(memset)
+-	prefetchw [r0]		; Prefetch the write location
+-	mov.f	0, r2
+-;;; if size is zero
+-	jz.d	[blink]
+-	mov	r3, r0		; don't clobber ret val
+-
+-;;; if length < 8
+-	brls.d.nt	r2, 8, .Lsmallchunk
+-	mov.f	lp_count,r2
+-
+-	and.f	r4, r0, 0x03
+-	rsub	lp_count, r4, 4
+-	lpnz	@.Laligndestination
+-	;; LOOP BEGIN
+-	stb.ab	r1, [r3,1]
+-	sub	r2, r2, 1
+-.Laligndestination:
+-
+-;;; Destination is aligned
+-	and	r1, r1, 0xFF
+-	asl	r4, r1, 8
+-	or	r4, r4, r1
+-	asl	r5, r4, 16
+-	or	r5, r5, r4
+-	mov	r4, r5
+-
+-	sub3	lp_count, r2, 8
+-	cmp     r2, 64
+-	bmsk.hi	r2, r2, 5
+-	mov.ls	lp_count, 0
+-	add3.hi	r2, r2, 8
+-
+-;;; Convert len to Dwords, unfold x8
+-	lsr.f	lp_count, lp_count, 6
+-	lpnz	@.Lset64bytes
+-	;; LOOP START
+-	PREWRITE(r3, 64)	;Prefetch the next write location
+-#if defined(__LL64__) || defined(__ARC_LL64__)
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-#else
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-#endif
+-.Lset64bytes:
+-
+-	lsr.f	lp_count, r2, 5 ;Last remaining  max 124 bytes
+-	lpnz	.Lset32bytes
+-	;; LOOP START
+-	prefetchw [r3, 32]	;Prefetch the next write location
+-#if defined(__LL64__) || defined(__ARC_LL64__)
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-	std.ab	r4, [r3, 8]
+-#else
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-	st.ab	r4, [r3, 4]
+-#endif
+-.Lset32bytes:
+-
+-	and.f	lp_count, r2, 0x1F ;Last remaining 31 bytes
+-.Lsmallchunk:
+-	lpnz	.Lcopy3bytes
+-	;; LOOP START
+-	stb.ab	r1, [r3, 1]
+-.Lcopy3bytes:
+-
+-	j	[blink]
+-
+-END(memset)
+-libc_hidden_def(memset)
+diff --git a/libc/string/arc/arcv2/strcmp.S b/libc/string/arc/arcv2/strcmp.S
+deleted file mode 100644
+index 2e0e64a0c..000000000
+--- a/libc/string/arc/arcv2/strcmp.S
++++ /dev/null
+@@ -1,83 +0,0 @@
+-/*
+- * Copyright (C) 2014-15 Synopsys, Inc. (www.synopsys.com)
+- *
+- * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
+- */
+-
+-#include <features.h>
+-#include <sysdep.h>
+-
+-ENTRY(strcmp)
+-	or	r2, r0, r1
+-	bmsk_s	r2, r2, 1
+-	brne	r2, 0, @.Lcharloop
+-
+-;;; s1 and s2 are word aligned
+-	ld.ab	r2, [r0, 4]
+-
+-	mov_s	r12, 0x01010101
+-	ror	r11, r12
+-	.align  4
+-.LwordLoop:
+-	ld.ab	r3, [r1, 4]
+-	;; Detect NULL char in str1
+-	sub	r4, r2, r12
+-	ld.ab	r5, [r0, 4]
+-	bic	r4, r4, r2
+-	and	r4, r4, r11
+-	brne.d.nt	r4, 0, .LfoundNULL
+-	;; Check if the read locations are the same
+-	cmp	r2, r3
+-	beq.d	.LwordLoop
+-	mov.eq	r2, r5
+-
+-	;; A match is found, spot it out
+-#ifdef __LITTLE_ENDIAN__
+-	swape	r3, r3
+-	mov_s	r0, 1
+-	swape	r2, r2
+-#else
+-	mov_s	r0, 1
+-#endif
+-	cmp_s	r2, r3
+-	j_s.d	[blink]
+-	bset.lo	r0, r0, 31
+-
+-	.align 4
+-.LfoundNULL:
+-#ifdef __BIG_ENDIAN__
+-	swape	r4, r4
+-	swape	r2, r2
+-	swape	r3, r3
+-#endif
+-	;; Find null byte
+-	ffs	r0, r4
+-	bmsk	r2, r2, r0
+-	bmsk	r3, r3, r0
+-	swape	r2, r2
+-	swape	r3, r3
+-	;; make the return value
+-	sub.f	r0, r2, r3
+-	mov.hi	r0, 1
+-	j_s.d	[blink]
+-	bset.lo	r0, r0, 31
+-
+-	.align 4
+-.Lcharloop:
+-	ldb.ab	r2, [r0, 1]
+-	ldb.ab	r3, [r1, 1]
+-	nop
+-	breq	r2, 0, .Lcmpend
+-	breq	r2, r3, .Lcharloop
+-
+-	.align 4
+-.Lcmpend:
+-	j_s.d	[blink]
+-	sub	r0, r2, r3
+-END(strcmp)
+-libc_hidden_def(strcmp)
+-
+-#ifndef __UCLIBC_HAS_LOCALE__
+-strong_alias(strcmp,strcoll)
+-libc_hidden_def(strcoll)
+-#endif
+diff --git a/libc/string/arc/memcpy.S b/libc/string/arc/memcpy.S
+index 1c11951e4..69d7220b8 100644
+--- a/libc/string/arc/memcpy.S
++++ b/libc/string/arc/memcpy.S
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ * Copyright (C) 2013, 2014-2015, 2017 Synopsys, Inc. (www.synopsys.com)
+  * Copyright (C) 2007 ARC International (UK) LTD
+  *
+  * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
+@@ -7,12 +7,18 @@
+ 
+ #include <sysdep.h>
+ 
++#if !defined(__ARC700__) && !defined(__ARCHS__)
++#error "Neither ARC700 nor ARCHS is defined!"
++#endif
++
++ENTRY(memcpy)
++
++#ifdef __ARC700__
+ /* This memcpy implementation does not support objects of 1GB or larger -
+    the check for alignment does not work then.  */
+ /* We assume that most sources and destinations are aligned, and
+    that also lengths are mostly a multiple of four, although to a lesser
+    extent.  */
+-ENTRY(memcpy)
+ 	or	r3,r0,r1
+ 	asl_s	r3,r3,30
+ 	mov_s	r5,r0
+@@ -67,5 +73,233 @@ ENTRY(memcpy)
+ .Lendbloop:
+ 	j_s.d	[blink]
+ 	stb	r12,[r5,0]
++#endif /* __ARC700__ */
++
++#ifdef __ARCHS__
++#ifdef __LITTLE_ENDIAN__
++# define SHIFT_1(RX,RY,IMM)	asl	RX, RY, IMM	; <<
++# define SHIFT_2(RX,RY,IMM)	lsr	RX, RY, IMM	; >>
++# define MERGE_1(RX,RY,IMM)	asl	RX, RY, IMM
++# define MERGE_2(RX,RY,IMM)
++# define EXTRACT_1(RX,RY,IMM)	and	RX, RY, 0xFFFF
++# define EXTRACT_2(RX,RY,IMM)	lsr	RX, RY, IMM
++#else
++# define SHIFT_1(RX,RY,IMM)	lsr	RX, RY, IMM	; >>
++# define SHIFT_2(RX,RY,IMM)	asl	RX, RY, IMM	; <<
++# define MERGE_1(RX,RY,IMM)	asl	RX, RY, IMM	; <<
++# define MERGE_2(RX,RY,IMM)	asl	RX, RY, IMM	; <<
++# define EXTRACT_1(RX,RY,IMM)	lsr	RX, RY, IMM
++# define EXTRACT_2(RX,RY,IMM)	lsr	RX, RY, 0x08
++#endif
++
++#if defined(__LL64__) || defined(__ARC_LL64__)
++# define PREFETCH_READ(RX)	prefetch [RX, 56]
++# define PREFETCH_WRITE(RX)	prefetchw [RX, 64]
++# define LOADX(DST,RX)		ldd.ab	DST, [RX, 8]
++# define STOREX(SRC,RX)		std.ab	SRC, [RX, 8]
++# define ZOLSHFT		5
++# define ZOLAND			0x1F
++#else
++# define PREFETCH_READ(RX)	prefetch [RX, 28]
++# define PREFETCH_WRITE(RX)	prefetchw [RX, 32]
++# define LOADX(DST,RX)		ld.ab	DST, [RX, 4]
++# define STOREX(SRC,RX)		st.ab	SRC, [RX, 4]
++# define ZOLSHFT		4
++# define ZOLAND			0xF
++#endif
++
++	prefetch  [r1]		; Prefetch the read location
++	prefetchw [r0]		; Prefetch the write location
++	mov.f	0, r2
++;;; if size is zero
++	jz.d	[blink]
++	mov	r3, r0		; don't clobber ret val
++
++;;; if size <= 8
++	cmp	r2, 8
++	bls.d	@.Lsmallchunk
++	mov.f	lp_count, r2
++
++	and.f	r4, r0, 0x03
++	rsub	lp_count, r4, 4
++	lpnz	@.Laligndestination
++	;; LOOP BEGIN
++	ldb.ab	r5, [r1,1]
++	sub	r2, r2, 1
++	stb.ab	r5, [r3,1]
++.Laligndestination:
++
++;;; Check the alignment of the source
++	and.f	r4, r1, 0x03
++	bnz.d	@.Lsourceunaligned
++
++;;; CASE 0: Both source and destination are 32bit aligned
++;;; Convert len to Dwords, unfold x4
++	lsr.f	lp_count, r2, ZOLSHFT
++	lpnz	@.Lcopy32_64bytes
++	;; LOOP START
++	LOADX (r6, r1)
++	PREFETCH_READ (r1)
++	PREFETCH_WRITE (r3)
++	LOADX (r8, r1)
++	LOADX (r10, r1)
++	LOADX (r4, r1)
++	STOREX (r6, r3)
++	STOREX (r8, r3)
++	STOREX (r10, r3)
++	STOREX (r4, r3)
++.Lcopy32_64bytes:
++
++	and.f	lp_count, r2, ZOLAND ;Last remaining 31 bytes
++.Lsmallchunk:
++	lpnz	@.Lcopyremainingbytes
++	;; LOOP START
++	ldb.ab	r5, [r1,1]
++	stb.ab	r5, [r3,1]
++.Lcopyremainingbytes:
++
++	j	[blink]
++;;; END CASE 0
++
++.Lsourceunaligned:
++	cmp	r4, 2
++	beq.d	@.LunalignedOffby2
++	sub	r2, r2, 1
++
++	bhi.d	@.LunalignedOffby3
++	ldb.ab	r5, [r1, 1]
++
++;;; CASE 1: The source is unaligned, off by 1
++	;; Hence I need to read 1 byte for a 16bit alignment
++	;; and 2bytes to reach 32bit alignment
++	ldh.ab	r6, [r1, 2]
++	sub	r2, r2, 2
++	;; Convert to words, unfold x2
++	lsr.f	lp_count, r2, 3
++	MERGE_1 (r6, r6, 8)
++	MERGE_2 (r5, r5, 24)
++	or	r5, r5, r6
++
++	;; Both src and dst are aligned
++	lpnz	@.Lcopy8bytes_1
++	;; LOOP START
++	ld.ab	r6, [r1, 4]
++	prefetch [r1, 28]	;Prefetch the next read location
++	ld.ab	r8, [r1,4]
++	prefetchw [r3, 32]	;Prefetch the next write location
++
++	SHIFT_1	(r7, r6, 24)
++	or	r7, r7, r5
++	SHIFT_2	(r5, r6, 8)
++
++	SHIFT_1	(r9, r8, 24)
++	or	r9, r9, r5
++	SHIFT_2	(r5, r8, 8)
++
++	st.ab	r7, [r3, 4]
++	st.ab	r9, [r3, 4]
++.Lcopy8bytes_1:
++
++	;; Write back the remaining 16bits
++	EXTRACT_1 (r6, r5, 16)
++	sth.ab	r6, [r3, 2]
++	;; Write back the remaining 8bits
++	EXTRACT_2 (r5, r5, 16)
++	stb.ab	r5, [r3, 1]
++
++	and.f	lp_count, r2, 0x07 ;Last 8bytes
++	lpnz	@.Lcopybytewise_1
++	;; LOOP START
++	ldb.ab	r6, [r1,1]
++	stb.ab	r6, [r3,1]
++.Lcopybytewise_1:
++	j	[blink]
++
++.LunalignedOffby2:
++;;; CASE 2: The source is unaligned, off by 2
++	ldh.ab	r5, [r1, 2]
++	sub	r2, r2, 1
++
++	;; Both src and dst are aligned
++	;; Convert to words, unfold x2
++	lsr.f	lp_count, r2, 3
++#ifdef __BIG_ENDIAN__
++	asl.nz	r5, r5, 16
++#endif
++	lpnz	@.Lcopy8bytes_2
++	;; LOOP START
++	ld.ab	r6, [r1, 4]
++	prefetch [r1, 28]	;Prefetch the next read location
++	ld.ab	r8, [r1,4]
++	prefetchw [r3, 32]	;Prefetch the next write location
++
++	SHIFT_1	(r7, r6, 16)
++	or	r7, r7, r5
++	SHIFT_2	(r5, r6, 16)
++
++	SHIFT_1	(r9, r8, 16)
++	or	r9, r9, r5
++	SHIFT_2	(r5, r8, 16)
++
++	st.ab	r7, [r3, 4]
++	st.ab	r9, [r3, 4]
++.Lcopy8bytes_2:
++
++#ifdef __BIG_ENDIAN__
++	lsr.nz	r5, r5, 16
++#endif
++	sth.ab	r5, [r3, 2]
++
++	and.f	lp_count, r2, 0x07 ;Last 8bytes
++	lpnz	@.Lcopybytewise_2
++	;; LOOP START
++	ldb.ab	r6, [r1,1]
++	stb.ab	r6, [r3,1]
++.Lcopybytewise_2:
++	j	[blink]
++
++.LunalignedOffby3:
++;;; CASE 3: The source is unaligned, off by 3
++;;; Hence, I need to read 1byte for achieve the 32bit alignment
++
++	;; Both src and dst are aligned
++	;; Convert to words, unfold x2
++	lsr.f	lp_count, r2, 3
++#ifdef __BIG_ENDIAN__
++	asl.ne	r5, r5, 24
++#endif
++	lpnz	@.Lcopy8bytes_3
++	;; LOOP START
++	ld.ab	r6, [r1, 4]
++	prefetch [r1, 28]	;Prefetch the next read location
++	ld.ab	r8, [r1,4]
++	prefetchw [r3, 32]	;Prefetch the next write location
++
++	SHIFT_1	(r7, r6, 8)
++	or	r7, r7, r5
++	SHIFT_2	(r5, r6, 24)
++
++	SHIFT_1	(r9, r8, 8)
++	or	r9, r9, r5
++	SHIFT_2	(r5, r8, 24)
++
++	st.ab	r7, [r3, 4]
++	st.ab	r9, [r3, 4]
++.Lcopy8bytes_3:
++
++#ifdef __BIG_ENDIAN__
++	lsr.nz	r5, r5, 24
++#endif
++	stb.ab	r5, [r3, 1]
++
++	and.f	lp_count, r2, 0x07 ;Last 8bytes
++	lpnz	@.Lcopybytewise_3
++	;; LOOP START
++	ldb.ab	r6, [r1,1]
++	stb.ab	r6, [r3,1]
++.Lcopybytewise_3:
++	j	[blink]
++#endif /* __ARCHS__ */
++
+ END(memcpy)
+ libc_hidden_def(memcpy)
+diff --git a/libc/string/arc/memset.S b/libc/string/arc/memset.S
+index f4048455a..0b74ddc7f 100644
+--- a/libc/string/arc/memset.S
++++ b/libc/string/arc/memset.S
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ * Copyright (C) 2013, 2014-2015, 2017 Synopsys, Inc. (www.synopsys.com)
+  * Copyright (C) 2007 ARC International (UK) LTD
+  *
+  * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
+@@ -7,10 +7,15 @@
+ 
+ #include <sysdep.h>
+ 
+-#define SMALL	7 /* Must be at least 6 to deal with alignment/loop issues.  */
++#if !defined(__ARC700__) && !defined(__ARCHS__)
++#error "Neither ARC700 nor ARCHS is defined!"
++#endif
+ 
+ ENTRY(memset)
+ 
++#ifdef __ARC700__
++#define SMALL	7 /* Must be at least 6 to deal with alignment/loop issues.  */
++
+ 	mov_s	r4,r0
+ 	or	r12,r0,r2
+ 	bmsk.f	r12,r12,1
+@@ -47,5 +52,111 @@ ENTRY(memset)
+ 	stb.ab	r1,[r4,1]
+ .Ltiny_end:
+ 	j_s	[blink]
++#endif /* __ARC700__ */
++
++#ifdef __ARCHS__
++#ifdef DONT_USE_PREALLOC
++#define PREWRITE(A,B)	prefetchw [(A),(B)]
++#else
++#define PREWRITE(A,B)	prealloc [(A),(B)]
++#endif
++
++	prefetchw [r0]		; Prefetch the write location
++	mov.f	0, r2
++;;; if size is zero
++	jz.d	[blink]
++	mov	r3, r0		; don't clobber ret val
++
++;;; if length < 8
++	brls.d.nt	r2, 8, .Lsmallchunk
++	mov.f	lp_count,r2
++
++	and.f	r4, r0, 0x03
++	rsub	lp_count, r4, 4
++	lpnz	@.Laligndestination
++	;; LOOP BEGIN
++	stb.ab	r1, [r3,1]
++	sub	r2, r2, 1
++.Laligndestination:
++
++;;; Destination is aligned
++	and	r1, r1, 0xFF
++	asl	r4, r1, 8
++	or	r4, r4, r1
++	asl	r5, r4, 16
++	or	r5, r5, r4
++	mov	r4, r5
++
++	sub3	lp_count, r2, 8
++	cmp     r2, 64
++	bmsk.hi	r2, r2, 5
++	mov.ls	lp_count, 0
++	add3.hi	r2, r2, 8
++
++;;; Convert len to Dwords, unfold x8
++	lsr.f	lp_count, lp_count, 6
++	lpnz	@.Lset64bytes
++	;; LOOP START
++	PREWRITE(r3, 64)	;Prefetch the next write location
++#if defined(__LL64__) || defined(__ARC_LL64__)
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++#else
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++#endif
++.Lset64bytes:
++
++	lsr.f	lp_count, r2, 5 ;Last remaining  max 124 bytes
++	lpnz	.Lset32bytes
++	;; LOOP START
++	prefetchw [r3, 32]	;Prefetch the next write location
++#if defined(__LL64__) || defined(__ARC_LL64__)
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++	std.ab	r4, [r3, 8]
++#else
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++	st.ab	r4, [r3, 4]
++#endif
++.Lset32bytes:
++
++	and.f	lp_count, r2, 0x1F ;Last remaining 31 bytes
++.Lsmallchunk:
++	lpnz	.Lcopy3bytes
++	;; LOOP START
++	stb.ab	r1, [r3, 1]
++.Lcopy3bytes:
++
++	j	[blink]
++#endif /* __ARCHS__ */
++
+ END(memset)
+ libc_hidden_def(memset)
+diff --git a/libc/string/arc/strcmp.S b/libc/string/arc/strcmp.S
+index 5a0e56045..ad38d9e00 100644
+--- a/libc/string/arc/strcmp.S
++++ b/libc/string/arc/strcmp.S
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ * Copyright (C) 2013, 2014-2015, 2017 Synopsys, Inc. (www.synopsys.com)
+  * Copyright (C) 2007 ARC International (UK) LTD
+  *
+  * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
+@@ -8,6 +8,13 @@
+ #include <features.h>
+ #include <sysdep.h>
+ 
++#if !defined(__ARC700__) && !defined(__ARCHS__)
++#error "Neither ARC700 nor ARCHS is defined!"
++#endif
++
++ENTRY(strcmp)
++
++#ifdef __ARC700__
+ /* This is optimized primarily for the ARC700.
+    It would be possible to speed up the loops by one cycle / word
+    respective one cycle / byte by forcing double source 1 alignment, unrolling
+@@ -15,7 +22,6 @@
+    source 1; however, that would increase the overhead for loop setup / finish,
+    and strcmp might often terminate early.  */
+ 
+-ENTRY(strcmp)
+ 	or	r2,r0,r1
+ 	bmsk_s	r2,r2,1
+ 	brne	r2,0,.Lcharloop
+@@ -93,6 +99,77 @@ ENTRY(strcmp)
+ .Lcmpend:
+ 	j_s.d	[blink]
+ 	sub	r0,r2,r3
++#endif /* __ARC700__ */
++
++#ifdef __ARCHS__
++	or	r2, r0, r1
++	bmsk_s	r2, r2, 1
++	brne	r2, 0, @.Lcharloop
++
++;;; s1 and s2 are word aligned
++	ld.ab	r2, [r0, 4]
++
++	mov_s	r12, 0x01010101
++	ror	r11, r12
++	.align  4
++.LwordLoop:
++	ld.ab	r3, [r1, 4]
++	;; Detect NULL char in str1
++	sub	r4, r2, r12
++	ld.ab	r5, [r0, 4]
++	bic	r4, r4, r2
++	and	r4, r4, r11
++	brne.d.nt	r4, 0, .LfoundNULL
++	;; Check if the read locations are the same
++	cmp	r2, r3
++	beq.d	.LwordLoop
++	mov.eq	r2, r5
++
++	;; A match is found, spot it out
++#ifdef __LITTLE_ENDIAN__
++	swape	r3, r3
++	mov_s	r0, 1
++	swape	r2, r2
++#else
++	mov_s	r0, 1
++#endif
++	cmp_s	r2, r3
++	j_s.d	[blink]
++	bset.lo	r0, r0, 31
++
++	.align 4
++.LfoundNULL:
++#ifdef __BIG_ENDIAN__
++	swape	r4, r4
++	swape	r2, r2
++	swape	r3, r3
++#endif
++	;; Find null byte
++	ffs	r0, r4
++	bmsk	r2, r2, r0
++	bmsk	r3, r3, r0
++	swape	r2, r2
++	swape	r3, r3
++	;; make the return value
++	sub.f	r0, r2, r3
++	mov.hi	r0, 1
++	j_s.d	[blink]
++	bset.lo	r0, r0, 31
++
++	.align 4
++.Lcharloop:
++	ldb.ab	r2, [r0, 1]
++	ldb.ab	r3, [r1, 1]
++	nop
++	breq	r2, 0, .Lcmpend
++	breq	r2, r3, .Lcharloop
++
++	.align 4
++.Lcmpend:
++	j_s.d	[blink]
++	sub	r0, r2, r3
++#endif /* __ARCHS__ */
++
+ END(strcmp)
+ libc_hidden_def(strcmp)
+ 

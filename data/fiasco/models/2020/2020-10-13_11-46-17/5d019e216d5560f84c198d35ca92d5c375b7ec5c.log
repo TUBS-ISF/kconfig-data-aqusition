@@ -1,0 +1,671 @@
+"2020-10-13 11:46:17 +0200"
+diff --git a/src/kern/arm/bsp/bcm283x/Kconfig b/src/kern/arm/bsp/bcm283x/Kconfig
+deleted file mode 100644
+index 0165048..0000000
+--- a/src/kern/arm/bsp/bcm283x/Kconfig
++++ /dev/null
+@@ -1,29 +0,0 @@
+-# PF: BCM283X
+-# PFDESCR: Broadcom 2835, 2836 & 2837
+-# PFDEPENDS: ARM
+-
+-choice
+-        prompt "Raspberry Pi variant"
+-        default PF_BCM283X_RPI3
+-
+-config PF_BCM283X_RPI1
+-        bool "rpi1"
+-        depends on PF_BCM283X
+-        select CAN_ARM_CPU_1176
+-
+-config PF_BCM283X_RPI2
+-        bool "rpi2"
+-        depends on PF_BCM283X
+-        select CAN_ARM_CPU_CORTEX_A7
+-
+-config PF_BCM283X_RPI3
+-        bool "rpi3"
+-        depends on PF_BCM283X
+-        select CAN_ARM_CPU_CORTEX_A53
+-
+-config PF_BCM283X_RPIZW
+-        bool "rpizw"
+-        depends on PF_BCM283X
+-        select CAN_ARM_CPU_1176
+-
+-endchoice
+diff --git a/src/kern/arm/bsp/bcm283x/Modules b/src/kern/arm/bsp/bcm283x/Modules
+deleted file mode 100644
+index d8bc9eb..0000000
+--- a/src/kern/arm/bsp/bcm283x/Modules
++++ /dev/null
+@@ -1,30 +0,0 @@
+-# vim:set ft=make:
+-
+-PREPROCESS_PARTS        += generic_tickless_idle arm_single_ipi_irq
+-PREPROCESS_PARTS        += $(if $(CONFIG_ARM_V7PLUS),arm_generic_timer)
+-INTERFACES_KERNEL       += $(if $(CONFIG_ARM_V7PLUS),generic_timer)
+-INTERFACES_KERNEL       += arm_control irq_handler
+-RAM_PHYS_BASE           := 0
+-
+-ifeq ($(CONFIG_PF_BCM283X_RPI3),y)
+-  OBJECTS_LIBUART       += uart_16550.o
+-  CXXFLAGS_uart-libuart += $(call LIBUART_UART, 16550)
+-else ifeq ($(CONFIG_PF_BCM283X_RPIZW),y)
+-  OBJECTS_LIBUART       += uart_16550.o
+-  CXXFLAGS_uart-libuart += $(call LIBUART_UART, 16550)
+-else
+-  OBJECTS_LIBUART       += uart_pl011.o
+-  CXXFLAGS_uart-libuart += $(call LIBUART_UART, pl011)
+-endif
+-arm_control_IMPL      += arm_control-arm-bcm283x
+-config_IMPL           += config-arm-bcm283x
+-mem_layout_IMPL       += mem_layout-arm-bcm283x
+-pic_IMPL              += pic-arm-bcm283x
+-timer_IMPL            += timer-arm-bcm283x
+-timer_IMPL            += $(if $(CONFIG_ARM_V7PLUS),timer-arm-generic)
+-timer_tick_IMPL       += $(if $(CONFIG_ARM_V7PLUS),timer_tick-arm-bcm283x,timer_tick-single-vector)
+-reset_IMPL            += reset-arm-bcm283x
+-clock_IMPL            += clock-generic
+-ipi_IMPL              += ipi-arm-bcm283x
+-platform_control_IMPL += platform_control-arm-bcm283x
+-irq_handler_IMPL       = irq_handler-arm-bcm283x
+diff --git a/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp
+deleted file mode 100644
+index 560c585..0000000
+--- a/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp
++++ /dev/null
+@@ -1,11 +0,0 @@
+-INTERFACE [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
+-
+-#define TARGET_NAME "Broadcom 2835"
+-
+-INTERFACE [arm && pf_bcm283x && pf_bcm283x_rpi2]:
+-
+-#define TARGET_NAME "Broadcom 2836"
+-
+-INTERFACE [arm && pf_bcm283x && pf_bcm283x_rpi3]:
+-
+-#define TARGET_NAME "Broadcom 2837"
+diff --git a/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp
+deleted file mode 100644
+index f827084..0000000
+--- a/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp
++++ /dev/null
+@@ -1,32 +0,0 @@
+-INTERFACE [arm && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]: //-------------------------------------
+-
+-EXTENSION class Mem_layout
+-{
+-public:
+-  enum Phys_layout_bcm2835 : Address {
+-    Bcm283x_base = 0x20000000,
+-  };
+-};
+-
+-INTERFACE [arm && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3)]: //----------------
+-
+-EXTENSION class Mem_layout
+-{
+-public:
+-  enum Phys_layout_bcm2836_7 : Address {
+-    Bcm283x_base = 0x3f000000,
+-  };
+-};
+-
+-INTERFACE [arm && pf_bcm283x]: //------------------------------------------
+-
+-EXTENSION class Mem_layout
+-{
+-public:
+-  enum Phys_layout_bcm283x : Address {
+-    Pic_phys_base        = Bcm283x_base + 0x0000b200,
+-    Timer_phys_base      = Bcm283x_base + 0x00003000,
+-    Watchdog_phys_base   = Bcm283x_base + 0x00100000,
+-  };
+-};
+-
+diff --git a/src/kern/arm/bsp/rpi/Kconfig b/src/kern/arm/bsp/rpi/Kconfig
+new file mode 100644
+index 0000000..1fddfef
+--- /dev/null
++++ b/src/kern/arm/bsp/rpi/Kconfig
+@@ -0,0 +1,51 @@
++# PF: RPI
++# PFDESCR: Raspberry Pi (Broadcom 283X & 2711)
++# PFDEPENDS: ARM
++
++config PF_RPI_UART_16550
++        bool
++
++config PF_RPI_UART_PL011
++        bool
++
++choice
++        prompt "Raspberry Pi variant"
++        default PF_RPI_RPI3
++
++config PF_RPI_RPI1
++        bool "rpi1"
++        depends on PF_RPI
++        select RPI
++        select PF_RPI_UART_PL011
++        select CAN_ARM_CPU_1176
++
++config PF_RPI_RPI2
++        bool "rpi2"
++        depends on PF_RPI
++        select RPI
++        select PF_RPI_UART_PL011
++        select CAN_ARM_CPU_CORTEX_A7
++
++config PF_RPI_RPI3
++        bool "rpi3"
++        depends on PF_RPI
++        select RPI
++        select PF_RPI_UART_16550
++        select CAN_ARM_CPU_CORTEX_A53
++
++config PF_RPI_RPIZW
++        bool "rpizw"
++        depends on PF_RPI
++        select RPI
++        select PF_RPI_UART_16550
++        select CAN_ARM_CPU_1176
++
++config PF_RPI_RPI4
++        bool "rpi4"
++        depends on PF_RPI
++        select PF_RPI_UART_16550
++        select CAN_ARM_CPU_CORTEX_A72
++        select ARM_GIC
++        select HAVE_ARM_GICV2
++
++endchoice
+diff --git a/src/kern/arm/bsp/rpi/Modules b/src/kern/arm/bsp/rpi/Modules
+new file mode 100644
+index 0000000..38bfc53
+--- /dev/null
++++ b/src/kern/arm/bsp/rpi/Modules
+@@ -0,0 +1,43 @@
++# vim:set ft=make:
++
++PREPROCESS_PARTS        += generic_tickless_idle
++RAM_PHYS_BASE           := 0
++
++PREPROCESS_PARTS        += generic_tickless_idle
++
++PREPROCESS_PARTS-$(CONFIG_ARM_V7PLUS)       += arm_generic_timer
++OBJECTS_LIBUART-$(CONFIG_PF_RPI_UART_16550)  = uart_16550.o
++OBJECTS_LIBUART-$(CONFIG_PF_RPI_UART_PL011)  = uart_pl011.o
++OBJECTS_LIBUART         += $(OBJECTS_LIBUART-y)
++CXXFLAGS-$(CONFIG_PF_RPI_UART_16550)_uart-libuart += $(call LIBUART_UART, 16550)
++CXXFLAGS-$(CONFIG_PF_RPI_UART_PL011)_uart-libuart += $(call LIBUART_UART, pl011)
++CXXFLAGS_uart-libuart   += $(CXXFLAGS-y_uart-libuart)
++
++PREPROCESS_PARTS-$(CONFIG_PF_RPI_RPI1)  += arm_single_ipi_irq
++PREPROCESS_PARTS-$(CONFIG_PF_RPI_RPI2)  += arm_single_ipi_irq
++PREPROCESS_PARTS-$(CONFIG_PF_RPI_RPI3)  += arm_single_ipi_irq
++PREPROCESS_PARTS-$(CONFIG_PF_RPI_RPIZW) += arm_single_ipi_irq
++PREPROCESS_PARTS-$(CONFIG_ARM_GIC)          += pic_gic
++
++INTERFACES_KERNEL-$(CONFIG_ARM_V7PLUS)   += generic_timer
++INTERFACES_KERNEL-$(CONFIG_PF_RPI_RPI1)  += arm_control irq_handler
++INTERFACES_KERNEL-$(CONFIG_PF_RPI_RPI2)  += arm_control irq_handler
++INTERFACES_KERNEL-$(CONFIG_PF_RPI_RPI3)  += arm_control irq_handler
++INTERFACES_KERNEL-$(CONFIG_PF_RPI_RPIZW) += arm_control irq_handler
++
++arm_control_IMPL      += arm_control-arm-rpi
++config_IMPL           += config-arm-rpi
++mem_layout_IMPL       += mem_layout-arm-rpi
++pic_IMPL              += pic-arm-rpi
++pic_IMPL              += $(if $(CONFIG_ARM_GIC),pic-gic)
++timer_IMPL            += timer-arm-rpi
++timer_IMPL            += $(if $(CONFIG_ARM_V7PLUS),timer-arm-generic)
++timer_IMPL            += $(if $(CONFIG_PF_RPI_RPI4),timer-arm-generic-rpi)
++timer_tick_IMPL       += $(if $(CONFIG_ARM_V7PLUS),timer_tick-arm-rpi,\
++			                           timer_tick-single-vector)
++timer_tick_IMPL       += $(if $(CONFIG_PF_RPI_RPI4),timer_tick-single-vector)
++reset_IMPL            += reset-arm-rpi
++clock_IMPL            += clock-generic
++ipi_IMPL              += ipi-arm-rpi
++platform_control_IMPL += platform_control-arm-rpi
++irq_handler_IMPL       = irq_handler-arm-rpi
+diff --git a/src/kern/arm/bsp/bcm283x/arm_control-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/arm_control-arm-rpi.cpp
+similarity index 93%
+rename from src/kern/arm/bsp/bcm283x/arm_control-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/arm_control-arm-rpi.cpp
+index c0da1f7..6aa81ba 100644
+--- a/src/kern/arm/bsp/bcm283x/arm_control-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/arm_control-arm-rpi.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [pf_bcm283x_rpi2 || pf_bcm283x_rpi3]: // ------------------------
++INTERFACE [pf_rpi_rpi2 || pf_rpi_rpi3]: // --------------------------------
+ 
+ #include "assert.h"
+ #include "kmem.h"
+@@ -92,12 +92,12 @@ private:
+ };
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [pf_bcm283x_rpi2 || pf_bcm283x_rpi3]:
++IMPLEMENTATION [pf_rpi_rpi2 || pf_rpi_rpi3]:
+ 
+ Static_object<Arm_control> Arm_control::_arm_control;
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [mp && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3) && !64bit]:
++IMPLEMENTATION [mp && (pf_rpi_rpi2 || pf_rpi_rpi3) && !64bit]:
+ 
+ PUBLIC
+ void
+diff --git a/src/kern/arm/bsp/rpi/config-arm-rpi.cpp b/src/kern/arm/bsp/rpi/config-arm-rpi.cpp
+new file mode 100644
+index 0000000..faf7219
+--- /dev/null
++++ b/src/kern/arm/bsp/rpi/config-arm-rpi.cpp
+@@ -0,0 +1,15 @@
++INTERFACE [arm && pf_rpi && (pf_rpi_rpi1 || pf_rpi_rpizw)]:
++
++#define TARGET_NAME "RPi1 (Broadcom 2835)"
++
++INTERFACE [arm && pf_rpi && pf_rpi_rpi2]:
++
++#define TARGET_NAME "RPi2 (Broadcom 2836)"
++
++INTERFACE [arm && pf_rpi && pf_rpi_rpi3]:
++
++#define TARGET_NAME "RPi3 (Broadcom 2837)"
++
++INTERFACE [arm && pf_rpi && pf_rpi_rpi4]:
++
++#define TARGET_NAME "RPi4 (Broadcom 2711)"
+diff --git a/src/kern/arm/bsp/bcm283x/ipi-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/ipi-arm-rpi.cpp
+similarity index 87%
+rename from src/kern/arm/bsp/bcm283x/ipi-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/ipi-arm-rpi.cpp
+index 49d2dfa..afe2620 100644
+--- a/src/kern/arm/bsp/bcm283x/ipi-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/ipi-arm-rpi.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [arm && pf_bcm283x && mp]: // -----------------------------------
++INTERFACE [arm && pf_rpi && mp && !pic_gic]: // -----------------------
+ 
+ EXTENSION class Ipi
+ {
+@@ -11,7 +11,7 @@ private:
+   Cpu_phys_id _phys_id;
+ };
+ 
+-IMPLEMENTATION [arm && pf_bcm283x && mp]: // ------------------------------
++IMPLEMENTATION [arm && pf_rpi && mp && !pic_gic]: // ------------------
+ 
+ #include "arm_control.h"
+ #include "cpu.h"
+diff --git a/src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/irq_handler-arm-rpi.cpp
+similarity index 81%
+rename from src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/irq_handler-arm-rpi.cpp
+index 06c92d4..48ffa28 100644
+--- a/src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/irq_handler-arm-rpi.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
++IMPLEMENTATION [arm && pf_rpi && (pf_rpi_rpi1 || pf_rpi_rpizw)]:
+ 
+ #include "pic.h"
+ 
+@@ -7,7 +7,7 @@ void irq_handler()
+ { Pic::handle_irq(); }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && mp && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3)]:
++IMPLEMENTATION [arm && mp && (pf_rpi_rpi2 || pf_rpi_rpi3)]:
+ 
+ #include "ipi.h"
+ #include "thread.h"
+@@ -26,12 +26,12 @@ void handle_ipis()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && !mp && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3)]:
++IMPLEMENTATION [arm && !mp && (pf_rpi_rpi2 || pf_rpi_rpi3)]:
+ 
+ inline void handle_ipis() {}
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3)]:
++IMPLEMENTATION [arm && (pf_rpi_rpi2 || pf_rpi_rpi3)]:
+ 
+ #include "pic.h"
+ #include "timer.h"
+diff --git a/src/kern/arm/bsp/rpi/mem_layout-arm-rpi.cpp b/src/kern/arm/bsp/rpi/mem_layout-arm-rpi.cpp
+new file mode 100644
+index 0000000..44b7c64
+--- /dev/null
++++ b/src/kern/arm/bsp/rpi/mem_layout-arm-rpi.cpp
+@@ -0,0 +1,47 @@
++INTERFACE [arm && (pf_rpi_rpi1 || pf_rpi_rpizw)]: //-----------------------
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Phys_layout_bcm2835 : Address {
++    Bcm283x_base = 0x20000000,
++  };
++};
++
++INTERFACE [arm && (pf_rpi_rpi2 || pf_rpi_rpi3)]: //------------------------
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Phys_layout_bcm2836_7 : Address {
++    Bcm283x_base = 0x3f000000,
++  };
++};
++
++//-------------------------------------------------------------------------
++INTERFACE [arm && (pf_rpi_rpi1 || pf_rpi_rpizw || pf_rpi_rpi2 || pf_rpi_rpi3)]:
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Phys_layout_bcm283x : Address {
++    Pic_phys_base        = Bcm283x_base + 0x0000b200,
++    Timer_phys_base      = Bcm283x_base + 0x00003000,
++    Watchdog_phys_base   = Bcm283x_base + 0x00100000,
++  };
++};
++
++INTERFACE [arm && pf_rpi_rpi4]: //-----------------------------------------
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Phys_layout_bcm2711 : Address {
++    Bcm2711_base       = 0xfe000000,
++    Watchdog_phys_base = Bcm2711_base + 0x00100000,
++    Gic_cpu_phys_base  = 0xff842000,
++    Gic_dist_phys_base = 0xff841000,
++    Gic_h_phys_base    = 0xff844000,
++    Gic_v_phys_base    = 0xff846000,
++  };
++};
+diff --git a/src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/pic-arm-rpi.cpp
+similarity index 72%
+rename from src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/pic-arm-rpi.cpp
+index 6ebb81a..cd919dd 100644
+--- a/src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/pic-arm-rpi.cpp
+@@ -1,10 +1,10 @@
+-INTERFACE [arm && pf_bcm283x]:
++INTERFACE [arm && pf_rpi]:
+ 
+ #include "initcalls.h"
+ #include "irq_chip_generic.h"
+ 
+-// ---------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x]:
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && pf_rpi && !pic_gic]:
+ 
+ #include "assert.h"
+ #include "irq_mgr.h"
+@@ -118,7 +118,7 @@ Pic::handle_irq()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
++IMPLEMENTATION [arm && pf_rpi && (pf_rpi_rpi1 || pf_rpi_rpizw)]:
+ 
+ PUBLIC static FIASCO_INIT
+ void Pic::init()
+@@ -127,7 +127,7 @@ void Pic::init()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3)]:
++IMPLEMENTATION [arm && pf_rpi && (pf_rpi_rpi2 || pf_rpi_rpi3)]:
+ 
+ #include "arm_control.h"
+ 
+@@ -139,7 +139,7 @@ void Pic::init()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && mp]:
++IMPLEMENTATION [arm && pf_rpi && !pic_gic && mp]:
+ 
+ PUBLIC static
+ void
+@@ -147,7 +147,7 @@ Pic::init_ap(Cpu_number, bool)
+ {}
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && arm_em_tz]:
++IMPLEMENTATION [arm && pf_rpi && !pic_gic && arm_em_tz]:
+ 
+ #include <cstdio>
+ 
+@@ -158,10 +158,43 @@ Pic::set_pending_irq(unsigned group32num, Unsigned32 val)
+   printf("%s(%d, %x): Not implemented\n", __func__, group32num, val);
+ }
+ 
+-//---------------------------------------------------------------------------
+-IMPLEMENTATION [debug && pf_bcm283x]:
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && pic_gic]:
++
++#include "gic_v2.h"
++#include "irq_mgr_multi_chip.h"
++#include "kmem.h"
++
++PUBLIC static FIASCO_INIT
++void
++Pic::init()
++{
++  typedef Irq_mgr_multi_chip<8> M;
++
++  M *m = new Boot_object<M>(1);
++
++  gic = new Boot_object<Gic_v2>(Kmem::mmio_remap(Mem_layout::Gic_cpu_phys_base,
++	                                         Gic_cpu_v2::Size),
++                                Kmem::mmio_remap(Mem_layout::Gic_dist_phys_base,
++				                 Gic_dist::Size));
++  m->add_chip(0, gic, gic->nr_irqs());
++
++  Irq_mgr::mgr = m;
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && mp && pic_gic]:
++
++PUBLIC static
++void Pic::init_ap(Cpu_number cpu, bool resume)
++{
++  gic->init_ap(cpu, resume);
++}
++
++//-------------------------------------------------------------------------
++IMPLEMENTATION [debug && pf_rpi && !pic_gic]:
+ 
+ PUBLIC
+ char const *
+ Irq_chip_bcm::chip_type() const
+-{ return "BCM283X"; }
++{ return "Raspberry Pi"; }
+diff --git a/src/kern/arm/bsp/bcm283x/platform_control-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/platform_control-arm-rpi.cpp
+similarity index 58%
+rename from src/kern/arm/bsp/bcm283x/platform_control-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/platform_control-arm-rpi.cpp
+index 0515d7e..333a11a 100644
+--- a/src/kern/arm/bsp/bcm283x/platform_control-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/platform_control-arm-rpi.cpp
+@@ -1,23 +1,25 @@
+-IMPLEMENTATION [arm && mp && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3) && !64bit]:
++IMPLEMENTATION [arm && mp && (pf_rpi_rpi2 || pf_rpi_rpi3) && !64bit]:
+ 
+ #include "arm_control.h"
+ #include "cpu.h"
++#include "minmax.h"
+ 
+ PUBLIC static
+ void
+ Platform_control::boot_ap_cpus(Address phys_tramp_mp_addr)
+ {
+   Cpu_phys_id myid = Proc::cpu_id();
+-  for (unsigned i = 0; i < 4; ++i)
++  for (unsigned i = 0; i < min<unsigned>(4, Config::Max_num_cpus); ++i)
+     if (myid != Cpu_phys_id(i))
+       Arm_control::o()->do_boot_cpu(Cpu_phys_id(i), phys_tramp_mp_addr);
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && mp && pf_bcm283x_rpi3 && 64bit]:
++IMPLEMENTATION [arm && mp && ((pf_rpi_rpi3 && 64bit) || pf_rpi_rpi4)]:
+ 
+ #include "cpu.h"
+ #include "kmem.h"
++#include "minmax.h"
+ #include "mmio_register_block.h"
+ 
+ PUBLIC static
+@@ -26,12 +28,20 @@ Platform_control::boot_ap_cpus(Address phys_tramp_mp_addr)
+ {
+   static Mmio_register_block a(Kmem::mmio_remap(0xd8, 0x28));
+   Cpu_phys_id myid = Proc::cpu_id();
+-  for (unsigned i = 0; i < 4; ++i)
++  int seq = 1;
++  for (unsigned i = 0; i < min<unsigned>(4, Config::Max_num_cpus); ++i)
+     if (myid != Cpu_phys_id(i))
+       {
+-        Mem_unit::clean_dcache();
+         a.r<64>(i * 8) = phys_tramp_mp_addr;
+-        Mem::dsb();
++        Mem_unit::clean_dcache();
+         asm volatile("sev");
++
++        // All at once does not work, so wait one-by-one
++        while (!Cpu::online(Cpu_number(seq)))
++          {
++            Mem::barrier();
++            Proc::pause();
++          }
++        ++seq;
+       }
+ }
+diff --git a/src/kern/arm/bsp/bcm283x/reset-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/reset-arm-rpi.cpp
+similarity index 92%
+rename from src/kern/arm/bsp/bcm283x/reset-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/reset-arm-rpi.cpp
+index 409607b..fa397aa 100644
+--- a/src/kern/arm/bsp/bcm283x/reset-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/reset-arm-rpi.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [arm && pf_bcm283x]:
++IMPLEMENTATION [arm && pf_rpi]:
+ 
+ #include "io.h"
+ #include "kmem.h"
+diff --git a/src/kern/arm/bsp/rpi/timer-arm-generic-rpi.cpp b/src/kern/arm/bsp/rpi/timer-arm-generic-rpi.cpp
+new file mode 100644
+index 0000000..8a888bf
+--- /dev/null
++++ b/src/kern/arm/bsp/rpi/timer-arm-generic-rpi.cpp
+@@ -0,0 +1,16 @@
++IMPLEMENTATION [arm_generic_timer && pf_rpi_rpi4]:
++
++PUBLIC static
++unsigned Timer::irq()
++{
++  switch (Gtimer::Type)
++    {
++    case Generic_timer::Physical: return 29;
++    case Generic_timer::Virtual:  return 27;
++    case Generic_timer::Hyp:      return 26;
++    };
++}
++
++IMPLEMENT
++void Timer::bsp_init(Cpu_number)
++{}
+diff --git a/src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/timer-arm-rpi.cpp
+similarity index 88%
+rename from src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/timer-arm-rpi.cpp
+index 34779d4..079d414 100644
+--- a/src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/timer-arm-rpi.cpp
+@@ -1,5 +1,5 @@
+ // --------------------------------------------------------------------------
+-INTERFACE [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
++INTERFACE [arm && pf_rpi && (pf_rpi_rpi1 || pf_rpi_rpizw)]:
+ 
+ // HINT: This is drivers/clocksource/bcm2835_timer.c
+ 
+@@ -29,7 +29,7 @@ private:
+ };
+ 
+ // --------------------------------------------------------------------------
+-INTERFACE [arm && pf_bcm283x && arm_generic_timer]:
++INTERFACE [arm && pf_rpi && arm_generic_timer]:
+ 
+ #include "per_cpu_data.h"
+ 
+@@ -40,7 +40,7 @@ private:
+ };
+ 
+ // --------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && arm_generic_timer]:
++IMPLEMENTATION [arm && pf_rpi && arm_generic_timer && (pf_rpi_rpi3 || pf_rpi_rpi2)]:
+ 
+ IMPLEMENT inline
+ void Timer::bsp_init(Cpu_number)
+@@ -60,7 +60,7 @@ unsigned Timer::irq()
+ }
+ 
+ // ----------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
++IMPLEMENTATION [arm && pf_rpi && (pf_rpi_rpi1 || pf_rpi_rpizw)]:
+ 
+ #include "config.h"
+ #include "kip.h"
+diff --git a/src/kern/arm/bsp/bcm283x/timer_tick-arm-bcm283x.cpp b/src/kern/arm/bsp/rpi/timer_tick-arm-rpi.cpp
+similarity index 86%
+rename from src/kern/arm/bsp/bcm283x/timer_tick-arm-bcm283x.cpp
+rename to src/kern/arm/bsp/rpi/timer_tick-arm-rpi.cpp
+index b5d41b8..8105a67 100644
+--- a/src/kern/arm/bsp/bcm283x/timer_tick-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/rpi/timer_tick-arm-rpi.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [arm && (pf_bcm283x_rpi2 || pf_bcm283x_rpi3)]:
++IMPLEMENTATION [arm && (pf_rpi_rpi2 || pf_rpi_rpi3)]:
+ 
+ #include "timer.h"
+ #include "arm_control.h"
+diff --git a/src/templates/globalconfig.out.arm-rpi4 b/src/templates/globalconfig.out.arm-rpi4
+new file mode 100644
+index 0000000..e570a66
+--- /dev/null
++++ b/src/templates/globalconfig.out.arm-rpi4
+@@ -0,0 +1,6 @@
++CONFIG_ARM=y
++CONFIG_PF_RPI=y
++CONFIG_PF_RPI_RPI4=y
++CONFIG_CPU_VIRT=y
++# CONFIG_BIT64_CHOICE is not set
++CONFIG_MP=y
+diff --git a/src/templates/globalconfig.out.arm64-rpi4 b/src/templates/globalconfig.out.arm64-rpi4
+new file mode 100644
+index 0000000..6114e52
+--- /dev/null
++++ b/src/templates/globalconfig.out.arm64-rpi4
+@@ -0,0 +1,6 @@
++CONFIG_ARM=y
++CONFIG_PF_RPI=y
++CONFIG_PF_RPI_RPI4=y
++CONFIG_CPU_VIRT=y
++CONFIG_ARM_SMC_USER=y
++CONFIG_MP=y

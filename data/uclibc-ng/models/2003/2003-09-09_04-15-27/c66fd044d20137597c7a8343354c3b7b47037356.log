@@ -1,0 +1,123 @@
+"2003-09-09 04:15:27 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 7de210bf7..49f259cda 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -410,7 +410,6 @@ endchoice
+ 
+ config UCLIBC_HAS_WCHAR
+ 	bool "Wide Character Support"
+-	select UCLIBC_HAS_CTYPE_TABLES
+ 	default n
+ 	help
+ 	  Answer Y to enable wide character support.  This will make uClibc 
+@@ -421,6 +420,7 @@ config UCLIBC_HAS_WCHAR
+ config UCLIBC_HAS_LOCALE
+ 	bool "Locale Support (experimental/incomplete)"
+ 	select UCLIBC_HAS_WCHAR
++	select UCLIBC_HAS_CTYPE_TABLES
+ 	default n
+ 	help
+ 	  Answer Y to enable locale support.  This will make uClibc much
+diff --git a/libc/misc/wctype/wctype.c b/libc/misc/wctype/wctype.c
+index 851d2625b..9b340dc0e 100644
+--- a/libc/misc/wctype/wctype.c
++++ b/libc/misc/wctype/wctype.c
+@@ -293,7 +293,13 @@ ISW_FUNC_BODY(xdigit);
+ 
+ wint_t towlower(wint_t wc)
+ {
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
+ 	return __C_towlower(wc);
++#else
++	return (wc == ((unsigned int)(wc)))
++		? __C_tolower(((unsigned int)(wc)))
++		: 0;
++#endif
+ }
+ 
+ #else  /* __LOCALE_C_ONLY */
+@@ -390,7 +396,14 @@ weak_alias(__towlower_l, towlower_l)
+ 
+ wint_t towupper(wint_t wc)
+ {
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
+ 	return __C_towupper(wc);
++#else
++	return (wc == ((unsigned int)(wc)))
++		? __C_toupper(((unsigned int)(wc)))
++		: 0;
++#endif
++
+ }
+ 
+ #else  /* __LOCALE_C_ONLY */
+@@ -522,6 +535,7 @@ weak_alias(__wctype_l, wctype_l)
+ #endif /* __UCLIBC_MJN3_ONLY__ */
+ 
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
+ #if !defined(__UCLIBC_HAS_XLOCALE__) || defined(L_iswctype_l)
+ 
+ static const unsigned short int desc2flag[] = {
+@@ -541,9 +555,12 @@ static const unsigned short int desc2flag[] = {
+ };
+ 
+ #endif /* defined(L_iswctype_L) || defined(__LOCALE_C_ONLY) */
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
+ 
+ #ifdef __LOCALE_C_ONLY
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int __iswctype(wint_t wc, wctype_t desc)
+ {
+ 	/* Note... wctype_t is unsigned. */
+@@ -556,6 +573,47 @@ int __iswctype(wint_t wc, wctype_t desc)
+ 	return 0;
+ }
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++int __iswctype(wint_t wc, wctype_t desc)
++{
++	/* This is lame, but it is here just to get it working for now. */
++
++	if (wc == ((unsigned int)(wc))) {
++		switch(desc) {
++			case _CTYPE_isupper:
++				return __C_isupper((unsigned int)(wc));
++			case _CTYPE_islower:
++				return __C_islower((unsigned int)(wc));
++			case _CTYPE_isalpha:
++				return __C_isalpha((unsigned int)(wc));
++			case _CTYPE_isdigit:
++				return __C_isdigit((unsigned int)(wc));
++			case _CTYPE_isxdigit:
++				return __C_isxdigit((unsigned int)(wc));
++			case _CTYPE_isspace:
++				return __C_isspace((unsigned int)(wc));
++			case _CTYPE_isprint:
++				return __C_isprint((unsigned int)(wc));
++			case _CTYPE_isgraph:
++				return __C_isgraph((unsigned int)(wc));
++			case _CTYPE_isblank:
++				return __C_isblank((unsigned int)(wc));
++			case _CTYPE_iscntrl:
++				return __C_iscntrl((unsigned int)(wc));
++			case _CTYPE_ispunct:
++				return __C_ispunct((unsigned int)(wc));
++			case _CTYPE_isalnum:
++				return __C_isalnum((unsigned int)(wc));
++			default:
++				break;
++		}
++	}
++	return 0;
++}
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #else  /* __LOCALE_C_ONLY */
+ 
+ #ifdef __UCLIBC_MJN3_ONLY__

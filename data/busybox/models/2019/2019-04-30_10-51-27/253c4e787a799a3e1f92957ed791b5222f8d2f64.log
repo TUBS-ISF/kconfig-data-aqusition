@@ -1,0 +1,954 @@
+"2019-04-30 10:51:27 +0200"
+diff --git a/Config.in b/Config.in
+index 1a44c5b6d..1a726f043 100644
+--- a/Config.in
++++ b/Config.in
+@@ -339,6 +339,15 @@ config FEATURE_CLEAN_UP
+ 	Don't enable this unless you have a really good reason to clean
+ 	things up manually.
+ 
++config FEATURE_SYSLOG_INFO
++	bool "Support LOG_INFO level syslog messages"
++	default y
++	depends on FEATURE_SYSLOG
++	help
++	Applets which send their output to syslog use either LOG_INFO or
++	LOG_ERR log levels, but by disabling this option all messages will
++	be logged at the LOG_ERR level, saving just under 200 bytes.
++
+ # These are auto-selected by other options
+ 
+ config FEATURE_SYSLOG
+diff --git a/include/libbb.h b/include/libbb.h
+index a20d5e403..57cfce385 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -1316,7 +1316,6 @@ enum {
+ 	LOGMODE_BOTH = LOGMODE_SYSLOG + LOGMODE_STDIO,
+ };
+ extern const char *msg_eol;
+-extern smallint syslog_level;
+ extern smallint logmode;
+ extern uint8_t xfunc_error_retval;
+ extern void (*die_func)(void);
+@@ -1336,6 +1335,14 @@ void bb_verror_msg(const char *s, va_list p, const char *strerr) FAST_FUNC;
+ void bb_die_memory_exhausted(void) NORETURN FAST_FUNC;
+ void bb_logenv_override(void) FAST_FUNC;
+ 
++#if ENABLE_FEATURE_SYSLOG_INFO
++void bb_info_msg(const char *s, ...) __attribute__ ((format (printf, 1, 2))) FAST_FUNC;
++void bb_vinfo_msg(const char *s, va_list p) FAST_FUNC;
++#else
++#define bb_info_msg bb_error_msg
++#define bb_vinfo_msg(s,p) bb_verror_msg(s,p,NULL)
++#endif
++
+ /* We need to export XXX_main from libbusybox
+  * only if we build "individual" binaries
+  */
+diff --git a/libbb/verror_msg.c b/libbb/verror_msg.c
+index 22c30357b..6d3459905 100644
+--- a/libbb/verror_msg.c
++++ b/libbb/verror_msg.c
+@@ -12,7 +12,7 @@
+ #endif
+ 
+ #if ENABLE_FEATURE_SYSLOG
+-smallint syslog_level = LOG_ERR;
++static smallint syslog_level = LOG_ERR;
+ #endif
+ smallint logmode = LOGMODE_STDIO;
+ const char *msg_eol = "\n";
+@@ -154,7 +154,7 @@ void FAST_FUNC bb_verror_msg(const char *s, va_list p, const char* strerr)
+ 	}
+ # if ENABLE_FEATURE_SYSLOG
+ 	if (logmode & LOGMODE_SYSLOG) {
+-		syslog(LOG_ERR, "%s", msgc);
++		syslog(syslog_level, "%s", msgc);
+ 	}
+ # endif
+ 	free(msgc);
+@@ -180,3 +180,21 @@ void FAST_FUNC bb_error_msg(const char *s, ...)
+ 	bb_verror_msg(s, p, NULL);
+ 	va_end(p);
+ }
++
++#if ENABLE_FEATURE_SYSLOG_INFO
++void FAST_FUNC bb_vinfo_msg(const char *s, va_list p)
++{
++	syslog_level = LOG_INFO;
++	bb_verror_msg(s, p, NULL);
++	syslog_level = LOG_ERR;
++}
++
++void FAST_FUNC bb_info_msg(const char *s, ...)
++{
++	va_list p;
++
++	va_start(p, s);
++	bb_vinfo_msg(s, p);
++	va_end(p);
++}
++#endif
+diff --git a/loginutils/chpasswd.c b/loginutils/chpasswd.c
+index 4b3602e7a..dd0532c66 100644
+--- a/loginutils/chpasswd.c
++++ b/loginutils/chpasswd.c
+@@ -114,7 +114,7 @@ int chpasswd_main(int argc UNUSED_PARAM, char **argv)
+ 		if (rc < 0)
+ 			bb_error_msg_and_die("an error occurred updating password for %s", name);
+ 		if (rc)
+-			bb_error_msg("password for '%s' changed", name);
++			bb_info_msg("password for '%s' changed", name);
+ 		logmode = LOGMODE_STDIO;
+ 		free(name);
+ 		free(free_me);
+diff --git a/loginutils/passwd.c b/loginutils/passwd.c
+index 30e096460..6c643d3d0 100644
+--- a/loginutils/passwd.c
++++ b/loginutils/passwd.c
+@@ -228,7 +228,7 @@ int passwd_main(int argc UNUSED_PARAM, char **argv)
+ 	/* LOGMODE_BOTH */
+ 	if (rc < 0)
+ 		bb_error_msg_and_die("can't update password file %s", filename);
+-	bb_error_msg("password for %s changed by %s", name, myname);
++	bb_info_msg("password for %s changed by %s", name, myname);
+ 
+ 	/*if (ENABLE_FEATURE_CLEAN_UP) free(newp); - can't, it may be non-malloced */
+  skip:
+diff --git a/loginutils/sulogin.c b/loginutils/sulogin.c
+index 27ea5dff0..9bb4d3613 100644
+--- a/loginutils/sulogin.c
++++ b/loginutils/sulogin.c
+@@ -68,17 +68,17 @@ int sulogin_main(int argc UNUSED_PARAM, char **argv)
+ 		);
+ 		if (r < 0) {
+ 			/* ^D, ^C, timeout, or read error */
+-			bb_error_msg("normal startup");
++			bb_info_msg("normal startup");
+ 			return 0;
+ 		}
+ 		if (r > 0) {
+ 			break;
+ 		}
+ 		bb_do_delay(LOGIN_FAIL_DELAY);
+-		bb_error_msg("Login incorrect");
++		bb_info_msg("Login incorrect");
+ 	}
+ 
+-	bb_error_msg("starting shell for system maintenance");
++	bb_info_msg("starting shell for system maintenance");
+ 
+ 	IF_SELINUX(renew_current_security_context());
+ 
+diff --git a/miscutils/crond.c b/miscutils/crond.c
+index 25e5503c7..b533a3991 100644
+--- a/miscutils/crond.c
++++ b/miscutils/crond.c
+@@ -181,9 +181,7 @@ static void crondlog(unsigned level, const char *msg, va_list va)
+ 		 * need not touch syslog_level
+ 		 * (they are ok with LOG_ERR default).
+ 		 */
+-		syslog_level = LOG_INFO;
+-		bb_verror_msg(msg, va, /* strerr: */ NULL);
+-		syslog_level = LOG_ERR;
++		bb_vinfo_msg(msg, va);
+ 	}
+ }
+ 
+@@ -1108,7 +1106,7 @@ int crond_main(int argc UNUSED_PARAM, char **argv)
+ 		process_cron_update_file();
+ 		log5("wakeup dt=%ld", dt);
+ 		if (dt < -60 * 60 || dt > 60 * 60) {
+-			bb_error_msg("time disparity of %ld minutes detected", dt / 60);
++			bb_info_msg("time disparity of %ld minutes detected", dt / 60);
+ 			/* and we do not run any jobs in this case */
+ 		} else if (dt > 0) {
+ 			/* Usual case: time advances forward, as expected */
+diff --git a/miscutils/devfsd.c b/miscutils/devfsd.c
+index 3bf06b965..e4d104d0c 100644
+--- a/miscutils/devfsd.c
++++ b/miscutils/devfsd.c
+@@ -343,7 +343,7 @@ static const char bb_msg_variable_not_found[] ALIGN1 = "variable: %s not found";
+ 
+ /* Busybox stuff */
+ #if ENABLE_DEVFSD_VERBOSE || ENABLE_DEBUG
+-#define info_logger(p, fmt, args...)                 bb_error_msg(fmt, ## args)
++#define info_logger(p, fmt, args...)                 bb_info_msg(fmt, ## args)
+ #define msg_logger(p, fmt, args...)                  bb_error_msg(fmt, ## args)
+ #define msg_logger_and_die(p, fmt, args...)          bb_error_msg_and_die(fmt, ## args)
+ #define error_logger(p, fmt, args...)                bb_perror_msg(fmt, ## args)
+diff --git a/networking/dnsd.c b/networking/dnsd.c
+index 37a80309d..f2c6bddc6 100644
+--- a/networking/dnsd.c
++++ b/networking/dnsd.c
+@@ -133,7 +133,7 @@ static struct dns_entry *parse_conf_file(const char *fileconf)
+ 		}
+ 
+ 		if (OPT_verbose)
+-			bb_error_msg("name:%s, ip:%s", token[0], token[1]);
++			bb_info_msg("name:%s, ip:%s", token[0], token[1]);
+ 
+ 		/* sizeof(*m) includes 1 byte for m->name[0] */
+ 		m = xzalloc(sizeof(*m) + strlen(token[0]) + 1);
+@@ -438,7 +438,7 @@ static int process_packet(struct dns_entry *conf_data,
+ 	answstr = table_lookup(conf_data, type, query_string);
+ #if DEBUG
+ 	/* Shows lengths instead of dots, unusable for !DEBUG */
+-	bb_error_msg("'%s'->'%s'", query_string, answstr);
++	bb_info_msg("'%s'->'%s'", query_string, answstr);
+ #endif
+ 	outr_rlen = 4;
+ 	if (answstr && type == htons(REQ_PTR)) {
+@@ -474,7 +474,7 @@ static int process_packet(struct dns_entry *conf_data,
+ 	 * RCODE = 0 "success"
+ 	 */
+ 	if (OPT_verbose)
+-		bb_error_msg("returning positive reply");
++		bb_info_msg("returning positive reply");
+ 	outr_flags = htons(0x8000 | 0x0400 | 0);
+ 	/* we have one answer */
+ 	head->nansw = htons(1);
+@@ -539,7 +539,7 @@ int dnsd_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 	{
+ 		char *p = xmalloc_sockaddr2dotted(&lsa->u.sa);
+-		bb_error_msg("accepting UDP packets on %s", p);
++		bb_info_msg("accepting UDP packets on %s", p);
+ 		free(p);
+ 	}
+ 
+@@ -557,7 +557,7 @@ int dnsd_main(int argc UNUSED_PARAM, char **argv)
+ 			continue;
+ 		}
+ 		if (OPT_verbose)
+-			bb_error_msg("got UDP packet");
++			bb_info_msg("got UDP packet");
+ 		buf[r] = '\0'; /* paranoia */
+ 		r = process_packet(conf_data, conf_ttl, buf);
+ 		if (r <= 0)
+diff --git a/networking/ifplugd.c b/networking/ifplugd.c
+index 026ff1cc8..1426709cb 100644
+--- a/networking/ifplugd.c
++++ b/networking/ifplugd.c
+@@ -326,7 +326,7 @@ static int run_script(const char *action)
+ 	char *argv[5];
+ 	int r;
+ 
+-	bb_error_msg("executing '%s %s %s'", G.script_name, G.iface, action);
++	bb_info_msg("executing '%s %s %s'", G.script_name, G.iface, action);
+ 
+ 	argv[0] = (char*) G.script_name;
+ 	argv[1] = (char*) G.iface;
+@@ -345,7 +345,7 @@ static int run_script(const char *action)
+ 	bb_unsetenv_and_free(env_PREVIOUS);
+ 	bb_unsetenv_and_free(env_CURRENT);
+ 
+-	bb_error_msg("exit code: %d", r & 0xff);
++	bb_info_msg("exit code: %d", r & 0xff);
+ 	return (option_mask32 & FLAG_IGNORE_RETVAL) ? 0 : r;
+ }
+ 
+@@ -365,7 +365,7 @@ static void up_iface(void)
+ 	if (!(ifrequest.ifr_flags & IFF_UP)) {
+ 		ifrequest.ifr_flags |= IFF_UP;
+ 		/* Let user know we mess up with interface */
+-		bb_error_msg("upping interface");
++		bb_info_msg("upping interface");
+ 		if (network_ioctl(SIOCSIFFLAGS, &ifrequest, "setting interface flags") < 0) {
+ 			if (errno != ENODEV && errno != EADDRNOTAVAIL)
+ 				xfunc_die();
+@@ -414,7 +414,7 @@ static void maybe_up_new_iface(void)
+ 				(uint8_t)(ifrequest.ifr_hwaddr.sa_data[5]));
+ 		}
+ 
+-		bb_error_msg("using interface %s%s with driver<%s> (version: %s)",
++		bb_info_msg("using interface %s%s with driver<%s> (version: %s)",
+ 			G.iface, buf, driver_info.driver, driver_info.version);
+ 	}
+ #endif
+@@ -447,7 +447,7 @@ static smallint detect_link(void)
+ 			logmode = sv_logmode;
+ 			if (status != IFSTATUS_ERR) {
+ 				G.api_method_num = i;
+-				bb_error_msg("using %s detection mode", method_table[i].name);
++				bb_info_msg("using %s detection mode", method_table[i].name);
+ 				break;
+ 			}
+ 		}
+@@ -632,7 +632,7 @@ int ifplugd_main(int argc UNUSED_PARAM, char **argv)
+ 		/* | (1 << SIGCHLD) - run_script does not use it anymore */
+ 		, record_signo);
+ 
+-	bb_error_msg("started: %s", bb_banner);
++	bb_info_msg("started: %s", bb_banner);
+ 
+ 	if (opts & FLAG_MONITOR) {
+ 		struct ifreq ifrequest;
+@@ -649,7 +649,7 @@ int ifplugd_main(int argc UNUSED_PARAM, char **argv)
+ 	iface_status_str = strstatus(iface_status);
+ 
+ 	if (opts & FLAG_MONITOR) {
+-		bb_error_msg("interface %s",
++		bb_info_msg("interface %s",
+ 			G.iface_exists ? "exists"
+ 			: "doesn't exist, waiting");
+ 	}
+@@ -657,7 +657,7 @@ int ifplugd_main(int argc UNUSED_PARAM, char **argv)
+ 	 * by potentially lying that it really exists */
+ 
+ 	if (G.iface_exists) {
+-		bb_error_msg("link is %s", iface_status_str);
++		bb_info_msg("link is %s", iface_status_str);
+ 	}
+ 
+ 	if ((!(opts & FLAG_NO_STARTUP)
+@@ -712,7 +712,7 @@ int ifplugd_main(int argc UNUSED_PARAM, char **argv)
+ 			if (G.iface_exists < 0) /* error */
+ 				goto exiting;
+ 			if (iface_exists_old != G.iface_exists) {
+-				bb_error_msg("interface %sappeared",
++				bb_info_msg("interface %sappeared",
+ 						G.iface_exists ? "" : "dis");
+ 				if (G.iface_exists)
+ 					maybe_up_new_iface();
+@@ -730,7 +730,7 @@ int ifplugd_main(int argc UNUSED_PARAM, char **argv)
+ 		iface_status_str = strstatus(iface_status);
+ 
+ 		if (iface_status_old != iface_status) {
+-			bb_error_msg("link is %s", iface_status_str);
++			bb_info_msg("link is %s", iface_status_str);
+ 
+ 			if (delay_time) {
+ 				/* link restored its old status before
+diff --git a/networking/ntpd.c b/networking/ntpd.c
+index 027cfe783..cd6da2b38 100644
+--- a/networking/ntpd.c
++++ b/networking/ntpd.c
+@@ -1130,7 +1130,7 @@ step_time(double offset)
+ 	}
+ 	tval = tvn.tv_sec;
+ 	strftime_YYYYMMDDHHMMSS(buf, sizeof(buf), &tval);
+-	bb_error_msg("setting time to %s.%06u (offset %+fs)", buf, (unsigned)tvn.tv_usec, offset);
++	bb_info_msg("setting time to %s.%06u (offset %+fs)", buf, (unsigned)tvn.tv_usec, offset);
+ 	//maybe? G.FREQHOLD_cnt = 0;
+ 
+ 	/* Correct various fields which contain time-relative values: */
+@@ -2132,7 +2132,7 @@ recv_and_process_peer_pkt(peer_t *p)
+ 
+ 	p->reachable_bits |= 1;
+ 	if ((MAX_VERBOSE && G.verbose) || (option_mask32 & OPT_w)) {
+-		bb_error_msg("reply from %s: offset:%+f delay:%f status:0x%02x strat:%d refid:0x%08x rootdelay:%f reach:0x%02x",
++		bb_info_msg("reply from %s: offset:%+f delay:%f status:0x%02x strat:%d refid:0x%08x rootdelay:%f reach:0x%02x",
+ 			p->p_dotted,
+ 			offset,
+ 			p->p_raw_delay,
+diff --git a/networking/tftp.c b/networking/tftp.c
+index d20d4ca4b..5ebd22105 100644
+--- a/networking/tftp.c
++++ b/networking/tftp.c
+@@ -245,7 +245,7 @@ static int tftp_blksize_check(const char *blksize_str, int maxsize)
+ 		return -1;
+ 	}
+ # if ENABLE_TFTP_DEBUG
+-	bb_error_msg("using blksize %u", blksize);
++	bb_info_msg("using blksize %u", blksize);
+ # endif
+ 	return blksize;
+ }
+diff --git a/networking/udhcp/common.c b/networking/udhcp/common.c
+index 59cf723ee..62ad248ce 100644
+--- a/networking/udhcp/common.c
++++ b/networking/udhcp/common.c
+@@ -191,7 +191,7 @@ static void log_option(const char *pfx, const uint8_t *opt)
+ 	if (dhcp_verbose >= 2) {
+ 		char buf[256 * 2 + 2];
+ 		*bin2hex(buf, (void*) (opt + OPT_DATA), opt[OPT_LEN]) = '\0';
+-		bb_error_msg("%s: 0x%02x %s", pfx, opt[OPT_CODE], buf);
++		bb_info_msg("%s: 0x%02x %s", pfx, opt[OPT_CODE], buf);
+ 	}
+ }
+ #else
+diff --git a/networking/udhcp/common.h b/networking/udhcp/common.h
+index 9d1f71aae..a897837f9 100644
+--- a/networking/udhcp/common.h
++++ b/networking/udhcp/common.h
+@@ -274,16 +274,16 @@ struct option_set *udhcp_find_option(struct option_set *opt_list, uint8_t code)
+ #if defined CONFIG_UDHCP_DEBUG && CONFIG_UDHCP_DEBUG >= 1
+ # define IF_UDHCP_VERBOSE(...) __VA_ARGS__
+ extern unsigned dhcp_verbose;
+-# define log1(...) do { if (dhcp_verbose >= 1) bb_error_msg(__VA_ARGS__); } while (0)
++# define log1(...) do { if (dhcp_verbose >= 1) bb_info_msg(__VA_ARGS__); } while (0)
+ # if CONFIG_UDHCP_DEBUG >= 2
+ void udhcp_dump_packet(struct dhcp_packet *packet) FAST_FUNC;
+-#  define log2(...) do { if (dhcp_verbose >= 2) bb_error_msg(__VA_ARGS__); } while (0)
++#  define log2(...) do { if (dhcp_verbose >= 2) bb_info_msg(__VA_ARGS__); } while (0)
+ # else
+ #  define udhcp_dump_packet(...) ((void)0)
+ #  define log2(...) ((void)0)
+ # endif
+ # if CONFIG_UDHCP_DEBUG >= 3
+-#  define log3(...) do { if (dhcp_verbose >= 3) bb_error_msg(__VA_ARGS__); } while (0)
++#  define log3(...) do { if (dhcp_verbose >= 3) bb_info_msg(__VA_ARGS__); } while (0)
+ # else
+ #  define log3(...) ((void)0)
+ # endif
+diff --git a/networking/udhcp/d6_dhcpc.c b/networking/udhcp/d6_dhcpc.c
+index 3562988fd..1a0a5739e 100644
+--- a/networking/udhcp/d6_dhcpc.c
++++ b/networking/udhcp/d6_dhcpc.c
+@@ -670,7 +670,7 @@ static NOINLINE int send_d6_discover(uint32_t xid, struct in6_addr *requested_ip
+ 	 */
+ 	opt_ptr = add_d6_client_options(opt_ptr);
+ 
+-	bb_error_msg("sending %s", "discover");
++	bb_info_msg("sending %s", "discover");
+ 	return d6_mcast_from_client_config_ifindex(&packet, opt_ptr);
+ }
+ 
+@@ -727,7 +727,7 @@ static NOINLINE int send_d6_select(uint32_t xid)
+ 	 */
+ 	opt_ptr = add_d6_client_options(opt_ptr);
+ 
+-	bb_error_msg("sending %s", "select");
++	bb_info_msg("sending %s", "select");
+ 	return d6_mcast_from_client_config_ifindex(&packet, opt_ptr);
+ }
+ 
+@@ -800,7 +800,7 @@ static NOINLINE int send_d6_renew(uint32_t xid, struct in6_addr *server_ipv6, st
+ 	 */
+ 	opt_ptr = add_d6_client_options(opt_ptr);
+ 
+-	bb_error_msg("sending %s", "renew");
++	bb_info_msg("sending %s", "renew");
+ 	if (server_ipv6)
+ 		return d6_send_kernel_packet(
+ 			&packet, (opt_ptr - (uint8_t*) &packet),
+@@ -830,7 +830,7 @@ int send_d6_release(struct in6_addr *server_ipv6, struct in6_addr *our_cur_ipv6)
+ 	if (client6_data.ia_pd)
+ 		opt_ptr = mempcpy(opt_ptr, client6_data.ia_pd, client6_data.ia_pd->len + 2+2);
+ 
+-	bb_error_msg("sending %s", "release");
++	bb_info_msg("sending %s", "release");
+ 	return d6_send_kernel_packet(
+ 		&packet, (opt_ptr - (uint8_t*) &packet),
+ 		our_cur_ipv6, CLIENT_PORT6,
+@@ -1033,7 +1033,7 @@ static void change_listen_mode(int new_mode)
+ /* Called only on SIGUSR1 */
+ static void perform_renew(void)
+ {
+-	bb_error_msg("performing DHCP renew");
++	bb_info_msg("performing DHCP renew");
+ 	switch (state) {
+ 	case BOUND:
+ 		change_listen_mode(LISTEN_KERNEL);
+@@ -1061,10 +1061,10 @@ static void perform_d6_release(struct in6_addr *server_ipv6, struct in6_addr *ou
+ 	 || state == REBINDING
+ 	 || state == RENEW_REQUESTED
+ 	) {
+-		bb_error_msg("unicasting a release");
++		bb_info_msg("unicasting a release");
+ 		send_d6_release(server_ipv6, our_cur_ipv6); /* unicast */
+ 	}
+-	bb_error_msg("entering released state");
++	bb_info_msg("entering released state");
+ /*
+  * We can be here on: SIGUSR2,
+  * or on exit (SIGTERM) and -R "release on quit" is specified.
+@@ -1274,7 +1274,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 	/* Create pidfile */
+ 	write_pidfile(client_config.pidfile);
+ 	/* Goes to stdout (unless NOMMU) and possibly syslog */
+-	bb_error_msg("started, v"BB_VER);
++	bb_info_msg("started, v"BB_VER);
+ 	/* Set up the signal pipe */
+ 	udhcp_sp_setup();
+ 
+@@ -1363,7 +1363,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 				d6_run_script_no_option("leasefail");
+ #if BB_MMU /* -b is not supported on NOMMU */
+ 				if (opt & OPT_b) { /* background if no lease */
+-					bb_error_msg("no lease, forking to background");
++					bb_info_msg("no lease, forking to background");
+ 					client_background();
+ 					/* do not background again! */
+ 					opt = ((opt & ~(OPT_b|OPT_n)) | OPT_f);
+@@ -1376,7 +1376,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 				} else
+ #endif
+ 				if (opt & OPT_n) { /* abort if no lease */
+-					bb_error_msg("no lease, failing");
++					bb_info_msg("no lease, failing");
+ 					retval = 1;
+ 					goto ret;
+ 				}
+@@ -1439,7 +1439,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 					continue;
+ 				}
+ 				/* Timed out, enter init state */
+-				bb_error_msg("lease lost, entering init state");
++				bb_info_msg("lease lost, entering init state");
+ 				d6_run_script_no_option("deconfig");
+ 				state = INIT_SELECTING;
+ 				client_config.first_secs = 0; /* make secs field count from 0 */
+@@ -1484,7 +1484,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 			timeout = INT_MAX;
+ 			continue;
+ 		case SIGTERM:
+-			bb_error_msg("received %s", "SIGTERM");
++			bb_info_msg("received %s", "SIGTERM");
+ 			goto ret0;
+ 		}
+ 
+@@ -1544,7 +1544,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 				option = d6_find_option(packet.d6_options, packet_end, D6_OPT_STATUS_CODE);
+ 				if (option && (option->data[0] | option->data[1]) != 0) {
+ 					/* return to init state */
+-					bb_error_msg("received DHCP NAK (%u)", option->data[4]);
++					bb_info_msg("received DHCP NAK (%u)", option->data[4]);
+ 					d6_run_script(packet.d6_options,
+ 							packet_end, "nak");
+ 					if (state != REQUESTING)
+@@ -1561,7 +1561,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 				}
+ 				option = d6_copy_option(packet.d6_options, packet_end, D6_OPT_SERVERID);
+ 				if (!option) {
+-					bb_error_msg("no server ID, ignoring packet");
++					bb_info_msg("no server ID, ignoring packet");
+ 					continue;
+ 					/* still selecting - this server looks bad */
+ 				}
+@@ -1670,11 +1670,11 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 					free(client6_data.ia_na);
+ 					client6_data.ia_na = d6_copy_option(packet.d6_options, packet_end, D6_OPT_IA_NA);
+ 					if (!client6_data.ia_na) {
+-						bb_error_msg("no %s option, ignoring packet", "IA_NA");
++						bb_info_msg("no %s option, ignoring packet", "IA_NA");
+ 						continue;
+ 					}
+ 					if (client6_data.ia_na->len < (4 + 4 + 4) + (2 + 2 + 16 + 4 + 4)) {
+-						bb_error_msg("%s option is too short:%d bytes",
++						bb_info_msg("%s option is too short:%d bytes",
+ 							"IA_NA", client6_data.ia_na->len);
+ 						continue;
+ 					}
+@@ -1683,11 +1683,11 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 							D6_OPT_IAADDR
+ 					);
+ 					if (!iaaddr) {
+-						bb_error_msg("no %s option, ignoring packet", "IAADDR");
++						bb_info_msg("no %s option, ignoring packet", "IAADDR");
+ 						continue;
+ 					}
+ 					if (iaaddr->len < (16 + 4 + 4)) {
+-						bb_error_msg("%s option is too short:%d bytes",
++						bb_info_msg("%s option is too short:%d bytes",
+ 							"IAADDR", iaaddr->len);
+ 						continue;
+ 					}
+@@ -1698,7 +1698,7 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 					move_from_unaligned32(lease_seconds, iaaddr->data + 16 + 4);
+ 					lease_seconds = ntohl(lease_seconds);
+ /// TODO: check for 0 lease time?
+-					bb_error_msg("%s obtained, lease time %u",
++					bb_info_msg("%s obtained, lease time %u",
+ 						"IPv6", /*inet_ntoa(temp_addr),*/ (unsigned)lease_seconds);
+ 					address_timeout = lease_seconds;
+ 				}
+@@ -1708,11 +1708,11 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 					free(client6_data.ia_pd);
+ 					client6_data.ia_pd = d6_copy_option(packet.d6_options, packet_end, D6_OPT_IA_PD);
+ 					if (!client6_data.ia_pd) {
+-						bb_error_msg("no %s option, ignoring packet", "IA_PD");
++						bb_info_msg("no %s option, ignoring packet", "IA_PD");
+ 						continue;
+ 					}
+ 					if (client6_data.ia_pd->len < (4 + 4 + 4) + (2 + 2 + 4 + 4 + 1 + 16)) {
+-						bb_error_msg("%s option is too short:%d bytes",
++						bb_info_msg("%s option is too short:%d bytes",
+ 							"IA_PD", client6_data.ia_pd->len);
+ 						continue;
+ 					}
+@@ -1721,17 +1721,17 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 							D6_OPT_IAPREFIX
+ 					);
+ 					if (!iaprefix) {
+-						bb_error_msg("no %s option, ignoring packet", "IAPREFIX");
++						bb_info_msg("no %s option, ignoring packet", "IAPREFIX");
+ 						continue;
+ 					}
+ 					if (iaprefix->len < (4 + 4 + 1 + 16)) {
+-						bb_error_msg("%s option is too short:%d bytes",
++						bb_info_msg("%s option is too short:%d bytes",
+ 							"IAPREFIX", iaprefix->len);
+ 						continue;
+ 					}
+ 					move_from_unaligned32(lease_seconds, iaprefix->data + 4);
+ 					lease_seconds = ntohl(lease_seconds);
+-					bb_error_msg("%s obtained, lease time %u",
++					bb_info_msg("%s obtained, lease time %u",
+ 						"prefix", /*inet_ntoa(temp_addr),*/ (unsigned)lease_seconds);
+ 					prefix_timeout = lease_seconds;
+ 				}
+@@ -1781,4 +1781,3 @@ int udhcpc6_main(int argc UNUSED_PARAM, char **argv)
+ 	/*if (client_config.pidfile) - remove_pidfile has its own check */
+ 		remove_pidfile(client_config.pidfile);
+ 	return retval;
+-}
+diff --git a/networking/udhcp/d6_packet.c b/networking/udhcp/d6_packet.c
+index 493943d72..01d1c930b 100644
+--- a/networking/udhcp/d6_packet.c
++++ b/networking/udhcp/d6_packet.c
+@@ -17,7 +17,7 @@ void FAST_FUNC d6_dump_packet(struct d6_packet *packet)
+ 	if (dhcp_verbose < 2)
+ 		return;
+ 
+-	bb_error_msg(
++	bb_info_msg(
+ 		" xid %x"
+ 		, packet->d6_xid32
+ 	);
+@@ -40,7 +40,7 @@ int FAST_FUNC d6_recv_kernel_packet(struct in6_addr *peer_ipv6
+ 	}
+ 
+ 	if (bytes < offsetof(struct d6_packet, d6_options)) {
+-		bb_error_msg("packet with bad magic, ignoring");
++		bb_info_msg("packet with bad magic, ignoring");
+ 		return -2;
+ 	}
+ 	log1("received %s", "a packet");
+diff --git a/networking/udhcp/dhcpc.c b/networking/udhcp/dhcpc.c
+index e2fb18aba..0e673ae7e 100644
+--- a/networking/udhcp/dhcpc.c
++++ b/networking/udhcp/dhcpc.c
+@@ -730,7 +730,7 @@ static NOINLINE int send_discover(uint32_t xid, uint32_t requested)
+ 	 */
+ 	add_client_options(&packet);
+ 
+-	bb_error_msg("sending %s", "discover");
++	bb_info_msg("sending %s", "discover");
+ 	return raw_bcast_from_client_config_ifindex(&packet, INADDR_ANY);
+ }
+ 
+@@ -774,7 +774,7 @@ static NOINLINE int send_select(uint32_t xid, uint32_t server, uint32_t requeste
+ 	add_client_options(&packet);
+ 
+ 	temp_addr.s_addr = requested;
+-	bb_error_msg("sending select for %s", inet_ntoa(temp_addr));
++	bb_info_msg("sending select for %s", inet_ntoa(temp_addr));
+ 	return raw_bcast_from_client_config_ifindex(&packet, INADDR_ANY);
+ }
+ 
+@@ -815,7 +815,7 @@ static NOINLINE int send_renew(uint32_t xid, uint32_t server, uint32_t ciaddr)
+ 	add_client_options(&packet);
+ 
+ 	temp_addr.s_addr = server;
+-	bb_error_msg("sending renew to %s", inet_ntoa(temp_addr));
++	bb_info_msg("sending renew to %s", inet_ntoa(temp_addr));
+ 	return bcast_or_ucast(&packet, ciaddr, server);
+ }
+ 
+@@ -844,7 +844,7 @@ static NOINLINE int send_decline(/*uint32_t xid,*/ uint32_t server, uint32_t req
+ 
+ 	udhcp_add_simple_option(&packet, DHCP_SERVER_ID, server);
+ 
+-	bb_error_msg("sending %s", "decline");
++	bb_info_msg("sending %s", "decline");
+ 	return raw_bcast_from_client_config_ifindex(&packet, INADDR_ANY);
+ }
+ #endif
+@@ -866,7 +866,7 @@ int send_release(uint32_t server, uint32_t ciaddr)
+ 
+ 	udhcp_add_simple_option(&packet, DHCP_SERVER_ID, server);
+ 
+-	bb_error_msg("sending %s", "release");
++	bb_info_msg("sending %s", "release");
+ 	/* Note: normally we unicast here since "server" is not zero.
+ 	 * However, there _are_ people who run "address-less" DHCP servers,
+ 	 * and reportedly ISC dhcp client and Windows allow that.
+@@ -969,7 +969,7 @@ static NOINLINE int udhcp_recv_raw_packet(struct dhcp_packet *dhcp_pkt, int fd)
+  skip_udp_sum_check:
+ 
+ 	if (packet.data.cookie != htonl(DHCP_MAGIC)) {
+-		bb_error_msg("packet with bad magic, ignoring");
++		bb_info_msg("packet with bad magic, ignoring");
+ 		return -2;
+ 	}
+ 
+@@ -1117,7 +1117,7 @@ static void change_listen_mode(int new_mode)
+ /* Called only on SIGUSR1 */
+ static void perform_renew(void)
+ {
+-	bb_error_msg("performing DHCP renew");
++	bb_info_msg("performing DHCP renew");
+ 	switch (state) {
+ 	case BOUND:
+ 		change_listen_mode(LISTEN_KERNEL);
+@@ -1151,11 +1151,11 @@ static void perform_release(uint32_t server_addr, uint32_t requested_ip)
+ 		temp_addr.s_addr = server_addr;
+ 		strcpy(buffer, inet_ntoa(temp_addr));
+ 		temp_addr.s_addr = requested_ip;
+-		bb_error_msg("unicasting a release of %s to %s",
++		bb_info_msg("unicasting a release of %s to %s",
+ 				inet_ntoa(temp_addr), buffer);
+ 		send_release(server_addr, requested_ip); /* unicast */
+ 	}
+-	bb_error_msg("entering released state");
++	bb_info_msg("entering released state");
+ /*
+  * We can be here on: SIGUSR2,
+  * or on exit (SIGTERM) and -R "release on quit" is specified.
+@@ -1391,7 +1391,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 	/* Create pidfile */
+ 	write_pidfile(client_config.pidfile);
+ 	/* Goes to stdout (unless NOMMU) and possibly syslog */
+-	bb_error_msg("started, v"BB_VER);
++	bb_info_msg("started, v"BB_VER);
+ 	/* Set up the signal pipe */
+ 	udhcp_sp_setup();
+ 	/* We want random_xid to be random... */
+@@ -1481,7 +1481,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 				udhcp_run_script(NULL, "leasefail");
+ #if BB_MMU /* -b is not supported on NOMMU */
+ 				if (opt & OPT_b) { /* background if no lease */
+-					bb_error_msg("no lease, forking to background");
++					bb_info_msg("no lease, forking to background");
+ 					client_background();
+ 					/* do not background again! */
+ 					opt = ((opt & ~(OPT_b|OPT_n)) | OPT_f);
+@@ -1494,7 +1494,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 				} else
+ #endif
+ 				if (opt & OPT_n) { /* abort if no lease */
+-					bb_error_msg("no lease, failing");
++					bb_info_msg("no lease, failing");
+ 					retval = 1;
+ 					goto ret;
+ 				}
+@@ -1570,7 +1570,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 					continue;
+ 				}
+ 				/* Timed out, enter init state */
+-				bb_error_msg("lease lost, entering init state");
++				bb_info_msg("lease lost, entering init state");
+ 				udhcp_run_script(NULL, "deconfig");
+ 				state = INIT_SELECTING;
+ 				client_config.first_secs = 0; /* make secs field count from 0 */
+@@ -1615,7 +1615,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 			timeout = INT_MAX;
+ 			continue;
+ 		case SIGTERM:
+-			bb_error_msg("received %s", "SIGTERM");
++			bb_info_msg("received %s", "SIGTERM");
+ 			goto ret0;
+ 		}
+ 
+@@ -1662,7 +1662,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 		message = udhcp_get_option(&packet, DHCP_MESSAGE_TYPE);
+ 		if (message == NULL) {
+-			bb_error_msg("no message type option, ignoring packet");
++			bb_info_msg("no message type option, ignoring packet");
+ 			continue;
+ 		}
+ 
+@@ -1691,7 +1691,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+  * might work too.
+  * "Next server" and router are definitely wrong ones to use, though...
+  */
+-/* We used to ignore pcakets without DHCP_SERVER_ID.
++/* We used to ignore packets without DHCP_SERVER_ID.
+  * I've got user reports from people who run "address-less" servers.
+  * They either supply DHCP_SERVER_ID of 0.0.0.0 or don't supply it at all.
+  * They say ISC DHCP client supports this case.
+@@ -1699,7 +1699,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 				server_addr = 0;
+ 				temp = udhcp_get_option32(&packet, DHCP_SERVER_ID);
+ 				if (!temp) {
+-					bb_error_msg("no server ID, using 0.0.0.0");
++					bb_info_msg("no server ID, using 0.0.0.0");
+ 				} else {
+ 					/* it IS unaligned sometimes, don't "optimize" */
+ 					move_from_unaligned32(server_addr, temp);
+@@ -1726,7 +1726,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 				temp = udhcp_get_option32(&packet, DHCP_LEASE_TIME);
+ 				if (!temp) {
+-					bb_error_msg("no lease time with ACK, using 1 hour lease");
++					bb_info_msg("no lease time with ACK, using 1 hour lease");
+ 					lease_seconds = 60 * 60;
+ 				} else {
+ 					/* it IS unaligned sometimes, don't "optimize" */
+@@ -1759,7 +1759,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 							client_config.interface,
+ 							arpping_ms)
+ 					) {
+-						bb_error_msg("offered address is in use "
++						bb_info_msg("offered address is in use "
+ 							"(got ARP reply), declining");
+ 						send_decline(/*xid,*/ server_addr, packet.yiaddr);
+ 
+@@ -1778,7 +1778,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ #endif
+ 				/* enter bound state */
+ 				temp_addr.s_addr = packet.yiaddr;
+-				bb_error_msg("lease of %s obtained, lease time %u",
++				bb_info_msg("lease of %s obtained, lease time %u",
+ 					inet_ntoa(temp_addr), (unsigned)lease_seconds);
+ 				requested_ip = packet.yiaddr;
+ 
+@@ -1831,7 +1831,7 @@ int udhcpc_main(int argc UNUSED_PARAM, char **argv)
+ 						goto non_matching_svid;
+ 				}
+ 				/* return to init state */
+-				bb_error_msg("received %s", "DHCP NAK");
++				bb_info_msg("received %s", "DHCP NAK");
+ 				udhcp_run_script(&packet, "nak");
+ 				if (state != REQUESTING)
+ 					udhcp_run_script(NULL, "deconfig");
+diff --git a/networking/udhcp/dhcpd.c b/networking/udhcp/dhcpd.c
+index 0c55fa5e4..d248d2b67 100644
+--- a/networking/udhcp/dhcpd.c
++++ b/networking/udhcp/dhcpd.c
+@@ -104,7 +104,7 @@ static void log_static_leases(struct static_lease **st_lease_pp)
+ 
+ 	cur = *st_lease_pp;
+ 	while (cur) {
+-		bb_error_msg("static lease: mac:%02x:%02x:%02x:%02x:%02x:%02x nip:%x",
++		bb_info_msg("static lease: mac:%02x:%02x:%02x:%02x:%02x:%02x nip:%x",
+ 			cur->mac[0], cur->mac[1], cur->mac[2],
+ 			cur->mac[3], cur->mac[4], cur->mac[5],
+ 			cur->nip
+@@ -242,7 +242,7 @@ static int nobody_responds_to_arp(uint32_t nip, const uint8_t *safe_mac, unsigne
+ 		return r;
+ 
+ 	temp.s_addr = nip;
+-	bb_error_msg("%s belongs to someone, reserving it for %u seconds",
++	bb_info_msg("%s belongs to someone, reserving it for %u seconds",
+ 		inet_ntoa(temp), (unsigned)server_config.conflict_time);
+ 	add_lease(NULL, nip, server_config.conflict_time, NULL, 0);
+ 	return 0;
+@@ -722,7 +722,7 @@ static NOINLINE void send_offer(struct dhcp_packet *oldpacket,
+ 	add_server_options(&packet);
+ 
+ 	addr.s_addr = packet.yiaddr;
+-	bb_error_msg("sending OFFER of %s", inet_ntoa(addr));
++	bb_info_msg("sending OFFER of %s", inet_ntoa(addr));
+ 	/* send_packet emits error message itself if it detects failure */
+ 	send_packet(&packet, /*force_bcast:*/ 0);
+ }
+@@ -755,7 +755,7 @@ static NOINLINE void send_ACK(struct dhcp_packet *oldpacket, uint32_t yiaddr)
+ 	add_server_options(&packet);
+ 
+ 	addr.s_addr = yiaddr;
+-	bb_error_msg("sending ACK to %s", inet_ntoa(addr));
++	bb_info_msg("sending ACK to %s", inet_ntoa(addr));
+ 	send_packet(&packet, /*force_bcast:*/ 0);
+ 
+ 	p_host_name = (const char*) udhcp_get_option(oldpacket, DHCP_HOST_NAME);
+@@ -865,7 +865,7 @@ int udhcpd_main(int argc UNUSED_PARAM, char **argv)
+ 	write_pidfile(server_config.pidfile);
+ 	/* if (!..) bb_perror_msg("can't create pidfile %s", pidfile); */
+ 
+-	bb_error_msg("started, v"BB_VER);
++	bb_info_msg("started, v"BB_VER);
+ 
+ 	option = udhcp_find_option(server_config.options, DHCP_LEASE_TIME);
+ 	server_config.max_lease_sec = DEFAULT_LEASE_TIME;
+@@ -944,12 +944,12 @@ int udhcpd_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 		if (pfds[0].revents) switch (udhcp_sp_read()) {
+ 		case SIGUSR1:
+-			bb_error_msg("received %s", "SIGUSR1");
++			bb_info_msg("received %s", "SIGUSR1");
+ 			write_leases();
+ 			/* why not just reset the timeout, eh */
+ 			goto continue_with_autotime;
+ 		case SIGTERM:
+-			bb_error_msg("received %s", "SIGTERM");
++			bb_info_msg("received %s", "SIGTERM");
+ 			write_leases();
+ 			goto ret0;
+ 		}
+@@ -973,16 +973,16 @@ int udhcpd_main(int argc UNUSED_PARAM, char **argv)
+ 			continue;
+ 		}
+ 		if (packet.hlen != 6) {
+-			bb_error_msg("MAC length != 6, ignoring packet");
++			bb_info_msg("MAC length != 6, ignoring packet");
+ 			continue;
+ 		}
+ 		if (packet.op != BOOTREQUEST) {
+-			bb_error_msg("not a REQUEST, ignoring packet");
++			bb_info_msg("not a REQUEST, ignoring packet");
+ 			continue;
+ 		}
+ 		state = udhcp_get_option(&packet, DHCP_MESSAGE_TYPE);
+ 		if (state == NULL || state[0] < DHCP_MINTYPE || state[0] > DHCP_MAXTYPE) {
+-			bb_error_msg("no or bad message type option, ignoring packet");
++			bb_info_msg("no or bad message type option, ignoring packet");
+ 			continue;
+ 		}
+ 
+@@ -1001,7 +1001,7 @@ int udhcpd_main(int argc UNUSED_PARAM, char **argv)
+ 		/* Look for a static/dynamic lease */
+ 		static_lease_nip = get_static_nip_by_mac(server_config.static_leases, &packet.chaddr);
+ 		if (static_lease_nip) {
+-			bb_error_msg("found static lease: %x", static_lease_nip);
++			bb_info_msg("found static lease: %x", static_lease_nip);
+ 			memcpy(&fake_lease.lease_mac, &packet.chaddr, 6);
+ 			fake_lease.lease_nip = static_lease_nip;
+ 			fake_lease.expires = 0;
+diff --git a/networking/udhcp/packet.c b/networking/udhcp/packet.c
+index ff16904f7..64af802a3 100644
+--- a/networking/udhcp/packet.c
++++ b/networking/udhcp/packet.c
+@@ -40,7 +40,7 @@ void FAST_FUNC udhcp_dump_packet(struct dhcp_packet *packet)
+ 	if (dhcp_verbose < 2)
+ 		return;
+ 
+-	bb_error_msg(
++	bb_info_msg(
+ 		//" op %x"
+ 		//" htype %x"
+ 		" hlen %x"
+@@ -73,7 +73,7 @@ void FAST_FUNC udhcp_dump_packet(struct dhcp_packet *packet)
+ 		//, packet->options[]
+ 	);
+ 	*bin2hex(buf, (void *) packet->chaddr, sizeof(packet->chaddr)) = '\0';
+-	bb_error_msg(" chaddr %s", buf);
++	bb_info_msg(" chaddr %s", buf);
+ }
+ #endif
+ 
+@@ -92,7 +92,7 @@ int FAST_FUNC udhcp_recv_kernel_packet(struct dhcp_packet *packet, int fd)
+ 	if (bytes < offsetof(struct dhcp_packet, options)
+ 	 || packet->cookie != htonl(DHCP_MAGIC)
+ 	) {
+-		bb_error_msg("packet with bad magic, ignoring");
++		bb_info_msg("packet with bad magic, ignoring");
+ 		return -2;
+ 	}
+ 	log1("received %s", "a packet");
+diff --git a/networking/zcip.c b/networking/zcip.c
+index 434762f12..f95b6f7fb 100644
+--- a/networking/zcip.c
++++ b/networking/zcip.c
+@@ -195,7 +195,7 @@ static int run(char *argv[3], const char *param, uint32_t nip)
+ 		putenv(env_ip);
+ 		fmt -= 3;
+ 	}
+-	bb_error_msg(fmt, argv[2], argv[0], addr);
++	bb_info_msg(fmt, argv[2], argv[0], addr);
+ 	status = spawn_and_wait(argv + 1);
+ 	if (nip != 0)
+ 		bb_unsetenv_and_free(env_ip);
+@@ -339,7 +339,7 @@ int zcip_main(int argc UNUSED_PARAM, char **argv)
+ #if BB_MMU
+ 		bb_daemonize(0 /*was: DAEMON_CHDIR_ROOT*/);
+ #endif
+-		bb_error_msg("start, interface %s", argv_intf);
++		bb_info_msg("start, interface %s", argv_intf);
+ 	}
+ 
+ 	// Run the dynamic address negotiation protocol,

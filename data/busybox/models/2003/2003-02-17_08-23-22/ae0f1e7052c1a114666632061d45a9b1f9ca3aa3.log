@@ -1,0 +1,290 @@
+"2003-02-17 08:23:22 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 6ee319a0d..5b9996d5b 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -306,6 +306,12 @@ config CONFIG_RMDIR
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
++config CONFIG_SHA1SUM
++	bool "sha1sum"
++	default n
++	help
++	  Compute and check SHA1 message digest
++
+ config CONFIG_SLEEP
+ 	bool "sleep"
+ 	default n
+diff --git a/coreutils/Makefile.in b/coreutils/Makefile.in
+index 78ee307ec..be34934ab 100644
+--- a/coreutils/Makefile.in
++++ b/coreutils/Makefile.in
+@@ -61,6 +61,7 @@ COREUTILS-$(CONFIG_PWD)		+= pwd.o
+ COREUTILS-$(CONFIG_REALPATH)		+= realpath.o
+ COREUTILS-$(CONFIG_RM)		+= rm.o
+ COREUTILS-$(CONFIG_RMDIR)	+= rmdir.o
++COREUTILS-$(CONFIG_SHA1SUM)	+= sha1sum.o
+ COREUTILS-$(CONFIG_SLEEP)		+= sleep.o
+ COREUTILS-$(CONFIG_SORT)	+= sort.o
+ COREUTILS-$(CONFIG_STTY)		+= stty.o
+diff --git a/coreutils/sha1sum.c b/coreutils/sha1sum.c
+new file mode 100644
+index 000000000..d79a88ec1
+--- /dev/null
++++ b/coreutils/sha1sum.c
+@@ -0,0 +1,224 @@
++/*
++ *  Based on shasum from http://www.netsw.org/crypto/hash/
++ *  
++ *  shasum fixed with reference to coreutils and the nist fip180-1 document
++ *  which is incorrect, in section 5
++ *  - ft(B,C,D) = (B AND C) OR ((NOT B) AND D) ( 0 <= t <= 19)
++ *  + ft(B,C,D) = (D XOR (B AND (C XOR S))) ( 0 <= t <= 19)
++ *
++ *  Copyright (C) 1999 Scott G. Miller
++ *  Copyright (C) 2003 Glenn L. McGrath
++ * 
++ *  This program is free software; you can redistribute it and/or modify
++ *  it under the terms of the GNU General Public License as published by
++ *  the Free Software Foundation; either version 2 of the License, or
++ *  (at your option) any later version.
++ *
++ *  This program is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU General Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License
++ *  along with this program; if not, write to the Free Software
++ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
++ */
++
++#include <stdio.h>
++#include <getopt.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "busybox.h"
++
++#ifdef WORDS_BIGENDIAN
++# define SWAP(n) (n)
++#else
++# define SWAP(n) \
++    (((n) << 24) | (((n) & 0xff00) << 8) | (((n) >> 8) & 0xff00) | ((n) >> 24))
++#endif
++
++#define f1(X,Y,Z) (Z ^ (X & (Y ^ Z)))
++#define f2(X,Y,Z) (X ^ Y ^ Z)
++#define f3(X,Y,Z) ((X & Y) | (Z & (X | Y)))
++
++#define rol1(x) (x<<1) | ((x>>31) & 1)
++#define rol5(x) ((x<<5) | ((x>>27) & 0x1f))
++#define rol30(x) (x<<30) | ((x>>2) & 0x3fffffff)
++
++static void sha_hash(unsigned int *data, int *hash)
++{
++	RESERVE_CONFIG_BUFFER(word, 80 * sizeof(unsigned int));
++	int *W = (unsigned int *) &word;
++	int a = hash[0];
++	int b = hash[1];
++	int c = hash[2];
++	int d = hash[3];
++	int e = hash[4];
++	int t;
++	int TEMP;
++
++	for (t = 0; t < 16; t++) {
++		W[t] = SWAP(data[t]);
++	}
++
++	/** Data expansion from 16 to 80 blocks **/
++	for (t = 16; t < 80; t++) {
++		int x = W[t - 3] ^ W[t - 8] ^ W[t - 14] ^ W[t - 16];
++		W[t] = rol1(x);
++	}
++
++	/** Main loops **/
++	for (t = 0; t < 20; t++) {
++		TEMP = rol5(a) + f1(b, c, d) + e + W[t] + 0x5a827999;
++		e = d;
++		d = c;
++		c = rol30(b);
++		b = a;
++		a = TEMP;
++	}
++	for (; t < 40; t++) {
++		TEMP = rol5(a) + f2(b, c, d) + e + W[t] + 0x6ed9eba1;
++		e = d;
++		d = c;
++		c = rol30(b);
++		b = a;
++		a = TEMP;
++	}
++	for (; t < 60; t++) {
++		TEMP = rol5(a) + f3(b, c, d) + e + W[t] + 0x8f1bbcdc;
++		e = d;
++		d = c;
++		c = rol30(b);
++		b = a;
++		a = TEMP;
++	}
++	for (; t < 80; t++) {
++		TEMP = rol5(a) + f2(b, c, d) + e + W[t] + 0xca62c1d6;
++		e = d;
++		d = c;
++		c = rol30(b);
++		b = a;
++		a = TEMP;
++	}
++
++	RELEASE_CONFIG_BUFFER(word);
++
++	hash[0] += a;
++	hash[1] += b;
++	hash[2] += c;
++	hash[3] += d;
++	hash[4] += e;
++}
++
++static void sha1sum_stream(FILE * fd, unsigned int *hashval)
++{
++	RESERVE_CONFIG_BUFFER(buffer, 64);
++	int length = 0;
++
++	hashval[0] = 0x67452301;
++	hashval[1] = 0xefcdab89;
++	hashval[2] = 0x98badcfe;
++	hashval[3] = 0x10325476;
++	hashval[4] = 0xc3d2e1f0;
++
++	while (!feof(fd) && !ferror(fd)) {
++		int c = fread(&buffer, 1, 64, fd);
++		length += c;
++		if (feof(fd) || ferror(fd)) {
++			int i;
++			/* If reading from stdin we need to get rid of a tailing character */
++			if (fd == stdin) {
++				c--;
++				length--;
++			}
++			for (i = c; i < 61; i++) {
++				if (i == c) {
++					buffer[i] = 0x80;
++				}
++				else if (i == 60) {
++					/* This ends up being swaped twice */
++					((unsigned int *) &buffer)[15] = SWAP(length * 8);
++				} else {
++					buffer[i] = 0;
++				}
++			}
++		}
++		sha_hash((unsigned int *) &buffer, hashval);
++	}
++
++	RELEASE_CONFIG_BUFFER(buffer);
++
++	return;
++}
++
++static void print_hash(unsigned short hash_length, unsigned int *hash_val, char *filename)
++{
++	int x;
++
++	for (x = 0; x < hash_length; x++) {
++		printf("%08x", hash_val[x]);
++	}
++	if (filename != NULL) {
++		putchar(' ');
++		putchar(' ');
++		puts(filename);
++	}
++	putchar('\n');
++}
++
++/* This should become a common function used by sha1sum and md5sum,
++ * it needs extra functionality first
++ */
++extern int authenticate(const int argc, char **argv, void (*hash_ptr)(FILE *stream, unsigned int *hashval), const unsigned short hash_length)
++{
++	int opt;
++	unsigned int *hashval;
++
++	while ((opt = getopt(argc, argv, "sc:w")) != -1) {
++		switch (opt) {
++#if 0
++		case 's':	/* Dont output anything, status code shows success */
++			break;
++		case 'c':	/* Check a list of checksums against stored values  */
++			break;
++		case 'w':	/* Warn of bad formatting when checking files */
++			break;
++#endif
++		default:
++			show_usage();
++		}
++	}
++
++	hashval = xmalloc(hash_length * sizeof(unsigned int));
++
++	if (argc == optind) {
++		hash_ptr(stdin, hashval);
++		print_hash(hash_length, hashval, NULL);
++	} else {
++		int i;
++
++		for (i = optind; i < argc; i++) {
++			if (!strcmp(argv[i], "-")) {
++				hash_ptr(stdin, hashval);
++				print_hash(hash_length, hashval, NULL);
++			} else {
++				FILE *stream = xfopen(argv[i], "r");
++				hash_ptr(stream, hashval);
++				fclose(stream);
++				print_hash(hash_length, hashval, argv[i]);
++			}
++		}
++	}
++
++	free(hashval);
++
++	return 0;
++}
++
++extern int sha1sum_main(int argc, char **argv)
++{
++	/* sha1 length is 5 nibbles */
++	return (authenticate(argc, argv, sha1sum_stream, 5));
++}
+diff --git a/include/applets.h b/include/applets.h
+index 6c274825c..a4d272746 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -487,6 +487,9 @@
+ #elif defined(CONFIG_FEATURE_SH_IS_MSH) && defined(CONFIG_MSH)
+ 	APPLET_NOUSAGE("sh", msh_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_SHA1SUM
++	APPLET(sha1sum, sha1sum_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_SLEEP
+ 	APPLET(sleep, sleep_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 9616906d2..8fc12f151 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1859,6 +1859,11 @@
+ "use ash or bash.  If you just need a very simple and extremely small shell,\n" \
+ "this will do the job."
+ 
++#define sha1sum_trivial_usage \
++	"[OPTION] [FILE]"
++#define sha1sum_full_usage \
++	"[OPTION] [FILE]"
++
+ #define sleep_trivial_usage \
+ 	"N"
+ #define sleep_full_usage \

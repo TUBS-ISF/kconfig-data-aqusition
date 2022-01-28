@@ -1,0 +1,416 @@
+"2003-01-13 21:40:38 +0000"
+diff --git a/include/usage.h b/include/usage.h
+index da4fad886..0a0948bdd 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -878,28 +878,28 @@
+ #define ifup_full_usage \
+ 	"Usage: ifup <options> <ifaces...>\n\n" \
+ 	"Options:\n" \
+-	"\t-h, --help\t\tthis help\n" \
+-	"\t-a, --all\t\tde/configure all interfaces automatically\n" \
+-	"\t-i, --interfaces FILE\tuse FILE for interface definitions\n" \
+-    "\t-n, --no-act\t\tprint out what would happen, but don't do it\n" \
+-	"\t\t\t\t(note that this option doesn't disable mappings)\n" \
+-    "\t-v, --verbose\t\tprint out what would happen before doing it\n" \
+-	"\t--no-mappings\t\tdon't run any mappings\n" \
+-	"\t--force\t\t\tforce de/configuration\n"
++	"\t-h\tthis help\n" \
++	"\t-a\tde/configure all interfaces automatically\n" \
++	"\t-i FILE\tuse FILE for interface definitions\n" \
++	"\t-n\tprint out what would happen, but don't do it\n" \
++	"\t\t\t(note that this option doesn't disable mappings)\n" \
++	"\t-v\tprint out what would happen before doing it\n" \
++	"\t-m\tdon't run any mappings\n" \
++	"\t-f\tforce de/configuration\n"
+ 
+ #define ifdown_trivial_usage \
+ 	"<-ahinv> <ifaces...>"
+ #define ifdown_full_usage \
+ 	"Usage: ifdown <options> <ifaces...>\n\n" \
+ 	"Options:\n" \
+-	"\t-h, --help\t\tthis help\n" \
+-	"\t-a, --all\t\tde/configure all interfaces automatically\n" \
+-	"\t-i, --interfaces FILE\tuse FILE for interface definitions\n" \
+-    "\t-n, --no-act\t\tprint out what would happen, but don't do it\n" \
+-	"\t\t\t\t(note that this option doesn't disable mappings)\n" \
+-    "\t-v, --verbose\t\tprint out what would happen before doing it\n" \
+-	"\t--no-mappings\t\tdon't run any mappings\n" \
+-	"\t--force\t\t\tforce de/configuration\n"
++	"\t-h\tthis help\n" \
++	"\t-a\tde/configure all interfaces automatically\n" \
++	"\t-i FILE\tuse FILE for interface definitions\n" \
++	"\t-n\tprint out what would happen, but don't do it\n" \
++	"\t\t(note that this option doesn't disable mappings)\n" \
++	"\t-v\tprint out what would happen before doing it\n" \
++	"\t-m\tdon't run any mappings\n" \
++	"\t-f\tforce de/configuration\n"
+ 	
+ #define init_trivial_usage \
+ 	""
+diff --git a/networking/Config.in b/networking/Config.in
+index 42dd06e50..bc1178007 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -96,6 +96,13 @@ config CONFIG_IFUPDOWN
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
++config CONFIG_FEATURE_IFUPDOWN_IP
++	bool "  Use ip applet"
++	default n
++	depends on CONFIG_IFUPDOWN && CONFIG_IP && CONFIG_FEATURE_IP_ADDRESS && CONFIG_FEATURE_IP_LINK && CONFIG_FEATURE_IP_ROUTE
++	help
++	  Please submit a patch to add help text for this item.
++
+ config CONFIG_FEATURE_IFUPDOWN_IPV4
+ 	bool "  Enable support for IPv4"
+ 	default y
+@@ -104,14 +111,14 @@ config CONFIG_FEATURE_IFUPDOWN_IPV4
+ 	  Please submit a patch to add help text for this item.
+ 
+ config CONFIG_FEATURE_IFUPDOWN_IPV6
+-	bool "  Enable support for IPv6 (requires ip command)"
++	bool "  Enable support for IPv6"
+ 	default n
+ 	depends on CONFIG_IFUPDOWN
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
+ config CONFIG_FEATURE_IFUPDOWN_IPX
+-	bool "  Enable support for IPX (requires ipx_interface command)"
++	bool "  Enable support for IPX"
+ 	default n
+ 	depends on CONFIG_IFUPDOWN
+ 	help
+diff --git a/networking/ifupdown.c b/networking/ifupdown.c
+index 37185327b..665e527cc 100644
+--- a/networking/ifupdown.c
++++ b/networking/ifupdown.c
+@@ -307,22 +307,40 @@ address_family_t addr_ipx = {
+ #ifdef CONFIG_FEATURE_IFUPDOWN_IPV6
+ static int loopback_up6(interface_defn_t *ifd, execfn *exec)
+ {
+-	if (!execute("ifconfig %iface% add ::1", ifd, exec)) {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip link set %iface% up", ifd, exec))
+ 		return(0);
+-	}
++	if (!execute("ip addr add ::1 dev %iface%", ifd, exec))
++		return(0);
++#else
++	if (!execute("ifconfig %iface% add ::1", ifd, exec))
++		return(0);
++#endif
+ 	return(1);
+ }
+ 
+ static int loopback_down6(interface_defn_t *ifd, execfn *exec)
+ {
+-	if (!execute("ifconfig %iface% del ::1", ifd, exec)) {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip link set %iface% down", ifd, exec))
+ 		return(0);
+-	}
++#else
++	if (!execute("ifconfig %iface% del ::1", ifd, exec))
++		return(0);
++#endif
+ 	return(1);
+ }
+ 
+ static int static_up6(interface_defn_t *ifd, execfn *exec)
+ {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip link set %iface% up", ifd, exec))
++		return(0);
++	if (!execute("ip addr add %address%/%netmask% dev %iface%", ifd, exec))
++		return(0);
++	if (!execute("[[ ip route add ::/0 via %gateway% ]]", ifd, exec))
++		return(0);
++#else
+ 	if (!execute("ifconfig %iface% [[media %media%]] [[hw %hwaddress%]] [[mtu %mtu%]] up", ifd, exec)) {
+ 		return(0);
+ 	}
+@@ -332,17 +350,24 @@ static int static_up6(interface_defn_t *ifd, execfn *exec)
+ 	if (!execute("[[ route -A inet6 add ::/0 gw %gateway% ]]", ifd, exec)) {
+ 		return(0);
+ 	}
++#endif
+ 	return(1);
+ }
+ 
+ static int static_down6(interface_defn_t *ifd, execfn *exec)
+ {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip link set %iface% down", ifd, exec))
++		return(0);
++#else
+ 	if (!execute("ifconfig %iface% down", ifd, exec)) {
+ 		return(0);
+ 	}
++#endif
+ 	return(1);
+ }
+ 
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
+ static int v4tunnel_up(interface_defn_t *ifd, execfn *exec)
+ {
+ 	if (!execute("ip tunnel add %iface% mode sit remote %endpoint% [[local %local%]] [[ttl %ttl%]]", ifd, exec)) {
+@@ -367,9 +392,12 @@ static int v4tunnel_down(interface_defn_t * ifd, execfn * exec)
+ 	}
+ 	return(1);
+ }
++#endif
+ 
+ static method_t methods6[] = {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
+ 	{ "v4tunnel", v4tunnel_up, v4tunnel_down, },
++#endif
+ 	{ "static", static_up6, static_down6, },
+ 	{ "loopback", loopback_up6, loopback_down6, },
+ };
+@@ -384,22 +412,44 @@ address_family_t addr_inet6 = {
+ #ifdef CONFIG_FEATURE_IFUPDOWN_IPV4
+ static int loopback_up(interface_defn_t *ifd, execfn *exec)
+ {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip link set %iface% up", ifd, exec))
++		return(0);
++	if (!execute("ip addr add 127.0.0.1 dev %iface%", ifd, exec))
++		return(0);
++#else
+ 	if (!execute("ifconfig %iface% 127.0.0.1 up", ifd, exec)) {
+ 		return(0);
+ 	}
++#endif
+ 	return(1);
+ }
+ 
+ static int loopback_down(interface_defn_t *ifd, execfn *exec)
+ {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip -f inet addr flush dev %iface%", ifd, exec))
++		return(0);
++	if (!execute("ip link set %iface% down", ifd, exec))
++		return(0);
++#else
+ 	if (!execute("ifconfig %iface% 127.0.0.1 down", ifd, exec)) {
+ 		return(0);
+ 	}
++#endif
+ 	return(1);
+ }
+ 
+ static int static_up(interface_defn_t *ifd, execfn *exec)
+ {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("ip link set %iface% up", ifd, exec))
++		return(0);
++	if (!execute("ip addr add %address%/%netmask% dev %iface%", ifd, exec))
++		return(0);
++	if (!execute("[[ ip route add default via %gateway% dev %iface% ]]", ifd, exec))
++		return(0);
++#else
+ 	if (!execute("ifconfig %iface% %address% netmask %netmask% [[broadcast %broadcast%]] 	[[pointopoint %pointopoint%]] [[media %media%]] [[mtu %mtu%]] 	[[hw %hwaddress%]] up",
+ 		 ifd, exec)) {
+ 		return(0);
+@@ -407,17 +457,27 @@ static int static_up(interface_defn_t *ifd, execfn *exec)
+ 	if (!execute("[[ route add default gw %gateway% %iface% ]]", ifd, exec)) {
+ 		return(0);
+ 	}
++#endif
+ 	return(1);
+ }
+ 
+ static int static_down(interface_defn_t *ifd, execfn *exec)
+ {
++#ifdef CONFIG_FEATURE_IFUPDOWN_IP
++	if (!execute("[[ ip route del default via %gateway% dev %iface% ]]", ifd, exec))
++		return(0);
++	if (!execute("ip -f inet addr flush dev %iface%", ifd, exec))
++		return(0);
++	if (!execute("ip link set %iface% down", ifd, exec))
++		return(0);
++#else
+ 	if (!execute("[[ route del default gw %gateway% %iface% ]]", ifd, exec)) {
+ 		return(0);
+ 	}
+ 	if (!execute("ifconfig %iface% down", ifd, exec)) {
+ 		return(0);
+ 	}
++#endif
+ 	return(1);
+ }
+ 
+@@ -936,7 +996,6 @@ static int doit(char *str)
+ 		case 0:		/* child */
+ 			execle("/bin/sh", "/bin/sh", "-c", str, NULL, environ);
+ 			exit(127);
+-		default:		/* parent */
+ 		}
+ 		waitpid(child, &status, 0);
+ 		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+diff --git a/networking/libiproute/ipaddress.c b/networking/libiproute/ipaddress.c
+index 2821f2e8d..77368fb3c 100644
+--- a/networking/libiproute/ipaddress.c
++++ b/networking/libiproute/ipaddress.c
+@@ -42,6 +42,10 @@ static struct
+ 	int flags, flagmask;
+ 	int up;
+ 	char *label;
++	int flushed;
++	char *flushb;
++	int flushp;
++	int flushe;
+ 	struct rtnl_handle *rth;
+ } filter;
+ 
+@@ -191,6 +195,16 @@ static int print_linkinfo(struct sockaddr_nl *who, struct nlmsghdr *n, void *arg
+ 	return 0;
+ }
+ 
++static int flush_update(void)
++{
++	if (rtnl_send(filter.rth, filter.flushb, filter.flushp) < 0) {
++		perror("Failed to send flush request\n");
++		return -1;
++	}
++	filter.flushp = 0;
++	return 0;
++}
++
+ static int print_addrinfo(struct sockaddr_nl *who, struct nlmsghdr *n, void *arg)
+ {
+ 	FILE *fp = (FILE*)arg;
+@@ -208,6 +222,9 @@ static int print_addrinfo(struct sockaddr_nl *who, struct nlmsghdr *n, void *arg
+ 		return -1;
+ 	}
+ 
++	if (filter.flushb && n->nlmsg_type != RTM_NEWADDR)
++		return 0;
++
+ 	memset(rta_tb, 0, sizeof(rta_tb));
+ 	parse_rtattr(rta_tb, IFA_MAX, IFA_RTA(ifa), n->nlmsg_len - NLMSG_LENGTH(sizeof(*ifa)));
+ 
+@@ -242,6 +259,22 @@ static int print_addrinfo(struct sockaddr_nl *who, struct nlmsghdr *n, void *arg
+ 		}
+ 	}
+ 
++	if (filter.flushb) {
++		struct nlmsghdr *fn;
++		if (NLMSG_ALIGN(filter.flushp) + n->nlmsg_len > filter.flushe) {
++			if (flush_update())
++				return -1;
++		}
++		fn = (struct nlmsghdr*)(filter.flushb + NLMSG_ALIGN(filter.flushp));
++		memcpy(fn, n, n->nlmsg_len);
++		fn->nlmsg_type = RTM_DELADDR;
++		fn->nlmsg_flags = NLM_F_REQUEST;
++		fn->nlmsg_seq = ++filter.rth->seq;
++		filter.flushp = (((char*)fn) + n->nlmsg_len) - filter.flushb;
++		filter.flushed++;
++		return 0;
++	}
++
+ 	if (n->nlmsg_type == RTM_DELADDR)
+ 		fprintf(fp, "Deleted ");
+ 
+@@ -382,7 +415,7 @@ static void ipaddr_reset_filter(int _oneline)
+ 	filter.oneline = _oneline;
+ }
+ 
+-extern int ipaddr_list(int argc, char **argv)
++extern int ipaddr_list_or_flush(int argc, char **argv, int flush)
+ {
+ 	const char *option[] = { "to", "scope", "up", "label", "dev", 0 };
+ 	struct nlmsg_list *linfo = NULL;
+@@ -398,6 +431,17 @@ extern int ipaddr_list(int argc, char **argv)
+ 	if (filter.family == AF_UNSPEC)
+ 		filter.family = preferred_family;
+ 
++	if (flush) {
++		if (argc <= 0) {
++			fprintf(stderr, "Flush requires arguments.\n");
++			return -1;
++		}
++		if (filter.family == AF_PACKET) {
++			fprintf(stderr, "Cannot flush link addresses.\n");
++			return -1;
++		}
++	}
++
+ 	while (argc > 0) {
+ 		const unsigned short option_num = compare_string_array(option, *argv);
+ 		switch (option_num) {
+@@ -461,6 +505,37 @@ extern int ipaddr_list(int argc, char **argv)
+ 		}
+ 	}
+ 
++	if (flush) {
++		int round = 0;
++		char flushb[4096-512];
++
++		filter.flushb = flushb;
++		filter.flushp = 0;
++		filter.flushe = sizeof(flushb);
++		filter.rth = &rth;
++
++		for (;;) {
++			if (rtnl_wilddump_request(&rth, filter.family, RTM_GETADDR) < 0) {
++				perror("Cannot send dump request");
++				exit(1);
++			}
++			filter.flushed = 0;
++			if (rtnl_dump_filter(&rth, print_addrinfo, stdout, NULL, NULL) < 0) {
++				fprintf(stderr, "Flush terminated\n");
++				exit(1);
++			}
++			if (filter.flushed == 0) {
++				if (round == 0)
++					fprintf(stderr, "Nothing to flush.\n");
++				fflush(stdout);
++				return 0;
++			}
++			round++;
++			if (flush_update() < 0)
++				exit(1);
++		}
++	}
++
+ 	if (filter.family != AF_PACKET) {
+ 		if (rtnl_wilddump_request(&rth, filter.family, RTM_GETADDR) < 0) {
+ 			perror_msg_and_die("Cannot send dump request");
+@@ -727,7 +802,7 @@ static int ipaddr_modify(int cmd, int argc, char **argv)
+ 
+ extern int do_ipaddr(int argc, char **argv)
+ {
+-	const char *commands[] = { "add", "delete", "list", "show", "lst", 0 };
++	const char *commands[] = { "add", "delete", "list", "show", "lst", "flush", 0 };
+ 	unsigned short command_num = 2;
+ 
+ 	if (*argv) {
+@@ -741,7 +816,9 @@ extern int do_ipaddr(int argc, char **argv)
+ 		case 2: /* list */
+ 		case 3: /* show */
+ 		case 4: /* lst */
+-			return ipaddr_list(argc-1, argv+1);
++			return ipaddr_list_or_flush(argc-1, argv+1, 0);
++		case 5: /* flush */
++			return ipaddr_list_or_flush(argc-1, argv+1, 1);
+ 	}
+ 	error_msg_and_die("Unknown command %s", *argv);
+ }
+diff --git a/networking/libiproute/iplink.c b/networking/libiproute/iplink.c
+index ef4d6b9a5..3b2f4dac1 100644
+--- a/networking/libiproute/iplink.c
++++ b/networking/libiproute/iplink.c
+@@ -334,7 +334,7 @@ static int ipaddr_list_link(int argc, char **argv)
+ {
+ 	preferred_family = AF_PACKET;
+ 	do_link = 1;
+-	return ipaddr_list(argc, argv);
++	return ipaddr_list_or_flush(argc, argv, 0);
+ }
+ 
+ int do_iplink(int argc, char **argv)

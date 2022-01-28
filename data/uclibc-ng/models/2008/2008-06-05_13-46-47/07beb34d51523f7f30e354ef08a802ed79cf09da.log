@@ -1,0 +1,172 @@
+"2008-06-05 13:46:47 +0000"
+diff --git a/Makefile.in b/Makefile.in
+index 820d8fb68..852018627 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -278,6 +278,10 @@ ifneq ($(UCLIBC_HAS_SOCKET),y)
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/socket.h
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/socketvar.h
+ endif
++ifneq ($(UCLIBC_HAS_CRYPT),y)
++	# Remove crypt.h since libcrypt was disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/crypt.h
++endif
+ 
+ # Installs development library links.
+ install_dev: install_headers
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 006124eb2..db2483e5f 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -910,6 +910,26 @@ config UCLIBC_HAS_PROFILING
+ 	  gcc's -finstrument-functions needs these.
+ 
+ 	  Most people can safely answer N.
++
++config UCLIBC_HAS_CRYPT_IMPL
++	bool "libcrypt support"
++	default y
++	help
++	  libcrypt contains crypt(), setkey() and encrypt()
++
++config UCLIBC_HAS_CRYPT_STUB
++	bool "libcrypt stubs"
++	default y
++	depends on !UCLIBC_HAS_CRYPT_IMPL
++	help
++	  Standards mandate that crypt(3) provides a stub if it is unavailable.
++	  If you enable this option then stubs for
++	    crypt(), setkey() and encrypt()
++	  will be provided in a small libcrypt.
++
++config UCLIBC_HAS_CRYPT
++	def_bool y
++	depends on UCLIBC_HAS_CRYPT_IMPL || UCLIBC_HAS_CRYPT_STUB
+ endmenu
+ 
+ menuconfig UCLIBC_HAS_NETWORK_SUPPORT
+diff --git a/include/crypt.h b/include/crypt.h
+index f3fed7ca7..f62a03056 100644
+--- a/include/crypt.h
++++ b/include/crypt.h
+@@ -27,14 +27,15 @@ __BEGIN_DECLS
+ 
+ /* Encrypt characters from KEY using salt to perturb the encryption method.
+  * If salt begins with "$1$", MD5 hashing is used instead of DES. */
+-extern char *crypt (const char *__key, const char *__salt);
++extern char *crypt (const char *__key, const char *__salt)
++     __THROW __nonnull ((1, 2));
+ 
+ /* Setup DES tables according KEY.  */
+-extern void setkey (const char *__key);
++extern void setkey (const char *__key) __THROW __nonnull ((1));
+ 
+ /* Encrypt data in BLOCK in place if EDFLAG is zero; otherwise decrypt
+    block in place.  */
+-extern void encrypt (char *__block, int __edflag);
++extern void encrypt (char *__block, int __edflag) __THROW __nonnull ((1));
+ 
+ __END_DECLS
+ 
+diff --git a/include/stdlib.h b/include/stdlib.h
+index 354134906..0b4447480 100644
+--- a/include/stdlib.h
++++ b/include/stdlib.h
+@@ -802,8 +802,10 @@ extern int getsubopt (char **__restrict __optionp,
+ 
+ 
+ #ifdef __USE_XOPEN
++# if defined __UCLIBC_HAS_CRYPT__
+ /* Setup DES tables according KEY.  */
+ extern void setkey (__const char *__key) __THROW __nonnull ((1));
++# endif /* __UCLIBC_HAS_CRYPT__ */
+ #endif
+ 
+ 
+diff --git a/include/unistd.h b/include/unistd.h
+index e0219e770..58021a5e2 100644
+--- a/include/unistd.h
++++ b/include/unistd.h
+@@ -1077,6 +1077,7 @@ extern int fdatasync (int __fildes) __THROW;
+ /* XPG4.2 specifies that prototypes for the encryption functions must
+    be defined here.  */
+ #ifdef	__USE_XOPEN
++# if defined __UCLIBC_HAS_CRYPT__
+ /* Encrypt at most 8 characters from KEY using salt to perturb DES.  */
+ extern char *crypt (__const char *__key, __const char *__salt)
+      __THROW __nonnull ((1, 2));
+@@ -1084,6 +1085,7 @@ extern char *crypt (__const char *__key, __const char *__salt)
+ /* Encrypt data in BLOCK in place if EDFLAG is zero; otherwise decrypt
+    block in place.  */
+ extern void encrypt (char *__block, int __edflag) __THROW __nonnull ((1));
++# endif /* __UCLIBC_HAS_CRYPT__ */
+ 
+ 
+ /* Swab pairs bytes in the first N bytes of the area pointed to by
+diff --git a/libcrypt/Makefile.in b/libcrypt/Makefile.in
+index 40a73d1c8..d93e6abab 100644
+--- a/libcrypt/Makefile.in
++++ b/libcrypt/Makefile.in
+@@ -16,7 +16,14 @@ libcrypt_FULL_NAME := libcrypt-$(VERSION).so
+ libcrypt_DIR := $(top_srcdir)libcrypt
+ libcrypt_OUT := $(top_builddir)libcrypt
+ 
+-libcrypt_SRC := $(wildcard $(libcrypt_DIR)/*.c)
++ifeq ($(UCLIBC_HAS_CRYPT_IMPL),y)
++CSRC := crypt.c des.c md5.c
++endif
++ifeq ($(UCLIBC_HAS_CRYPT_STUB),y)
++CSRC := crypt_stub.c
++endif
++
++libcrypt_SRC := $(addprefix $(libcrypt_DIR)/,$(CSRC))
+ libcrypt_OBJ := $(patsubst $(libcrypt_DIR)/%.c,$(libcrypt_OUT)/%.o,$(libcrypt_SRC))
+ 
+ ifeq ($(DOPIC),y)
+@@ -26,8 +33,10 @@ libcrypt-a-y := $(libcrypt_OBJ)
+ endif
+ libcrypt-so-y := $(libcrypt_OBJ:.o=.os)
+ 
++ifeq ($(UCLIBC_HAS_CRYPT),y)
+ lib-a-y += $(top_builddir)lib/libcrypt.a
+ lib-so-y += $(top_builddir)lib/libcrypt.so
++endif
+ objclean-y += libcrypt_clean
+ 
+ ifeq ($(DOMULTI),n)
+diff --git a/libcrypt/crypt_stub.c b/libcrypt/crypt_stub.c
+new file mode 100644
+index 000000000..76645a046
+--- /dev/null
++++ b/libcrypt/crypt_stub.c
+@@ -0,0 +1,30 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * crypt() for uClibc
++ * Copyright (C) 2008 by Erik Andersen <andersen@uclibc.org>
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#define __FORCE_GLIBC
++#include <crypt.h>
++#include <unistd.h>
++#include "libcrypt.h"
++#include <syscall.h>
++
++char *crypt(const char *key attribute_unused, const char *salt attribute_unused)
++{
++	__set_errno(ENOSYS);
++	return NULL;
++}
++
++void
++setkey(const char *key attribute_unused)
++{
++	__set_errno(ENOSYS);
++}
++
++void
++encrypt(char *block attribute_unused, int flag attribute_unused)
++{
++	__set_errno(ENOSYS);
++}

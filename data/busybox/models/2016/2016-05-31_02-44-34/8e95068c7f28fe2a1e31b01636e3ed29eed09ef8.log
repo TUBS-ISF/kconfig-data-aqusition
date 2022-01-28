@@ -1,0 +1,80 @@
+"2016-05-31 02:44:34 +0200"
+diff --git a/Config.in b/Config.in
+index 0a0b5d7cb..3d1870966 100644
+--- a/Config.in
++++ b/Config.in
+@@ -116,9 +116,21 @@ config FEATURE_COMPRESS_USAGE
+ 	  and have very little memory, this might not be a win. Otherwise,
+ 	  you probably want this.
+ 
++config BUSYBOX
++	bool "Include busybox applet"
++	default y
++	help
++	  The busybox applet provides general help regarding busybox and
++	  allows the included applets to be listed.  It's also required
++	  if applet links are to be installed at runtime.
++
++	  If you can live without these features disabling this will save
++	  some space.
++
+ config FEATURE_INSTALLER
+ 	bool "Support --install [-s] to install applet links at runtime"
+ 	default y
++	depends on BUSYBOX
+ 	help
+ 	  Enable 'busybox --install [-s]' support. This will allow you to use
+ 	  busybox at runtime to create hard links or symlinks for all the
+diff --git a/libbb/appletlib.c b/libbb/appletlib.c
+index b682e6b85..281123c37 100644
+--- a/libbb/appletlib.c
++++ b/libbb/appletlib.c
+@@ -701,7 +701,7 @@ static void install_links(const char *busybox, int use_symbolic_links,
+ 			continue;
+ 	}
+ }
+-# else
++# elif ENABLE_BUSYBOX
+ static void install_links(const char *busybox UNUSED_PARAM,
+ 		int use_symbolic_links UNUSED_PARAM,
+ 		char *custom_install_dir UNUSED_PARAM)
+@@ -709,6 +709,7 @@ static void install_links(const char *busybox UNUSED_PARAM,
+ }
+ # endif
+ 
++# if ENABLE_BUSYBOX
+ /* If we were called as "busybox..." */
+ static int busybox_main(char **argv)
+ {
+@@ -784,10 +785,10 @@ static int busybox_main(char **argv)
+ 		const char *a = applet_names;
+ 		dup2(1, 2);
+ 		while (*a) {
+-# if ENABLE_FEATURE_INSTALLER
++#  if ENABLE_FEATURE_INSTALLER
+ 			if (argv[1][6]) /* --list-full? */
+ 				full_write2_str(install_dir[APPLET_INSTALL_LOC(i)] + 1);
+-# endif
++#  endif
+ 			full_write2_str(a);
+ 			full_write2_str("\n");
+ 			i++;
+@@ -843,6 +844,7 @@ static int busybox_main(char **argv)
+ 	/* POSIX: "If a command is not found, the exit status shall be 127" */
+ 	exit(127);
+ }
++# endif
+ 
+ void FAST_FUNC run_applet_no_and_exit(int applet_no, char **argv)
+ {
+@@ -886,8 +888,10 @@ void FAST_FUNC run_applet_and_exit(const char *name, char **argv)
+ {
+ 	int applet;
+ 
++# if ENABLE_BUSYBOX
+ 	if (is_prefixed_with(name, "busybox"))
+ 		exit(busybox_main(argv));
++# endif
+ 	/* find_applet_by_name() search is more expensive, so goes second */
+ 	applet = find_applet_by_name(name);
+ 	if (applet >= 0)

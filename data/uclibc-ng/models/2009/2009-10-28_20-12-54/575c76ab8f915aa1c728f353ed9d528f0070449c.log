@@ -1,0 +1,134 @@
+"2009-10-28 20:12:54 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 8fa9a47ae..75f87feff 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1299,6 +1299,28 @@ config UCLIBC_HAS_LOCALE
+ 
+ 	  Answer Y to enable locale support.  Most people will answer N.
+ 
++choice
++
++prompt "Locale data"
++	depends on UCLIBC_HAS_LOCALE
++	default UCLIBC_BUILD_ALL_LOCALE
++
++config UCLIBC_BUILD_ALL_LOCALE
++	bool "All locales"
++	depends on UCLIBC_HAS_LOCALE
++	default y
++	help
++	  This builds all the locales that are available on your
++	  host-box.
++
++config UCLIBC_BUILD_MINIMAL_LOCALE
++	bool "Only selected locales"
++	depends on UCLIBC_HAS_LOCALE
++	default n
++	help
++	  If you do not need all locales that are available on your
++	  host-box, then set this to 'Y'.
++
+ config UCLIBC_PREGENERATED_LOCALE_DATA
+ 	bool "Use Pre-generated Locale Data"
+ 	depends on UCLIBC_HAS_LOCALE
+@@ -1311,6 +1333,20 @@ config UCLIBC_PREGENERATED_LOCALE_DATA
+ 
+ 	  Saying N here is highly recommended.
+ 
++endchoice
++
++config UCLIBC_BUILD_MINIMAL_LOCALES
++	string "locales to use"
++	depends on UCLIBC_BUILD_MINIMAL_LOCALE
++	default "en_US"
++	help
++	  Space separated list of locales to use.
++
++	  E.g.:
++	      en_US en_GB de_AT
++	  default:
++	      en_US
++
+ config UCLIBC_DOWNLOAD_PREGENERATED_LOCALE_DATA
+ 	bool "Automagically Download the Pre-generated Locale Data (if necessary)"
+ 	depends on UCLIBC_PREGENERATED_LOCALE_DATA
+@@ -1323,7 +1359,7 @@ config UCLIBC_DOWNLOAD_PREGENERATED_LOCALE_DATA
+ 	  and place the uClibc-locale-*.tgz tarball in the extra/locale/
+ 	  directory.
+ 
+-	  Go ahead and make life easy for yourself... Answer Y.
++	  Note that the use of pregenerated locale data is discouraged.
+ 
+ config UCLIBC_HAS_XLOCALE
+ 	bool "Extended Locale Support (experimental/incomplete)"
+diff --git a/extra/locale/Makefile.in b/extra/locale/Makefile.in
+index fe2e3cfd8..8bda8d8aa 100644
+--- a/extra/locale/Makefile.in
++++ b/extra/locale/Makefile.in
+@@ -85,7 +85,7 @@ $(locale_OUT)/codesets.txt:
+ 	    echo "and then edit that file to disable/enable the codesets you wish to support. "; \
+ 	    echo " "; \
+ 	    false; \
+-	fi;
++	fi
+ 
+ $(locale_OUT)/locales.txt:
+ 	@if [ ! -f $@ ] ; then \
+@@ -100,14 +100,14 @@ $(locale_OUT)/locales.txt:
+ 	    echo "to support. "; \
+ 	    echo " "; \
+ 	    false; \
+-	fi;
++	fi
+ 
+ else
+ 
+ $(locale_OUT)/codesets.txt:
+ 	@$(disp_gen)
+ ifeq ($(UCLIBC_BUILD_MINIMAL_LOCALE),y)
+-	$(Q)echo "$(CURDIR)/$(locale_DIR)/charmaps/ASCII.pairs" > $@ ; \
++	$(Q)echo "$(CURDIR)/$(locale_DIR)/charmaps/ASCII.pairs" > $@
+ 	$(Q)echo "$(CURDIR)/$(locale_DIR)/charmaps/ISO-8859-1.pairs" >> $@
+ else
+ 	$(Q)set -e; \
+@@ -128,13 +128,15 @@ endif
+ $(locale_OUT)/locales.txt: $(locale_DIR)/LOCALES
+ 	@$(disp_gen)
+ ifeq ($(UCLIBC_BUILD_MINIMAL_LOCALE),y)
+-	$(Q)echo "@euro e" > $@ ; \
+-	$(Q)echo "#-" >> $@ ; \
+-	$(Q)echo "UTF-8 yes" >> $@ ; \
+-	$(Q)echo "8-BIT yes" >> $@ ; \
+-	$(Q)echo "#-" >> $@ ; \
+-	$(Q)echo "en_US.UTF-8 UTF-8" >> $@ ; \
+-	$(Q)echo "en_US ISO-8859-1" >> $@
++	$(Q)echo "@euro e" > $@
++	$(Q)echo "#-" >> $@
++	$(Q)echo "UTF-8 yes" >> $@
++	$(Q)echo "8-BIT yes" >> $@
++	$(Q)echo "#-" >> $@
++	$(Q)for locale in $(call qstrip,$(UCLIBC_BUILD_MINIMAL_LOCALES)); do \
++		echo "$$locale.UTF-8 UTF-8"; \
++		echo "$$locale ISO-8859-1"; \
++	done >> $@
+ else
+ 	$(Q)cat $< > $@
+ endif
+@@ -175,11 +177,11 @@ $(locale_OUT)/c8tables.h: $(locale_OUT)/gen_wc8bit $(locale_OUT)/codesets.txt
+ # Warning! Beware tr_TR toupper/tolower exceptions!
+ $(locale_OUT)/wctables.h: $(locale_OUT)/gen_wctype
+ 	@$(disp_gen)
+-	$(Q)$< $(FLAG-locale-verbose) en_US > $@ || \
+-		$< $(FLAG-locale-verbose) en_US.UTF-8 > $@ || \
+-		$< $(FLAG-locale-verbose) en_US.iso8859-1 > $@ || \
+-		$< $(FLAG-locale-verbose) en_GB > $@ || \
+-		$< $(FLAG-locale-verbose) en_GB.UTF-8 > $@
++	$(Q)for locale in $(call qstrip,$(UCLIBC_BUILD_MINIMAL_LOCALES)) en_US en_GB; do \
++		$< $(FLAG-locale-verbose) $$locale > $@ || \
++		$< $(FLAG-locale-verbose) $$locale.UTF-8 > $@ || \
++		$< $(FLAG-locale-verbose) $$locale.iso8859-1 > $@ && break; \
++	done
+ 
+ $(locale_OUT)/locale_tables.h: $(locale_OUT)/gen_locale $(locale_OUT)/locales.txt
+ 	@$(disp_gen)

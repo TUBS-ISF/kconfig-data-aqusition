@@ -1,0 +1,95 @@
+"2010-01-05 12:17:05 -0600"
+diff --git a/Config.in b/Config.in
+index aa3100ff..ad8a2426 100644
+--- a/Config.in
++++ b/Config.in
+@@ -11,6 +11,14 @@ config TOYBOX
+ 	  With no arguments, shows available commands.  First argument is
+ 	  name of a command to run, followed by any arguments to that command.
+ 
++config TOYBOX_SUID
++	bool "SUID support"
++	default y
++	help
++	  Support for suid commands, which run as root.  This means toybox must
++	  be installed suid root, and drops permissions before running commands
++	  which do not require root access.
++
+ config TOYBOX_FREE
+ 	bool "Free memory unnecessarily"
+ 	default n
+diff --git a/lib/lib.c b/lib/lib.c
+index 48689d3d..08c991dd 100644
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -369,6 +369,16 @@ void xmkpath(char *path, int mode)
+ 		if (!*p) break;
+ 	}
+ }
++
++// setuid() can fail (for example, too many processes belonging to that user),
++// which opens a security hole if the process continues as the original user.
++
++void xsetuid(uid_t uid)
++{
++	if (setuid(uid)) perror_exit("xsetuid");
++}
++
++
+ // Find all file in a colon-separated path with access type "type" (generally
+ // X_OK or R_OK).  Returns a list of absolute paths to each file found, in
+ // order.
+diff --git a/lib/lib.h b/lib/lib.h
+index c6226aae..fb2215cf 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -81,6 +81,7 @@ void xstat(char *path, struct stat *st);
+ char *xabspath(char *path);
+ void xchdir(char *path);
+ void xmkpath(char *path, int mode);
++void xsetuid(uid_t uid);
+ struct string_list *find_in_path(char *path, char *filename);
+ void utoa_to_buf(unsigned n, char *buf, unsigned buflen);
+ void itoa_to_buf(int n, char *buf, unsigned buflen);
+diff --git a/main.c b/main.c
+index 4e6a31e7..e0dab1cc 100644
+--- a/main.c
++++ b/main.c
+@@ -64,6 +64,21 @@ static const int NEED_OPTIONS =
+ 
+ void toy_init(struct toy_list *which, char *argv[])
+ {
++	// Drop permissions for non-suid commands.
++
++	if (CFG_TOYBOX_SUID) {
++		uid_t uid = getuid(), euid = geteuid();
++
++		if (!(which->flags & TOYFLAG_STAYROOT)) {
++			if (uid != euid) xsetuid(euid=uid);
++		} else if (CFG_TOYBOX_DEBUG && uid)
++			error_exit("Not installed suid root");
++
++		if ((which->flags & TOYFLAG_NEEDROOT) && euid)
++			error_exit("Not root");
++
++	}
++
+ 	// Free old toys contents here?
+ 
+ 	toys.which = which;
+diff --git a/toys.h b/toys.h
+index 93907fb6..e5cde838 100644
+--- a/toys.h
++++ b/toys.h
+@@ -68,6 +68,11 @@ void toy_exec(char *argv[]);
+ // Start applet with a umask of 0 (saves old umask in this.old_umask)
+ #define TOYFLAG_UMASK    (1<<5)
+ 
++// This applet runs as root.
++#define TOYFLAG_STAYROOT (1<<6)
++#define TOYFLAG_NEEDROOT (1<<7)
++#define TOYFLAG_ROOTONLY (TOYFLAG_STAYROOT|TOYFLAG_NEEDROOT)
++
+ // Array of available applets
+ 
+ extern struct toy_list {

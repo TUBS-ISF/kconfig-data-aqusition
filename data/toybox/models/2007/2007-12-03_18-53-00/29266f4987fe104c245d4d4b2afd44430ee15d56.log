@@ -1,0 +1,194 @@
+"2007-12-03 18:53:00 -0600"
+diff --git a/toys/Config.in b/toys/Config.in
+index 7c75d255..a53c11f1 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -226,7 +226,27 @@ config MKFIFO
+ 	  Makes a named pipe at name.
+ 
+ 	  -m mode	The mode of the pipe(s) created by mkfifo. It defaults to 0644.
+-				The format is in octal, optionally preceded by a leading zero.
++			The format is in octal, optionally preceded by a leading zero.
++
++config NETCAT
++	bool "netcat"
++	default y
++	help
++	  usage: netcat [-iwlp] {IPADDR PORTNUM|-f FILENAME} [-e COMMAND]
++
++	  -e exec the rest of the command line
++	  -i SECONDS delay after each line sent
++	  -w SECONDS timeout for connection
++	  -f filename use file (ala /dev/ttyS0) instead of network
++	  -l listen for incoming connection (twice for persistent connection)
++	  -p local port number
++	  -s local source address
++	  -q SECONDS quit this many seconds after EOF on stdin.
++
++	  Use -l twice with -e for a quick-and-dirty server.
++
++	  Use "stty 115200 -F /dev/ttyS0 && stty raw -echo -ctlecho" with
++	  netcat -f to connect to a serial port.
+ 
+ config ONEIT
+ 	bool "oneit"
+diff --git a/toys/netcat.c b/toys/netcat.c
+new file mode 100644
+index 00000000..39c531d8
+--- /dev/null
++++ b/toys/netcat.c
+@@ -0,0 +1,116 @@
++/* vi: set sw=4 ts=4: */
++/* nc: mini-netcat - Forward stdin/stdout to a file or network connection.
++ *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ */
++
++#include "toys.h"
++#include "toynet.h"
++
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++
++#define TT toy.netcat
++
++static void timeout(int signum)
++{
++	error_exit("Timeout");
++}
++
++// Translate x.x.x.x numeric IPv4 address, or else DNS lookup an IPv4 name.
++void lookup_name(char *name, uint32_t *result)
++{
++	struct hostent *hostbyname;
++
++	hostbyname = gethostbyname(*toys.optargs);
++	if (!hostbyname) error_exit("name lookup failed");
++	*result = *(uint32_t *)*hostbyname->h_addr_list;
++}
++
++// Worry about a fancy lookup later.
++void lookup_port(char *str, uint16_t *port)
++{
++  *port = SWAP_BE16(atoi(str));
++}
++
++void netcat_main(void)
++{
++	int sockfd, pollcount;
++	struct pollfd pollfds[2];
++
++	if (TT.wait) {
++		signal(SIGALRM, timeout);
++		alarm(TT.wait);
++	}
++
++	if (TT.filename) pollfds[0].fd = xopen(TT.filename, O_RDWR);
++	else {
++		int temp;
++		struct sockaddr_in address;
++
++		// The argument parsing logic can't make "<2" conditional on "-f", so...
++		if (!*toys.optargs || !toys.optargs[1]) {
++			toys.exithelp++;
++			error_exit("Need address and port");
++		}
++
++		// Setup socket
++		sockfd = socket(AF_INET, SOCK_STREAM, 0);
++		if (-1 == sockfd) perror_exit("socket");
++		fcntl(sockfd, F_SETFD, FD_CLOEXEC);
++		temp = 1;
++		setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &temp, sizeof(temp));
++		memset(&address, 0, sizeof(address));
++		address.sin_family = AF_INET;
++		if (TT.port) {
++			address.sin_port = TT.port;
++			if (-1 == bind(sockfd, &address, sizeof(address)))
++				perror_exit("bind");
++		}
++
++		// Figure out where to dial out to.
++		lookup_name(*toys.optargs, (uint32_t *)&address.sin_addr);
++		lookup_port(toys.optargs[1], &address.sin_port);
++		temp = connect(sockfd, (struct sockaddr *)&address, sizeof(address));
++		if (temp<0) perror_exit("connect");
++		pollfds[0].fd = sockfd;
++	}
++
++	// We have a connection.  Disarm timeout.
++	if (TT.wait) {
++		alarm(0);
++		signal(SIGALRM, SIG_DFL);
++	}
++
++	pollcount = 2;
++	pollfds[1].fd = 0;
++	pollfds[0].events = pollfds[1].events = POLLIN;
++
++	// Poll loop copying stdin->socket and socket->stdout.
++	for (;;) {
++		int i;
++
++		if (0>poll(pollfds, pollcount, -1)) perror_exit("poll");
++
++		for (i=0; i<pollcount; i++) {
++			if (pollfds[i].revents & POLLIN) {
++				int len = read(pollfds[i].fd, toybuf, sizeof(toybuf));
++				if (len<1) goto dohupnow;
++				xwrite(i ? pollfds[0].fd : 1, toybuf, len);
++			}
++			if (pollfds[i].revents & POLLHUP) {
++dohupnow:
++				// Close half-connect.  This is needed for things like
++				// "echo GET / | netcat landley.net 80" to work.
++				if (i) {
++					shutdown(pollfds[0].fd, SHUT_WR);
++					pollcount--;
++				} else goto cleanup;
++			}
++		}
++	}
++cleanup:
++	close(pollfds[0].fd);
++//	close(sockfd);
++}
+diff --git a/toys/toylist.h b/toys/toylist.h
+index e3fb4d7c..360efa8a 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -53,6 +53,16 @@ struct mke2fs_data {
+ 	struct ext2_superblock sb;
+ };
+ 
++struct netcat_data {
++	char *filename;        // -f read from filename instead of network
++	long quit_delay;       // -q Exit after EOF from stdin after # seconds.
++	char *source_address;  // -s Bind to a specific source address.
++	long port;             // -p Bind to a specific source port.
++	long listen;           // -l Listen for connection instead of dialing out.
++	long wait;             // -w Wait # seconds for a connection.
++	long delay;            // -i delay between lines sent
++};
++
+ struct sleep_data {
+ 	long seconds;
+ };
+@@ -76,6 +86,7 @@ extern union toy_union {
+ 	struct df_data df;
+ 	struct mke2fs_data mke2fs;
+ 	struct mkfifo_data mkfifo;
++	struct netcat_data netcat;
+ 	struct sleep_data sleep;
+ 	struct touch_data touch;
+ 	struct toysh_data toysh;
+@@ -120,6 +131,8 @@ USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_USR|TOYFLAG_BIN))
+ USE_HELP(NEWTOY(help, "<1", TOYFLAG_BIN))
+ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))
+ USE_MKFIFO(NEWTOY(mkfifo, "<1m:", TOYFLAG_BIN))
++USE_NETCAT(OLDTOY(nc, netcat, "i#w#l@p#s:q#f:e", TOYFLAG_BIN))
++USE_NETCAT(NEWTOY(netcat, "i#w#l@p#s:q#f:e", TOYFLAG_BIN))
+ USE_ONEIT(NEWTOY(oneit, "+<1p", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
+ USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))

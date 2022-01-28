@@ -1,0 +1,333 @@
+"2016-08-27 19:23:20 +0200"
+diff --git a/Makerules b/Makerules
+index d8cbfe435..d35e40d38 100644
+--- a/Makerules
++++ b/Makerules
+@@ -365,18 +365,6 @@ define link-flat.so
+ 		$(top_builddir)/lib/crtn.o
+ endef
+ 
+-define linkm.so
+-	$(Q)$(RM) $@ $@.$(2) $(dir $@)$(1)
+-	$(do_strip)
+-	@$(disp_ld)
+-	$(Q)$(CC) $(LDFLAGS-$(notdir $@)) -Wl,-soname=$(notdir $@).$(2) \
+-		$(CFLAG_-nostdlib) -o $(dir $@)$(1) $(START_FILE-$(notdir $@)) \
+-		$^ \
+-		$(LIBS-$(notdir $@)) $(LIBGCC) $(END_FILE-$(notdir $@))
+-	$(Q)$(LN) -sf $(1) $@.$(2)
+-	$(Q)$(LN) -sf $(1) $@
+-endef
+-
+ CFLAGS-.os+=$(PICFLAG)
+ CFLAGS-.oS+=$(PICFLAG) -DSHARED
+ 
+diff --git a/Rules.mak b/Rules.mak
+index cd343f586..f226dca71 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -677,22 +677,6 @@ else
+ STRIPTOOL := true -Stripping_disabled
+ endif
+ 
+-ifeq ($(DOMULTI),y)
+-# we try to compile all sources at once into an object (IMA), but
+-# gcc-3.3.x does not support it
+-# gcc-3.4.x supports it, but does not need and support --combine. though fails on many sources
+-# gcc-4.0.x supports it, supports the --combine flag, but does not need it
+-# gcc-4.1(200506xx) supports it, but needs the --combine flag, else libs are useless
+-ifeq ($(GCC_MAJOR_VER),3)
+-DOMULTI:=n
+-else
+-$(eval $(call check-gcc-var,--combine))
+-CFLAGS += $(CFLAG_--combine)
+-endif
+-else
+-DOMULTI:=n
+-endif
+-
+ ifneq ($(strip $(UCLIBC_EXTRA_CFLAGS)),"")
+ CFLAGS += $(call qstrip,$(UCLIBC_EXTRA_CFLAGS))
+ endif
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 1d97e784e..12dc0df66 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -2416,16 +2416,4 @@ config EXTRA_WARNINGS
+ 	help
+ 	  If you wish to build with extra warnings enabled, say Y here.
+ 
+-config DOMULTI
+-	bool "Compile all sources at once into an object"
+-	help
+-	  Set this to compile all sources at once into an object (IMA).
+-	  This mode of compilation uses alot of memory but may produce
+-	  smaller binaries.
+-
+-	  Note that you need a very recent GCC for this to work, like
+-	  gcc >= 4.3 plus eventually some patches.
+-
+-	  If unsure, keep the default of N.
+-
+ endmenu
+diff --git a/extra/Configs/defconfigs/or1k/defconfig b/extra/Configs/defconfigs/or1k/defconfig
+index a4658dace..b1f890a1e 100644
+--- a/extra/Configs/defconfigs/or1k/defconfig
++++ b/extra/Configs/defconfigs/or1k/defconfig
+@@ -237,4 +237,3 @@ UCLIBC_EXTRA_CFLAGS=""
+ # UCLIBC_HAS_BACKTRACE is not set
+ WARNINGS="-Wall"
+ # EXTRA_WARNINGS is not set
+-# DOMULTI is not set
+diff --git a/extra/scripts/randconfig.sh b/extra/scripts/randconfig.sh
+index d83731b6e..e2124c75d 100755
+--- a/extra/scripts/randconfig.sh
++++ b/extra/scripts/randconfig.sh
+@@ -10,7 +10,6 @@ test "x$AWK" = "x" && AWK=awk
+ test "x$ARCH" = "x" && ARCH=`uname -m`
+ KCONFIG_ALLCONFIG=.config.allconfig
+ (echo TARGET_$ARCH=y
+- echo '# DOMULTI is not set'
+ ) > $KCONFIG_ALLCONFIG
+ export KCONFIG_ALLCONFIG
+ 
+diff --git a/libc/Makefile.in b/libc/Makefile.in
+index 8ed8a751a..05cec1875 100644
+--- a/libc/Makefile.in
++++ b/libc/Makefile.in
+@@ -42,14 +42,7 @@ else
+ libc-a-y = $(libc-y) $(libc-static-y)
+ endif
+ 
+-ifeq ($(DOMULTI),n)
+ libc-so-y = $(libc-y:.o=.os) $(libc-shared-y)
+-else
+-all_sources = $(libc-y:.o=.c)
+-all_sources += $(libc-shared-y:.oS=.c)
+-libc-multi-y = $(filter-out $(libc-nomulti-y:.o=.c),$(all_sources))
+-endif
+-
+ lib-a-y += $(top_builddir)lib/libc.a
+ lib-gdb-y += $(top_builddir)lib/libc.gdb
+ lib-so-y += $(libc.depend)
+@@ -57,17 +50,10 @@ objclean-y += CLEAN_libc
+ 
+ OUTPUT_FORMAT = $(CC) $(CFLAGS) -Wl,--verbose 2>&1 | $(SED) -n '/OUTPUT_FORMAT/,/)/p'
+ 
+-ifeq ($(DOMULTI),n)
+ $(libc.depend): $(libc_OUT)/libc_so.a $(LIBS-libc.so)
+ 	$(call link.so,$(libc_FULL_NAME),$(ABI_VERSION))
+ 	# link for backward compatibility
+ 	$(call link.so,$(libc_FULL_NAME),0)
+-else
+-$(libc.depend): $(libc_OUT)/libc.oS $(libc-nomulti-y:.o=.oS) | $(LIBS-libc.so)
+-	$(call linkm.so,$(libc_FULL_NAME),$(ABI_VERSION))
+-	# link for backward compatibility
+-	$(call linkm.so,$(libc_FULL_NAME),0)
+-endif
+ 	$(Q)$(RM) $@
+ 	$(Q)cat $(top_srcdir)extra/scripts/format.lds > $@.tmp
+ 	$(Q)$(OUTPUT_FORMAT) >> $@.tmp
+diff --git a/libc/sysdeps/linux/i386/bits/syscalls.h b/libc/sysdeps/linux/i386/bits/syscalls.h
+index 566b5acf5..5e9209386 100644
+--- a/libc/sysdeps/linux/i386/bits/syscalls.h
++++ b/libc/sysdeps/linux/i386/bits/syscalls.h
+@@ -44,17 +44,9 @@
+ 
+ /* We need some help from the assembler to generate optimal code.
+  * We define some macros here which later will be used.  */
+-/* gcc>=4.6 with LTO need the same guards as IMA (a.k.a --combine) did.
+- * See gcc.gnu.org/PR47577  */
+ /* FIXME: drop these b* macros! */
+ 
+ __asm__ (
+-#if defined __DOMULTI__ || __GNUC_PREREQ (4, 6)
+-	/* Protect against asm macro redefinition (happens in __DOMULTI__ mode).
+-	 * Unfortunately, it ends up visible in .o files. */
+-	".ifndef _BITS_SYSCALLS_ASM\n\t"
+-	".set _BITS_SYSCALLS_ASM,1\n\t"
+-#endif
+ 	".L__X'%ebx = 1\n\t"
+ 	".L__X'%ecx = 2\n\t"
+ 	".L__X'%edx = 2\n\t"
+@@ -95,10 +87,6 @@ __asm__ (
+ 	".endif\n\t"
+ 	".endif\n\t"
+ 	".endm\n\t"
+-
+-#if defined __DOMULTI__ || __GNUC_PREREQ (4, 6)
+-	".endif\n\t" /* _BITS_SYSCALLS_ASM */
+-#endif
+ );
+ 
+ #define LOADARGS_0
+diff --git a/libcrypt/Makefile.in b/libcrypt/Makefile.in
+index 94feacb87..eb2d45246 100644
+--- a/libcrypt/Makefile.in
++++ b/libcrypt/Makefile.in
+@@ -39,7 +39,6 @@ lib-a-$(UCLIBC_HAS_CRYPT)  += $(top_builddir)lib/libcrypt.a
+ lib-so-$(UCLIBC_HAS_CRYPT) += $(top_builddir)lib/libcrypt.so
+ objclean-y += CLEAN_libcrypt
+ 
+-ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+ $(top_builddir)lib/libcrypt.so: $(top_builddir)lib/libcrypt.a $(libc.depend)
+ else
+@@ -48,12 +47,6 @@ endif
+ 	$(call link.so,$(libcrypt_FULL_NAME),$(ABI_VERSION))
+ 	# link for backward compatibility
+ 	$(call link.so,$(libcrypt_FULL_NAME),0)
+-else
+-$(top_builddir)lib/libcrypt.so: $(libcrypt_OUT)/libcrypt.oS | $(libc.depend)
+-	$(call linkm.so,$(libcrypt_FULL_NAME),$(ABI_VERSION))
+-	# link for backward compatibility
+-	$(call linkm.so,$(libcrypt_FULL_NAME),0)
+-endif
+ 
+ $(libcrypt_OUT)/libcrypt_so.a: $(libcrypt-so-y)
+ 	$(Q)$(RM) $@
+diff --git a/libintl/Makefile.in b/libintl/Makefile.in
+index 39b39a540..6c3e79b69 100644
+--- a/libintl/Makefile.in
++++ b/libintl/Makefile.in
+@@ -26,10 +26,6 @@ libintl_OUT := $(top_builddir)libintl
+ libintl_MSRC := $(libintl_DIR)/intl.c
+ libintl_MOBJ := $(patsubst %.o,$(libintl_OUT)/%.o,$(MOBJ))
+ 
+-ifneq ($(DOMULTI),n)
+-CFLAGS-libintl += $(patsubst %,-DL_%,$(subst .o,,$(notdir $(libintl_MOBJ))))
+-endif
+-
+ ifeq ($(DOPIC),y)
+ libintl-a-y := $(libintl_MOBJ:.o=.os)
+ else
+@@ -41,7 +37,6 @@ lib-a-$(UCLIBC_HAS_GETTEXT_AWARENESS) += $(top_builddir)lib/libintl.a
+ lib-so-$(UCLIBC_HAS_GETTEXT_AWARENESS) += $(top_builddir)lib/libintl.so
+ objclean-y += CLEAN_libintl
+ 
+-ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+ $(top_builddir)lib/libintl.so: $(top_builddir)lib/libintl.a $(libc.depend)
+ else
+@@ -50,12 +45,6 @@ endif
+ 	$(call link.so,$(libintl_FULL_NAME),$(ABI_VERSION))
+ 	# link for backward compatibility
+ 	$(call link.so,$(libintl_FULL_NAME),0)
+-else
+-$(top_builddir)lib/libintl.so: $(libintl_OUT)/libintl.oS | $(libc.depend)
+-	$(call linkm.so,$(libintl_FULL_NAME),$(ABI_VERSION))
+-	# link for backward compatibility
+-	$(call linkm.so,$(libintl_FULL_NAME),0)
+-endif
+ 
+ $(libintl_OUT)/libintl_so.a: $(libintl-so-y)
+ 	$(Q)$(RM) $@
+diff --git a/libm/Makefile.in b/libm/Makefile.in
+index 2880512db..0d6ca057e 100644
+--- a/libm/Makefile.in
++++ b/libm/Makefile.in
+@@ -277,14 +277,6 @@ endif
+ libm_MSRC_FL := $(libm_DIR)/$(FL_MSRC)
+ libm_MOBJ_FL := $(patsubst %.o,$(libm_OUT)/%.o,$(FL_MOBJ))
+ 
+-
+-ifneq ($(DOMULTI),n)
+-CFLAGS-libm += $(patsubst %,-DL_%,$(subst .o,,$(notdir $(libm_MOBJ_FL))))
+-ifeq ($(strip $(UCLIBC_HAS_LONG_DOUBLE_MATH)),y)
+-CFLAGS-libm += $(patsubst %,-DL_%,$(subst .o,,$(notdir $(libm_MOBJ_LD))))
+-endif
+-endif
+-
+ libm_OBJS := $(libm_OBJ) $(libm_MOBJ_FL) $(libm_MOBJ_LD)
+ 
+ ifeq ($(DOPIC),y)
+@@ -298,7 +290,6 @@ lib-a-$(UCLIBC_HAS_FLOATS) += $(top_builddir)lib/libm.a
+ lib-so-$(UCLIBC_HAS_FLOATS) += $(top_builddir)lib/libm.so
+ objclean-y += CLEAN_libm
+ 
+-ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+ $(top_builddir)lib/libm.so: $(top_builddir)lib/libm.a $(libc.depend)
+ else
+@@ -307,12 +298,6 @@ endif
+ 	$(call link.so,$(libm_FULL_NAME),$(ABI_VERSION))
+ 	# link for backward compatibility
+ 	$(call link.so,$(libm_FULL_NAME),0)
+-else
+-$(top_builddir)lib/libm.so: $(libm_OUT)/libm.oS | $(libc.depend)
+-	$(call linkm.so,$(libm_FULL_NAME),$(ABI_VERSION))
+-	# link for backward compatibility
+-	$(call linkm.so,$(libm_FULL_NAME),0)
+-endif
+ 
+ $(libm_OUT)/libm_so.a: $(libm-so-y)
+ 	$(Q)$(RM) $@
+diff --git a/libuargp/Makefile.in b/libuargp/Makefile.in
+index 1498abb69..f1ccfa640 100644
+--- a/libuargp/Makefile.in
++++ b/libuargp/Makefile.in
+@@ -44,17 +44,12 @@ lib-so-$(UCLIBC_HAS_ARGP) += $(top_builddir)lib/libuargp.so
+ 
+ objclean-y += CLEAN_libuargp
+ 
+-ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+ $(top_builddir)lib/libuargp.so: $(top_builddir)lib/libuargp.a $(libc.depend)
+ else
+ $(top_builddir)lib/libuargp.so: $(libuargp_OUT)/libuargp_so.a $(libc.depend)
+ endif
+ 	$(call link.so,$(libuargp_FULL_NAME),$(MAJOR_VERSION))
+-else
+-$(top_builddir)lib/libuargp.so: $(libuargp_OUT)/libuargp.oS $(libc.depend)
+-	$(call linkm.so,$(libuargp_FULL_NAME),$(MAJOR_VERSION))
+-endif
+ 
+ $(libuargp_OUT)/libuargp_so.a: $(libuargp-so-y)
+ 	$(Q)$(RM) $@
+diff --git a/libubacktrace/Makefile.in b/libubacktrace/Makefile.in
+index 587eaf69e..fdd73face 100644
+--- a/libubacktrace/Makefile.in
++++ b/libubacktrace/Makefile.in
+@@ -59,17 +59,10 @@ lib-so-$(UCLIBC_HAS_BACKTRACE) += $(top_builddir)lib/libubacktrace.so
+ 
+ objclean-y += CLEAN_libubacktrace
+ 
+-ifeq ($(DOMULTI),n)
+ $(top_builddir)lib/libubacktrace.so: $(libubacktrace_OUT)/libubacktrace_so.a $(libdl.depend)
+ 	$(call link.so,$(libubacktrace_FULL_NAME),$(ABI_VERSION))
+ 	# link for backward compatibility
+ 	$(call link.so,$(libubacktrace_FULL_NAME),0)
+-else
+-$(top_builddir)lib/libubacktrace.so: $(libubacktrace_OUT)/libubacktrace.oS | $(libdl.depend)
+-	$(call linkm.so,$(libubacktrace_FULL_NAME),$(ABI_VERSION))
+-	# link for backward compatibility
+-	$(call linkm.so,$(libubacktrace_FULL_NAME),0)
+-endif
+ 
+ $(libubacktrace_OUT)/libubacktrace_so.a: $(libubacktrace-so-y)
+ 	$(Q)$(RM) $@
+diff --git a/libutil/Makefile.in b/libutil/Makefile.in
+index 7759482f0..d36995fb0 100644
+--- a/libutil/Makefile.in
++++ b/libutil/Makefile.in
+@@ -48,7 +48,6 @@ lib-a-$(UCLIBC_HAS_LIBUTIL) += $(top_builddir)lib/libutil.a
+ lib-so-$(UCLIBC_HAS_LIBUTIL) += $(top_builddir)lib/libutil.so
+ objclean-y += CLEAN_libutil
+ 
+-ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+ $(top_builddir)lib/libutil.so: $(top_builddir)lib/libutil.a $(libc.depend)
+ else
+@@ -57,12 +56,6 @@ endif
+ 	$(call link.so,$(libutil_FULL_NAME),$(ABI_VERSION))
+ 	# link for backward compatibility
+ 	$(call link.so,$(libutil_FULL_NAME),0)
+-else
+-$(top_builddir)lib/libutil.so: $(libutil_OUT)/libutil.oS | $(libc.depend)
+-	$(call linkm.so,$(libutil_FULL_NAME),$(ABI_VERSION))
+-	# link for backward compatibility
+-	$(call linkm.so,$(libutil_FULL_NAME),0)
+-endif
+ 
+ $(libutil_OUT)/libutil_so.a: $(libutil-so-y)
+ 	$(Q)$(RM) $@

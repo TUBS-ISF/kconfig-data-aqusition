@@ -1,0 +1,158 @@
+"2007-10-31 01:13:36 -0500"
+diff --git a/toys/Config.in b/toys/Config.in
+index e0454229..fbc633fe 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -248,17 +248,17 @@ config SYNC
+ 
+ config TOUCH
+ 	bool "touch"
+-	default n
++	default y
+ 	help
+ 	  usage: touch [-acmrt] FILE...
+ 
+-	  Change file timestamps/length.  Create empty or sparse files.
++	  Change file timestamps and ensure file existance.
+ 
+-	  -a
+-	  -c
+-	  -m
+-	  -r
+-	  -t
++	  -a	Only change the access time.
++	  -c	Do not create the file if it doesn't exist.
++	  -m	Only change the modification time.
++	  -r	Reference file to take timestamps from.
++	  -t	Time to change {a,m}time to, in the format MMDDhhmm.
+ 
+ config TOYSH
+ 	bool "sh (toysh)"
+diff --git a/toys/touch.c b/toys/touch.c
+index 51fd53f2..6771877b 100644
+--- a/toys/touch.c
++++ b/toys/touch.c
+@@ -1,14 +1,99 @@
+ /* vi: set sw=4 ts=4: */
+ /*
+- * touch.c - Modify a file's timestamps (or length).
++ * touch.c - Modify a file's timestamps.
++ *
++ * Copyright (C) 2007 Charlie Shepherd <masterdriverz@gentoo.org>
+  */
+ 
++#define _XOPEN_SOURCE
++#include <sys/stat.h>
++#include <utime.h>
++#include <time.h>
+ #include "toys.h"
+ 
+-# warning touch unimplemented
++#define MTIME		0x01
++#define NO_CREATE	0x02
++#define ATIME		0x04
++#define REFERENCE	0x08
++#define TIME		0x10
+ 
+ int touch_main(void)
+ {
+-	printf("Hello world\n");
++	char *arg;
++	int i, set_a, set_m, create;
++	time_t curr_a, curr_m;
++
++	set_a = !!(toys.optflags & ATIME);
++	set_m = !!(toys.optflags & MTIME);
++	create = !(toys.optflags & NO_CREATE);
++
++	if (toys.optflags & REFERENCE) {
++		struct stat sb;
++		if (toys.optflags & TIME) {
++			fprintf(stderr,
++					"Cannot specify times from more than one source\n");
++			return 1;
++		}
++		if (stat(toy.touch.ref_file, &sb) == -1) {
++			perror(toy.touch.ref_file);
++			return 1;
++		}
++		curr_m = sb.st_mtime;
++		curr_a = sb.st_atime;
++	} else if (toys.optflags & TIME) {
++		struct tm t;
++		time_t curr;
++		char *c;
++		curr = time(NULL);
++		if (!localtime_r(&curr, &t))
++			goto err;
++		c = strptime(toy.touch.time, "%m%d%H%M", &t);
++		if (!c || *c)
++			goto err;
++		curr_a = curr_m = mktime(&t);
++		if (curr_a == -1) {
++err:
++			fprintf(stderr, "Error converting time %s to internal format",
++					toy.touch.time);
++			return 1;
++		}
++	} else {
++		curr_m = curr_a = time(NULL);
++	}
++
++	for (i = 0; (arg = toys.optargs[i]); i++) {
++		struct utimbuf buf;
++		struct stat sb;
++
++		buf.modtime = curr_m;
++		buf.actime = curr_a;
++
++		if (stat(arg, &sb) == -1) {
++			if (create && errno == ENOENT) {
++				if (creat(arg, O_RDWR))
++					goto error;
++				if (stat(arg, &sb))
++					goto error;
++			}
++		} else {
++error:
++			perror(arg);
++			return 1;
++		}
++
++		if ((set_a+set_m) == 1) {
++			/* We've been asked to only change one */
++			if (set_a)
++				buf.modtime = sb.st_mtime;
++			else if (set_m)
++				buf.actime = sb.st_atime;
++		}
++
++		if (utime(arg, &buf)) {
++			perror(arg);
++			return 1;
++		}
++	}
++
+ 	return 0;
+ }
+diff --git a/toys/toylist.h b/toys/toylist.h
+index 3c3b316a..b717c93b 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -55,7 +55,6 @@ struct sleep_data {
+ struct touch_data {
+ 	char *ref_file;
+ 	char *time;
+-	long length;
+ };
+ 
+ struct toysh_data {
+@@ -111,7 +110,7 @@ USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))
+ USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
+ USE_SLEEP(NEWTOY(sleep, "<1", TOYFLAG_BIN))
+ USE_SYNC(NEWTOY(sync, NULL, TOYFLAG_BIN))
+-USE_TOUCH(NEWTOY(touch, "l#t:r:mca", TOYFLAG_BIN))
++USE_TOUCH(NEWTOY(touch, "t:r:mca", TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(toysh, "c:i", TOYFLAG_BIN))
+ USE_TRUE(NEWTOY(true, NULL, TOYFLAG_BIN))
+ USE_WHICH(NEWTOY(which, "a", TOYFLAG_USR|TOYFLAG_BIN))

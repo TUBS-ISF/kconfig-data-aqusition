@@ -1,0 +1,98 @@
+"2015-08-26 17:28:56 -0300"
+diff --git a/Kconfig b/Kconfig
+index 0c35f7b5..7a2958d9 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -65,6 +65,18 @@ config PREFIX
+             further resources, such as loadable module support (see
+             MODULES configuration help).
+ 
++config RPATH
++	bool "Uses rpath for local builds"
++	depends on HAVE_CHRPATH
++	default y
++	help
++            This option defines if rpath ought be used to look up
++            libraries. If disabled the user should adjust the environment
++            accordingly.
++
++comment "rpath disabled, no chrpath found"
++	depends on !HAVE_CHRPATH
++
+ menu "Compiler options"
+ choice BUILD_TYPE
+ 	prompt "Build type"
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 6b3081db..f408b667 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -358,8 +358,7 @@
+     {
+       "dependency": "chrpath",
+       "type": "exec",
+-      "exec": "chrpath",
+-      "required": true
++      "exec": "chrpath"
+     },
+     {
+       "dependency": "jsonschema",
+diff --git a/data/scripts/dependency-resolver.py b/data/scripts/dependency-resolver.py
+index 598722e4..1331da3f 100755
+--- a/data/scripts/dependency-resolver.py
++++ b/data/scripts/dependency-resolver.py
+@@ -277,7 +277,7 @@ def handle_exec_check(args, conf, context):
+         context.add_append_makefile_var("NOT_FOUND", req_label, True)
+ 
+     context.add_cond_makefile_var(dep_sym, path)
+-    context.add_cond_makefile_var("HAVE_%s" % dep_sym, "y" if path else "n")
++    context.add_kconfig("HAVE_%s" % dep_sym, "bool", "y" if path else "n")
+ 
+     return success
+ 
+diff --git a/tools/build/Makefile.targets b/tools/build/Makefile.targets
+index 287fc979..8d9ca995 100644
+--- a/tools/build/Makefile.targets
++++ b/tools/build/Makefile.targets
+@@ -89,6 +89,7 @@ ifneq (,$(strip $(builtin-flows)))
+ PRE_GEN += $(FLOW_BUILTINS_DESC)
+ endif
+ 
++ifeq (y,$(RPATH))
+ rpath-bins := $(subst $(build_sysroot)/,$(DESTDIR),$(bins-out))
+ 
+ rpath-bins-prepare = \
+@@ -105,12 +106,15 @@ $($(1)-install)-rpath-cleanup: $(1) pre-install
+ endef
+ $(foreach bin,$(bins-out),$(eval $(call rpath-cleanup,$(bin))))
+ 
++post-install: $(all-rpath-bins)
++endif
++
+ pre-install: $(PRE_INSTALL)
+ 	$(Q)echo "     "INSTALLING SYSROOT TO: $(DESTDIR)
+ 	$(Q)$(MKDIR) -p $(DESTDIR)/$(PREFIX)
+ 	$(Q)$(CP) -R $(build_sysroot)/$(PREFIX)/* $(DESTDIR)/$(PREFIX)
+ 
+-post-install: pre-install $(all-rpath-bins)
++post-install: pre-install
+ 
+ install: post-install
+ 
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index b6a05f07..de545348 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -227,7 +227,13 @@ LIB_LDFLAGS := $(COMMON_LDFLAGS)
+ 
+ LINKED_OBJS_LDFLAGS := $(addprefix -L,$(LIB_OUTPUTDIR))
+ LINKED_OBJS_LDFLAGS += -lsoletta
++
++ifeq (y,$(RPATH))
+ LINKED_OBJS_LDFLAGS += -Wl,-R$(abspath $(build_libdir))
++else
++# make sure we set lib path so internal scripts keep working
++export LD_LIBRARY_PATH := $(LD_LIBRARY_PATH):$(abspath $(build_libdir))
++endif
+ 
+ OBJ_CFLAGS := $(COMMON_CFLAGS) $(COVERAGE_CFLAGS)
+ OBJ_LDFLAGS += $(addprefix -L,$(LIB_OUTPUTDIR))

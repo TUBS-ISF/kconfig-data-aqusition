@@ -1,0 +1,1291 @@
+"2016-11-27 22:32:11 +0100"
+diff --git a/extra/Configs/Config.alpha b/extra/Configs/Config.alpha
+index 212df6a82..a1eb7898b 100644
+--- a/extra/Configs/Config.alpha
++++ b/extra/Configs/Config.alpha
+@@ -14,4 +14,3 @@ config FORCE_OPTIONS_FOR_ARCH
+ 	select ARCH_HAS_MMU
+ 	select ARCH_HAS_NO_LDSO
+ 	select ARCH_HAS_DEPRECATED_SYSCALLS
+-	select UCLIBC_HAS_LFS
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 3315c7d5a..68b17aba8 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -567,15 +567,6 @@ config UCLIBC_HAS_SYSLOG
+ 	  Support sending messages to the system logger.
+ 	  This requires socket-support.
+ 
+-config UCLIBC_HAS_LFS
+-	bool "Large File Support"
+-	default y
+-	help
+-	  If you wish to build uClibc with support for accessing large files
+-	  (i.e. files greater then 2 GiB) then answer Y.  Do not enable this
+-	  if you are using an older Linux kernel (2.0.x) that lacks large file
+-	  support.  Enabling this option will increase the size of uClibc.
+-
+ choice
+ 	prompt "Malloc Implementation"
+ 	default MALLOC if ! ARCH_USE_MMU
+@@ -1736,7 +1727,6 @@ config UCLIBC_HAS_STDIO_AUTO_RW_TRANSITION
+ 
+ config UCLIBC_HAS_FOPEN_LARGEFILE_MODE
+ 	bool "Support an fopen() 'F' flag for large file mode (uClibc-specific)"
+-	depends on UCLIBC_HAS_LFS
+ 	help
+ 	  Answer Y to enable a uClibc-specific extension to allow passing an
+ 	  additional 'F' flag in the mode string for fopen() to specify that
+diff --git a/extra/Configs/defconfigs/or1k/defconfig b/extra/Configs/defconfigs/or1k/defconfig
+index b1f890a1e..d97651533 100644
+--- a/extra/Configs/defconfigs/or1k/defconfig
++++ b/extra/Configs/defconfigs/or1k/defconfig
+@@ -79,7 +79,6 @@ UCLIBC_HAS_LINUXTHREADS=y
+ UCLIBC_HAS_THREADS=y
+ # PTHREADS_DEBUG_SUPPORT is not set
+ UCLIBC_HAS_SYSLOG=y
+-UCLIBC_HAS_LFS=y
+ # MALLOC is not set
+ # MALLOC_SIMPLE is not set
+ MALLOC_STANDARD=y
+diff --git a/include/_lfs_64.h b/include/_lfs_64.h
+index deee98a77..88af93c0b 100644
+--- a/include/_lfs_64.h
++++ b/include/_lfs_64.h
+@@ -5,8 +5,6 @@
+  */
+ #include <features.h>
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+-
+ #if defined _FILE_OFFSET_BITS && _FILE_OFFSET_BITS != 64
+ #undef _FILE_OFFSET_BITS
+ #define _FILE_OFFSET_BITS   64
+@@ -21,9 +19,3 @@
+ #ifdef __USE_FILE_OFFSET64
+ # undef __USE_FILE_OFFSET64
+ #endif
+-
+-#else
+-
+-# error Do not include this header in files not built when LFS is disabled
+-
+-#endif
+diff --git a/include/dirent.h b/include/dirent.h
+index 00aa0773e..9abd0542a 100644
+--- a/include/dirent.h
++++ b/include/dirent.h
+@@ -369,9 +369,7 @@ __END_DECLS
+ 
+ #ifdef _LIBC
+ extern __ssize_t __getdents(int fd, char *buf, size_t count) attribute_hidden;
+-# ifdef __UCLIBC_HAS_LFS__
+ extern __ssize_t __getdents64 (int fd, char *buf, size_t count) attribute_hidden;
+-# endif
+ #endif
+ 
+ #endif /* dirent.h  */
+diff --git a/include/features.h b/include/features.h
+index dcf1348d8..e76bbbab1 100644
+--- a/include/features.h
++++ b/include/features.h
+@@ -211,16 +211,6 @@
+ #  endif
+ # endif
+ 
+-# ifndef __UCLIBC_HAS_LFS__
+-#  undef _LARGEFILE64_SOURCE
+-/* NOTE: This is probably incorrect on a 64-bit arch... */
+-#  if defined _FILE_OFFSET_BITS && _FILE_OFFSET_BITS == 64
+-#   error It appears you have defined _FILE_OFFSET_BITS=64.  Unfortunately, \
+-uClibc was built without large file support enabled.
+-#  endif
+-# elif defined __BCC__
+-#  error BCC does not support LFS, please disable it
+-# endif
+ #endif /* __UCLIBC__ */
+ 
+ /* If nothing (other than _GNU_SOURCE) is defined,
+@@ -419,9 +409,7 @@ uClibc was built without large file support enabled.
+    __USE_FILE_OFFSET64 but not __USE_LARGEFILE[64]. */
+ # if defined __USE_FILE_OFFSET64 && !defined __REDIRECT
+ #  define __USE_LARGEFILE	1
+-#  ifdef __UCLIBC_HAS_LFS__
+ #  define __USE_LARGEFILE64	1
+-#  endif
+ # endif
+ 
+ #endif	/* !ASSEMBLER */
+@@ -440,10 +428,8 @@ uClibc was built without large file support enabled.
+ #endif
+ 
+ #ifdef _LIBC
+-# ifdef __UCLIBC_HAS_LFS__
+ #  undef _FILE_OFFSET_BITS
+ #  undef __USE_FILE_OFFSET64
+-# endif
+ # include <libc-internal.h>
+ #endif
+ 
+diff --git a/libc/misc/dirent/Makefile.in b/libc/misc/dirent/Makefile.in
+index 5cae8d44d..90cdc25d4 100644
+--- a/libc/misc/dirent/Makefile.in
++++ b/libc/misc/dirent/Makefile.in
+@@ -11,8 +11,8 @@ CSRC   := alphasort.c readdir.c scandir.c versionsort.c
+ CSRC_R := readdir_r.c
+ CSRC-y := closedir.c dirfd.c opendir.c rewinddir.c seekdir.c telldir.c $(CSRC) \
+ 		  $(CSRC_R)
+-CSRC-$(UCLIBC_HAS_LFS) += $(patsubst %.c,%64.c,$(CSRC))
+-CSRC-$(UCLIBC_HAS_LFS) += $(patsubst %_r.c,%64_r.c,$(CSRC_R))
++CSRC-y += $(patsubst %.c,%64.c,$(CSRC))
++CSRC-y += $(patsubst %_r.c,%64_r.c,$(CSRC_R))
+ 
+ MISC_DIRENT_DIR := $(top_srcdir)libc/misc/dirent
+ MISC_DIRENT_OUT := $(top_builddir)libc/misc/dirent
+diff --git a/libc/misc/dirent/alphasort.c b/libc/misc/dirent/alphasort.c
+index 67b3b7859..de9bf4dfb 100644
+--- a/libc/misc/dirent/alphasort.c
++++ b/libc/misc/dirent/alphasort.c
+@@ -12,6 +12,6 @@ int alphasort(const struct dirent **a, const struct dirent **b)
+ {
+ 	return strcoll((*a)->d_name, (*b)->d_name);
+ }
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(alphasort,alphasort64)
+ #endif
+diff --git a/libc/misc/dirent/readdir.c b/libc/misc/dirent/readdir.c
+index 75171064d..52fd26b62 100644
+--- a/libc/misc/dirent/readdir.c
++++ b/libc/misc/dirent/readdir.c
+@@ -56,7 +56,7 @@ all_done:
+ 	return de;
+ }
+ libc_hidden_def(__READDIR)
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(readdir,readdir64)
+ libc_hidden_def(readdir64)
+ #endif
+diff --git a/libc/misc/dirent/readdir_r.c b/libc/misc/dirent/readdir_r.c
+index 5beebfed0..04feac9c6 100644
+--- a/libc/misc/dirent/readdir_r.c
++++ b/libc/misc/dirent/readdir_r.c
+@@ -67,7 +67,7 @@ all_done:
+ 	return((de != NULL)? 0 : ret);
+ }
+ libc_hidden_def(__READDIR_R)
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(readdir_r,readdir64_r)
+ libc_hidden_def(readdir64_r)
+ #endif
+diff --git a/libc/misc/dirent/scandir.c b/libc/misc/dirent/scandir.c
+index c036ce59b..1f6c1ec9c 100644
+--- a/libc/misc/dirent/scandir.c
++++ b/libc/misc/dirent/scandir.c
+@@ -97,6 +97,6 @@ int __SCANDIR(const char *dir, __DIRENT_TYPE ***namelist,
+     *namelist = names;
+     return pos;
+ }
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(scandir,scandir64)
+ #endif
+diff --git a/libc/misc/dirent/versionsort.c b/libc/misc/dirent/versionsort.c
+index 8e56ec56b..8129f7886 100644
+--- a/libc/misc/dirent/versionsort.c
++++ b/libc/misc/dirent/versionsort.c
+@@ -12,6 +12,6 @@ int versionsort(const struct dirent **a, const struct dirent **b)
+ {
+ 	return strverscmp((*a)->d_name, (*b)->d_name);
+ }
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(versionsort,versionsort64)
+ #endif
+diff --git a/libc/misc/file/Makefile.in b/libc/misc/file/Makefile.in
+index b94efa67f..a19ac5790 100644
+--- a/libc/misc/file/Makefile.in
++++ b/libc/misc/file/Makefile.in
+@@ -13,12 +13,12 @@ MISC_FILE_OUT := $(top_builddir)libc/misc/file
+ CSRC-y := $(wildcard $(MISC_FILE_DIR)/*.c)
+ CSRC_LFS := $(wildcard $(MISC_FILE_DIR)/*64.c)
+ CSRC-y := $(filter-out $(CSRC_LFS),$(CSRC-y))
+-CSRC-$(UCLIBC_HAS_LFS) += $(CSRC_LFS)
++CSRC-y += $(CSRC_LFS)
+ 
+ MISC_FILE_OBJ := $(patsubst $(MISC_FILE_DIR)/%.c,$(MISC_FILE_OUT)/%.o,$(CSRC-y))
+ libc-y += $(MISC_FILE_OBJ)
+ 
+-libc-nomulti-$(UCLIBC_HAS_LFS) += $(MISC_FILE_OUT)/lockf64.o
++libc-nomulti-y += $(MISC_FILE_OUT)/lockf64.o
+ 
+ objclean-y += CLEAN_libc/misc/file
+ 
+diff --git a/libc/misc/file/isfdtype.c b/libc/misc/file/isfdtype.c
+index 4d9199bd1..27fb01ca7 100644
+--- a/libc/misc/file/isfdtype.c
++++ b/libc/misc/file/isfdtype.c
+@@ -20,12 +20,7 @@
+ #include <sys/stat.h>
+ #include <sys/socket.h>
+ #include <sys/types.h>
+-#ifdef __UCLIBC_HAS_LFS__
+-# include <_lfs_64.h>
+-#else
+-# define stat64 stat
+-# define fstat64 fstat
+-#endif
++#include <_lfs_64.h>
+ 
+ int
+ isfdtype (int fildes, int fdtype)
+diff --git a/libc/misc/fts/fts.c b/libc/misc/fts/fts.c
+index 7dc67683b..d5ebcbc5e 100644
+--- a/libc/misc/fts/fts.c
++++ b/libc/misc/fts/fts.c
+@@ -36,14 +36,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
+-
+-#ifdef __UCLIBC_HAS_LFS__
+-/* this is wrong, either you include this header as first, or not at all */
+-# include <_lfs_64.h>
+-#else
+-# define stat64 stat
+-# define fstat64 fstat
+-#endif
++#include <_lfs_64.h>
+ 
+ /* Largest alignment size needed, minus one.
+    Usually long double is the worst case.  */
+diff --git a/libc/misc/ftw/Makefile.in b/libc/misc/ftw/Makefile.in
+index 084a73009..939932b09 100644
+--- a/libc/misc/ftw/Makefile.in
++++ b/libc/misc/ftw/Makefile.in
+@@ -7,8 +7,7 @@
+ 
+ subdirs += libc/misc/ftw
+ 
+-CSRC-y := ftw.c
+-CSRC-$(UCLIBC_HAS_LFS) += ftw64.c
++CSRC-y := ftw.c ftw64.c
+ 
+ MISC_FTW_DIR := $(top_srcdir)libc/misc/ftw
+ MISC_FTW_OUT := $(top_builddir)libc/misc/ftw
+diff --git a/libc/misc/ftw/ftw.c b/libc/misc/ftw/ftw.c
+index c6241ed90..0c6e617da 100644
+--- a/libc/misc/ftw/ftw.c
++++ b/libc/misc/ftw/ftw.c
+@@ -111,11 +111,7 @@ extern char *xgetcwd (void);
+ # undef __opendir
+ # define __opendir opendir
+ # undef __readdir64
+-# ifndef __UCLIBC_HAS_LFS__
+-# define __readdir64 readdir
+-# else
+ # define __readdir64 readdir64
+-# endif
+ # undef __stpcpy
+ # define __stpcpy stpcpy
+ # undef __tdestroy
+@@ -126,10 +122,6 @@ extern char *xgetcwd (void);
+ # define __tsearch tsearch
+ # undef internal_function
+ # define internal_function /* empty */
+-# ifndef __UCLIBC_HAS_LFS__
+-# undef dirent64
+-# define dirent64 dirent
+-# endif
+ # undef MAX
+ # define MAX(a, b) ((a) > (b) ? (a) : (b))
+ #endif
+diff --git a/libc/misc/glob/Makefile.in b/libc/misc/glob/Makefile.in
+index c89d2b08d..a3f952067 100644
+--- a/libc/misc/glob/Makefile.in
++++ b/libc/misc/glob/Makefile.in
+@@ -9,7 +9,7 @@ subdirs += libc/misc/glob
+ 
+ VARIANT := $(if $(UCLIBC_HAS_GNU_GLOB),,-susv3)
+ CSRC-y := glob$(VARIANT).c
+-CSRC-$(UCLIBC_HAS_LFS) += glob64$(VARIANT).c
++CSRC-y += glob64$(VARIANT).c
+ 
+ MISC_GLOB_DIR := $(top_srcdir)libc/misc/glob
+ MISC_GLOB_OUT := $(top_builddir)libc/misc/glob
+diff --git a/libc/misc/glob/glob-susv3.c b/libc/misc/glob/glob-susv3.c
+index 59b4d8e5f..bdece2a91 100644
+--- a/libc/misc/glob/glob-susv3.c
++++ b/libc/misc/glob/glob-susv3.c
+@@ -6,9 +6,7 @@
+ 
+ #include <features.h>
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+-# define BUILD_GLOB64
+-#endif
++#define BUILD_GLOB64
+ 
+ #include <glob.h>
+ #include <fnmatch.h>
+@@ -39,14 +37,10 @@ extern int __glob_sort(const void *a, const void *b) attribute_hidden;
+ extern int __glob_match_in_dir(const char *d, const char *p, int flags, int (*errfunc)(const char *path, int err), struct match **tail) attribute_hidden;
+ #endif
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ # define stat stat64
+ # define readdir_r readdir64_r
+ # define dirent dirent64
+ # define struct_stat struct stat64
+-#else
+-# define struct_stat struct stat
+-#endif
+ 
+ /* keep only one copy of these */
+ #ifndef __GLOB64
+diff --git a/libc/misc/glob/glob.c b/libc/misc/glob/glob.c
+index 923c03538..c4ecf678b 100644
+--- a/libc/misc/glob/glob.c
++++ b/libc/misc/glob/glob.c
+@@ -49,11 +49,7 @@
+ #define globfree(pglob) globfree64 (pglob)
+ #else
+ #define __readdir readdir
+-#ifdef __UCLIBC_HAS_LFS__
+ #define __readdir64 readdir64
+-#else
+-#define __readdir64 readdir
+-#endif
+ #define struct_stat64          struct stat
+ #define __stat64(fname, buf)   stat (fname, buf)
+ #endif
+@@ -341,7 +337,7 @@ static int glob_in_dir (const char *pattern, const char *directory, int flags,
+ 		{
+ 		  const char *name;
+ 		  size_t len;
+-#if defined __UCLIBC_HAS_LFS__ && !defined COMPILE_GLOB64
++#if !defined COMPILE_GLOB64
+ 		  struct dirent64 *d;
+ 		  union
+ 		    {
+diff --git a/libc/misc/internals/tempname.c b/libc/misc/internals/tempname.c
+index 7654eb433..ca87b0c06 100644
+--- a/libc/misc/internals/tempname.c
++++ b/libc/misc/internals/tempname.c
+@@ -223,11 +223,9 @@ int attribute_hidden __gen_tempname (char *tmpl, int kind, int flags,
+ 	    case __GT_FILE:
+ 		fd = open (tmpl, O_RDWR | O_CREAT | O_EXCL | flags, mode);
+ 		break;
+-#if defined __UCLIBC_HAS_LFS__
+ 	    case __GT_BIGFILE:
+ 		fd = open64 (tmpl, O_RDWR | O_CREAT | O_EXCL | flags, mode);
+ 		break;
+-#endif
+ 	    case __GT_DIR:
+ 		fd = mkdir (tmpl, mode);
+ 		break;
+diff --git a/libc/misc/statfs/Makefile.in b/libc/misc/statfs/Makefile.in
+index d70ab8f6e..322bc9071 100644
+--- a/libc/misc/statfs/Makefile.in
++++ b/libc/misc/statfs/Makefile.in
+@@ -8,9 +8,8 @@
+ subdirs += libc/misc/statfs
+ 
+ CSRC-y := statvfs.c fstatvfs.c
+-CSRC-$(UCLIBC_HAS_LFS) += $(patsubst %.c,%64.c,$(CSRC-y))
+-CSRC-$(if $(findstring yy,$(UCLIBC_HAS_LFS)$(UCLIBC_LINUX_SPECIFIC)),y) += \
+-	fstatfs64.c statfs64.c
++CSRC-y += $(patsubst %.c,%64.c,$(CSRC-y))
++CSRC-$(UCLIBC_LINUX_SPECIFIC) += fstatfs64.c statfs64.c
+ 
+ MISC_STATFS_DIR := $(top_srcdir)libc/misc/statfs
+ MISC_STATFS_OUT := $(top_builddir)libc/misc/statfs
+@@ -20,7 +19,7 @@ MISC_STATFS_OBJ := $(patsubst %.c,$(MISC_STATFS_OUT)/%.o,$(CSRC-y))
+ 
+ libc-y += $(MISC_STATFS_OBJ)
+ 
+-libc-nomulti-$(UCLIBC_HAS_LFS) += $(MISC_STATFS_OUT)/statvfs64.o $(MISC_STATFS_OUT)/fstatvfs64.o
++libc-nomulti-y += $(MISC_STATFS_OUT)/statvfs64.o $(MISC_STATFS_OUT)/fstatvfs64.o
+ 
+ objclean-y += CLEAN_libc/misc/statfs
+ 
+diff --git a/libc/misc/sysvipc/ftok.c b/libc/misc/sysvipc/ftok.c
+index 1e7549984..c8d5e58b4 100644
+--- a/libc/misc/sysvipc/ftok.c
++++ b/libc/misc/sysvipc/ftok.c
+@@ -18,11 +18,7 @@
+ 
+ #include <sys/ipc.h>
+ #include <sys/stat.h>
+-#ifdef __UCLIBC_HAS_LFS__
+-# include <_lfs_64.h>
+-#else
+-# define stat64 stat
+-#endif
++#include <_lfs_64.h>
+ 
+ key_t ftok (const char *pathname, int proj_id)
+ {
+diff --git a/libc/stdio/Makefile.in b/libc/stdio/Makefile.in
+index 7d697bf82..b100c78f9 100644
+--- a/libc/stdio/Makefile.in
++++ b/libc/stdio/Makefile.in
+@@ -19,8 +19,7 @@ CSRC-y := \
+ 	printf.c vprintf.c vsprintf.c fprintf.c snprintf.c dprintf.c \
+ 	asprintf.c sprintf.c vasprintf.c vdprintf.c vsnprintf.c \
+ 	tmpfile.c popen.c ctermid.c
+-CSRC-$(UCLIBC_HAS_LFS) += fgetpos64.c fopen64.c freopen64.c \
+-	fseeko64.c fsetpos64.c ftello64.c
++CSRC-y += fgetpos64.c fopen64.c freopen64.c fseeko64.c fsetpos64.c ftello64.c
+ CSRC-$(UCLIBC_SUSV4_LEGACY) += tmpnam.c tmpnam_r.c tempnam.c
+ 
+ # internal support functions
+diff --git a/libc/stdio/_cs_funcs.c b/libc/stdio/_cs_funcs.c
+index be416a450..7dfb120f5 100644
+--- a/libc/stdio/_cs_funcs.c
++++ b/libc/stdio/_cs_funcs.c
+@@ -13,11 +13,7 @@ int attribute_hidden __stdio_seek(FILE *stream, register __offmax_t *pos, int wh
+ {
+ 	__offmax_t res;
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ 	res = lseek64(stream->__filedes, *pos, whence);
+-#else
+-	res = lseek(stream->__filedes, *pos, whence);
+-#endif
+ 
+ 	return (res >= 0) ? ((*pos = res), 0) : ((int) res);
+ }
+diff --git a/libc/stdio/_stdio.h b/libc/stdio/_stdio.h
+index 727e331d1..974327d82 100644
+--- a/libc/stdio/_stdio.h
++++ b/libc/stdio/_stdio.h
+@@ -297,11 +297,7 @@ static inline int __CLOSE(FILE *stream)
+ 	free((S)); } while (0)
+ 
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ #define __STDIO_WHEN_LFS(E) E
+-#else
+-#define __STDIO_WHEN_LFS(E) ((void)0)
+-#endif
+ 
+ /**********************************************************************/
+ /* The following return 0 on success. */
+diff --git a/libc/stdio/fseeko.c b/libc/stdio/fseeko.c
+index 16b0c043a..781032a53 100644
+--- a/libc/stdio/fseeko.c
++++ b/libc/stdio/fseeko.c
+@@ -18,7 +18,7 @@
+ 
+ int FSEEK(register FILE *stream, OFFSET_TYPE offset, int whence)
+ {
+-#if defined(__UCLIBC_HAS_LFS__) && !defined(__DO_LARGEFILE)
++#if !defined(__DO_LARGEFILE)
+ 
+ 	return fseeko64(stream, offset, whence);
+ 
+diff --git a/libc/stdio/ftello.c b/libc/stdio/ftello.c
+index 219b6996a..f19735cb7 100644
+--- a/libc/stdio/ftello.c
++++ b/libc/stdio/ftello.c
+@@ -14,7 +14,7 @@
+ 
+ OFFSET_TYPE FTELL(register FILE *stream)
+ {
+-#if defined(__UCLIBC_HAS_LFS__) && !defined(__DO_LARGEFILE)
++#if !defined(__DO_LARGEFILE)
+ 
+ 	__offmax_t pos = ftello64(stream);
+ 
+diff --git a/libc/stdio/tmpfile.c b/libc/stdio/tmpfile.c
+index 3654f9e3a..c00ae438b 100644
+--- a/libc/stdio/tmpfile.c
++++ b/libc/stdio/tmpfile.c
+@@ -48,6 +48,4 @@ FILE * tmpfile (void)
+ 
+     return f;
+ }
+-#ifdef __UCLIBC_HAS_LFS__
+ strong_alias(tmpfile,tmpfile64)
+-#endif
+diff --git a/libc/stdlib/Makefile.in b/libc/stdlib/Makefile.in
+index ae74995bb..f6e471ac5 100644
+--- a/libc/stdlib/Makefile.in
++++ b/libc/stdlib/Makefile.in
+@@ -22,7 +22,7 @@ CSRC-$(UCLIBC_SUSV2_LEGACY) += valloc.c
+ CSRC-$(UCLIBC_HAS_ADVANCED_REALTIME) += posix_memalign.c
+ CSRC-$(UCLIBC_HAS_PTY) += grantpt.c unlockpt.c ptsname.c
+ CSRC-$(UCLIBC_HAS_ARC4RANDOM) += arc4random.c
+-CSRC-$(UCLIBC_HAS_LFS) += mkstemp64.c mkostemp64.c mkstemps64.c mkostemps64.c
++CSRC-y += mkstemp64.c mkostemp64.c mkstemps64.c mkostemps64.c
+ CSRC-$(UCLIBC_HAS_FLOATS) += drand48.c drand48_r.c erand48.c erand48_r.c
+ CSRC-$(if $(findstring yy,$(UCLIBC_HAS_FLOATS)$(UCLIBC_SUSV3_LEGACY)),y) += \
+ 	gcvt.c
+diff --git a/libc/sysdeps/linux/arm/Makefile.arch b/libc/sysdeps/linux/arm/Makefile.arch
+index 78f753361..f9ac88b84 100644
+--- a/libc/sysdeps/linux/arm/Makefile.arch
++++ b/libc/sysdeps/linux/arm/Makefile.arch
+@@ -10,9 +10,8 @@ CSRC-y := brk.c ioperm.c iopl.c __syscall_error.c sigaction.c
+ SSRC-y := \
+ 	__longjmp.S setjmp.S bsd-setjmp.S \
+ 	bsd-_setjmp.S sigrestorer.S \
+-	vfork.S clone.S
++	vfork.S clone.S mmap64.S
+ 
+-SSRC-$(UCLIBC_HAS_LFS) += mmap64.S
+ libc-nonshared-$(UCLIBC_HAS_THREADS_NATIVE) += $(ARCH_OUT)/libc-aeabi_read_tp.os
+ libc-static-$(UCLIBC_HAS_THREADS_NATIVE) += $(ARCH_OUT)/libc-aeabi_read_tp.o
+ CSRC-$(UCLIBC_HAS_CONTEXT_FUNCS) += makecontext.c
+diff --git a/libc/sysdeps/linux/common-generic/bits/kernel_stat.h b/libc/sysdeps/linux/common-generic/bits/kernel_stat.h
+index 843a1d1a6..7a97bb4d7 100644
+--- a/libc/sysdeps/linux/common-generic/bits/kernel_stat.h
++++ b/libc/sysdeps/linux/common-generic/bits/kernel_stat.h
+@@ -18,11 +18,7 @@
+  * However that requires more #ifndef in relevant wrappers,
+  * further uglifying them
+  */
+-#if defined __UCLIBC_HAS_LFS__
+-#define kernel_stat64	stat64
+-#else
+ #define kernel_stat64	stat
+-#endif
+ 
+ #endif	/*  _BITS_STAT_STRUCT_H */
+ 
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 3855e8505..257ed7222 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -13,7 +13,7 @@ CSRC-  := ssp-local.c
+ 
+ CSRC_LFS := $(notdir $(wildcard $(COMMON_DIR)/*64.c))
+ CSRC-y := $(filter-out llseek.c $(CSRC_LFS),$(CSRC-y))
+-CSRC-$(UCLIBC_HAS_LFS) += llseek.c $(CSRC_LFS)
++CSRC-y += llseek.c $(CSRC_LFS)
+ CSRC-$(findstring y,$(UCLIBC_HAS_SSP)$(UCLIBC_HAS_FORTIFY)) += ssp.c
+ CSRC-$(UCLIBC_LINUX_MODULE_26) += delete_module.c init_module.c
+ # we need these internally: fstatfs.c statfs.c
+@@ -65,8 +65,7 @@ CSRC-$(UCLIBC_LINUX_SPECIFIC) += \
+ 	uselib.c \
+ 	vhangup.c \
+ 	vmsplice.c
+-CSRC-$(if $(findstring yy,$(UCLIBC_LINUX_SPECIFIC)$(UCLIBC_HAS_LFS)),y) += \
+-	sendfile64.c
++CSRC-$(UCLIBC_LINUX_SPECIFIC) += sendfile64.c
+ # posix_fallocate() needs __libc_fallocate() from fallocate.c
+ # posix_fallocate64() needs __libc_fallocate64() from fallocate64.c
+ CSRC-$(if $(UCLIBC_LINUX_SPECIFIC)$(UCLIBC_HAS_ADVANCED_REALTIME),y,) += \
+diff --git a/libc/sysdeps/linux/common/__syscall_fcntl.c b/libc/sysdeps/linux/common/__syscall_fcntl.c
+index 86cc60d1a..909b0a061 100644
+--- a/libc/sysdeps/linux/common/__syscall_fcntl.c
++++ b/libc/sysdeps/linux/common/__syscall_fcntl.c
+@@ -18,7 +18,7 @@ int __NC(fcntl)(int fd, int cmd, long arg)
+ {
+ #if __WORDSIZE == 32
+ 	if (cmd == F_GETLK64 || cmd == F_SETLK64 || cmd == F_SETLKW64) {
+-# if (defined __UCLIBC_HAS_LFS__ && defined __NR_fcntl64) || !defined __NR_fcntl
++# if defined __NR_fcntl64 || !defined __NR_fcntl
+ 		return INLINE_SYSCALL(fcntl64, 3, fd, cmd, arg);
+ # else
+ 		__set_errno(ENOSYS);
+@@ -66,7 +66,7 @@ int fcntl(int fd, int cmd, ...)
+ }
+ lt_strong_alias(fcntl)
+ lt_libc_hidden(fcntl)
+-#if defined __UCLIBC_HAS_LFS__ && !defined __NR_fcntl64 && __WORDSIZE == 32
++#if !defined __NR_fcntl64 && __WORDSIZE == 32
+ strong_alias_untyped(fcntl,fcntl64)
+ lt_strong_alias(fcntl64)
+ lt_libc_hidden(fcntl64)
+diff --git a/libc/sysdeps/linux/common/bits/uClibc_posix_opt.h b/libc/sysdeps/linux/common/bits/uClibc_posix_opt.h
+index 0ae0da188..6ec7da3de 100644
+--- a/libc/sysdeps/linux/common/bits/uClibc_posix_opt.h
++++ b/libc/sysdeps/linux/common/bits/uClibc_posix_opt.h
+@@ -110,13 +110,6 @@
+ # undef _POSIX_MEMORY_PROTECTION
+ #endif
+ 
+-#ifndef __UCLIBC_HAS_LFS__
+-# undef _LFS64_ASYNCHRONOUS_IO
+-# undef _LFS_LARGEFILE
+-# undef _LFS64_LARGEFILE
+-# undef _LFS64_STDIO
+-#endif
+-
+ #ifndef __UCLIBC_HAS_REALTIME__
+ # undef _POSIX_SEMAPHORES
+ #endif
+diff --git a/libc/sysdeps/linux/common/bits/uClibc_stdio.h b/libc/sysdeps/linux/common/bits/uClibc_stdio.h
+index efd8a6c89..6222cebee 100644
+--- a/libc/sysdeps/linux/common/bits/uClibc_stdio.h
++++ b/libc/sysdeps/linux/common/bits/uClibc_stdio.h
+@@ -151,7 +151,6 @@ typedef struct {
+ #endif
+ } __STDIO_fpos_t;
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ typedef struct {
+ 	__off64_t __pos;
+ #ifdef __STDIO_MBSTATE
+@@ -161,14 +160,9 @@ typedef struct {
+ 	int __mblen_pending;
+ #endif
+ } __STDIO_fpos64_t;
+-#endif
+ 
+ /**********************************************************************/
+-#ifdef __UCLIBC_HAS_LFS__
+ typedef __off64_t __offmax_t;		/* TODO -- rename this? */
+-#else
+-typedef __off_t __offmax_t;		/* TODO -- rename this? */
+-#endif
+ 
+ /**********************************************************************/
+ #ifdef __UCLIBC_HAS_GLIBC_CUSTOM_STREAMS__
+diff --git a/libc/sysdeps/linux/common/fstat.c b/libc/sysdeps/linux/common/fstat.c
+index 696f79ea7..eae3c8006 100644
+--- a/libc/sysdeps/linux/common/fstat.c
++++ b/libc/sysdeps/linux/common/fstat.c
+@@ -56,7 +56,7 @@ int fstat(int fd, struct stat *buf)
+ }
+ libc_hidden_def(fstat)
+ 
+-# if ! defined __NR_fstat64 && defined __UCLIBC_HAS_LFS__
++# if ! defined __NR_fstat64
+ strong_alias_untyped(fstat,fstat64)
+ libc_hidden_def(fstat64)
+ # endif
+diff --git a/libc/sysdeps/linux/common/ftruncate.c b/libc/sysdeps/linux/common/ftruncate.c
+index 96076e449..8637ee830 100644
+--- a/libc/sysdeps/linux/common/ftruncate.c
++++ b/libc/sysdeps/linux/common/ftruncate.c
+@@ -15,10 +15,10 @@
+ # include <stdint.h>
+ int ftruncate(int fd, __off_t length)
+ {
+-# if defined __UCLIBC_HAS_LFS__
+-	return ftruncate64(fd, length);
+-# elif __WORDSIZE == 32
++# if __WORDSIZE == 32
+ 	return INLINE_SYSCALL(ftruncate64, 3, fd, OFF_HI_LO(length));
++# else
++	return ftruncate64(fd, length);
+ # endif
+ }
+ libc_hidden_def(ftruncate);
+diff --git a/libc/sysdeps/linux/common/getdents.c b/libc/sysdeps/linux/common/getdents.c
+index 8f371eba4..6a5389ec8 100644
+--- a/libc/sysdeps/linux/common/getdents.c
++++ b/libc/sysdeps/linux/common/getdents.c
+@@ -7,7 +7,7 @@
+ #include <sys/syscall.h>
+ #include <bits/wordsize.h>
+ 
+-#if !(defined __UCLIBC_HAS_LFS__ && defined __NR_getdents64 && __WORDSIZE == 64)
++#if !(defined __NR_getdents64 && __WORDSIZE == 64)
+ 
+ #include <dirent.h>
+ #include <string.h>
+@@ -72,7 +72,7 @@ ssize_t __getdents (int fd, char *buf, size_t nbytes)
+ 	return retval;
+ }
+ 
+-# elif ! defined __UCLIBC_HAS_LFS__ || !defined __NR_getdents64
++# elif !defined __NR_getdents64
+ 
+ #  include <assert.h>
+ #  include <stddef.h>
+@@ -187,7 +187,7 @@ ssize_t __getdents (int fd, char *buf, size_t nbytes)
+ 
+ # endif
+ 
+-# if defined __UCLIBC_HAS_LFS__ && ! defined __NR_getdents64
++# if ! defined __NR_getdents64
+ strong_alias(__getdents,__getdents64)
+ # endif
+ 
+diff --git a/libc/sysdeps/linux/common/getdents64.c b/libc/sysdeps/linux/common/getdents64.c
+index 017fa63c1..d4bc14b5f 100644
+--- a/libc/sysdeps/linux/common/getdents64.c
++++ b/libc/sysdeps/linux/common/getdents64.c
+@@ -91,7 +91,7 @@ ssize_t __getdents64 (int fd, char *buf, size_t nbytes)
+     return (char *) dp - buf;
+ }
+ 
+-#if __WORDSIZE == 64 || (defined __UCLIBC_HAS_LFS__ && !defined __NR_getdents)
++#if __WORDSIZE == 64 || !defined __NR_getdents
+ /* since getdents doesnt give us d_type but getdents64 does, try and
+  * use getdents64 as much as possible */
+ strong_alias(__getdents64,__getdents)
+diff --git a/libc/sysdeps/linux/common/getdirname.c b/libc/sysdeps/linux/common/getdirname.c
+index 862559a2e..7153cd1e0 100644
+--- a/libc/sysdeps/linux/common/getdirname.c
++++ b/libc/sysdeps/linux/common/getdirname.c
+@@ -32,21 +32,12 @@ char *
+ get_current_dir_name (void)
+ {
+ 	char *pwd;
+-#ifdef __UCLIBC_HAS_LFS__
+ 	struct stat64 dotstat, pwdstat;
+-#else
+-	struct stat dotstat, pwdstat;
+-#endif
+ 
+ 	pwd = getenv ("PWD");
+ 	if (pwd != NULL
+-#ifdef __UCLIBC_HAS_LFS__
+ 		&& stat64 (".", &dotstat) == 0
+ 		&& stat64 (pwd, &pwdstat) == 0
+-#else
+-		&& stat (".", &dotstat) == 0
+-		&& stat (pwd, &pwdstat) == 0
+-#endif
+ 		&& pwdstat.st_dev == dotstat.st_dev
+ 		&& pwdstat.st_ino == dotstat.st_ino)
+ 		/* The PWD value is correct.  Use it.  */
+diff --git a/libc/sysdeps/linux/common/getrlimit.c b/libc/sysdeps/linux/common/getrlimit.c
+index 3b2ce3b37..8091e56de 100644
+--- a/libc/sysdeps/linux/common/getrlimit.c
++++ b/libc/sysdeps/linux/common/getrlimit.c
+@@ -58,6 +58,6 @@ int getrlimit(__rlimit_resource_t resource, struct rlimit *rlimits)
+ #endif
+ libc_hidden_def(getrlimit)
+ 
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(getrlimit, getrlimit64)
+ #endif
+diff --git a/libc/sysdeps/linux/common/lseek.c b/libc/sysdeps/linux/common/lseek.c
+index 11a1fbb3e..cbebbaec5 100644
+--- a/libc/sysdeps/linux/common/lseek.c
++++ b/libc/sysdeps/linux/common/lseek.c
+@@ -14,17 +14,16 @@
+ #ifdef __NR_lseek
+ # define __NR___lseek_nocancel __NR_lseek
+ _syscall3(off_t, __NC(lseek), int, fd, off_t, offset, int, whence)
+-/* Use lseek64 if __NR_lseek is not defined but UCLIBC_HAS_LFS is enabled */
+ #elif !defined __NR_lseek && defined __NR_llseek
+ #include <endian.h>
+ off_t __NC(lseek)(int fd, off_t offset, int whence)
+ {
+-#if defined __UCLIBC_HAS_LFS__
+-	return lseek64(fd, offset, whence);
+-#elif __WORDSIZE == 32
++#if __WORDSIZE == 32
+ 	__off64_t result;
+ 	__off_t high = 0;
+ 	return INLINE_SYSCALL(llseek, 5, fd, high, offset, &result, whence) ?: result;
++#else
++	return lseek64(fd, offset, whence);
+ #endif
+ /* No need to handle __WORDSIZE == 64 as such a kernel won't define __NR_llseek */
+ }
+@@ -53,7 +52,7 @@ off_t __NC(lseek)(int fd, off_t offset attribute_unused, int whence)
+ #endif
+ CANCELLABLE_SYSCALL(off_t, lseek, (int fd, off_t offset, int whence), (fd, offset, whence))
+ lt_libc_hidden(lseek)
+-#if defined __UCLIBC_HAS_LFS__ && (__WORDSIZE == 64 || (!defined __NR__llseek && !defined __NR_llseek))
++#if __WORDSIZE == 64 || (!defined __NR__llseek && !defined __NR_llseek)
+ strong_alias_untyped(__NC(lseek),__NC(lseek64))
+ strong_alias_untyped(lseek,lseek64)
+ lt_strong_alias(lseek64)
+diff --git a/libc/sysdeps/linux/common/lstat.c b/libc/sysdeps/linux/common/lstat.c
+index 2fa3de1c2..143cc1916 100644
+--- a/libc/sysdeps/linux/common/lstat.c
++++ b/libc/sysdeps/linux/common/lstat.c
+@@ -49,8 +49,7 @@ int lstat(const char *file_name, struct stat *buf)
+ }
+ libc_hidden_def(lstat)
+ 
+-# if ! defined __NR_fstatat64 && ! defined __NR_lstat64 \
+-	&& defined __UCLIBC_HAS_LFS__
++# if ! defined __NR_fstatat64 && ! defined __NR_lstat64
+ strong_alias_untyped(lstat,lstat64)
+ libc_hidden_def(lstat64)
+ # endif
+diff --git a/libc/sysdeps/linux/common/posix_fadvise.c b/libc/sysdeps/linux/common/posix_fadvise.c
+index 74d8409c0..c4ebeaa31 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise.c
++++ b/libc/sysdeps/linux/common/posix_fadvise.c
+@@ -22,7 +22,7 @@
+ # include <endian.h>
+ # include <bits/wordsize.h>
+ 
+-# if defined(__NR_fadvise64_64) && defined(__UCLIBC_HAS_LFS__)
++# if defined(__NR_fadvise64_64)
+ #include <_lfs_64.h>
+ 
+ int posix_fadvise64(int fd, off64_t offset, off64_t len, int advice);
+@@ -73,7 +73,7 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
+ 		return INTERNAL_SYSCALL_ERRNO (ret, err);
+ 	return 0;
+ }
+-# if defined __UCLIBC_HAS_LFS__ && (!defined __NR_fadvise64_64 || __WORDSIZE == 64)
++# if !defined __NR_fadvise64_64 || __WORDSIZE == 64
+ strong_alias(posix_fadvise,posix_fadvise64)
+ # endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/posix_fallocate.c b/libc/sysdeps/linux/common/posix_fallocate.c
+index 2316cfdcd..0f1632f78 100644
+--- a/libc/sysdeps/linux/common/posix_fallocate.c
++++ b/libc/sysdeps/linux/common/posix_fallocate.c
+@@ -22,7 +22,7 @@ int posix_fallocate(int fd, __off_t offset, __off_t len)
+ 		return errno;
+ 	return 0;
+ }
+-# if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++# if __WORDSIZE == 64
+ strong_alias(posix_fallocate,posix_fallocate64)
+ # endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/pread_write.c b/libc/sysdeps/linux/common/pread_write.c
+index d0abd90e4..cb2e325e9 100644
+--- a/libc/sysdeps/linux/common/pread_write.c
++++ b/libc/sysdeps/linux/common/pread_write.c
+@@ -86,8 +86,7 @@ static ssize_t __NC(pwrite)(int fd, const void *buf, size_t count, off_t offset)
+ CANCELLABLE_SYSCALL(ssize_t, pwrite, (int fd, const void *buf, size_t count, off_t offset),
+ 		    (fd, buf, count, offset))
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+-# if __WORDSIZE == 32
++#if __WORDSIZE == 32
+ static ssize_t __NC(pread64)(int fd, void *buf, size_t count, off64_t offset)
+ {
+ 	return MY_PREAD64(fd, buf, count, offset);
+@@ -101,15 +100,14 @@ static ssize_t __NC(pwrite64)(int fd, const void *buf, size_t count, off64_t off
+ }
+ CANCELLABLE_SYSCALL(ssize_t, pwrite64, (int fd, const void *buf, size_t count, off64_t offset),
+ 		    (fd, buf, count, offset))
+-# else
+-#  ifdef __UCLIBC_HAS_LINUXTHREADS__
++#else
++# ifdef __UCLIBC_HAS_LINUXTHREADS__
+ weak_alias(pread,pread64)
+ weak_alias(pwrite,pwrite64)
+ lt_strong_alias(pread64)
+ lt_strong_alias(pwrite64)
+-#  else
++# else
+ strong_alias_untyped(pread,pread64)
+ strong_alias_untyped(pwrite,pwrite64)
+-#  endif
+ # endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/readahead.c b/libc/sysdeps/linux/common/readahead.c
+index bda0de2c7..f45be75c9 100644
+--- a/libc/sysdeps/linux/common/readahead.c
++++ b/libc/sysdeps/linux/common/readahead.c
+@@ -18,7 +18,7 @@
+ 
+ #include <sys/syscall.h>
+ 
+-#if defined __NR_readahead && defined __UCLIBC_HAS_LFS__ && defined __USE_GNU
++#if defined __NR_readahead && defined __USE_GNU
+ 
+ # include <fcntl.h>
+ # include <bits/wordsize.h>
+diff --git a/libc/sysdeps/linux/common/sendfile.c b/libc/sysdeps/linux/common/sendfile.c
+index 2f4887145..cca80abc7 100644
+--- a/libc/sysdeps/linux/common/sendfile.c
++++ b/libc/sysdeps/linux/common/sendfile.c
+@@ -15,7 +15,7 @@
+ #if defined __NR_sendfile
+ _syscall4(ssize_t, sendfile, int, out_fd, int, in_fd, __off_t *, offset,
+ 	  size_t, count)
+-# if defined __UCLIBC_HAS_LFS__ && (!defined __NR_sendfile64 || __WORDSIZE == 64)
++# if !defined __NR_sendfile64 || __WORDSIZE == 64
+ libc_hidden_def(sendfile64)
+ strong_alias_untyped(sendfile,sendfile64)
+ # endif
+diff --git a/libc/sysdeps/linux/common/setrlimit.c b/libc/sysdeps/linux/common/setrlimit.c
+index d96700aec..cc4f6717b 100644
+--- a/libc/sysdeps/linux/common/setrlimit.c
++++ b/libc/sysdeps/linux/common/setrlimit.c
+@@ -63,6 +63,6 @@ int setrlimit(__rlimit_resource_t resource, const struct rlimit *rlimits)
+ #endif
+ libc_hidden_def(setrlimit)
+ 
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++#if __WORDSIZE == 64
+ strong_alias_untyped(setrlimit, setrlimit64)
+ #endif
+diff --git a/libc/sysdeps/linux/common/splice.c b/libc/sysdeps/linux/common/splice.c
+index 4a32c54a8..edf9314eb 100644
+--- a/libc/sysdeps/linux/common/splice.c
++++ b/libc/sysdeps/linux/common/splice.c
+@@ -9,7 +9,7 @@
+ 
+ #include <sys/syscall.h>
+ 
+-#if defined __NR_splice && defined __UCLIBC_HAS_LFS__ && defined __USE_GNU
++#if defined __NR_splice && defined __USE_GNU
+ # include <fcntl.h>
+ 
+ _syscall6(ssize_t, splice, int, __fdin, off64_t *, __offin, int, __fdout,
+diff --git a/libc/sysdeps/linux/common/stat.c b/libc/sysdeps/linux/common/stat.c
+index c7e213838..b3c2a19ea 100644
+--- a/libc/sysdeps/linux/common/stat.c
++++ b/libc/sysdeps/linux/common/stat.c
+@@ -51,8 +51,7 @@ int stat(const char *file_name, struct stat *buf)
+ #endif /* __NR_fstat64 */
+ libc_hidden_def(stat)
+ 
+-#if ! defined __NR_stat64 && ! defined __NR_fstatat64 && \
+-	defined __UCLIBC_HAS_LFS__
++#if ! defined __NR_stat64 && ! defined __NR_fstatat64
+ strong_alias_untyped(stat,stat64)
+ libc_hidden_def(stat64)
+ #endif
+diff --git a/libc/sysdeps/linux/common/stat64.c b/libc/sysdeps/linux/common/stat64.c
+index cb3a0e169..736125fc9 100644
+--- a/libc/sysdeps/linux/common/stat64.c
++++ b/libc/sysdeps/linux/common/stat64.c
+@@ -11,11 +11,9 @@
+ #include <sys/syscall.h>
+ #include <sys/stat.h>
+ 
+-#if defined __UCLIBC_HAS_LFS__
+-
+-# if defined __NR_fstatat64 && !defined __NR_stat64
+-# include <fcntl.h>
+-# include <unistd.h>
++#if defined __NR_fstatat64 && !defined __NR_stat64
++#include <fcntl.h>
++#include <unistd.h>
+ 
+ int stat64(const char *file_name, struct stat64 *buf)
+ {
+@@ -42,6 +40,4 @@ int stat64(const char *file_name, struct stat64 *buf)
+ 	return result;
+ }
+ libc_hidden_def(stat64)
+-# endif
+-
+-#endif /* __UCLIBC_HAS_LFS__ */
++#endif
+diff --git a/libc/sysdeps/linux/common/stubs.c b/libc/sysdeps/linux/common/stubs.c
+index b80b54b2c..e7e81daaf 100644
+--- a/libc/sysdeps/linux/common/stubs.c
++++ b/libc/sysdeps/linux/common/stubs.c
+@@ -232,9 +232,7 @@ make_stub(modify_ldt)
+ 
+ #ifndef __NR_openat
+ make_stub(openat)
+-# ifdef __UCLIBC_HAS_LFS__
+ make_stub(openat64)
+-# endif
+ #endif
+ 
+ #if !defined __NR_personality && defined __UCLIBC_LINUX_SPECIFIC__
+@@ -249,11 +247,11 @@ make_stub(pipe2)
+ make_stub(pivot_root)
+ #endif
+ 
+-#if !defined __NR_fadvise64 && defined __UCLIBC_HAS_LFS__
++#if !defined __NR_fadvise64
+ make_ret_stub(posix_fadvise)
+ #endif
+ 
+-#if !defined __NR_fadvise64_64 && defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 32
++#if !defined __NR_fadvise64_64 && __WORDSIZE == 32
+ make_ret_stub(posix_fadvise64)
+ #endif
+ 
+@@ -322,7 +320,7 @@ make_stub(send)
+ make_stub(sendfile)
+ #endif
+ 
+-#if !defined __NR_sendfile64 && !defined __NR_sendfile && defined __UCLIBC_LINUX_SPECIFIC__ && defined __UCLIBC_HAS_LFS__
++#if !defined __NR_sendfile64 && !defined __NR_sendfile && defined __UCLIBC_LINUX_SPECIFIC__
+ make_stub(sendfile64)
+ #endif
+ 
+diff --git a/libc/sysdeps/linux/common/sync_file_range.c b/libc/sysdeps/linux/common/sync_file_range.c
+index 52bc9d7af..ed03d2f85 100644
+--- a/libc/sysdeps/linux/common/sync_file_range.c
++++ b/libc/sysdeps/linux/common/sync_file_range.c
+@@ -8,7 +8,7 @@
+  */
+ 
+ #include <sys/syscall.h>
+-#if defined __UCLIBC_HAS_LFS__ && defined __USE_GNU
++#if defined __USE_GNU
+ # include <bits/wordsize.h>
+ # include <endian.h>
+ # include <fcntl.h>
+diff --git a/libc/sysdeps/linux/common/truncate.c b/libc/sysdeps/linux/common/truncate.c
+index 5cbf67351..48514c2a4 100644
+--- a/libc/sysdeps/linux/common/truncate.c
++++ b/libc/sysdeps/linux/common/truncate.c
+@@ -16,14 +16,14 @@
+ 
+ int truncate(const char *path, __off_t length)
+ {
+-# if defined __UCLIBC_HAS_LFS
+-	return truncate64(path, length);
+-# elif __WORDSIZE == 32
++# if __WORDSIZE == 32
+ #  if defined(__UCLIBC_SYSCALL_ALIGN_64BIT__)
+ 	return INLINE_SYSCALL(truncate64, 4, path, 0, OFF_HI_LO(length));
+ #  else
+ 	return INLINE_SYSCALL(truncate64, 3, path, OFF_HI_LO(length));
+ #  endif
++# else
++	return truncate64(path, length);
+ # endif
+ }
+ libc_hidden_def(truncate);
+diff --git a/libc/sysdeps/linux/common/xstatconv.c b/libc/sysdeps/linux/common/xstatconv.c
+index a21579c41..d50fbf9c3 100644
+--- a/libc/sysdeps/linux/common/xstatconv.c
++++ b/libc/sysdeps/linux/common/xstatconv.c
+@@ -67,8 +67,6 @@ void __xstat32_conv(struct kernel_stat64 *kbuf, struct stat *buf)
+ 	buf->st_ctim.tv_nsec = kbuf->st_ctim.tv_nsec;
+ }
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+-
+ void __xstat64_conv(struct kernel_stat64 *kbuf, struct stat64 *buf)
+ {
+ 	/* Convert to current kernel version of `struct stat64'. */
+@@ -93,5 +91,3 @@ void __xstat64_conv(struct kernel_stat64 *kbuf, struct stat64 *buf)
+ 	buf->st_ctim.tv_sec = kbuf->st_ctim.tv_sec;
+ 	buf->st_ctim.tv_nsec = kbuf->st_ctim.tv_nsec;
+ }
+-
+-#endif /* __UCLIBC_HAS_LFS__ */
+diff --git a/libc/sysdeps/linux/common/xstatconv.h b/libc/sysdeps/linux/common/xstatconv.h
+index cd4d7e9cf..7c86c2edc 100644
+--- a/libc/sysdeps/linux/common/xstatconv.h
++++ b/libc/sysdeps/linux/common/xstatconv.h
+@@ -28,8 +28,6 @@
+ #ifdef __ARCH_HAS_DEPRECATED_SYSCALLS__
+ extern void __xstat_conv(struct kernel_stat *kbuf, struct stat *buf) attribute_hidden;
+ extern void __xstat32_conv(struct kernel_stat64 *kbuf, struct stat *buf) attribute_hidden;
+-#if defined __UCLIBC_HAS_LFS__
+ extern void __xstat64_conv(struct kernel_stat64 *kbuf, struct stat64 *buf) attribute_hidden;
+ #endif
+-#endif
+ 
+diff --git a/libc/sysdeps/linux/i386/Makefile.arch b/libc/sysdeps/linux/i386/Makefile.arch
+index 581e10a5e..e1739e193 100644
+--- a/libc/sysdeps/linux/i386/Makefile.arch
++++ b/libc/sysdeps/linux/i386/Makefile.arch
+@@ -9,9 +9,8 @@ CSRC-y := brk.c __syscall_error.c sigaction.c
+ 
+ SSRC-y := \
+ 	__longjmp.S setjmp.S bsd-setjmp.S bsd-_setjmp.S \
+-	sync_file_range.S syscall.S mmap.S
++	sync_file_range.S syscall.S mmap.S mmap64.S
+ 
+-SSRC-$(UCLIBC_HAS_LFS) += mmap64.S
+-SSRC-$(if $(findstring yy,$(UCLIBC_HAS_ADVANCED_REALTIME)$(UCLIBC_HAS_LFS)),y) += posix_fadvise64.S
++SSRC-$(UCLIBC_HAS_ADVANCED_REALTIME) += posix_fadvise64.S
+ SSRC-$(if $(UCLIBC_HAS_THREADS_NATIVE),,y) += vfork.S clone.S
+ SSRC-$(UCLIBC_HAS_CONTEXT_FUNCS) += makecontext.S setcontext.S getcontext.S swapcontext.S
+diff --git a/libc/sysdeps/linux/mips/Makefile.arch b/libc/sysdeps/linux/mips/Makefile.arch
+index 844bc2b24..10deedc3e 100644
+--- a/libc/sysdeps/linux/mips/Makefile.arch
++++ b/libc/sysdeps/linux/mips/Makefile.arch
+@@ -12,8 +12,7 @@ CSRC-y := \
+ SSRC-y := bsd-_setjmp.S bsd-setjmp.S setjmp.S syscall.S pipe.S syscall_error.S
+ 
+ CSRC-$(UCLIBC_LINUX_SPECIFIC) += cacheflush.c sysmips.c
+-CSRC-$(UCLIBC_HAS_ADVANCED_REALTIME) += posix_fadvise.c
+-CSRC-$(if $(findstring yy,$(UCLIBC_HAS_LFS)$(UCLIBC_HAS_ADVANCED_REALTIME)),y) += posix_fadvise64.c
++CSRC-$(UCLIBC_HAS_ADVANCED_REALTIME) += posix_fadvise.c posix_fadvise64.c
+ SSRC-$(if $(UCLIBC_HAS_THREADS_NATIVE),,y) += vfork.S clone.S
+ SSRC-$(UCLIBC_HAS_CONTEXT_FUNCS) += makecontext.S setcontext.S getcontext.S \
+ 	swapcontext.S
+diff --git a/libc/sysdeps/linux/mips/posix_fadvise.c b/libc/sysdeps/linux/mips/posix_fadvise.c
+index b0110bfb2..ea71ac0be 100644
+--- a/libc/sysdeps/linux/mips/posix_fadvise.c
++++ b/libc/sysdeps/linux/mips/posix_fadvise.c
+@@ -31,7 +31,7 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
+ 		return INTERNAL_SYSCALL_ERRNO (ret, err);
+ 	return 0;
+ }
+-# if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 64
++# if __WORDSIZE == 64
+ strong_alias(posix_fadvise,posix_fadvise64)
+ # endif
+ 
+diff --git a/libc/unistd/daemon.c b/libc/unistd/daemon.c
+index 8fa292850..3b3a6261f 100644
+--- a/libc/unistd/daemon.c
++++ b/libc/unistd/daemon.c
+@@ -53,13 +53,8 @@
+ #include <sys/stat.h>
+ #endif
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ #define STAT stat64
+ #define FSTAT fstat64
+-#else
+-#define STAT stat
+-#define FSTAT fstat
+-#endif
+ 
+ #if defined __USE_BSD || (defined __USE_XOPEN && !defined __USE_UNIX98)
+ 
+diff --git a/libc/unistd/fpathconf.c b/libc/unistd/fpathconf.c
+index fe4bcea67..556343be2 100644
+--- a/libc/unistd/fpathconf.c
++++ b/libc/unistd/fpathconf.c
+@@ -202,7 +202,7 @@ long int fpathconf(int fd, int name)
+ #endif
+ 
+ 	case _PC_ASYNC_IO:
+-#if defined _POSIX_ASYNC_IO && defined __UCLIBC_HAS_LFS__
++#if defined _POSIX_ASYNC_IO
+ 	    {
+ 		/* AIO is only allowed on regular files and block devices.  */
+ 		struct stat st;
+diff --git a/libc/unistd/pathconf.c b/libc/unistd/pathconf.c
+index de78a83e9..c8d03a20b 100644
+--- a/libc/unistd/pathconf.c
++++ b/libc/unistd/pathconf.c
+@@ -149,7 +149,7 @@ pathconf (const char *path, int name)
+ #endif
+ 
+     case _PC_ASYNC_IO:
+-#if defined _POSIX_ASYNC_IO && defined __UCLIBC_HAS_LFS__
++#if defined _POSIX_ASYNC_IO
+       {
+ 	/* AIO is only allowed on regular files and block devices.  */
+ 	struct stat st;
+diff --git a/libc/unistd/sysconf.c b/libc/unistd/sysconf.c
+index 3d3b1a5ff..172794e9c 100644
+--- a/libc/unistd/sysconf.c
++++ b/libc/unistd/sysconf.c
+@@ -99,10 +99,6 @@ static int nprocessors_onln(void)
+ 	return ret != 0 ? ret : 1;
+ }
+ 
+-#if defined __UCLIBC__ && !defined __UCLIBC_HAS_LFS__
+-# define readdir64 readdir
+-# define dirent64 dirent
+-#endif
+ static int nprocessors_conf(void)
+ {
+ 	int ret = 0;
+diff --git a/libpthread/linuxthreads/wrapsyscall.c b/libpthread/linuxthreads/wrapsyscall.c
+index 668b3911c..ca046a442 100644
+--- a/libpthread/linuxthreads/wrapsyscall.c
++++ b/libpthread/linuxthreads/wrapsyscall.c
+@@ -80,13 +80,12 @@ CANCELABLE_SYSCALL (int, close, (int fd), (fd))
+ CANCELABLE_SYSCALL_VA (int, fcntl, (int fd, int cmd, ...),
+ 		       (fd, cmd, va_arg (ap, long int)), cmd)
+ 
+-#if defined __UCLIBC_HAS_LFS__ && __WORDSIZE == 32
++#if __WORDSIZE == 32
+ /* fcntl64(2).  */
+ CANCELABLE_SYSCALL_VA (int, fcntl64, (int fd, int cmd, ...),
+ 		       (fd, cmd, va_arg (ap, long int)), cmd)
+ #endif
+ 
+-
+ /* fsync(2).  */
+ CANCELABLE_SYSCALL (int, fsync, (int fd), (fd))
+ 
+@@ -95,11 +94,9 @@ CANCELABLE_SYSCALL (int, fsync, (int fd), (fd))
+ CANCELABLE_SYSCALL (off_t, lseek, (int fd, off_t offset, int whence),
+ 		    (fd, offset, whence))
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ /* lseek64(2).  */
+ CANCELABLE_SYSCALL (off64_t, lseek64, (int fd, off64_t offset, int whence),
+ 		    (fd, offset, whence))
+-#endif
+ 
+ #if defined(__NR_msync) && defined(__ARCH_USE_MMU__)
+ 
+@@ -122,11 +119,9 @@ CANCELABLE_SYSCALL_VA (int, open, (const char *pathname, int flags, ...),
+ 		       (pathname, flags, va_arg (ap, mode_t)), flags)
+ 
+ 
+-#ifdef __UCLIBC_HAS_LFS__
+ /* open64(3).  */
+ CANCELABLE_SYSCALL_VA (int, open64, (const char *pathname, int flags, ...),
+ 		       (pathname, flags, va_arg (ap, mode_t)), flags)
+-#endif
+ 
+ /* pause(2).  */
+ CANCELABLE_SYSCALL (int, pause, (void), ())
+@@ -139,7 +134,7 @@ CANCELABLE_SYSCALL (ssize_t, pread, (int fd, void *buf, size_t count,
+ 		    (fd, buf, count, offset))
+ 
+ 
+-#if defined __UCLIBC_HAS_LFS__ && defined __NR_pread64
++#if defined __NR_pread64
+ /* pread64(3).  */
+ CANCELABLE_SYSCALL (ssize_t, pread64, (int fd, void *buf, size_t count,
+ 				       off64_t offset),
+@@ -152,7 +147,7 @@ CANCELABLE_SYSCALL (ssize_t, pwrite, (int fd, const void *buf, size_t n,
+ 		    (fd, buf, n, offset))
+ 
+ 
+-#if defined __UCLIBC_HAS_LFS__ && defined __NR_pwrited64
++#if defined __NR_pwrited64
+ /* pwrite64(3).  */
+ CANCELABLE_SYSCALL (ssize_t, pwrite64, (int fd, const void *buf, size_t n,
+ 					off64_t offset),
+diff --git a/libpthread/nptl/sem_open.c b/libpthread/nptl/sem_open.c
+index 5584557ff..d811ec503 100644
+--- a/libpthread/nptl/sem_open.c
++++ b/libpthread/nptl/sem_open.c
+@@ -42,14 +42,8 @@
+ #define __setmntent                    setmntent
+ #define __statfs                       statfs
+ #define __libc_close                   close
+-#ifdef __UCLIBC_HAS_LFS__
+-# define __libc_open                    open64
+-# define __fxstat64(vers, fd, buf)		fstat64(fd, buf)
+-#else
+-# define __libc_open                    open
+-# define __fxstat64(vers, fd, buf)		fstat(fd, buf)
+-# define stat64							stat
+-#endif
++#define __libc_open                    open64
++#define __fxstat64(vers, fd, buf)      fstat64(fd, buf)
+ #define __libc_write                   write
+ 
+ 
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/bits/posix_opt.h b/libpthread/nptl/sysdeps/unix/sysv/linux/bits/posix_opt.h
+index c92bd7246..2f4b16bce 100644
+--- a/libpthread/nptl/sysdeps/unix/sysv/linux/bits/posix_opt.h
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/bits/posix_opt.h
+@@ -114,13 +114,9 @@
+ 
+ /* The LFS support in asynchronous I/O is also available.  */
+ #define _LFS64_ASYNCHRONOUS_IO	1
+-
+-#ifdef __UCLIBC_HAS_LFS__
+-/* The rest of the LFS is also available.  */
+ #define _LFS_LARGEFILE		1
+ #define _LFS64_LARGEFILE	1
+ #define _LFS64_STDIO		1
+-#endif
+ 
+ /* POSIX shared memory objects are implemented.  */
+ #define _POSIX_SHARED_MEMORY_OBJECTS	200809L
+diff --git a/librt/spawn_int.h b/librt/spawn_int.h
+index 1d990fc33..89c88dba9 100644
+--- a/librt/spawn_int.h
++++ b/librt/spawn_int.h
+@@ -24,12 +24,3 @@ struct __spawn_action {
+ };
+ 
+ int __posix_spawn_file_actions_realloc(posix_spawn_file_actions_t *fa);
+-
+-/* handle !LFS */
+-#ifndef __UCLIBC_HAS_LFS__
+-# define rlimit64 rlimit
+-# define getrlimit64 getrlimit
+-#endif
+-#ifndef O_LARGEFILE
+-# define O_LARGEFILE 0
+-#endif

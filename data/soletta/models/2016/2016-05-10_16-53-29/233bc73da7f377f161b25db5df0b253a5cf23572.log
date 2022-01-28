@@ -1,0 +1,680 @@
+"2016-05-10 16:53:29 -0300"
+diff --git a/src/lib/common/sol-mainloop.c b/src/lib/common/sol-mainloop.c
+index f3c6e1dc..faad6e80 100644
+--- a/src/lib/common/sol-mainloop.c
++++ b/src/lib/common/sol-mainloop.c
+@@ -113,6 +113,22 @@ sol_update_shutdown(void)
+ }
+ #endif
+ 
++#ifdef USE_IPM
++extern int sol_ipm_init(void);
++extern void sol_ipm_shutdown(void);
++#else
++static inline int
++sol_ipm_init(void)
++{
++    return 0;
++}
++
++static inline void
++sol_ipm_shutdown()
++{
++}
++#endif
++
+ static const struct sol_mainloop_implementation _sol_mainloop_implementation_default = {
+     SOL_SET_API_VERSION(.api_version = SOL_MAINLOOP_IMPLEMENTATION_API_VERSION, )
+     .init = sol_mainloop_impl_init,
+@@ -198,12 +214,18 @@ sol_init(void)
+     if (r < 0)
+         goto update_error;
+ 
++    r = sol_ipm_init();
++    if (r < 0)
++        goto ipm_error;
++
+     SOL_DBG("Soletta %s on %s-%s initialized",
+         sol_platform_get_sw_version(), BASE_OS,
+         sol_platform_get_os_version());
+ 
+     return 0;
+ 
++ipm_error:
++    sol_update_shutdown();
+ update_error:
+     sol_comms_shutdown();
+ comms_error:
+@@ -279,6 +301,8 @@ sol_shutdown(void)
+         return;
+ 
+     SOL_DBG("shutdown");
++    sol_ipm_shutdown();
++    sol_update_shutdown();
+     sol_comms_shutdown();
+     sol_flow_shutdown();
+     sol_crypto_shutdown();
+@@ -287,7 +311,6 @@ sol_shutdown(void)
+     sol_platform_shutdown();
+     mainloop_impl->shutdown();
+     sol_modules_clear_cache();
+-    sol_update_shutdown();
+ 
+     sol_log_shutdown();
+ }
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+index 6df4acfb..24fad6a9 100644
+--- a/src/lib/io/Kconfig
++++ b/src/lib/io/Kconfig
+@@ -81,3 +81,28 @@ config USE_MEMMAP
+         Users must provide a mapping - for instance, using a JSON
+         file - that will be used to define where on memory
+         entries will be saved. Examples of memory are NVRAM or EEPROM.
++
++config USE_IPM
++    bool "Inter-processor messaging"
++    depends on FEATURE_HW_IPM
++    default y
++    help
++        Provide API to Inter-processor messaging. Some platforms
++        have more than one processor - this API provides communication
++        among them.
++
++config IPM_CHANNEL_X86_TO_ARC
++    int "IPM Channel x86 -> ARC"
++    depends on USE_IPM
++    default 0
++    help
++        Which IPM channel should be used to communication from x86 core
++        to ARC one.
++
++config IPM_CHANNEL_ARC_TO_X86
++    int "IPM Channel ARC -> x86"
++    depends on USE_IPM
++    default 1
++    help
++        Which IPM channel should be used to communication from ARC core
++        to x86 one.
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index a3c212a0..d4e111a5 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -22,6 +22,9 @@ obj-$(USE_IIO) += \
+ obj-$(USE_STORAGE) += \
+     io-storage.mod
+ 
++obj-$(USE_IPM) += \
++    io-ipm.mod
++
+ obj-io-aio-$(USE_AIO) := \
+     sol-aio-common.o
+ obj-io-aio-$(PLATFORM_RIOTOS) += \
+@@ -86,6 +89,9 @@ obj-io-storage-$(USE_EFIVARS) += \
+ obj-io-storage-$(USE_MEMMAP) += \
+     sol-memmap-storage.o
+ 
++obj-io-ipm-$(USE_IPM) += \
++    sol-ipm.o
++
+ headers-$(USE_AIO) += \
+     include/sol-aio.h
+ headers-$(USE_GPIO) += \
+@@ -108,3 +114,6 @@ headers-$(USE_EFIVARS) += \
+     include/sol-efivarfs-storage.h
+ headers-$(USE_MEMMAP) += \
+     include/sol-memmap-storage.h
++
++headers-$(USE_IPM) += \
++    include/sol-ipm.h
+diff --git a/src/lib/io/include/sol-ipm.h b/src/lib/io/include/sol-ipm.h
+new file mode 100644
+index 00000000..ab23ca10
+--- /dev/null
++++ b/src/lib/io/include/sol-ipm.h
+@@ -0,0 +1,144 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include "sol-types.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief These routines are used for Inter Processor Messaging
++ * on Soletta.
++ */
++
++/**
++ * @defgroup IPM IPM
++ * @ingroup IO
++ *
++ * @brief Inter Processor Messaging API for Soletta.
++ *
++ * Some platforms may have more than one core available to use. This API
++ * provides a way to send data from one to another, assuming shared
++ * memory among cores and a mechanism to send messages from one core to
++ * another, like mailbox.
++ *
++ * @{
++ */
++
++/**
++ * @brief Set receiver to IPM messages.
++ *
++ * Receives messages sent with id @a id on callback @a receive_cb. Message
++ * content is on callback parameter @a message.
++ *
++ * @param id id of messages to listen to. Only messages sent with @a id
++ * will be sent to this receiver.
++ * @param receive_cb callback to be called with message sent with @a id.
++ * If @c NULL, deletes a previously set callback.
++ * @param data user defined data that will be sent to callback @a cb
++ *
++ * @return 0 if receiver was set (or unset if @a receive_cb is @c NULL).
++ * Negative number otherwise.
++ *
++ * @see sol_blob
++ * @see sol_ipm_send
++ *
++ * @note message received is a @c sol_blob. Only when all references to this
++ * blob are gone sender will receive its consumed confirmation.
++ *
++ * @note One can not override a current receiver callback. To change current
++ * callback for a given id, one must first set callback to @c NULL. This is so
++ * to avoid accidentaly changing callback.
++ *
++ * @attention Soletta reserves id 0 - do not use it.
++ */
++int sol_ipm_set_receiver(uint32_t id,
++    void (*receive_cb)(void *cb_data, uint32_t id, struct sol_blob *message),
++    const void *data);
++
++/**
++ * @brief Send IPM message.
++ *
++ * Sends messages with id @a id.
++ *
++ * @param id id of message. Only receivers listening to the same id will
++ * receive this message.
++ * @param message message to be sent.
++ *
++ * @return 0 on success. Negative number otherwise
++ *
++ * @see sol_ipm_set_consumed_callback
++ *
++ * @attention Soletta reserves id 0 - do not use it.
++ */
++int sol_ipm_send(uint32_t id, struct sol_blob *message);
++
++/**
++ * @brief Set callback to be called when sent messaged is consumed.
++ *
++ * When remote core unrefs its last reference to message, this callback
++ * is called to inform that message was consumed - so it can, for instance,
++ * perform some cleanup tasks or logging.
++ *
++ * @param id id of messages that whose consumption will be listened to.
++ * @param message_consumed_cb callback to be called when receiver
++ * consumed this message. This happens when last reference to it is gone.
++ * @c If NULL, deletes current callback for @a id.
++ * @param data user defined data to be sent to @a message_consumed_cb.
++ *
++ * @return 0 on success. Negative number otherwise.
++ *
++ * @see sol_ipm_send
++ *
++ * @note One can not override a current consumed callback. To change current
++ * callback for a given id, one must first set callback to @c NULL. This is so
++ * to avoid accidentaly changing callback.
++ *
++ * @attention Soletta reserves id 0 - do not use it.
++ */
++int sol_ipm_set_consumed_callback(uint32_t id,
++    void (*message_consumed_cb)(void *cb_data, uint32_t id, struct sol_blob *message),
++    const void *data);
++
++/**
++ * @brief Get maximum IPM message ID for the platform.
++ *
++ * Some platforms limit maximum number that can be used for message ID.
++ * This function retrieves such value.
++ *
++ * @return Maximum message ID on current platform. If return 0, an error
++ * happened.
++ *
++ * @attention Soletta reserves id 0 - do not use it.
++ */
++uint32_t sol_ipm_get_max_id(void);
++
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/io/sol-ipm.c b/src/lib/io/sol-ipm.c
+new file mode 100644
+index 00000000..6479599b
+--- /dev/null
++++ b/src/lib/io/sol-ipm.c
+@@ -0,0 +1,370 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <errno.h>
++#include <inttypes.h>
++#include <stdlib.h>
++
++#ifndef SOL_LOG_DOMAIN
++#define SOL_LOG_DOMAIN &_sol_ipm_log_domain
++#endif
++
++#include "sol-log-internal.h"
++
++#include "ipm.h"
++#include "ipm/ipm_quark_se.h"
++
++#include "sol-ipm.h"
++#include "sol-log.h"
++#include "sol-macros.h"
++#include "sol-mainloop-zephyr.h"
++#include "sol-types.h"
++#include "sol-util.h"
++#include "sol-vector.h"
++
++SOL_LOG_INTERNAL_DECLARE_STATIC(_sol_ipm_log_domain, "ipm");
++
++#define SOL_IPM_ID_FREE_REMOTE 0
++
++/* Declare channels we are going to use.
++ */
++#ifdef CONFIG_X86
++QUARK_SE_IPM_DEFINE(message_ipm_receiver, IPM_CHANNEL_ARC_TO_X86, QUARK_SE_IPM_INBOUND);
++QUARK_SE_IPM_DEFINE(message_ipm_sender, IPM_CHANNEL_X86_TO_ARC, QUARK_SE_IPM_OUTBOUND);
++#elif CONFIG_ARC
++QUARK_SE_IPM_DEFINE(message_ipm_receiver, IPM_CHANNEL_X86_TO_ARC, QUARK_SE_IPM_INBOUND);
++QUARK_SE_IPM_DEFINE(message_ipm_sender, IPM_CHANNEL_ARC_TO_X86, QUARK_SE_IPM_OUTBOUND);
++#endif
++
++#define AS_PTR(_ptr) *(uintptr_t *)_ptr
++
++int sol_ipm_init(void);
++void sol_ipm_shutdown(void);
++
++/***** IPM Blobs *****/
++
++static void free_ipm_blob(struct sol_blob *blob);
++
++struct sol_blob_ipm_received {
++    struct sol_blob base;
++    struct sol_blob *remote;
++};
++
++struct sol_blob_ipm_sent {
++    struct sol_blob base;
++    uint32_t id;
++};
++
++static const struct sol_blob_type SOL_BLOB_TYPE_IPM_RECEIVED = {
++    SOL_SET_API_VERSION(.api_version = SOL_BLOB_TYPE_API_VERSION, )
++    SOL_SET_API_VERSION(.sub_api = 0, )
++    .free = free_ipm_blob,
++};
++
++/*** IPM Stuff ***/
++
++struct sol_ipm_receiver_entry {
++    uint32_t id;
++    void (*receive_cb)(void *cb_data, uint32_t id, struct sol_blob *message);
++    const void *data;
++};
++
++struct sol_ipm_consumed_handler {
++    uint32_t id;
++    void (*message_consumed_cb)(void *data, uint32_t id, struct sol_blob *message);
++    const void *data;
++};
++
++static struct sol_vector ipm_receivers;
++static struct sol_vector ipm_consumed_handlers;
++static struct device *ipm_sender, *ipm_receiver;
++static uint32_t ipm_max_id;
++static bool initialised;
++
++static void
++free_remote_blob(struct sol_blob *blob)
++{
++    int r;
++
++    r = ipm_send(ipm_sender, 1, SOL_IPM_ID_FREE_REMOTE, &blob,
++        sizeof(uintptr_t));
++    if (r != 0) {
++        /* Should I care if return was EBUSY?*/
++        SOL_WRN("Could not send consumed message to remote core: %d", r);
++    }
++}
++
++static void
++free_ipm_blob(struct sol_blob *blob)
++{
++    struct sol_blob_ipm_received *ipm_blob = (struct sol_blob_ipm_received *)blob;
++
++    free_remote_blob(ipm_blob->remote);
++
++    /* Free local shadow */
++    free(blob);
++}
++
++static void
++ipm_receiver_process(void *data)
++{
++    uint16_t idx;
++    struct sol_blob_ipm_sent *message = data;
++    struct sol_ipm_receiver_entry *receiver;
++
++    SOL_VECTOR_FOREACH_IDX (&ipm_receivers, receiver, idx) {
++        if (receiver->id == message->id) {
++            struct sol_blob_ipm_received *remote_blob;
++
++            /* Setup local shadow blob whose `mem` points to the same `mem` as remote one*/
++            remote_blob = calloc(1, sizeof(struct sol_blob_ipm_received));
++            if (!remote_blob) {
++                SOL_WRN("Could not create blob to deliver IPM message %p (id %" PRIu32 ")",
++                    message, message->id);
++                goto fail;
++            }
++
++            sol_blob_setup(&remote_blob->base, &SOL_BLOB_TYPE_IPM_RECEIVED,
++                message->base.mem,
++                message->base.size);
++
++            remote_blob->remote = &message->base;
++            receiver->receive_cb((void *)receiver->data, message->id,
++                &remote_blob->base);
++            return;
++        }
++    }
++
++    SOL_INF("Processed IPM id %" PRIu32 " but no receiver was found!",
++        message->id);
++
++fail:
++    /* Let's unref this blob on remote */
++    free_remote_blob(&message->base);
++}
++
++static void
++ipm_reaper_process(void *data)
++{
++    uint16_t idx;
++    struct sol_blob_ipm_sent *message = data;
++    struct sol_ipm_consumed_handler *handler;
++
++    SOL_VECTOR_FOREACH_IDX (&ipm_consumed_handlers, handler, idx) {
++        if (handler->id == message->id) {
++            handler->message_consumed_cb((void *)handler->data, message->id,
++                message->base.parent);
++            sol_blob_unref(&message->base);
++            return;
++        }
++    }
++}
++
++/* Note: this function runs in interrupt context */
++static void
++ipm_receiver_isr_cb(void *context, uint32_t id, volatile void *data)
++{
++    struct sol_blob_ipm_sent *remote_blob = (struct sol_blob_ipm_sent *)AS_PTR(data);
++    struct mainloop_event me;
++
++    /* id == 0 messages. Those messages signal sender
++    * core that blob was consumed and may be freed */
++    if (id == SOL_IPM_ID_FREE_REMOTE) {
++        me.cb = ipm_reaper_process;
++        me.data = remote_blob;
++        sol_mainloop_event_post(&me);
++        return;
++    }
++
++    me.cb = ipm_receiver_process,
++    me.data = remote_blob;
++    sol_mainloop_event_post(&me);
++}
++
++static int
++init(void)
++{
++    int r;
++    uint32_t max_data_size;
++
++    ipm_receiver = device_get_binding("message_ipm_receiver");
++    SOL_NULL_CHECK_MSG(ipm_receiver, -EINVAL, "Could not get IPM receiver channel");
++
++    ipm_sender = device_get_binding("message_ipm_sender");
++    SOL_NULL_CHECK_MSG(ipm_sender, -EINVAL, "Could not get IPM sender channel");
++
++    max_data_size = ipm_max_data_size_get(ipm_sender);
++    if (max_data_size < sizeof(void *)) {
++        SOL_WRN("IPM max data size < sizeof(void *)");
++        return -EINVAL;
++    }
++
++    ipm_max_id = ipm_max_id_val_get(ipm_sender);
++
++    ipm_register_callback(ipm_receiver, ipm_receiver_isr_cb, NULL);
++    r = ipm_set_enabled(ipm_receiver, 1);
++    if (r != 0) {
++        SOL_WRN("Could not enable IPM receiver: %s", sol_util_strerrora(r));
++        return -r;
++    }
++
++    sol_vector_init(&ipm_receivers, sizeof(struct sol_ipm_receiver_entry));
++    sol_vector_init(&ipm_consumed_handlers, sizeof(struct sol_ipm_consumed_handler));
++
++    initialised = true;
++
++    return 0;
++}
++
++SOL_API int
++sol_ipm_set_receiver(uint32_t id,
++    void (*receive_cb)(void *cb_data, uint32_t id, struct sol_blob *message),
++    const void *data)
++{
++    uint16_t idx;
++    struct sol_ipm_receiver_entry *receiver;
++
++    if (!initialised) {
++        int r = init();
++
++        SOL_INT_CHECK(r, != 0, r);
++    }
++
++    SOL_INT_CHECK(id, > ipm_max_id, -EINVAL);
++    SOL_INT_CHECK(id, == 0, -EINVAL);
++
++    SOL_VECTOR_FOREACH_IDX (&ipm_receivers, receiver, idx) {
++        if (receiver->id == id) {
++            if (receive_cb)
++                return -EEXIST; /* One can not override current receiver. */
++            else
++                return sol_vector_del(&ipm_receivers, idx);
++        }
++    }
++
++    /* NULL receive_cb means it's trying to remove a receiver, but none was found */
++    SOL_NULL_CHECK(receive_cb, -ENOENT);
++
++    receiver = sol_vector_append(&ipm_receivers);
++    SOL_NULL_CHECK_MSG(receiver, -ENOMEM, "Could not add receiver to id %" PRIu32,
++        id);
++
++    receiver->id = id;
++    receiver->receive_cb = receive_cb;
++    receiver->data = data;
++
++    return 0;
++}
++
++SOL_API int
++sol_ipm_send(uint32_t id, struct sol_blob *message)
++{
++    struct sol_blob_ipm_sent *blob;
++    int r;
++
++    if (!initialised) {
++        r = init();
++        SOL_INT_CHECK(r, != 0, r);
++    }
++
++    SOL_INT_CHECK(id, > ipm_max_id, -EINVAL);
++    SOL_INT_CHECK(id, == 0, -EINVAL);
++    SOL_NULL_CHECK(message, -EINVAL);
++
++    blob = calloc(1, sizeof(struct sol_blob_ipm_sent));
++    SOL_NULL_CHECK(blob, -ENOMEM);
++
++    sol_blob_setup(&blob->base, SOL_BLOB_TYPE_NO_FREE, message->mem, message->size);
++    sol_blob_set_parent(&blob->base, message);
++    blob->id = id;
++
++    r = ipm_send(ipm_sender, 1, id, &blob, sizeof(uintptr_t));
++    SOL_INT_CHECK_GOTO(r, != 0, fail);
++
++    return 0;
++
++fail:
++    sol_blob_unref(&blob->base);
++    return -r;
++}
++
++SOL_API int
++sol_ipm_set_consumed_callback(uint32_t id,
++    void (*message_consumed_cb)(void *data, uint32_t id, struct sol_blob *message),
++    const void *data)
++{
++    uint16_t idx;
++    struct sol_ipm_consumed_handler *handler;
++
++    if (!initialised) {
++        int r = init();
++
++        SOL_INT_CHECK(r, != 0, r);
++    }
++
++    SOL_INT_CHECK(id, > ipm_max_id, -EINVAL);
++    SOL_INT_CHECK(id, == 0, -EINVAL);
++
++    SOL_VECTOR_FOREACH_IDX (&ipm_consumed_handlers, handler, idx) {
++        if (handler->id == id) {
++            if (message_consumed_cb)
++                return -EEXIST;
++            else
++                return sol_vector_del(&ipm_consumed_handlers, idx);
++        }
++    }
++
++    /* NULL message_consumed_cb means it's trying to remove a handler, but none was found */
++    SOL_NULL_CHECK(message_consumed_cb, -ENOENT);
++
++    handler = sol_vector_append(&ipm_consumed_handlers);
++    SOL_NULL_CHECK(handler, -ENOMEM);
++
++    handler->id = id;
++    handler->message_consumed_cb = message_consumed_cb;
++    handler->data = data;
++
++    return 0;
++}
++
++SOL_API uint32_t
++sol_ipm_get_max_id(void)
++{
++    if (!initialised) {
++        int r = init();
++
++        SOL_INT_CHECK(r, != 0, r);
++    }
++
++    return ipm_max_id;
++}
++
++int
++sol_ipm_init(void)
++{
++    sol_log_domain_init_level(SOL_LOG_DOMAIN);
++
++    return 0;
++}
++
++void
++sol_ipm_shutdown(void)
++{
++    sol_vector_clear(&ipm_receivers);
++    sol_vector_clear(&ipm_consumed_handlers);
++}
+diff --git a/tools/build/Kconfig.features b/tools/build/Kconfig.features
+index 3ce1831c..f2437151 100644
+--- a/tools/build/Kconfig.features
++++ b/tools/build/Kconfig.features
+@@ -46,6 +46,9 @@ config FEATURE_HW_SPI
+ config FEATURE_HW_I2C
+     bool
+ 
++config FEATURE_HW_IPM
++    bool
++
+ config FEATURE_FLOW
+     bool
+ 
+diff --git a/tools/build/Kconfig.zephyr b/tools/build/Kconfig.zephyr
+index 1e226cce..cf4323d4 100644
+--- a/tools/build/Kconfig.zephyr
++++ b/tools/build/Kconfig.zephyr
+@@ -8,6 +8,7 @@ config ZEPHYR
+     select FEATURE_HW_AIO
+     select FEATURE_HW_GPIO
+     select FEATURE_HW_I2C
++    select FEATURE_HW_IPM
+     select FEATURE_HW_PWM
+     select FEATURE_HW_SPI
+     select FEATURE_NETWORK

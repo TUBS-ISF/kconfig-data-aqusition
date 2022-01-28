@@ -1,0 +1,87 @@
+"2005-10-12 19:40:41 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index bb2d9017c..3eb5f13d0 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1171,17 +1171,6 @@ config SSP_QUICK_CANARY
+ 	  	attacks.
+ 	  Most people will answer N.
+ 
+-config SSP_USE_ERANDOM
+-	bool "Use erandom for setting guard value if /dev/urandom fails"
+-	depends on UCLIBC_HAS_SSP && !SSP_QUICK_CANARY
+-	default n
+-	help
+-	  Use /dev/erandom to define the guard if /dev/urandom fails (chroot).
+-	  This requires a modified kernel.
+-	  More information at:
+-	  <http://frandom.sourceforge.net/>
+-	  Most people will answer N.
+-
+ choice
+ 	prompt "Propolice protection blocking signal"
+ 	depends on UCLIBC_HAS_SSP
+diff --git a/include/ssp-internal.h b/include/ssp-internal.h
+index c82debbd5..bff304fe1 100644
+--- a/include/ssp-internal.h
++++ b/include/ssp-internal.h
+@@ -21,17 +21,6 @@
+ #include <signal.h>
+ #include <linux/unistd.h>
+ 
+-#ifdef __SSP_USE_ERANDOM__
+-# include <sys/sysctl.h>
+-#if 1
+-# define SYSCTL __sysctl
+-#else
+-#define __NR__kernel_sysctl		__NR_sysctl
+-static __always_inline _syscall6(int,__kernel_sysctl,int *,name,int,nlen,void *,oldval,size_t *,oldlenp,void *,newval,size_t,newlen);
+-#define SYSCTL(name,nlen,oldval,oldlenp,newval,newlen) __kernel_sysctl(name,nlen,oldval,oldlenp,newval,newlen)
+-#endif
+-#endif
+-
+ #ifndef __SSP_QUICK_CANARY__
+ #define __NR___kernel_open		__NR_open
+ static __always_inline _syscall2(int,__kernel_open,const char *,path,int,flags);
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 4e2960918..1f2061e58 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -115,35 +115,10 @@ static __always_inline uintptr_t _dl_guard_setup(void)
+ {
+ 	uintptr_t ret;
+ #ifndef __SSP_QUICK_CANARY__
+-
+-	size_t size;
+-
+-# ifdef __SSP_USE_ERANDOM__
+-	{
+-		int mib[3];
+-		/* Random is another depth in Linux, hence an array of 3. */
+-		mib[0] = CTL_KERN;
+-		mib[1] = KERN_RANDOM;
+-		mib[2] = RANDOM_ERANDOM;
+-
+-		if (SYSCTL(mib, 3, &ret, &size, NULL, 0) != (-1))
+-			if (size == (size_t) sizeof(ret))
+-				return ret;
+-	}
+-# endif /* ifdef __SSP_USE_ERANDOM__ */
+ 	{
+-		int fd;
+-
+-# ifdef __SSP_USE_ERANDOM__
+-		/* 
+-		 * Attempt to open kernel pseudo random device if one exists before 
+-		 * opening urandom to avoid system entropy depletion.
+-		 */
+-		if ((fd = OPEN("/dev/erandom", O_RDONLY)) == (-1))
+-# endif
+-			fd = OPEN("/dev/urandom", O_RDONLY);
++		int fd = OPEN("/dev/urandom", O_RDONLY);
+ 		if (fd >= 0) {
+-			size = READ(fd, &ret, sizeof(ret));
++			size_t size = READ(fd, &ret, sizeof(ret));
+ 			CLOSE(fd);
+ 			if (size == (size_t) sizeof(ret))
+ 				return ret;

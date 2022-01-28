@@ -1,0 +1,459 @@
+"2007-04-10 23:03:30 +0000"
+diff --git a/Config.in b/Config.in
+index 59d7d6731..94ed109cb 100644
+--- a/Config.in
++++ b/Config.in
+@@ -238,7 +238,7 @@ config SELINUX
+ 
+ 	  Most people will leave this set to 'N'.
+ 
+-config FEATURE_EXEC_PREFER_APPLETS
++config FEATURE_PREFER_APPLETS
+ 	bool "exec prefers applets"
+ 	default n
+ 	help
+@@ -462,10 +462,10 @@ config INSTALL_APPLET_HARDLINKS
+ 
+ config INSTALL_APPLET_DONT
+ 	bool "not installed"
+-	depends on FEATURE_INSTALLER || FEATURE_SH_STANDALONE_SHELL || FEATURE_EXEC_PREFER_APPLETS
++	depends on FEATURE_INSTALLER || FEATURE_SH_STANDALONE || FEATURE_PREFER_APPLETS
+ 	help
+ 	  Do not install applet links. Useful when using the -install feature
+-	  or a standalone shell for rescue pruposes.
++	  or a standalone shell for rescue purposes.
+ 
+ endchoice
+ 
+diff --git a/TODO_config_nommu b/TODO_config_nommu
+index 695ac1114..e6f6d9314 100644
+--- a/TODO_config_nommu
++++ b/TODO_config_nommu
+@@ -35,7 +35,7 @@ CONFIG_FEATURE_SYSLOG=y
+ # CONFIG_FEATURE_SUID_CONFIG_QUIET is not set
+ # CONFIG_FEATURE_HAVE_RPC is not set
+ # CONFIG_SELINUX is not set
+-# CONFIG_FEATURE_EXEC_PREFER_APPLETS is not set
++# CONFIG_FEATURE_PREFER_APPLETS is not set
+ CONFIG_BUSYBOX_EXEC_PATH="/proc/self/exe"
+ 
+ #
+@@ -657,7 +657,7 @@ CONFIG_MSH=y
+ # Bourne Shell Options
+ #
+ CONFIG_FEATURE_SH_EXTRA_QUIET=y
+-# CONFIG_FEATURE_SH_STANDALONE_SHELL is not set
++# CONFIG_FEATURE_SH_STANDALONE is not set
+ 
+ #
+ # System Logging Utilities
+diff --git a/include/applets.h b/include/applets.h
+index d05299b69..67f7db4a6 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -56,8 +56,8 @@ s     - suid type:
+ # define APPLET(name,l,s)                    { #name, name##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) },
+ # define APPLET_NOUSAGE(name,main,l,s)       { #name, main##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) },
+ # define APPLET_ODDNAME(name,main,l,s,name2) { #name, main##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) },
+-# define APPLET_NOEXEC(name,main,l,s,name2)  { #name, main##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) USE_FEATURE_EXEC_PREFER_APPLETS(,1) },
+-# define APPLET_NOFORK(name,main,l,s,name2)  { #name, main##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) USE_FEATURE_EXEC_PREFER_APPLETS(,1 ,1) },
++# define APPLET_NOEXEC(name,main,l,s,name2)  { #name, main##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) USE_FEATURE_PREFER_APPLETS(,1) },
++# define APPLET_NOFORK(name,main,l,s,name2)  { #name, main##_main USE_FEATURE_INSTALLER(,l) USE_FEATURE_SUID(,s) USE_FEATURE_PREFER_APPLETS(,1 ,1) },
+ #endif
+ 
+ #if ENABLE_INSTALL_NO_USR
+diff --git a/include/busybox.h b/include/busybox.h
+index 380de9ab8..290ad17f2 100644
+--- a/include/busybox.h
++++ b/include/busybox.h
+@@ -37,7 +37,7 @@ struct bb_applet {
+ #if ENABLE_FEATURE_SUID
+ 	__extension__ enum bb_suid_t need_suid:8;
+ #endif
+-#if ENABLE_FEATURE_EXEC_PREFER_APPLETS
++#if ENABLE_FEATURE_PREFER_APPLETS
+ 	/* true if instead if fork(); exec("applet"); waitpid();
+ 	 * one can do fork(); exit(applet_main(argc,argv)); waitpid(); */
+ 	unsigned char noexec;
+diff --git a/include/libbb.h b/include/libbb.h
+index 2be13891c..04bf6a5cd 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -502,7 +502,7 @@ int execable_file(const char *name);
+ char *find_execable(const char *filename);
+ int exists_execable(const char *filename);
+ 
+-#if ENABLE_FEATURE_EXEC_PREFER_APPLETS
++#if ENABLE_FEATURE_PREFER_APPLETS
+ int bb_execvp(const char *file, char *const argv[]);
+ #define BB_EXECVP(prog,cmd) bb_execvp(prog,cmd)
+ #define BB_EXECLP(prog,cmd,...) \
+@@ -609,7 +609,8 @@ llist_t *llist_rev(llist_t *list);
+ int write_pidfile(const char *path);
+ #define remove_pidfile(f) ((void)unlink(f))
+ #else
+-#define write_pidfile(f)  TRUE
++/* Why? #defining it to 1 gives "warning: statement with no effect"... */
++static ATTRIBUTE_ALWAYS_INLINE int write_pidfile(const char *path) { return 1; }
+ #define remove_pidfile(f) ((void)0)
+ #endif
+ 
+diff --git a/libbb/default_error_retval.c b/libbb/default_error_retval.c
+index f4e46a4b5..0b19f2163 100644
+--- a/libbb/default_error_retval.c
++++ b/libbb/default_error_retval.c
+@@ -13,7 +13,6 @@
+  * that too seems silly.
+  */
+ 
+-#include <stdlib.h>
+ #include "libbb.h"
+ 
+ int xfunc_error_retval = EXIT_FAILURE;
+diff --git a/libbb/error_msg_and_die.c b/libbb/error_msg_and_die.c
+index 4a9049364..4115046c2 100644
+--- a/libbb/error_msg_and_die.c
++++ b/libbb/error_msg_and_die.c
+@@ -10,14 +10,14 @@
+ #include "libbb.h"
+ 
+ int die_sleep;
+-#if ENABLE_FEATURE_EXEC_PREFER_APPLETS
++#if ENABLE_FEATURE_PREFER_APPLETS
+ jmp_buf die_jmp;
+ #endif
+ 
+ void xfunc_die(void)
+ {
+ 	if (die_sleep) {
+-		if (ENABLE_FEATURE_EXEC_PREFER_APPLETS && die_sleep < 0) {
++		if (ENABLE_FEATURE_PREFER_APPLETS && die_sleep < 0) {
+ 			/* Special case. We arrive here if NOFORK applet
+ 			 * calls xfunc, which then decides to die.
+ 			 * We don't die, but jump instead back to caller.
+diff --git a/libbb/execable.c b/libbb/execable.c
+index ee10c6123..d84364753 100644
+--- a/libbb/execable.c
++++ b/libbb/execable.c
+@@ -60,7 +60,7 @@ int exists_execable(const char *filename)
+ 	return 0;
+ }
+ 
+-#if ENABLE_FEATURE_EXEC_PREFER_APPLETS
++#if ENABLE_FEATURE_PREFER_APPLETS
+ /* just like the real execvp, but try to launch an applet named 'file' first
+  */
+ int bb_execvp(const char *file, char *const argv[])
+diff --git a/libbb/fflush_stdout_and_exit.c b/libbb/fflush_stdout_and_exit.c
+index d79827f45..48889dae8 100644
+--- a/libbb/fflush_stdout_and_exit.c
++++ b/libbb/fflush_stdout_and_exit.c
+@@ -18,7 +18,7 @@ void fflush_stdout_and_exit(int retval)
+ 	if (fflush(stdout))
+ 		xfunc_die();
+ 
+-	if (ENABLE_FEATURE_EXEC_PREFER_APPLETS && die_sleep < 0) {
++	if (ENABLE_FEATURE_PREFER_APPLETS && die_sleep < 0) {
+ 		/* We are in NOFORK applet. Do not exit() directly,
+ 		 * but use xfunc_die() */
+ 		xfunc_error_retval = retval;
+diff --git a/libbb/vfork_daemon_rexec.c b/libbb/vfork_daemon_rexec.c
+index cf88a2b28..214b645c5 100644
+--- a/libbb/vfork_daemon_rexec.c
++++ b/libbb/vfork_daemon_rexec.c
+@@ -102,7 +102,7 @@ int wait_pid(int *wstat, int pid)
+ 
+ int spawn_and_wait(char **argv)
+ {
+-#if ENABLE_FEATURE_EXEC_PREFER_APPLETS
++#if ENABLE_FEATURE_PREFER_APPLETS
+ 	int rc;
+ 	const struct bb_applet *a = find_applet_by_name(argv[0]);
+ 
+@@ -121,8 +121,13 @@ int spawn_and_wait(char **argv)
+ 		{
+ 			int old_sleep = die_sleep;
+ 			int old_x = xfunc_error_retval;
+-			die_sleep = -1; /* special flag */
+-			/* xfunc_die() checks for it */
++			uint32_t old_m = option_mask32;
++
++			xfunc_error_retval = EXIT_FAILURE;
++			/* special flag for xfunc_die(). If xfunc will "die"
++			 * in NOFORK applet, xfunc_die() sees negative
++			 * die_sleep and longjmp here instead. */
++			die_sleep = -1;
+ 
+ 			rc = setjmp(die_jmp);
+ 			if (!rc) {
+@@ -144,6 +149,7 @@ int spawn_and_wait(char **argv)
+ 
+ 			die_sleep = old_sleep;
+ 			xfunc_error_retval = old_x;
++			option_mask32 = old_m;
+ 			return rc;
+ 		}
+ #ifndef BB_NOMMU	/* MMU only */
+@@ -159,7 +165,7 @@ int spawn_and_wait(char **argv)
+ 	rc = spawn(argv);
+  w:
+ 	return wait4pid(rc);
+-#else /* !FEATURE_EXEC_PREFER_APPLETS */
++#else /* !FEATURE_PREFER_APPLETS */
+ 	return wait4pid(spawn(argv));
+ #endif
+ }
+diff --git a/scripts/defconfig b/scripts/defconfig
+index 6864b2fa6..009026e5a 100644
+--- a/scripts/defconfig
++++ b/scripts/defconfig
+@@ -29,7 +29,7 @@ CONFIG_FEATURE_SUID_CONFIG=y
+ CONFIG_FEATURE_SUID_CONFIG_QUIET=y
+ # CONFIG_FEATURE_HAVE_RPC is not set
+ # CONFIG_SELINUX is not set
+-# CONFIG_FEATURE_EXEC_PREFER_APPLETS is not set
++# CONFIG_FEATURE_PREFER_APPLETS is not set
+ CONFIG_BUSYBOX_EXEC_PATH="/proc/self/exe"
+ 
+ #
+@@ -658,7 +658,7 @@ CONFIG_ASH_RANDOM_SUPPORT=y
+ # Bourne Shell Options
+ #
+ CONFIG_FEATURE_SH_EXTRA_QUIET=y
+-# CONFIG_FEATURE_SH_STANDALONE_SHELL is not set
++# CONFIG_FEATURE_SH_STANDALONE is not set
+ 
+ #
+ # System Logging Utilities
+diff --git a/shell/Config.in b/shell/Config.in
+index 4b7270efd..9479e3fed 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -216,10 +216,10 @@ config FEATURE_SH_EXTRA_QUIET
+ 	help
+ 	  Remove the busybox introduction when starting a shell.
+ 
+-config FEATURE_SH_STANDALONE_SHELL
++config FEATURE_SH_STANDALONE
+ 	bool "Standalone shell"
+ 	default n
+-	depends on MSH || LASH || HUSH || ASH
++	depends on (MSH || LASH || HUSH || ASH) && FEATURE_PREFER_APPLETS
+ 	help
+ 	  This option causes the selected busybox shell to use busybox applets
+ 	  in preference to executables in the PATH whenever possible.  For
+diff --git a/shell/ash.c b/shell/ash.c
+index b4278424a..bebfec8f5 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -6531,7 +6531,7 @@ tryexec(char *cmd, char **argv, char **envp)
+ {
+ 	int repeated = 0;
+ 
+-#if ENABLE_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE
+ 	if (strchr(cmd, '/') == NULL) {
+ 		const struct bb_applet *a;
+ 
+@@ -6596,7 +6596,7 @@ shellexec(char **argv, const char *path, int idx)
+ 	clearredir(1);
+ 	envp = environment();
+ 	if (strchr(argv[0], '/')
+-#if ENABLE_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE
+ 	 || find_applet_by_name(argv[0])
+ #endif
+ 	) {
+@@ -11116,7 +11116,7 @@ find_command(char *name, struct cmdentry *entry, int act, const char *path)
+ 		return;
+ 	}
+ 
+-#if ENABLE_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE
+ 	if (find_applet_by_name(name)) {
+ 		entry->cmdtype = CMDNORMAL;
+ 		entry->u.index = -1;
+@@ -11341,7 +11341,7 @@ helpcmd(int argc, char **argv)
+ 			col = 0;
+ 		}
+ 	}
+-#if ENABLE_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE
+ 	for (i = 0; i < NUM_APPLETS; i++) {
+ 		col += out1fmt("%c%s", ((col == 0) ? '\t' : ' '), applets[i].name);
+ 		if (col > 60) {
+diff --git a/shell/hush.c b/shell/hush.c
+index 666604dd9..f6c69a221 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -1112,7 +1112,7 @@ static void pseudo_exec(struct child_prog *child)
+ 		 * really dislike relying on /proc for things.  We could exec ourself
+ 		 * from global_argv[0], but if we are in a chroot, we may not be able
+ 		 * to find ourself... */
+-#if ENABLE_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE
+ 		{
+ 			int argc_l;
+ 			char** argv_l = child->argv;
+diff --git a/shell/lash.c b/shell/lash.c
+index f9d9deb62..99e2b1f06 100644
+--- a/shell/lash.c
++++ b/shell/lash.c
+@@ -1164,7 +1164,7 @@ static int pseudo_exec(struct child_prog *child)
+ 	 * /bin/foo invocation will fork and exec /bin/foo, even if
+ 	 * /bin/foo is a symlink to busybox.
+ 	 */
+-	if (ENABLE_FEATURE_SH_STANDALONE_SHELL) {
++	if (ENABLE_FEATURE_SH_STANDALONE) {
+ 		char **argv_l = child->argv;
+ 		int argc_l;
+ 
+diff --git a/shell/msh.c b/shell/msh.c
+index 23a7c0498..0337a4f06 100644
+--- a/shell/msh.c
++++ b/shell/msh.c
+@@ -37,7 +37,7 @@
+ # define DEFAULT_SHELL "/proc/self/exe"
+ # define CONFIG_BUSYBOX_EXEC_PATH "/proc/self/exe"
+ # define BB_BANNER "busybox standalone"
+-# define ENABLE_FEATURE_SH_STANDALONE_SHELL 0
++# define ENABLE_FEATURE_SH_STANDALONE 0
+ # define bb_msg_memory_exhausted "memory exhausted"
+ # define xmalloc(size) malloc(size)
+ # define msh_main(argc,argv) main(argc,argv)
+@@ -3064,7 +3064,7 @@ static const char *rexecve(char *c, char **v, char **envp)
+ 	int eacces = 0, asis = 0;
+ 	char *name = c;
+ 
+-	if (ENABLE_FEATURE_SH_STANDALONE_SHELL) {
++	if (ENABLE_FEATURE_SH_STANDALONE) {
+ 		optind = 1;
+ 		if (find_applet_by_name(name)) {
+ 			/* We have to exec here since we vforked.  Running
+@@ -3195,7 +3195,7 @@ static int dohelp(struct op *t)
+ 		}
+ 		x++;
+ 	}
+-#if ENABLE_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE
+ 	{
+ 		const struct bb_applet *applet = applets;
+ 
+diff --git a/util-linux/getopt.c b/util-linux/getopt.c
+index 85a1d4410..68e69de5c 100644
+--- a/util-linux/getopt.c
++++ b/util-linux/getopt.c
+@@ -38,8 +38,10 @@
+    mode */
+ enum {
+ 	NON_OPT = 1,
++#if ENABLE_GETOPT_LONG
+ /* LONG_OPT is the code that is returned when a long option is found. */
+ 	LONG_OPT = 2
++#endif
+ };
+ 
+ /* For finding activated option flags. Must match getopt32 call! */
+@@ -51,8 +53,10 @@ enum {
+ 	OPT_s	= 0x10,	// -s
+ 	OPT_T	= 0x20,	// -T
+ 	OPT_u	= 0x40,	// -u
++#if ENABLE_GETOPT_LONG
+ 	OPT_a	= 0x80,	// -a
+ 	OPT_l	= 0x100, // -l
++#endif
+ 	SHELL_IS_TCSH = 0x8000, /* hijack this bit for other purposes */
+ };
+ 
+@@ -137,31 +141,45 @@ static const char *normalize(const char *arg)
+  * optstr must contain the short options, and longopts the long options.
+  * Other settings are found in global variables.
+  */
+-static int generate_output(char * argv[],int argc,const char *optstr,
+-		const struct option *longopts)
++#if !ENABLE_GETOPT_LONG
++#define generate_output(argv,argc,optstr,longopts) generate_output(argv,argc,optstr)
++#endif
++static int generate_output(char **argv, int argc, const char *optstr, const struct option *longopts)
+ {
+ 	int exit_code = 0; /* We assume everything will be OK */
+ 	unsigned opt;
++#if ENABLE_GETOPT_LONG
+ 	int longindex;
++#endif
+ 	const char *charptr;
+ 
+ 	if (quiet_errors) /* No error reporting from getopt(3) */
+ 		opterr = 0;
+ 	optind = 0; /* Reset getopt(3) */
+ 
+-	while ((opt = (alternative ?
+-			getopt_long_only(argc,argv,optstr,longopts,&longindex) :
+-			getopt_long(argc,argv,optstr,longopts,&longindex)))
+-	       != EOF)
++	while (1) {
++		opt =
++#if ENABLE_GETOPT_LONG
++			alternative ?
++			getopt_long_only(argc, argv, optstr, longopts, &longindex) :
++			getopt_long(argc, argv, optstr, longopts, &longindex);
++#else
++			getopt(argc, argv, optstr);
++#endif
++		if (opt == EOF)
++			break;
+ 		if (opt == '?' || opt == ':' )
+ 			exit_code = 1;
+ 		else if (!quiet_output) {
++#if ENABLE_GETOPT_LONG
+ 			if (opt == LONG_OPT) {
+ 				printf(" --%s", longopts[longindex].name);
+ 				if (longopts[longindex].has_arg)
+ 					printf(" %s",
+ 						normalize(optarg ? optarg : ""));
+-			} else if (opt == NON_OPT)
++			} else
++#endif
++			if (opt == NON_OPT)
+ 				printf(" %s", normalize(optarg));
+ 			else {
+ 				printf(" -%c", opt);
+@@ -171,6 +189,7 @@ static int generate_output(char * argv[],int argc,const char *optstr,
+ 						normalize(optarg ? optarg : ""));
+ 			}
+ 		}
++	}
+ 
+ 	if (!quiet_output) {
+ 		printf(" --");
+@@ -181,6 +200,7 @@ static int generate_output(char * argv[],int argc,const char *optstr,
+ 	return exit_code;
+ }
+ 
++#if ENABLE_GETOPT_LONG
+ /*
+  * Register several long options. options is a string of long options,
+  * separated by commas or whitespace.
+@@ -224,6 +244,7 @@ static struct option *add_long_options(struct option *long_options, char *option
+ 	}
+ 	return long_options;
+ }
++#endif
+ 
+ static void set_shell(const char *new_shell)
+ {
+@@ -262,13 +283,13 @@ static const struct option longopts[] = {
+ int getopt_main(int argc, char *argv[]);
+ int getopt_main(int argc, char *argv[])
+ {
+-	struct option *long_options = NULL;
+ 	char *optstr = NULL;
+ 	char *name = NULL;
+ 	unsigned opt;
+ 	const char *compatible;
+ 	char *s_arg; 
+ #if ENABLE_GETOPT_LONG
++	struct option *long_options = NULL;
+ 	llist_t *l_arg = NULL;
+ #endif
+ 

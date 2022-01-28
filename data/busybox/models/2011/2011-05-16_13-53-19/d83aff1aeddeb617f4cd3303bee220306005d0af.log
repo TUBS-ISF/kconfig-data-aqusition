@@ -1,0 +1,83 @@
+"2011-05-16 13:53:19 +0200"
+diff --git a/Config.in b/Config.in
+index b65fe4530..8f4d64274 100644
+--- a/Config.in
++++ b/Config.in
+@@ -350,15 +350,17 @@ config FEATURE_SUID_CONFIG
+ 	  by checking /etc/busybox.conf. (This is sort of a poor man's sudo.)
+ 	  The format of this file is as follows:
+ 
+-	  APPLET = [Ssx-][Ssx-][x-] USER.GROUP
++	  APPLET = [Ssx-][Ssx-][x-] [USER.GROUP]
+ 
+-	  s: This user/group are allowed to execute APPLET.
++	  s: USER or GROUP is allowed to execute APPLET.
++	     APPLET will run under USER or GROUP
++	     (reagardless of who's running it).
++	  S: USER or GROUP is NOT allowed to execute APPLET.
+ 	     APPLET will run under USER or GROUP.
+-	  x: User/group/others are allowed to execute APPLET.
++	     This option is not very sensical.
++	  x: USER/GROUP/others are allowed to execute APPLET.
+ 	     No UID/GID change will be done when it is run.
+-	  S: This user/group are NOT allowed to execute APPLET.
+-	     APPLET will run under USER or GROUP.
+-	  -: User/group/others are not allowed to execute APPLET.
++	  -: USER/GROUP/others are not allowed to execute APPLET.
+ 
+ 	  An example might help:
+ 
+@@ -368,7 +370,8 @@ config FEATURE_SUID_CONFIG
+ 	  su = ssx        # exactly the same
+ 
+ 	  mount = sx- root.disk # applet mount can be run by root and members
+-	                        # of group disk and runs with euid=0
++	                        # of group disk (but not anyone else)
++	                        # and runs with euid=0 (egid is not changed)
+ 
+ 	  cp = --- # disable applet cp for everyone
+ 
+diff --git a/libbb/appletlib.c b/libbb/appletlib.c
+index ed60a1a0a..86b5cd381 100644
+--- a/libbb/appletlib.c
++++ b/libbb/appletlib.c
+@@ -261,9 +261,7 @@ static int ingroup(uid_t u, gid_t g)
+ 	return 0;
+ }
+ 
+-/* This should probably be a libbb routine.  In that case,
+- * I'd probably rename it to something like bb_trimmed_slice.
+- */
++/* libbb candidate */
+ static char *get_trimmed_slice(char *s, char *e)
+ {
+ 	/* First, consider the value at e to be nul and back up until we
+@@ -442,15 +440,16 @@ static void parse_config_file(void)
+ 				/* Now get the user/group info. */
+ 
+ 				s = skip_whitespace(e);
++				if (*s == '\0')
++					s = strcpy(buffer, "0.0");
+ 
+-				/* Note: we require whitespace between the mode and the
+-				 * user/group info. */
++				/* We require whitespace between mode and USER.GROUP */
+ 				if ((s == e) || !(e = strchr(s, '.'))) {
+ 					errmsg = "uid.gid";
+ 					goto pe_label;
+ 				}
+ 
+-				*e = ':'; /* get_uidgid doesn't understand user.group */
++				*e = ':'; /* get_uidgid needs USER:GROUP syntax */
+ 				if (get_uidgid(&sct->m_ugid, s, /*allow_numeric:*/ 1) == 0) {
+ 					errmsg = "unknown user/group";
+ 					goto pe_label;
+@@ -518,7 +517,7 @@ static void check_suid(int applet_no)
+ 			/* same group / in group */
+ 			m >>= 3;
+ 		if (!(m & S_IXOTH)) /* is x bit not set? */
+-			bb_error_msg_and_die("you have no permission to run this applet!");
++			bb_error_msg_and_die("you have no permission to run this applet");
+ 
+ 		/* We set effective AND saved ids. If saved-id is not set
+ 		 * like we do below, seteuid(0) can still later succeed! */

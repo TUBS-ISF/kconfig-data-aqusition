@@ -1,0 +1,873 @@
+"2011-02-24 08:24:43 -0500"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index aa459e06a..f152a9666 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -665,15 +665,6 @@ config UCLIBC_HAS_STUBS
+ 	  functions which are impossible to implement on the target
+ 	  architecture. Otherwise, such functions are simply omitted.
+ 
+-	  As of 2008-07, this option makes uClibc provide fork() stub
+-	  on NOMMU targets. It always sets errno to ENOSYS and returns -1.
+-
+-	  This may be useful if you port a lot of software and cannot
+-	  audit all of it and replace or disable fork() usage.
+-	  With this option, a program which uses fork() will build
+-	  successfully. Of course, it may be useless if fork()
+-	  is essential for its operation.
+-
+ config UCLIBC_HAS_SHADOW
+ 	bool "Shadow Password Support"
+ 	default y
+diff --git a/libc/sysdeps/linux/arm/posix_fadvise.c b/libc/sysdeps/linux/arm/posix_fadvise.c
+index 278bff981..80d3c5044 100644
+--- a/libc/sysdeps/linux/arm/posix_fadvise.c
++++ b/libc/sysdeps/linux/arm/posix_fadvise.c
+@@ -39,7 +39,7 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advise)
+ 
+ /* weak_alias(__libc_posix_fadvise, posix_fadvise); */
+ 
+-#else
++#elif defined __UCLIBC_HAS_STUBS__
+ 
+ int posix_fadvise(int fd attribute_unused, off_t offset attribute_unused, off_t len attribute_unused, int advice attribute_unused)
+ {
+diff --git a/libc/sysdeps/linux/arm/posix_fadvise64.c b/libc/sysdeps/linux/arm/posix_fadvise64.c
+index 4b27381d1..678c42f90 100644
+--- a/libc/sysdeps/linux/arm/posix_fadvise64.c
++++ b/libc/sysdeps/linux/arm/posix_fadvise64.c
+@@ -47,7 +47,7 @@ int posix_fadvise64(int fd, __off64_t offset, __off64_t len, int advise)
+ 
+ /* weak_alias(__libc_posix_fadvise64, posix_fadvise64); */
+ 
+-#else
++#elif defined __UCLIBC_HAS_STUBS__
+ 
+ int posix_fadvise64(int fd, __off64_t offset, __off64_t len, int advise)
+ {
+diff --git a/libc/sysdeps/linux/common/__rt_sigtimedwait.c b/libc/sysdeps/linux/common/__rt_sigtimedwait.c
+index a7ab8fb61..26860d2d2 100644
+--- a/libc/sysdeps/linux/common/__rt_sigtimedwait.c
++++ b/libc/sysdeps/linux/common/__rt_sigtimedwait.c
+@@ -86,16 +86,6 @@ int attribute_hidden __sigtimedwait(const sigset_t * set, siginfo_t * info,
+ 	return __rt_sigtimedwait(set, info, timeout, _NSIG / 8);
+ }
+ # endif /* !__UCLIBC_HAS_THREADS_NATIVE__ */
+-#else
+-int attribute_hidden __sigtimedwait(const sigset_t * set, siginfo_t * info,
+-									const struct timespec *timeout)
+-{
+-	if (set == NULL)
+-		__set_errno(EINVAL);
+-	else
+-		__set_errno(ENOSYS);
+-	return -1;
+-}
+-#endif
+ weak_alias(__sigtimedwait,sigtimedwait)
+ libc_hidden_weak(sigtimedwait)
++#endif
+diff --git a/libc/sysdeps/linux/common/__rt_sigwaitinfo.c b/libc/sysdeps/linux/common/__rt_sigwaitinfo.c
+index 92a11c9b6..6b4332715 100644
+--- a/libc/sysdeps/linux/common/__rt_sigwaitinfo.c
++++ b/libc/sysdeps/linux/common/__rt_sigwaitinfo.c
+@@ -83,16 +83,7 @@ int attribute_hidden __sigwaitinfo(const sigset_t * set, siginfo_t * info)
+ 	return __rt_sigwaitinfo(set, info, NULL, _NSIG / 8);
+ }
+ # endif
+-#else
+-int attribute_hidden __sigwaitinfo(const sigset_t * set, siginfo_t * info)
+-{
+-	if (set == NULL)
+-		__set_errno(EINVAL);
+-	else
+-		__set_errno(ENOSYS);
+-	return -1;
+-}
+-#endif
+ libc_hidden_proto(sigwaitinfo)
+ weak_alias (__sigwaitinfo, sigwaitinfo)
+ libc_hidden_weak(sigwaitinfo)
++#endif
+diff --git a/libc/sysdeps/linux/common/bdflush.c b/libc/sysdeps/linux/common/bdflush.c
+index 687a8f9a7..c2a05ed88 100644
+--- a/libc/sysdeps/linux/common/bdflush.c
++++ b/libc/sysdeps/linux/common/bdflush.c
+@@ -12,10 +12,4 @@
+ 
+ #ifdef __NR_bdflush
+ _syscall2(int, bdflush, int, __func, long int, __data)
+-#else
+-int bdflush(int __func, long int __data)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/capget.c b/libc/sysdeps/linux/common/capget.c
+index 361de845d..c3e8c5771 100644
+--- a/libc/sysdeps/linux/common/capget.c
++++ b/libc/sysdeps/linux/common/capget.c
+@@ -11,10 +11,4 @@
+ int capget(void *header, void *data);
+ #ifdef __NR_capget
+ _syscall2(int, capget, void *, header, void *, data)
+-#else
+-int capget(void *header, void *data)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/capset.c b/libc/sysdeps/linux/common/capset.c
+index 0a77e05f4..c0cf5deb0 100644
+--- a/libc/sysdeps/linux/common/capset.c
++++ b/libc/sysdeps/linux/common/capset.c
+@@ -8,13 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
+ int capset(void *header, const void *data);
+ #ifdef __NR_capset
+ _syscall2(int, capset, void *, header, const void *, data)
+-#elif defined __UCLIBC_HAS_STUBS__
+-int capset(void *header, const void *data)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/create_module.c b/libc/sysdeps/linux/common/create_module.c
+index d8f24466d..ddd7c4cff 100644
+--- a/libc/sysdeps/linux/common/create_module.c
++++ b/libc/sysdeps/linux/common/create_module.c
+@@ -49,11 +49,4 @@ unsigned long create_module(const char *name, size_t size)
+ _syscall2(unsigned long, create_module, const char *, name, size_t, size)
+ #endif
+ 
+-#else /* !__NR_create_module */
+-caddr_t create_module(const char *name attribute_unused, size_t size attribute_unused);
+-caddr_t create_module(const char *name attribute_unused, size_t size attribute_unused)
+-{
+-	__set_errno(ENOSYS);
+-	return (caddr_t)-1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/delete_module.c b/libc/sysdeps/linux/common/delete_module.c
+index 44f9b30ae..8ac6e559e 100644
+--- a/libc/sysdeps/linux/common/delete_module.c
++++ b/libc/sysdeps/linux/common/delete_module.c
+@@ -10,10 +10,4 @@
+ int delete_module(const char *name, unsigned int flags);
+ #ifdef __NR_delete_module
+ _syscall2(int, delete_module, const char *, name, unsigned int, flags)
+-#elif defined __UCLIBC_HAS_STUBS__
+-int delete_module(const char *name, unsigned int flags)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/epoll.c b/libc/sysdeps/linux/common/epoll.c
+index 86272d9aa..dda92282e 100644
+--- a/libc/sysdeps/linux/common/epoll.c
++++ b/libc/sysdeps/linux/common/epoll.c
+@@ -15,12 +15,6 @@
+  */
+ #ifdef __NR_epoll_create
+ _syscall1(int, epoll_create, int, size)
+-#else
+-int epoll_create(int size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ /*
+@@ -28,12 +22,6 @@ int epoll_create(int size)
+  */
+ #ifdef __NR_epoll_ctl
+ _syscall4(int,epoll_ctl, int, epfd, int, op, int, fd, struct epoll_event *, event)
+-#else
+-int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+ 
+ /*
+@@ -41,10 +29,4 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event)
+  */
+ #ifdef __NR_epoll_wait
+ _syscall4(int, epoll_wait, int, epfd, struct epoll_event *, events, int, maxevents, int, timeout)
+-#else
+-int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/fdatasync.c b/libc/sysdeps/linux/common/fdatasync.c
+index 19d37b6e0..e51c72365 100644
+--- a/libc/sysdeps/linux/common/fdatasync.c
++++ b/libc/sysdeps/linux/common/fdatasync.c
+@@ -40,11 +40,4 @@ int fdatasync(int fd)
+ # endif
+ }
+ 
+-#elif defined __UCLIBC_HAS_STUBS__
+-/* no syscall available, so provide a stub */
+-int fdatasync(int fd)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/fork.c b/libc/sysdeps/linux/common/fork.c
+index f21ec35b8..14e00a2cd 100644
+--- a/libc/sysdeps/linux/common/fork.c
++++ b/libc/sysdeps/linux/common/fork.c
+@@ -20,16 +20,4 @@ weak_alias(__libc_fork,fork)
+ libc_hidden_weak(fork)
+ #endif
+ 
+-#elif defined __UCLIBC_HAS_STUBS__
+-
+-extern __typeof(fork) __libc_fork;
+-pid_t __libc_fork(void)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+-weak_alias(__libc_fork,fork)
+-libc_hidden_weak(fork)
+-link_warning(fork, "fork: this function is not implemented on no-mmu systems")
+-
+ #endif
+diff --git a/libc/sysdeps/linux/common/get_kernel_syms.c b/libc/sysdeps/linux/common/get_kernel_syms.c
+index d6595eaf5..6124a81d4 100644
+--- a/libc/sysdeps/linux/common/get_kernel_syms.c
++++ b/libc/sysdeps/linux/common/get_kernel_syms.c
+@@ -13,10 +13,4 @@ struct kernel_sym;
+ int get_kernel_syms(struct kernel_sym *table attribute_unused);
+ #ifdef __NR_get_kernel_syms
+ _syscall1(int, get_kernel_syms, struct kernel_sym *, table)
+-#else
+-int get_kernel_syms(struct kernel_sym *table attribute_unused)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/getpgrp.c b/libc/sysdeps/linux/common/getpgrp.c
+index 5d36ba155..80a53daee 100644
+--- a/libc/sysdeps/linux/common/getpgrp.c
++++ b/libc/sysdeps/linux/common/getpgrp.c
+@@ -19,10 +19,4 @@ pid_t getpgrp(void)
+ {
+ 	return getpgid(getpid());
+ }
+-#elif defined __UCLIBC_HAS_STUBS__
+-pid_t getpgrp(void)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/init_module.c b/libc/sysdeps/linux/common/init_module.c
+index 8a6e94199..cf6d74721 100644
+--- a/libc/sysdeps/linux/common/init_module.c
++++ b/libc/sysdeps/linux/common/init_module.c
+@@ -15,11 +15,5 @@ int init_module(void *first, void *second, void *third, void *fourth, void *fift
+  * and let the kernel cope with whatever it gets.  It's good at that. */
+ _syscall5(int, init_module, void *, first, void *, second, void *, third,
+ 		  void *, fourth, void *, fifth)
+-#else
+-int init_module(void *first, void *second, void *third, void *fourth, void *fifth)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+ 
+diff --git a/libc/sysdeps/linux/common/pivot_root.c b/libc/sysdeps/linux/common/pivot_root.c
+index 3e9705903..0e738d53f 100644
+--- a/libc/sysdeps/linux/common/pivot_root.c
++++ b/libc/sysdeps/linux/common/pivot_root.c
+@@ -12,10 +12,4 @@
+ int pivot_root(const char *new_root, const char *put_old);
+ #ifdef __NR_pivot_root
+ _syscall2(int, pivot_root, const char *, new_root, const char *, put_old)
+-#else
+-int pivot_root(const char *new_root, const char *put_old)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/posix_fadvise.c b/libc/sysdeps/linux/common/posix_fadvise.c
+index 7c43be959..17831c201 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise.c
++++ b/libc/sysdeps/linux/common/posix_fadvise.c
+@@ -27,10 +27,9 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
+ strong_alias(posix_fadvise,posix_fadvise64)
+ #endif
+ 
+-#else
++#elif defined __UCLIBC_HAS_STUBS__
+ int posix_fadvise(int fd attribute_unused, off_t offset attribute_unused, off_t len attribute_unused, int advice attribute_unused)
+ {
+-#warning This is not correct as far as SUSv3 is concerned.
+ 	return ENOSYS;
+ }
+ #endif
+diff --git a/libc/sysdeps/linux/common/posix_fadvise64.c b/libc/sysdeps/linux/common/posix_fadvise64.c
+index b53e64321..e8a530fdf 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise64.c
++++ b/libc/sysdeps/linux/common/posix_fadvise64.c
+@@ -58,13 +58,12 @@ int posix_fadvise64(int fd, __off64_t offset, __off64_t len, int advice)
+ #error your machine is neither 32 bit or 64 bit ... it must be magical
+ #endif
+ 
+-#elif !defined __NR_fadvise64
++#elif !defined __NR_fadvise64 && defined __UCLIBC_HAS_STUBS__
+ /* This is declared as a strong alias in posix_fadvise.c if __NR_fadvise64
+  * is defined.
+  */
+ int posix_fadvise64(int fd, __off64_t offset, __off64_t len, int advice)
+ {
+-#warning This is not correct as far as SUSv3 is concerned.
+ 	return ENOSYS;
+ }
+ #endif /* __NR_fadvise64_64 */
+diff --git a/libc/sysdeps/linux/common/query_module.c b/libc/sysdeps/linux/common/query_module.c
+index 0f3d4700c..7c168df45 100644
+--- a/libc/sysdeps/linux/common/query_module.c
++++ b/libc/sysdeps/linux/common/query_module.c
+@@ -13,11 +13,4 @@ int query_module(const char *name attribute_unused, int which attribute_unused,
+ #ifdef __NR_query_module
+ _syscall5(int, query_module, const char *, name, int, which,
+ 		  void *, buf, size_t, bufsize, size_t *, ret)
+-#elif defined __UCLIBC_HAS_STUBS__
+-int query_module(const char *name attribute_unused, int which attribute_unused,
+-				 void *buf attribute_unused, size_t bufsize attribute_unused, size_t * ret attribute_unused)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/sched_getaffinity.c b/libc/sysdeps/linux/common/sched_getaffinity.c
+index 5d5e5b2c4..8982582cc 100644
+--- a/libc/sysdeps/linux/common/sched_getaffinity.c
++++ b/libc/sysdeps/linux/common/sched_getaffinity.c
+@@ -44,11 +44,5 @@ int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *cpuset)
+ 	}
+ 	return res;
+ }
+-#elif defined __UCLIBC_HAS_STUBS__
+-int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *cpuset)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/sched_setaffinity.c b/libc/sysdeps/linux/common/sched_setaffinity.c
+index 1a0f55f75..980c44199 100644
+--- a/libc/sysdeps/linux/common/sched_setaffinity.c
++++ b/libc/sysdeps/linux/common/sched_setaffinity.c
+@@ -70,16 +70,5 @@ int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t *cpuset)
+ 
+ 	return INLINE_SYSCALL (sched_setaffinity, 3, pid, cpusetsize, cpuset);
+ }
+-#else
+-#define ___HAVE_NO_sched_setaffinity
+ #endif
+-
+-#if defined ___HAVE_NO_sched_setaffinity && defined __UCLIBC_HAS_STUBS__
+-int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t *cpuset)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+-#endif
+-
+ #endif /* __USE_GNU */
+diff --git a/libc/sysdeps/linux/common/signalfd.c b/libc/sysdeps/linux/common/signalfd.c
+index 3d76e04c4..a0c995a89 100644
+--- a/libc/sysdeps/linux/common/signalfd.c
++++ b/libc/sysdeps/linux/common/signalfd.c
+@@ -21,8 +21,7 @@ static __inline__ _syscall3(int, __syscall_signalfd, int, fd,
+ 		const sigset_t *, mask, size_t, sizemask)
+ #endif
+ 
+-#if defined __NR_signalfd4 || defined __NR_signalfd \
+-	|| defined __UCLIBC_HAS_STUBS__
++#if defined __NR_signalfd4 || defined __NR_signalfd
+ int signalfd (int fd, const sigset_t *mask, int flags)
+ {
+ #if defined __NR___syscall_signalfd4
+@@ -33,9 +32,6 @@ int signalfd (int fd, const sigset_t *mask, int flags)
+ 		return -1;
+ 	}
+ 	return __syscall_signalfd(fd, mask, _NSIG / 8);
+-#elif defined __UCLIBC_HAS_STUBS__
+-	__set_errno(ENOSYS);
+-	return -1;
+ #endif
+ }
+ #endif
+diff --git a/libc/sysdeps/linux/common/splice.c b/libc/sysdeps/linux/common/splice.c
+index b21d10336..83f348a48 100644
+--- a/libc/sysdeps/linux/common/splice.c
++++ b/libc/sysdeps/linux/common/splice.c
+@@ -13,11 +13,4 @@
+ #ifdef __NR_splice
+ _syscall6(ssize_t, splice, int, __fdin, __off64_t *, __offin, int, __fdout,
+ 	__off64_t *, __offout, size_t, __len, unsigned int, __flags)
+-#else
+-ssize_t splice(int __fdin, __off64_t *__offin, int __fdout,
+-	__off64_t *__offout, size_t __len, unsigned int __flags)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/stubs.c b/libc/sysdeps/linux/common/stubs.c
+new file mode 100644
+index 000000000..dd4a384f8
+--- /dev/null
++++ b/libc/sysdeps/linux/common/stubs.c
+@@ -0,0 +1,183 @@
++/*
++ * system call not available stub
++ *
++ * Copyright (C) 2009 Analog Devices Inc.
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <sys/syscall.h>
++
++#ifdef __UCLIBC_HAS_STUBS__
++
++attribute_hidden int enosys_stub(void);
++libc_hidden_proto(enosys_stub)
++
++attribute_hidden int enosys_stub(void)
++{
++	__set_errno(ENOSYS);
++	return -1;
++}
++libc_hidden_def(enosys_stub)
++
++#define make_stub(stub) \
++	link_warning(stub, #stub ": this function is not implemented") \
++	strong_alias(enosys_stub, stub)
++
++#ifndef __ARCH_USE_MMU__
++# undef __NR_fork
++#endif
++
++#ifndef __UCLIBC_HAS_LFS__
++# undef __NR_fadvise64
++# undef __NR_fadvise64_64
++# undef __NR_sync_file_range
++#endif
++
++#ifndef __NR_bdflush
++make_stub(bdflush)
++#endif
++
++#ifndef __NR_capget
++make_stub(capget)
++#endif
++
++#ifndef __NR_capset
++make_stub(capset)
++#endif
++
++#ifndef __NR_create_module
++make_stub(create_module)
++#endif
++
++#ifndef __NR_delete_module
++make_stub(delete_module)
++#endif
++
++#ifndef __NR_epoll_create
++make_stub(epoll_create)
++#endif
++
++#ifndef __NR_epoll_ctl
++make_stub(epoll_ctl)
++#endif
++
++#ifndef __NR_epoll_wait
++make_stub(epoll_wait)
++#endif
++
++#ifndef __NR_fdatasync
++make_stub(fdatasync)
++#endif
++
++#ifndef __NR_flistxattr
++make_stub(flistxattr)
++#endif
++
++#ifndef __NR_fork
++make_stub(fork)
++#endif
++
++#ifndef __NR_fgetxattr
++make_stub(fgetxattr)
++#endif
++
++#ifndef __NR_fremovexattr
++make_stub(fremovexattr)
++#endif
++
++#ifndef __NR_fsetxattr
++make_stub(fsetxattr)
++#endif
++
++#ifndef __NR_get_kernel_syms
++make_stub(get_kernel_syms)
++#endif
++
++#if !defined(__NR_getpgrp) && (defined(__NR_getpgid) && (defined(__NR_getpid) || defined(__NR_getxpid)))
++make_stub(getpgrp)
++#endif
++
++#ifndef __NR_getxattr
++make_stub(getxattr)
++#endif
++
++#ifndef __NR_init_module
++make_stub(init_module)
++#endif
++
++#ifndef __NR_lgetxattr
++make_stub(lgetxattr)
++#endif
++
++#ifndef __NR_listxattr
++make_stub(listxattr)
++#endif
++
++#ifndef __NR_llistxattr
++make_stub(llistxattr)
++#endif
++
++#ifndef __NR_lremovexattr
++make_stub(lremovexattr)
++#endif
++
++#ifndef __NR_lsetxattr
++make_stub(lsetxattr)
++#endif
++
++#ifndef __NR_pivot_root
++make_stub(pivot_root)
++#endif
++
++#ifndef __NR_query_module
++make_stub(query_module)
++#endif
++
++#ifndef __NR_removexattr
++make_stub(removexattr)
++#endif
++
++#ifndef __NR_sched_getaffinity
++make_stub(sched_getaffinity)
++#endif
++
++#ifndef __NR_sched_setaffinity
++make_stub(sched_setaffinity)
++#endif
++
++#ifndef __NR_setxattr
++make_stub(setxattr)
++#endif
++
++#if !defined(__NR_signalfd4) && !defined(__NR_signalfd)
++make_stub(signalfd)
++#endif
++
++#ifndef __NR_rt_sigtimedwait
++make_stub(sigtimedwait)
++make_stub(sigwaitinfo)
++#endif
++
++#ifndef __NR_splice
++make_stub(splice)
++#endif
++
++#ifndef __NR_sync_file_range
++make_stub(sync_file_range)
++#endif
++
++#if !defined(__NR_umount) && !defined(__NR_umount2)
++make_stub(umount)
++#endif
++
++#ifndef __NR_umount2
++make_stub(umount2)
++#endif
++
++#ifndef __NR_vmsplice
++make_stub(vmsplice)
++#endif
++
++#endif
+diff --git a/libc/sysdeps/linux/common/sync_file_range.c b/libc/sysdeps/linux/common/sync_file_range.c
+index 7e2deff41..d24403e1b 100644
+--- a/libc/sysdeps/linux/common/sync_file_range.c
++++ b/libc/sysdeps/linux/common/sync_file_range.c
+@@ -23,11 +23,5 @@ int sync_file_range(int fd, off64_t offset, off64_t nbytes, unsigned int flags)
+ 		__LONG_LONG_PAIR((long)(nbytes >> 32), (long)(nbytes & 0xffffffff)),
+ 		flags);
+ }
+-#elif defined __UCLIBC_HAS_STUBS__
+-int sync_file_range(int fd, __off64_t offset, __off64_t nbytes, unsigned int flags)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/umount.c b/libc/sysdeps/linux/common/umount.c
+index 453ecd27b..a084d29bd 100644
+--- a/libc/sysdeps/linux/common/umount.c
++++ b/libc/sysdeps/linux/common/umount.c
+@@ -28,14 +28,5 @@ int umount(const char *special_file)
+ 	return (__syscall_umount2(special_file, 0));
+ }
+ 
+-/* arch doesn't provide any umount syscall !? */
+-#else
+-
+-int umount(const char *special_file)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+-
+ #endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/umount2.c b/libc/sysdeps/linux/common/umount2.c
+index bd44717d4..2cc4a2338 100644
+--- a/libc/sysdeps/linux/common/umount2.c
++++ b/libc/sysdeps/linux/common/umount2.c
+@@ -13,11 +13,5 @@
+ #include <sys/mount.h>
+ #ifdef __NR_umount2	/* Old kernels don't have umount2 */
+ _syscall2(int, umount2, const char *, special_file, int, flags)
+-#else
+-int umount2(const char *special_file, int flags)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/vmsplice.c b/libc/sysdeps/linux/common/vmsplice.c
+index c5fd6c7ed..dd0640e1e 100644
+--- a/libc/sysdeps/linux/common/vmsplice.c
++++ b/libc/sysdeps/linux/common/vmsplice.c
+@@ -13,11 +13,4 @@
+ #ifdef __NR_vmsplice
+ _syscall4(ssize_t, vmsplice, int, __fdout, const struct iovec *, __iov,
+ 	size_t, __count, unsigned int, __flags)
+-#else
+-ssize_t vmsplice(int __fdout, const struct iovec *__iov, size_t __count,
+-	unsigned int __flags)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/common/xattr.c b/libc/sysdeps/linux/common/xattr.c
+index 8a4e3be29..dea471ad6 100644
+--- a/libc/sysdeps/linux/common/xattr.c
++++ b/libc/sysdeps/linux/common/xattr.c
+@@ -29,136 +29,58 @@
+ #ifdef __NR_setxattr
+ _syscall5(int, setxattr, const char *, path, const char *, name,
+ 	const void *, value, size_t, size, int, flags)
+-#else
+-int setxattr(__const char *__path, __const char *__name,
+-	__const void *__value, size_t __size, int __flags)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_lsetxattr
+ _syscall5(int, lsetxattr, const char *, path, const char *, name,
+ 	const void *, value, size_t, size, int, flags)
+-#else
+-int lsetxattr(__const char *__path, __const char *__name,
+-	__const void *__value, size_t __size, int __flags)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_fsetxattr
+ _syscall5(int, fsetxattr, int, filedes, const char *, name, const void *,
+ 	value, size_t, size, int, flags)
+-#else
+-int fsetxattr(int __fd, __const char *__name, __const void *__value,
+-	size_t __size, int __flags)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ /* gets */
+ #ifdef __NR_getxattr
+ _syscall4(ssize_t, getxattr, const char *, path, const char *, name,
+ 	void *, value, size_t, size)
+-#else
+-ssize_t getxattr(__const char *__path, __const char *__name, void *__value,
+-	size_t __size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_lgetxattr
+ _syscall4(ssize_t, lgetxattr, const char *, path, const char *, name,
+ 	void *, value, size_t, size)
+-#else
+-ssize_t lgetxattr(__const char *__path, __const char *__name,
+-	void *__value, size_t __size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_fgetxattr
+ _syscall4(ssize_t, fgetxattr, int, filedes, const char *, name, void *,
+ 	value, size_t, size)
+-#else
+-ssize_t fgetxattr(int __fd, __const char *__name, void *__value,
+-	size_t __size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ /* list */
+ #ifdef __NR_listxattr
+ _syscall3(ssize_t, listxattr, const char *, path, char *, list, size_t,
+ 	size)
+-#else
+-ssize_t listxattr(__const char *__path, char *__list, size_t __size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_llistxattr
+ _syscall3(ssize_t, llistxattr, const char *, path, char *, list, size_t,
+ 	size)
+-#else
+-ssize_t llistxattr(__const char *__path, char *__list, size_t __size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_flistxattr
+ _syscall3(ssize_t, flistxattr, int, filedes, char *, list, size_t, size)
+-#else
+-ssize_t flistxattr(int __fd, char *__list, size_t __size)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ /* remove */
+ #ifdef __NR_removexattr
+ _syscall2(int, removexattr, const char *, path, const char *, name)
+-#else
+-int removexattr(__const char *__path, __const char *__name)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_lremovexattr
+ _syscall2(int, lremovexattr, const char *, path, const char *, name)
+-#else
+-int lremovexattr(__const char *__path, __const char *__name)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+ 
+ #ifdef __NR_fremovexattr
+ _syscall2(int, fremovexattr, int, filedes, const char *, name)
+-#else
+-int fremovexattr(int __fd, __const char *__name)
+-{
+-    __set_errno(ENOSYS);
+-    return -1;
+-}
+ #endif
+diff --git a/libc/sysdeps/linux/i386/posix_fadvise64.S b/libc/sysdeps/linux/i386/posix_fadvise64.S
+index 17f006aa8..b4aeff1f4 100644
+--- a/libc/sysdeps/linux/i386/posix_fadvise64.S
++++ b/libc/sysdeps/linux/i386/posix_fadvise64.S
+@@ -22,6 +22,8 @@
+ #include <bits/errno.h>
+ #include <sys/syscall.h>
+ 
++#if defined __NR_fadvise64_64
++
+ /* Was named __libc_posix_fadvise64 for some inexplicable reason.
+ ** google says only uclibc has *__libc*_posix_fadviseXXX,
+ ** so it cannot be compat with anything.
+@@ -33,7 +35,6 @@
+ .global posix_fadvise64
+ .type   posix_fadvise64,%function
+ posix_fadvise64:
+-#if defined __NR_fadvise64_64
+ 	/* Save regs  */
+ 	pushl	%ebp
+ 	pushl	%ebx
+@@ -91,10 +92,6 @@ overflow:
+ 	/* Returns 0 on success, else an error code.  */
+ 	negl	%eax
+ 
+-#elif defined __UCLIBC_HAS_STUBS__
+-	movl	$-ENOSYS, %eax
+-	jmp __syscall_error
+-#endif
+ 	/* Successful; return the syscall's value.  */
+ 	ret
+ 
+@@ -106,3 +103,5 @@ overflow:
+ ** weak_alias(__libc_posix_fadvise64,posix_fadvise64)
+ ** #endif
+ */
++
++#endif

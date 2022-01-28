@@ -1,0 +1,491 @@
+"2003-12-20 07:07:22 +0000"
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index 83694a824..e261794ab 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -31,12 +31,6 @@ config CONFIG_DUMPKMAP
+ 	  This program dumps the kernel's keyboard translation table to
+ 	  stdout, in binary format. You can then use loadkmap to load it.
+ 
+-config CONFIG_LOADACM
+-	bool "loadacm"
+-	default n
+-	help
+-	  This program loads an acm from standard input.
+-
+ config CONFIG_LOADFONT
+ 	bool "loadfont"
+ 	default n
+diff --git a/console-tools/Makefile.in b/console-tools/Makefile.in
+index 1c4ac5222..032b194f6 100644
+--- a/console-tools/Makefile.in
++++ b/console-tools/Makefile.in
+@@ -27,7 +27,6 @@ CONSOLETOOLS_DIR-$(CONFIG_CHVT)		+= chvt.o
+ CONSOLETOOLS_DIR-$(CONFIG_CLEAR)	+= clear.o
+ CONSOLETOOLS_DIR-$(CONFIG_DEALLOCVT)	+= deallocvt.o
+ CONSOLETOOLS_DIR-$(CONFIG_DUMPKMAP)	+= dumpkmap.o
+-CONSOLETOOLS_DIR-$(CONFIG_LOADACM)	+= loadacm.o
+ CONSOLETOOLS_DIR-$(CONFIG_LOADFONT)	+= loadfont.o
+ CONSOLETOOLS_DIR-$(CONFIG_LOADKMAP)	+= loadkmap.o
+ CONSOLETOOLS_DIR-$(CONFIG_OPENVT)	+= openvt.o
+diff --git a/console-tools/loadacm.c b/console-tools/loadacm.c
+deleted file mode 100644
+index edaf51afb..000000000
+--- a/console-tools/loadacm.c
++++ /dev/null
+@@ -1,354 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * Derived from
+- * mapscrn.c - version 0.92
+- *
+- * Was taken from console-tools and adapted by 
+- * Peter Novodvorsky <petya@logic.ru>
+- */
+-
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <memory.h>
+-#include <string.h>
+-#include <unistd.h>
+-#include <fcntl.h>
+-#include <assert.h>
+-#include <errno.h>
+-#include <signal.h>
+-#include <sys/kd.h>
+-#include <sys/types.h>
+-#include <sys/ioctl.h>
+-#include "busybox.h"
+-
+-typedef unsigned short unicode;
+-
+-static long int ctoi(unsigned char *s, int *is_unicode);
+-static int old_screen_map_read_ascii(FILE * fp, unsigned char buf[]);
+-static int uni_screen_map_read_ascii(FILE * fp, unicode buf[], int *is_unicode);
+-static unicode utf8_to_ucs2(char *buf);
+-static int screen_map_load(int fd, FILE * fp);
+-
+-int loadacm_main(int argc, char **argv)
+-{
+-	int fd;
+-
+-	if (argc>=2 && *argv[1]=='-') {
+-		bb_show_usage();
+-	}
+-
+-	fd = bb_xopen(CURRENT_VC, O_RDWR);
+-
+-	if (screen_map_load(fd, stdin)) {
+-		bb_perror_msg_and_die("Error loading acm");
+-	}
+-
+-	write(fd, "\033(K", 3);
+-
+-	return EXIT_SUCCESS;
+-}
+-
+-static int screen_map_load(int fd, FILE * fp)
+-{
+-	struct stat stbuf;
+-	unicode wbuf[E_TABSZ];
+-	unsigned char buf[E_TABSZ];
+-	int parse_failed = 0;
+-	int is_unicode;
+-
+-	if (fstat(fileno(fp), &stbuf))
+-		bb_perror_msg_and_die("Cannot stat map file");
+-
+-	/* first try a UTF screen-map: either ASCII (no restriction) or binary (regular file) */
+-	if (!
+-		(parse_failed =
+-		 (-1 == uni_screen_map_read_ascii(fp, wbuf, &is_unicode)))
+-|| (S_ISREG(stbuf.st_mode) && (stbuf.st_size == (sizeof(unicode) * E_TABSZ)))) {	/* test for binary UTF map by size */
+-		if (parse_failed) {
+-			if (-1 == fseek(fp, 0, SEEK_SET)) {
+-				if (errno == ESPIPE)
+-					bb_error_msg_and_die("16bit screen-map MUST be a regular file.");
+-				else
+-					bb_perror_msg_and_die("fseek failed reading binary 16bit screen-map");
+-			}
+-
+-			if (fread(wbuf, sizeof(unicode) * E_TABSZ, 1, fp) != 1)
+-				bb_perror_msg_and_die("Cannot read [new] map from file");
+-#if 0
+-			else
+-				bb_error_msg("Input screen-map is binary.");
+-#endif
+-		}
+-
+-		/* if it was effectively a 16-bit ASCII, OK, else try to read as 8-bit map */
+-		/* same if it was binary, ie. if parse_failed */
+-		if (parse_failed || is_unicode) {
+-			if (ioctl(fd, PIO_UNISCRNMAP, wbuf))
+-				bb_perror_msg_and_die("PIO_UNISCRNMAP ioctl");
+-			else
+-				return 0;
+-		}
+-	}
+-
+-	/* rewind... */
+-	if (-1 == fseek(fp, 0, SEEK_SET)) {
+-		if (errno == ESPIPE)
+-			bb_error_msg("Assuming 8bit screen-map - MUST be a regular file."),
+-				exit(1);
+-		else
+-			bb_perror_msg_and_die("fseek failed assuming 8bit screen-map");
+-	}
+-
+-	/* ... and try an old 8-bit screen-map */
+-	if (!(parse_failed = (-1 == old_screen_map_read_ascii(fp, buf))) ||
+-		(S_ISREG(stbuf.st_mode) && (stbuf.st_size == E_TABSZ))) {	/* test for binary old 8-bit map by size */
+-		if (parse_failed) {
+-			if (-1 == fseek(fp, 0, SEEK_SET)) {
+-				if (errno == ESPIPE)
+-					/* should not - it succedeed above */
+-					bb_error_msg_and_die("fseek() returned ESPIPE !");
+-				else
+-					bb_perror_msg_and_die("fseek for binary 8bit screen-map");
+-			}
+-
+-			if (fread(buf, E_TABSZ, 1, fp) != 1)
+-				bb_perror_msg_and_die("Cannot read [old] map from file");
+-#if 0
+-			else
+-				bb_error_msg("Input screen-map is binary.");
+-#endif
+-		}
+-
+-		if (ioctl(fd, PIO_SCRNMAP, buf))
+-			bb_perror_msg_and_die("PIO_SCRNMAP ioctl");
+-		else
+-			return 0;
+-	}
+-	bb_error_msg("Error parsing symbolic map");
+-	return(1);
+-}
+-
+-
+-/*
+- * - reads `fp' as a 16-bit ASCII SFM file.
+- * - returns -1 on error.
+- * - returns it in `unicode' in an E_TABSZ-elements array.
+- * - sets `*is_unicode' flagiff there were any non-8-bit
+- *   (ie. real 16-bit) mapping.
+- *
+- * FIXME: ignores everything after second word
+- */
+-static int uni_screen_map_read_ascii(FILE * fp, unicode buf[], int *is_unicode)
+-{
+-	char buffer[256];			/* line buffer reading file */
+-	char *p, *q;				/* 1st + 2nd words in line */
+-	int in, on;					/* the same, as numbers */
+-	int tmp_is_unicode;			/* tmp for is_unicode calculation */
+-	int i;						/* loop index - result holder */
+-	int ret_code = 0;			/* return code */
+-	sigset_t acmsigset, old_sigset;
+-
+-	assert(is_unicode);
+-
+-	*is_unicode = 0;
+-
+-	/* first 128 codes defaults to ASCII */
+-	for (i = 0; i < 128; i++)
+-		buf[i] = i;
+-	/* remaining defaults to replacement char (usually E_TABSZ = 256) */
+-	for (; i < E_TABSZ; i++)
+-		buf[i] = 0xfffd;
+-
+-	/* block SIGCHLD */
+-	sigemptyset(&acmsigset);
+-	sigaddset(&acmsigset, SIGCHLD);
+-	sigprocmask(SIG_BLOCK, &acmsigset, &old_sigset);
+-
+-	do {
+-		if (NULL == fgets(buffer, sizeof(buffer), fp)) {
+-			if (feof(fp))
+-				break;
+-			else
+-				bb_perror_msg_and_die("uni_screen_map_read_ascii() can't read line");
+-		}
+-
+-		/* get "charset-relative charcode", stripping leading spaces */
+-		p = strtok(buffer, " \t\n");
+-
+-		/* skip empty lines and comments */
+-		if (!p || *p == '#')
+-			continue;
+-
+-		/* get unicode mapping */
+-		q = strtok(NULL, " \t\n");
+-		if (q) {
+-			in = ctoi(p, NULL);
+-			if (in < 0 || in > 255) {
+-				ret_code = -1;
+-				break;
+-			}
+-
+-			on = ctoi(q, &tmp_is_unicode);
+-			if (in < 0 && on > 65535) {
+-				ret_code = -1;
+-				break;
+-			}
+-
+-			*is_unicode |= tmp_is_unicode;
+-			buf[in] = on;
+-		} else {
+-			ret_code = -1;
+-			break;
+-		}
+-	}
+-	while (1);					/* terminated by break on feof() */
+-
+-	/* restore sig mask */
+-	sigprocmask(SIG_SETMASK, &old_sigset, NULL);
+-
+-	return ret_code;
+-}
+-
+-
+-static int old_screen_map_read_ascii(FILE * fp, unsigned char buf[])
+-{
+-	char buffer[256];
+-	int in, on;
+-	char *p, *q;
+-
+-	for (in = 0; in < 256; in++)
+-		buf[in] = in;
+-
+-	while (fgets(buffer, sizeof(buffer) - 1, fp)) {
+-		p = strtok(buffer, " \t\n");
+-
+-		if (!p || *p == '#')
+-			continue;
+-
+-		q = strtok(NULL, " \t\n#");
+-		if (q) {
+-			in = ctoi(p, NULL);
+-			if (in < 0 || in > 255)
+-				return -1;
+-
+-			on = ctoi(q, NULL);
+-			if (in < 0 && on > 255)
+-				return -1;
+-
+-			buf[in] = on;
+-		} else
+-			return -1;
+-	}
+-
+-	return (0);
+-}
+-
+-
+-/*
+- * - converts a string into an int.
+- * - supports dec and hex bytes, hex UCS2, single-quoted byte and UTF8 chars.
+- * - returns the converted value
+- * - if `is_unicode != NULL', use it to tell whether it was unicode
+- *
+- * CAVEAT: will report valid UTF mappings using only 1 byte as 8-bit ones.
+- */
+-static long int ctoi(unsigned char *s, int *is_unicode)
+-{
+-	int i;
+-	size_t ls;
+-
+-	ls = strlen(s);
+-	if (is_unicode)
+-		*is_unicode = 0;
+-
+-	/* hex-specified UCS2 */
+-	if ((strncmp(s, "U+", 2) == 0) &&
+-		(strspn(s + 2, "0123456789abcdefABCDEF") == ls - 2)) {
+-		sscanf(s + 2, "%x", &i);
+-		if (is_unicode)
+-			*is_unicode = 1;
+-	}
+-
+-	/* hex-specified byte */
+-	else if ((ls <= 4) && (strncmp(s, "0x", 2) == 0) &&
+-			 (strspn(s + 2, "0123456789abcdefABCDEF") == ls - 2))
+-		sscanf(s + 2, "%x", &i);
+-
+-	/* oct-specified number (byte) */
+-	else if ((*s == '0') && (strspn(s, "01234567") == ls))
+-		sscanf(s, "%o", &i);
+-
+-	/* dec-specified number (byte) */
+-	else if (strspn(s, "0123456789") == ls)
+-		sscanf(s, "%d", &i);
+-
+-	/* single-byte quoted char */
+-	else if ((strlen(s) == 3) && (s[0] == '\'') && (s[2] == '\''))
+-		i = s[1];
+-
+-	/* multi-byte UTF8 quoted char */
+-	else if ((s[0] == '\'') && (s[ls - 1] == '\'')) {
+-		s[ls - 1] = 0;			/* ensure we'll not "parse UTF too far" */
+-		i = utf8_to_ucs2(s + 1);
+-		if (is_unicode)
+-			*is_unicode = 1;
+-	} else
+-		return (-1);
+-
+-	return (i);
+-}
+-
+-
+-static unicode utf8_to_ucs2(char *buf)
+-{
+-	int utf_count = 0;
+-	long utf_char = 0;
+-	unicode tc = 0;
+-	unsigned char c;
+-
+-	do {
+-		c = *buf;
+-		buf++;
+-
+-		/* if byte should be part of multi-byte sequence */
+-		if (c & 0x80) {
+-			/* if we have already started to parse a UTF8 sequence */
+-			if (utf_count > 0 && (c & 0xc0) == 0x80) {
+-				utf_char = (utf_char << 6) | (c & 0x3f);
+-				utf_count--;
+-				if (utf_count == 0)
+-					tc = utf_char;
+-				else
+-					continue;
+-			} else {			/* Possibly 1st char of a UTF8 sequence */
+-
+-				if ((c & 0xe0) == 0xc0) {
+-					utf_count = 1;
+-					utf_char = (c & 0x1f);
+-				} else if ((c & 0xf0) == 0xe0) {
+-					utf_count = 2;
+-					utf_char = (c & 0x0f);
+-				} else if ((c & 0xf8) == 0xf0) {
+-					utf_count = 3;
+-					utf_char = (c & 0x07);
+-				} else if ((c & 0xfc) == 0xf8) {
+-					utf_count = 4;
+-					utf_char = (c & 0x03);
+-				} else if ((c & 0xfe) == 0xfc) {
+-					utf_count = 5;
+-					utf_char = (c & 0x01);
+-				} else
+-					utf_count = 0;
+-				continue;
+-			}
+-		} else {				/* not part of multi-byte sequence - treat as ASCII
+-								   * this makes incomplete sequences to be ignored
+-								 */
+-			tc = c;
+-			utf_count = 0;
+-		}
+-	}
+-	while (utf_count);
+-
+-	return tc;
+-}
+diff --git a/console-tools/reset.c b/console-tools/reset.c
+index a3f01aab0..3f9ae984d 100644
+--- a/console-tools/reset.c
++++ b/console-tools/reset.c
+@@ -25,11 +25,21 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ #include "busybox.h"
+ 
+ extern int reset_main(int argc, char **argv)
+ {
+-	printf("\033[?25h\033c\033[J");
++	if (isatty(0) || isatty(0) || isatty(0)) {
++		/* See 'man 4 console_codes' for details:
++		 * "ESC c"			-- Reset
++		 * "ESC ( K"		-- Select user mapping
++		 * "ESC [ J"		-- Erase display
++		 * "ESC [ 0 m"		-- Reset all Graphics Rendition display attributes
++		 * "ESC [ ? 25 h"	-- Make cursor visible.
++		 */
++		printf("\033c\033(K\033[J\033[0m\033[?25h");
++	}
+ 	return EXIT_SUCCESS;
+ }
+ 
+diff --git a/debian/config-deb b/debian/config-deb
+index 1b323c980..677b18560 100644
+--- a/debian/config-deb
++++ b/debian/config-deb
+@@ -158,7 +158,6 @@ CONFIG_FEATURE_HUMAN_READABLE=y
+ CONFIG_CLEAR=y
+ # CONFIG_DEALLOCVT is not set
+ # CONFIG_DUMPKMAP is not set
+-# CONFIG_LOADACM is not set
+ # CONFIG_LOADFONT is not set
+ CONFIG_LOADKMAP=y
+ # CONFIG_OPENVT is not set
+diff --git a/debian/config-static b/debian/config-static
+index 6eafbc7e9..3ca24b173 100644
+--- a/debian/config-static
++++ b/debian/config-static
+@@ -173,7 +173,6 @@ CONFIG_CHVT=y
+ CONFIG_CLEAR=y
+ CONFIG_DEALLOCVT=y
+ CONFIG_DUMPKMAP=y
+-CONFIG_LOADACM=y
+ CONFIG_LOADFONT=y
+ CONFIG_LOADKMAP=y
+ CONFIG_OPENVT=y
+diff --git a/debian/config-udeb b/debian/config-udeb
+index a99383094..cca6ff9e8 100644
+--- a/debian/config-udeb
++++ b/debian/config-udeb
+@@ -161,7 +161,6 @@ CONFIG_FEATURE_HUMAN_READABLE=y
+ # CONFIG_CLEAR is not set
+ # CONFIG_DEALLOCVT is not set
+ # CONFIG_DUMPKMAP is not set
+-# CONFIG_LOADACM is not set
+ # CONFIG_LOADFONT is not set
+ # CONFIG_LOADKMAP is not set
+ # CONFIG_OPENVT is not set
+diff --git a/debian/config-udeb-linux-i386 b/debian/config-udeb-linux-i386
+index 678a6a193..90548ef9d 100644
+--- a/debian/config-udeb-linux-i386
++++ b/debian/config-udeb-linux-i386
+@@ -161,7 +161,6 @@ CONFIG_FEATURE_HUMAN_READABLE=y
+ # CONFIG_CLEAR is not set
+ # CONFIG_DEALLOCVT is not set
+ # CONFIG_DUMPKMAP is not set
+-# CONFIG_LOADACM is not set
+ # CONFIG_LOADFONT is not set
+ # CONFIG_LOADKMAP is not set
+ # CONFIG_OPENVT is not set
+diff --git a/include/applets.h b/include/applets.h
+index 5449777b1..8a20758f9 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -331,9 +331,6 @@
+ #ifdef CONFIG_LN
+ 	APPLET(ln, ln_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+-#ifdef CONFIG_LOADACM
+-	APPLET(loadacm, loadacm_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+-#endif
+ #ifdef CONFIG_LOADFONT
+ 	APPLET(loadfont, loadfont_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/sysdeps/linux/defconfig b/sysdeps/linux/defconfig
+index c1c43cee5..99f7f8f07 100644
+--- a/sysdeps/linux/defconfig
++++ b/sysdeps/linux/defconfig
+@@ -160,7 +160,6 @@ CONFIG_FEATURE_HUMAN_READABLE=y
+ CONFIG_CLEAR=y
+ # CONFIG_DEALLOCVT is not set
+ # CONFIG_DUMPKMAP is not set
+-# CONFIG_LOADACM is not set
+ # CONFIG_LOADFONT is not set
+ # CONFIG_LOADKMAP is not set
+ # CONFIG_OPENVT is not set

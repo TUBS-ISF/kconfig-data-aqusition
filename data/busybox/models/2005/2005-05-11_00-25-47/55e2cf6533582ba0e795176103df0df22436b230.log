@@ -1,0 +1,363 @@
+"2005-05-11 00:25:47 +0000"
+diff --git a/AUTHORS b/AUTHORS
+index ebf57b619..67015627c 100644
+--- a/AUTHORS
++++ b/AUTHORS
+@@ -8,6 +8,9 @@ incorrect, _please_ let me know.
+ 
+ -----------
+ 
++Peter Willis <psyphreak@phreaker.net>
++    eject
++
+ Emanuele Aina <emanuele.aina@tiscali.it>
+     run-parts
+ 
+@@ -139,5 +142,6 @@ Enrique Zanardi <ezanardi@ull.es>
+     tarcat (since removed), loadkmap, various fixes, Debian maintenance
+ 
+ Tito Ragusa <farmatito@tiscali.it>
+-    devfsd and size optimizations in strings, openvt, chvt, deallocvt, hdparm and fdformat.
++    devfsd and size optimizations in strings, openvt, chvt, deallocvt, hdparm,
++    fdformat, lsattr, chattr, id and eject.
+ 
+diff --git a/include/applets.h b/include/applets.h
+index 7f6f75864..3f411c269 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -182,6 +182,9 @@
+ #if defined(CONFIG_FEATURE_GREP_EGREP_ALIAS)
+ 	APPLET_NOUSAGE("egrep", grep_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_EJECT
++	APPLET(eject, eject_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_ENV
+ 	APPLET(env, env_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 1ef79df61..316772ea2 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -556,6 +556,19 @@
+ 	"$ echo \"Erik\\nis\\ncool\"\n" \
+ 	"Erik\\nis\\ncool\n")
+ 
++#ifdef CONFIG_FEATURE_EJECT_LONG_OPTIONS
++# define USAGE_EJECT_TRAYCLOSE ",trayclose"
++#else
++# define USAGE_EJECT_TRAYCLOSE ""
++#endif
++
++#define eject_trivial_usage \
++	"[-t] [DEVICE]"
++#define eject_full_usage \
++	"Eject specified DEVICE (or default /dev/cdrom).\n\n" \
++	"Options:\n" \
++	"\tt" USAGE_EJECT_TRAYCLOSE "\tclose tray"
++
+ #define env_trivial_usage \
+ 	"[-iu] [-] [name=value]... [command]"
+ #define env_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 77e13e84e..710639aba 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -83,6 +83,19 @@ config CONFIG_DEVFSD_VERBOSE
+ 	help
+ 	  Increases logging to stderr or syslog.
+ 
++config CONFIG_EJECT
++	bool "eject"
++	default n
++	help
++	  Used to eject cdroms.  (defaults to /dev/cdrom)
++
++config CONFIG_FEATURE_EJECT_LONG_OPTIONS
++	bool "  Enable support for --trayclose long option (-t)"
++	default n
++	depends on CONFIG_EJECT
++	help
++	  Enable use of long options (like --trayclose for -t).
++
+ config CONFIG_LAST
+ 	bool "last"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index ddddf72b3..d714f4038 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -24,19 +24,20 @@ endif
+ srcdir=$(top_srcdir)/miscutils
+ 
+ MISCUTILS-y:=
+-MISCUTILS-$(CONFIG_ADJTIMEX)		+= adjtimex.o
+-MISCUTILS-$(CONFIG_CROND)               += crond.o
+-MISCUTILS-$(CONFIG_CRONTAB)             += crontab.o
+-MISCUTILS-$(CONFIG_DC)			+= dc.o
+-MISCUTILS-$(CONFIG_DEVFSD)		+= devfsd.o
+-MISCUTILS-$(CONFIG_HDPARM)		+= hdparm.o
+-MISCUTILS-$(CONFIG_LAST)		+= last.o
+-MISCUTILS-$(CONFIG_MAKEDEVS)		+= makedevs.o
+-MISCUTILS-$(CONFIG_MT)			+= mt.o
+-MISCUTILS-$(CONFIG_RX)			+= rx.o
+-MISCUTILS-$(CONFIG_STRINGS)		+= strings.o
+-MISCUTILS-$(CONFIG_TIME)		+= time.o
+-MISCUTILS-$(CONFIG_WATCHDOG)		+= watchdog.o
++MISCUTILS-$(CONFIG_ADJTIMEX)    += adjtimex.o
++MISCUTILS-$(CONFIG_CROND)       += crond.o
++MISCUTILS-$(CONFIG_CRONTAB)     += crontab.o
++MISCUTILS-$(CONFIG_DC)          += dc.o
++MISCUTILS-$(CONFIG_DEVFSD)      += devfsd.o
++MISCUTILS-$(CONFIG_EJECT)       += eject.o
++MISCUTILS-$(CONFIG_HDPARM)      += hdparm.o
++MISCUTILS-$(CONFIG_LAST)        += last.o
++MISCUTILS-$(CONFIG_MAKEDEVS)    += makedevs.o
++MISCUTILS-$(CONFIG_MT)          += mt.o
++MISCUTILS-$(CONFIG_RX)          += rx.o
++MISCUTILS-$(CONFIG_STRINGS)     += strings.o
++MISCUTILS-$(CONFIG_TIME)        += time.o
++MISCUTILS-$(CONFIG_WATCHDOG)    += watchdog.o
+ 
+ libraries-y+=$(MISCUTILS_DIR)$(MISCUTILS_AR)
+ 
+diff --git a/miscutils/eject.c b/miscutils/eject.c
+new file mode 100644
+index 000000000..cbfd115f7
+--- /dev/null
++++ b/miscutils/eject.c
+@@ -0,0 +1,64 @@
++/*
++ * eject implementation for busybox
++ *
++ * Copyright (C) 2004  Peter Willis <psyphreak@phreaker.net>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ *
++ */
++
++/*
++ * This is a simple hack of eject based on something Erik posted in #uclibc.
++ * Most of the dirty work blatantly ripped off from cat.c =)
++ */
++
++#include <stdio.h>
++#include <string.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <getopt.h>
++#include "busybox.h"
++
++/* various defines swiped from linux/cdrom.h */
++#define CDROMCLOSETRAY            0x5319  /* pendant of CDROMEJECT  */
++#define CDROMEJECT                0x5309  /* Ejects the cdrom media */
++#define DEFAULT_CDROM             "/dev/cdrom"
++/*#define CLOSE_TRAY              1*/
++
++extern int eject_main(int argc, char **argv)
++{
++	unsigned long flags;
++	
++#ifdef CONFIG_FEATURE_EJECT_LONG_OPTIONS
++	static const struct option eject_long_options[] = {
++		{ "trayclose", 0, 0, 't' },
++		{ 0,           0, 0, 0 }
++	};
++	bb_applet_long_options = eject_long_options;
++#endif
++
++	flags = bb_getopt_ulflags(argc, argv, "t");
++
++	if (ioctl(bb_xopen((argv[optind] ? argv[optind] : DEFAULT_CDROM), 
++	                   (O_RDONLY | O_NONBLOCK)), 
++	          ( flags /*& CLOSE_TRAY*/ ? CDROMCLOSETRAY : CDROMEJECT)))
++	{
++		bb_perror_msg_and_die(bb_msg_unknown);
++	}
++
++	return EXIT_SUCCESS;
++}
+diff --git a/patches/eject.diff b/patches/eject.diff
+deleted file mode 100644
+index 197b8cd02..000000000
+--- a/patches/eject.diff
++++ /dev/null
+@@ -1,164 +0,0 @@
+-Index: AUTHORS
+-===================================================================
+-RCS file: /var/cvs/busybox/AUTHORS,v
+-retrieving revision 1.40
+-diff -u -r1.40 AUTHORS
+---- a/AUTHORS	9 Oct 2003 21:19:21 -0000	1.40
+-+++ b/AUTHORS	5 Mar 2004 07:23:17 -0000
+-@@ -8,6 +8,9 @@
+-
+- -----------
+-
+-+Peter Willis <psyphreak@phreaker.net>
+-+    eject
+-+
+- Emanuele Aina <emanuele.aina@tiscali.it>
+- 	run-parts
+-
+-Index: coreutils/Config.in
+-===================================================================
+-RCS file: /var/cvs/busybox/coreutils/Config.in,v
+-retrieving revision 1.23
+-diff -u -r1.23 Config.in
+---- a/coreutils/Config.in	5 Mar 2004 06:47:25 -0000	1.23
+-+++ b/coreutils/Config.in	5 Mar 2004 07:23:18 -0000
+-@@ -164,6 +164,13 @@
+- 	  a command; without options it displays the current
+- 	  environment.
+-
+-+config CONFIG_EJECT
+-+	bool "eject"
+-+	default n
+-+	help
+-+	  ejects a cdrom drive.
+-+	  defaults to /dev/cdrom
+-+
+- config CONFIG_EXPR
+- 	bool "expr"
+- 	default n
+-Index: coreutils/Makefile.in
+-===================================================================
+-RCS file: /var/cvs/busybox/coreutils/Makefile.in,v
+-retrieving revision 1.8
+-diff -u -r1.8 Makefile.in
+---- a/coreutils/Makefile.in	27 Jan 2004 09:22:20 -0000	1.8
+-+++ b/coreutils/Makefile.in	5 Mar 2004 07:23:18 -0000
+-@@ -41,6 +41,7 @@
+- COREUTILS-$(CONFIG_DU)      	+= du.o
+- COREUTILS-$(CONFIG_ECHO)    	+= echo.o
+- COREUTILS-$(CONFIG_ENV)     	+= env.o
+-+COREUTILS-$(CONFIG_EJECT)   	+= eject.o
+- COREUTILS-$(CONFIG_EXPR)    	+= expr.o
+- COREUTILS-$(CONFIG_FALSE)   	+= false.o
+- COREUTILS-$(CONFIG_FOLD)    	+= fold.o
+-Index: coreutils/eject.c
+-===================================================================
+-RCS file: coreutils/eject.c
+-diff -N coreutils/eject.c
+---- /dev/null	1 Jan 1970 00:00:00 -0000
+-+++ b/coreutils/eject.c	5 Mar 2004 07:23:21 -0000
+-@@ -0,0 +1,66 @@
+-+/*
+-+ * eject implementation for busybox
+-+ *
+-+ * Copyright (C) 2004  Peter Willis <psyphreak@phreaker.net>
+-+ *
+-+ * This program is free software; you can redistribute it and/or modify
+-+ * it under the terms of the GNU General Public License as published by
+-+ * the Free Software Foundation; either version 2 of the License, or
+-+ * (at your option) any later version.
+-+ *
+-+ * This program is distributed in the hope that it will be useful,
+-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+-+ * General Public License for more details.
+-+ *
+-+ * You should have received a copy of the GNU General Public License
+-+ * along with this program; if not, write to the Free Software
+-+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+-+ *
+-+ */
+-+
+-+/*
+-+ * This is a simple hack of eject based on something Erik posted in #uclibc.
+-+ * Most of the dirty work blatantly ripped off from cat.c =)
+-+ */
+-+
+-+#include <stdio.h>
+-+#include <string.h>
+-+#include <sys/types.h>
+-+#include <sys/stat.h>
+-+#include <fcntl.h>
+-+#include <sys/ioctl.h>
+-+#include "busybox.h"
+-+#include <linux/cdrom.h> // needs to be after busybox.h or compile problems arise
+-+
+-+#define DEFAULT_CDROM "/dev/cdrom"
+-+
+-+extern int eject_main(int argc, char **argv)
+-+{
+-+	int fd;
+-+	int flag = CDROMEJECT;
+-+	int i = 1;
+-+	char *device = NULL;
+-+
+-+	/*
+-+	 * i'm too lazy to learn bb_getopt_ulflags and this is obscenely large
+-+	 * for just some argument parsing so mjn3 can clean it up later.
+-+	 * sorry, but PlumpOS 7.0-pre2 needs this asap :-/
+-+	 */
+-+	while (++i <= argc) {
+-+		if ( (! strncmp(argv[i-1],"-t",2)) || (! strncmp(argv[i-1],"--trayclose",11)) ) {
+-+			flag = CDROMCLOSETRAY;
+-+		} else {
+-+			device = argv[i-1];
+-+		}
+-+	}
+-+	if ( (fd = open(device == NULL ? DEFAULT_CDROM : device, O_RDONLY | O_NONBLOCK) ) < 0 ) {
+-+		perror("eject: Can't open device");
+-+		return(EXIT_FAILURE);
+-+	}
+-+	if (ioctl(fd, flag)) {
+-+		perror("eject: Can't eject cdrom");
+-+		return(EXIT_FAILURE);
+-+	}
+-+	return EXIT_SUCCESS;
+-+}
+-Index: include/applets.h
+-===================================================================
+-RCS file: /var/cvs/busybox/include/applets.h,v
+-retrieving revision 1.111
+-diff -u -r1.111 applets.h
+---- a/include/applets.h	27 Jan 2004 09:22:20 -0000	1.111
+-+++ b/include/applets.h	5 Mar 2004 07:23:21 -0000
+-@@ -178,6 +178,9 @@
+- #if defined(CONFIG_FEATURE_GREP_EGREP_ALIAS)
+- 	APPLET_NOUSAGE("egrep", grep_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+- #endif
+-+#ifdef CONFIG_EJECT
+-+	APPLET(eject, eject_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+-+#endif
+- #ifdef CONFIG_ENV
+- 	APPLET(env, env_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+- #endif
+-Index: include/usage.h
+-===================================================================
+-RCS file: /var/cvs/busybox/include/usage.h,v
+-retrieving revision 1.191
+-diff -u -r1.191 usage.h
+---- a/include/usage.h	25 Feb 2004 10:35:55 -0000	1.191
+-+++ b/include/usage.h	5 Mar 2004 07:23:29 -0000
+-@@ -537,6 +537,13 @@
+- 	"\t-, -i\tstart with an empty environment\n" \
+- 	"\t-u\tremove variable from the environment\n"
+-
+-+#define eject_trivial_usage \
+-+	"[-t] [FILE]"
+-+#define eject_full_usage \
+-+	"Ejects the specified FILE or /dev/cdrom if FILE is unspecified.\n\n" \
+-+	"Options:\n" \
+-+	"\t-t, --trayclose\tclose tray\n"
+-+
+- #define expr_trivial_usage \
+- 	"EXPRESSION"
+- #define expr_full_usage \

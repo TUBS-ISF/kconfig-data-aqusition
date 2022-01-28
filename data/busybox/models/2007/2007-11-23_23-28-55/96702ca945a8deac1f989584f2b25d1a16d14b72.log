@@ -1,0 +1,133 @@
+"2007-11-23 23:28:55 +0000"
+diff --git a/TODO b/TODO
+index 10ed7e0d5..52a4aad11 100644
+--- a/TODO
++++ b/TODO
+@@ -22,12 +22,9 @@ Rob Landley <rob@landley.net>:
+     The command shell situation is a big mess.  We have three or four different
+     shells that don't really share any code, and the "standalone shell" doesn't
+     work all that well (especially not in a chroot environment), due to apps not
+-    being reentrant.  I'm writing a new shell (bbsh) to unify the various
+-    shells and configurably add the minimal set of bash features people
+-    actually use.  The hardest part is it has to configure down as small as
+-    lash while providing lash's features.  The rest is easy in comparison.
+-  bzip2
+-    Compression-side support.
++    being reentrant.
++    lash is phased out. hush can be configured down to be nearly as small,
++    but less buggy :)
+   init
+     General cleanup (should use ENABLE_FEATURE_INIT_SYSLOG and ENABLE_FEATURE_INIT_DEBUG).
+   depmod
+@@ -35,8 +32,6 @@ Rob Landley <rob@landley.net>:
+     use of the depmod.pl (perl is to bloated for most embedded setups) and or orig
+     modutils. The orig depmod is rather pointless to have to add to a firmware image
+     in when we already have a insmod/rmmod and friends.
+-  Unify base64 handling.
+-    [done]
+   Do a SUSv3 audit
+     Look at the full Single Unix Specification version 3 (available online at
+     "http://www.opengroup.org/onlinepubs/009695399/nfindex.html") and
+diff --git a/include/applets.h b/include/applets.h
+index 757fa4a25..8fdf1a241 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -312,7 +312,6 @@ USE_SETSID(APPLET(setsid, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SETUIDGID(APPLET_ODDNAME(setuidgid, chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER, setuidgid))
+ USE_FEATURE_SH_IS_ASH(APPLET_NOUSAGE(sh, ash, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_HUSH(APPLET_NOUSAGE(sh, hush, _BB_DIR_BIN, _BB_SUID_NEVER))
+-USE_FEATURE_SH_IS_LASH(APPLET_NOUSAGE(sh, lash, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_MSH(APPLET_NOUSAGE(sh, msh, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SHA1SUM(APPLET_ODDNAME(sha1sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_NEVER, sha1sum))
+ USE_SLATTACH(APPLET(slattach, _BB_DIR_SBIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 82a17578a..d910e2bf6 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -3194,15 +3194,7 @@ USE_FEATURE_RUN_PARTS_FANCY("\n	-l	Prints names of all matching files even when
+        "[FILE]...\n" \
+        "or: sh -c command [args]..."
+ #define lash_full_usage \
+-       "The BusyBox LAme SHell (command interpreter)"
+-#define lash_notes_usage \
+-       "This command does not yet have proper documentation.\n\n" \
+-       "Use lash just as you would use any other shell. It properly handles pipes,\n" \
+-       "redirects, job control, can be used as the shell for scripts, and has a\n" \
+-       "sufficient set of builtins to do what is needed. It does not (yet) support\n" \
+-       "Bourne Shell syntax. If you need things like \"if-then-else\", \"while\", and such\n" \
+-       "use ash or bash. If you just need a very simple and extremely small shell,\n" \
+-       "this will do the job."
++       "lash is deprecated, please use hush"
+ 
+ #define last_trivial_usage \
+        ""
+diff --git a/shell/Config.in b/shell/Config.in
+index 312583e87..9328c9102 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -20,9 +20,9 @@ config FEATURE_SH_IS_HUSH
+ 	select HUSH
+ 	bool "hush"
+ 
+-config FEATURE_SH_IS_LASH
+-	select LASH
+-	bool "lash"
++####config FEATURE_SH_IS_LASH
++####	select LASH
++####	bool "lash"
+ 
+ config FEATURE_SH_IS_MSH
+ 	select MSH
+@@ -229,16 +229,9 @@ config HUSH_LOOPS
+ config LASH
+ 	bool "lash"
+ 	default n
+-	select TRUE
+-	select FALSE
+-	select TEST
++	select HUSH
+ 	help
+-	  lash is the very smallest shell (adds just 10k) and it is quite
+-	  usable as a command prompt, but it is not suitable for any but the
+-	  most trivial scripting (such as an initrd that calls insmod a few
+-	  times) since it does not understand any Bourne shell grammar.  It
+-	  does handle pipes, redirects, and job control though.  Adding in
+-	  command editing makes it a very nice lightweight command prompt.
++	  lash is deprecated and will be removed, please migrate to hush.
+ 
+ 
+ config MSH
+diff --git a/shell/Kbuild b/shell/Kbuild
+index 944eaff51..36a8ffd3a 100644
+--- a/shell/Kbuild
++++ b/shell/Kbuild
+@@ -7,7 +7,6 @@
+ lib-y:=
+ lib-$(CONFIG_ASH)  += ash.o
+ lib-$(CONFIG_HUSH) += hush.o
+-lib-$(CONFIG_LASH) += lash.o
+ lib-$(CONFIG_MSH)  += msh.o
+ 
+ lib-$(CONFIG_CTTYHACK) += cttyhack.o
+diff --git a/shell/hush.c b/shell/hush.c
+index 6bf4d1d19..b3c77aa14 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -3925,3 +3925,13 @@ int hush_main(int argc, char **argv)
+ #endif
+ 	hush_exit(opt ? opt : last_return_code);
+ }
++
++
++#if ENABLE_LASH
++int lash_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
++int lash_main(int argc, char **argv)
++{
++	//bb_error_msg("lash is deprecated, please use hush instead");
++	return hush_main(argc, argv);
++}
++#endif
+diff --git a/shell/lash.c b/shell/lash_unused.c
+similarity index 100%
+rename from shell/lash.c
+rename to shell/lash_unused.c

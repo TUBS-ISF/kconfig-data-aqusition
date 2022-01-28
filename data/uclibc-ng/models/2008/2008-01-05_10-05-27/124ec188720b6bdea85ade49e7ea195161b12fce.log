@@ -1,0 +1,5462 @@
+"2008-01-05 10:05:27 +0000"
+diff --git a/Rules.mak b/Rules.mak
+index c14a907d7..99d7efa2d 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -50,7 +50,8 @@ BUILD_CFLAGS = -O2 -Wall
+ export ARCH := $(shell uname -m | sed -e s/i.86/i386/ -e s/sun.*/sparc/ -e s/sparc.*/sparc/ \
+ 				  -e s/arm.*/arm/ -e s/sa110/arm/ -e s/sh.*/sh/ \
+ 				  -e s/s390x/s390/ -e s/parisc.*/hppa/ \
+-				  -e s/ppc.*/powerpc/ -e s/mips.*/mips/ )
++				  -e s/ppc.*/powerpc/ -e s/mips.*/mips/ \
++				  -e s/xtensa.*/xtensa/ )
+ 
+ 
+ #---------------------------------------------------------
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index ec4cb4bdc..37dc0ba1e 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -82,6 +82,9 @@ config TARGET_vax
+ config TARGET_x86_64
+ 	bool "x86_64"
+ 
++config TARGET_xtensa
++	bool "xtensa"
++
+ endchoice
+ 
+ 
+@@ -183,6 +186,10 @@ if TARGET_x86_64
+ source "extra/Configs/Config.x86_64"
+ endif
+ 
++if TARGET_xtensa
++source "extra/Configs/Config.xtensa"
++endif
++
+ config TARGET_SUBARCH
+ 	string
+ 	default "e500" if CONFIG_E500
+diff --git a/extra/Configs/Config.xtensa b/extra/Configs/Config.xtensa
+new file mode 100644
+index 000000000..75132471a
+--- /dev/null
++++ b/extra/Configs/Config.xtensa
+@@ -0,0 +1,12 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/kconfig-language.txt
++#
++
++config TARGET_ARCH
++	string
++	default "xtensa"
++
++config ARCH_CFLAGS
++	string
++
+diff --git a/include/elf.h b/include/elf.h
+index 5ce5c694a..4c6d09012 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -2977,6 +2977,64 @@ typedef Elf32_Addr Elf32_Conflict;
+ /* Keep this the last entry.  */
+ #define R_NIOS2_NUM				22
+ 
++/* Xtensa-specific declarations */
++
++/* Xtensa values for the Dyn d_tag field.  */
++#define DT_XTENSA_GOT_LOC_OFF	(DT_LOPROC + 0)
++#define DT_XTENSA_GOT_LOC_SZ	(DT_LOPROC + 1)
++#define DT_XTENSA_NUM		2
++
++/* Xtensa relocations.  */
++#define R_XTENSA_NONE		0
++#define R_XTENSA_32		1
++#define R_XTENSA_RTLD		2
++#define R_XTENSA_GLOB_DAT	3
++#define R_XTENSA_JMP_SLOT	4
++#define R_XTENSA_RELATIVE	5
++#define R_XTENSA_PLT		6
++#define R_XTENSA_OP0		8
++#define R_XTENSA_OP1		9
++#define R_XTENSA_OP2		10
++#define R_XTENSA_ASM_EXPAND	11
++#define R_XTENSA_ASM_SIMPLIFY	12
++#define R_XTENSA_GNU_VTINHERIT	15
++#define R_XTENSA_GNU_VTENTRY	16
++#define R_XTENSA_DIFF8		17
++#define R_XTENSA_DIFF16		18
++#define R_XTENSA_DIFF32		19
++#define R_XTENSA_SLOT0_OP	20
++#define R_XTENSA_SLOT1_OP	21
++#define R_XTENSA_SLOT2_OP	22
++#define R_XTENSA_SLOT3_OP	23
++#define R_XTENSA_SLOT4_OP	24
++#define R_XTENSA_SLOT5_OP	25
++#define R_XTENSA_SLOT6_OP	26
++#define R_XTENSA_SLOT7_OP	27
++#define R_XTENSA_SLOT8_OP	28
++#define R_XTENSA_SLOT9_OP	29
++#define R_XTENSA_SLOT10_OP	30
++#define R_XTENSA_SLOT11_OP	31
++#define R_XTENSA_SLOT12_OP	32
++#define R_XTENSA_SLOT13_OP	33
++#define R_XTENSA_SLOT14_OP	34
++#define R_XTENSA_SLOT0_ALT	35
++#define R_XTENSA_SLOT1_ALT	36
++#define R_XTENSA_SLOT2_ALT	37
++#define R_XTENSA_SLOT3_ALT	38
++#define R_XTENSA_SLOT4_ALT	39
++#define R_XTENSA_SLOT5_ALT	40
++#define R_XTENSA_SLOT6_ALT	41
++#define R_XTENSA_SLOT7_ALT	42
++#define R_XTENSA_SLOT8_ALT	43
++#define R_XTENSA_SLOT9_ALT	44
++#define R_XTENSA_SLOT10_ALT	45
++#define R_XTENSA_SLOT11_ALT	46
++#define R_XTENSA_SLOT12_ALT	47
++#define R_XTENSA_SLOT13_ALT	48
++#define R_XTENSA_SLOT14_ALT	49
++/* Keep this the last entry.  */
++#define R_XTENSA_NUM		50
++
+ __END_DECLS
+ 
+ #endif	/* elf.h */
+diff --git a/ldso/include/dl-string.h b/ldso/include/dl-string.h
+index bf993b29c..746bd91c6 100644
+--- a/ldso/include/dl-string.h
++++ b/ldso/include/dl-string.h
+@@ -286,7 +286,7 @@ static __always_inline char * _dl_simple_ltoahex(char * local, unsigned long i)
+  * This requires that load_addr must already be defined... */
+ #if defined(mc68000)  || defined(__arm__) || defined(__thumb__) || \
+     defined(__mips__) || defined(__sh__)  || defined(__powerpc__) || \
+-    defined(__avr32__)
++    defined(__avr32__) || defined(__xtensa__)
+ # define CONSTANT_STRING_GOT_FIXUP(X) \
+ 	if ((X) < (const char *) load_addr) (X) += load_addr
+ # define NO_EARLY_SEND_STDERR
+diff --git a/ldso/ldso/xtensa/dl-debug.h b/ldso/ldso/xtensa/dl-debug.h
+new file mode 100644
+index 000000000..327defc07
+--- /dev/null
++++ b/ldso/ldso/xtensa/dl-debug.h
+@@ -0,0 +1,61 @@
++/* vi: set sw=4 ts=4: */
++/* Xtensa ELF shared library loader suppport
++ *
++ * Copyright (C) 2007 Tensilica Inc.
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++static const char *_dl_reltypes_tab[] =
++{
++	"R_XTENSA_NONE",
++	"R_XTENSA_32",
++	"R_XTENSA_RTLD",
++	"R_XTENSA_GLOB_DAT",
++	"R_XTENSA_JMP_SLOT",
++	"R_XTENSA_RELATIVE",
++	"R_XTENSA_PLT",
++	"R_XTENSA_UNUSED7",
++	"R_XTENSA_OP0",
++	"R_XTENSA_OP1",
++	"R_XTENSA_OP2",
++	"R_XTENSA_ASM_EXPAND",
++	"R_XTENSA_ASM_SIMPLIFY",
++	"R_XTENSA_UNUSED13",
++	"R_XTENSA_UNUSED14",
++	"R_XTENSA_GNU_VTINHERIT",
++	"R_XTENSA_GNU_VTENTRY",
++	"R_XTENSA_DIFF8",
++	"R_XTENSA_DIFF16",
++	"R_XTENSA_DIFF32",
++	"R_XTENSA_SLOT0_OP",
++	"R_XTENSA_SLOT1_OP",
++	"R_XTENSA_SLOT2_OP",
++	"R_XTENSA_SLOT3_OP",
++	"R_XTENSA_SLOT4_OP",
++	"R_XTENSA_SLOT5_OP",
++	"R_XTENSA_SLOT6_OP",
++	"R_XTENSA_SLOT7_OP",
++	"R_XTENSA_SLOT8_OP",
++	"R_XTENSA_SLOT9_OP",
++	"R_XTENSA_SLOT10_OP",
++	"R_XTENSA_SLOT11_OP",
++	"R_XTENSA_SLOT12_OP",
++	"R_XTENSA_SLOT13_OP",
++	"R_XTENSA_SLOT14_OP",
++	"R_XTENSA_SLOT0_ALT",
++	"R_XTENSA_SLOT1_ALT",
++	"R_XTENSA_SLOT2_ALT",
++	"R_XTENSA_SLOT3_ALT",
++	"R_XTENSA_SLOT4_ALT",
++	"R_XTENSA_SLOT5_ALT",
++	"R_XTENSA_SLOT6_ALT",
++	"R_XTENSA_SLOT7_ALT",
++	"R_XTENSA_SLOT8_ALT",
++	"R_XTENSA_SLOT9_ALT",
++	"R_XTENSA_SLOT10_ALT",
++	"R_XTENSA_SLOT11_ALT",
++	"R_XTENSA_SLOT12_ALT",
++	"R_XTENSA_SLOT13_ALT",
++	"R_XTENSA_SLOT14_ALT"
++};
+diff --git a/ldso/ldso/xtensa/dl-startup.h b/ldso/ldso/xtensa/dl-startup.h
+new file mode 100644
+index 000000000..2fd012846
+--- /dev/null
++++ b/ldso/ldso/xtensa/dl-startup.h
+@@ -0,0 +1,106 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * Xtensa ELF code used by dl-startup.c.
++ *
++ * Copyright (C) 2007 Tensilica Inc.
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ * Parts taken from glibc/sysdeps/xtensa/dl-machine.h. 
++ */
++
++__asm__ (
++    "	.text\n"
++    "	.align  4\n"
++    "	.global _start\n"
++    "	.type   _start, @function\n"
++    "_start:\n"
++    "	# Compute load offset in a2: the GOT has not yet been relocated\n"
++    "	# but the entries for local symbols contain the relative offsets\n"
++    "	# and we can explicitly add the load offset in this code.\n"
++    "	_call0  0f\n"
++    "	.align  4\n"
++    "0:	movi    a3, _start+3\n"
++    "	sub     a2, a0, a3\n"
++    "	# Make sure a0 is cleared to mark the top of stack.\n"
++    "	movi    a0, 0\n"
++    "	# user_entry_point = _dl_start(pointer to argument block)\n"
++    "	movi    a4, _dl_start\n"
++    "	mov     a6, sp\n"
++    "	add     a4, a4, a2\n"
++    "	callx4  a4\n"
++    "	# Save user_entry_point so we can jump to it.\n"
++    "	mov     a3, a6\n"
++    "	l32i    a7, sp, 0   # load argc\n"
++    "	# Load _dl_skip_args into a4.\n"
++    "	movi    a4, _dl_skip_args\n"
++    "	l32i    a4, a4, 0\n"
++    "	bnez    a4, .Lfixup_stack\n"
++    ".Lfixup_stack_ret:\n"
++    "	# Pass finalizer (_dl_fini) in a2 to the user entry point.\n"
++    "	movi    a2, _dl_fini\n"
++    "	# Jump to user's entry point (_start).\n"
++    "	jx      a3\n"
++    ".Lfixup_stack:\n"
++    "	# argc -= _dl_skip_args (with argc @ sp+0)\n"
++    "	sub     a7, a7, a4\n"
++    "	s32i    a7, sp, 0\n"
++    "	# Shift everything by _dl_skip_args.\n"
++    "	addi    a5, sp, 4   # a5 = destination ptr = argv\n"
++    "	add     a4, a5, a4  # a4 = source ptr = argv + _dl_skip_args\n"
++    "	# Shift argv.\n"
++    "1:	l32i    a6, a4, 0\n"
++    "	addi    a4, a4, 4\n"
++    "	s32i    a6, a5, 0\n"
++    "	addi    a5, a5, 4\n"
++    "	bnez    a6, 1b\n"
++    "	# Shift envp.\n"
++    "2:	l32i    a6, a4, 0\n"
++    "	addi    a4, a4, 4\n"
++    "	s32i    a6, a5, 0\n"
++    "	addi    a5, a5, 4\n"
++    "	bnez    a6, 2b\n"
++    "	# Shift auxiliary table.\n"
++    "3:	l32i    a6, a4, 0\n"
++    "	l32i    a8, a4, 4\n"
++    "	addi    a4, a4, 8\n"
++    "	s32i    a6, a5, 0\n"
++    "	s32i    a8, a5, 4\n"
++    "	addi    a5, a5, 8\n"
++    "	bnez    a6, 3b\n"
++    "	j      .Lfixup_stack_ret");
++
++/* Get a pointer to the argv value.  */
++#define GET_ARGV(ARGVP, ARGS) ARGVP = (((unsigned long *) ARGS) + 1)
++
++/* Function calls are not safe until the GOT relocations have been done.  */
++#define NO_FUNCS_BEFORE_BOOTSTRAP
++
++#define PERFORM_BOOTSTRAP_GOT(tpnt) \
++do { \
++	xtensa_got_location *got_loc; \
++	unsigned long l_addr = tpnt->loadaddr; \
++	Elf32_Word relative_count; \
++	unsigned long rel_addr; \
++	int x; \
++\
++	got_loc = (xtensa_got_location *) \
++		(tpnt->dynamic_info[DT_XTENSA (GOT_LOC_OFF)] + l_addr); \
++\
++	for (x = 0; x < tpnt->dynamic_info[DT_XTENSA (GOT_LOC_SZ)]; x++) { \
++		Elf32_Addr got_start, got_end; \
++		got_start = got_loc[x].offset & ~(PAGE_SIZE - 1); \
++		got_end = ((got_loc[x].offset + got_loc[x].length + PAGE_SIZE - 1) \
++				   & ~(PAGE_SIZE - 1)); \
++		_dl_mprotect ((void *)(got_start + l_addr), got_end - got_start, \
++					  PROT_READ | PROT_WRITE | PROT_EXEC); \
++	} \
++\
++	/* The following is a stripped down version of the code following \
++	   the invocation of PERFORM_BOOTSTRAP_GOT in dl-startup.c.	 That \
++	   code is skipped when PERFORM_BOOTSTRAP_GOT is defined, so it has \
++	   to be done here instead.	 */ \
++	relative_count = tpnt->dynamic_info[DT_RELCONT_IDX]; \
++	rel_addr = tpnt->dynamic_info[DT_RELOC_TABLE_ADDR]; \
++	if (rel_addr) \
++	  elf_machine_relative(load_addr, rel_addr, relative_count); \
++} while (0)
+diff --git a/ldso/ldso/xtensa/dl-syscalls.h b/ldso/ldso/xtensa/dl-syscalls.h
+new file mode 100644
+index 000000000..4b42a57e0
+--- /dev/null
++++ b/ldso/ldso/xtensa/dl-syscalls.h
+@@ -0,0 +1,7 @@
++/* We can't use the real errno in ldso, since it has not yet
++ * been dynamicly linked in yet. */
++#include "sys/syscall.h"
++extern int _dl_errno;
++#undef __set_errno
++#define __set_errno(X) {(_dl_errno) = (X);}
++
+diff --git a/ldso/ldso/xtensa/dl-sysdep.h b/ldso/ldso/xtensa/dl-sysdep.h
+new file mode 100644
+index 000000000..afbbf3bfe
+--- /dev/null
++++ b/ldso/ldso/xtensa/dl-sysdep.h
+@@ -0,0 +1,132 @@
++/* Machine-dependent ELF dynamic relocation.
++   Parts copied from glibc/sysdeps/xtensa/dl-machine.h
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* Define this if the system uses RELOCA.  */
++#define ELF_USES_RELOCA
++#include <elf.h>
++#include <link.h>
++
++/* Translate a processor specific dynamic tag to the index
++   in l_info array.  */
++#define DT_XTENSA(x) (DT_XTENSA_##x - DT_LOPROC + DT_NUM + OS_NUM)
++
++typedef struct xtensa_got_location_struct {
++  Elf32_Off offset;
++  Elf32_Word length;
++} xtensa_got_location;
++
++/* Initialization sequence for the GOT.  */
++#define INIT_GOT(GOT_BASE, MODULE) \
++  do {									      \
++    xtensa_got_location *got_loc;					      \
++    Elf32_Addr l_addr = MODULE->loadaddr;				      \
++    int x;								      \
++									      \
++    got_loc = (xtensa_got_location *)					      \
++      (MODULE->dynamic_info[DT_XTENSA (GOT_LOC_OFF)] + l_addr);		      \
++									      \
++    for (x = 0; x < MODULE->dynamic_info[DT_XTENSA (GOT_LOC_SZ)]; x++)	      \
++      {									      \
++	Elf32_Addr got_start, got_end;					      \
++	got_start = got_loc[x].offset & ~(PAGE_SIZE - 1);		      \
++	got_end = ((got_loc[x].offset + got_loc[x].length + PAGE_SIZE - 1)    \
++		   & ~(PAGE_SIZE - 1));					      \
++	_dl_mprotect ((void *)(got_start + l_addr) , got_end - got_start,     \
++		      PROT_READ | PROT_WRITE | PROT_EXEC);		      \
++      }									      \
++									      \
++    /* Fill in first GOT entry according to the ABI.  */		      \
++    GOT_BASE[0] = (unsigned long) _dl_linux_resolve;			      \
++  } while (0)
++
++/* Parse dynamic info */
++#define ARCH_NUM 2
++#define ARCH_DYNAMIC_INFO(dpnt, dynamic, debug_addr) \
++  do {									\
++    if (dpnt->d_tag == DT_XTENSA_GOT_LOC_OFF)				\
++      dynamic[DT_XTENSA (GOT_LOC_OFF)] = dpnt->d_un.d_ptr;		\
++    else if (dpnt->d_tag == DT_XTENSA_GOT_LOC_SZ)			\
++      dynamic[DT_XTENSA (GOT_LOC_SZ)] = dpnt->d_un.d_val;		\
++  } while (0)
++
++/* Here we define the magic numbers that this dynamic loader should accept. */
++#define MAGIC1 EM_XTENSA
++#undef	MAGIC2
++
++/* Used for error messages. */
++#define ELF_TARGET "Xtensa"
++
++struct elf_resolve;
++extern unsigned long _dl_linux_resolver (struct elf_resolve *, int);
++
++/* 4096 bytes alignment */
++#define PAGE_ALIGN 0xfffff000
++#define ADDR_ALIGN 0xfff
++#define OFFS_ALIGN 0x7ffff000
++
++/* ELF_RTYPE_CLASS_PLT iff TYPE describes relocation of a PLT entry, so
++   undefined references should not be allowed to define the value.  */
++#define elf_machine_type_class(type) \
++  (((type) == R_XTENSA_JMP_SLOT) * ELF_RTYPE_CLASS_PLT)
++
++/* Return the link-time address of _DYNAMIC.  */
++static inline Elf32_Addr
++elf_machine_dynamic (void)
++{
++  /* This function is only used while bootstrapping the runtime linker.
++     The "_DYNAMIC" symbol is always local so its GOT entry will initially
++     contain the link-time address.  */
++  return (Elf32_Addr) &_DYNAMIC;
++}
++
++/* Return the run-time load address of the shared object.  */
++static inline Elf32_Addr
++elf_machine_load_address (void)
++{
++  Elf32_Addr addr, tmp;
++
++  /* At this point, the runtime linker is being bootstrapped and the GOT
++     entry used for ".Lhere" will contain the link address.  The CALL0 will
++     produce the dynamic address of ".Lhere" + 3.  Thus, the end result is
++     equal to "dynamic_address(.Lhere) - link_address(.Lhere)".  */
++  __asm__ ("\
++	movi	%0, .Lhere\n\
++	mov	%1, a0\n\
++.Lhere:	_call0	0f\n\
++	.align	4\n\
++0:	sub	%0, a0, %0\n\
++	mov	a0, %1"
++	   : "=a" (addr), "=a" (tmp));
++
++  return addr - 3;
++}
++
++static inline void
++elf_machine_relative (Elf32_Addr load_off, const Elf32_Addr rel_addr,
++		      Elf32_Word relative_count)
++{
++  Elf32_Rela *rpnt = (Elf32_Rela *) rel_addr;
++  while (relative_count--)
++    {
++      Elf32_Addr *const reloc_addr = (Elf32_Addr *) (load_off + rpnt->r_offset);
++      *reloc_addr += load_off + rpnt->r_addend;
++      rpnt++;
++    }
++}
+diff --git a/ldso/ldso/xtensa/elfinterp.c b/ldso/ldso/xtensa/elfinterp.c
+new file mode 100644
+index 000000000..a459431b1
+--- /dev/null
++++ b/ldso/ldso/xtensa/elfinterp.c
+@@ -0,0 +1,285 @@
++/* vi: set sw=4 ts=4: */
++/* Xtensa ELF shared library loader suppport
++ *
++ * Copyright (C) 2007 Tensilica Inc.
++ * Copyright (c) 1994-2000 Eric Youngdale, Peter MacDonald,
++ *                              David Engel, Hongjiu Lu and Mitch D'Souza
++ * Copyright (C) 2001-2004 Erik Andersen
++ *
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. The name of the above contributors may not be
++ *    used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#include "ldso.h"
++
++unsigned long
++_dl_linux_resolver (struct elf_resolve *tpnt, int reloc_entry)
++{
++	int reloc_type;
++	ELF_RELOC *this_reloc;
++	char *strtab;
++	Elf32_Sym *symtab;
++	int symtab_index;
++	char *rel_addr;
++	char *new_addr;
++	char **got_addr;
++	char *symname;
++
++	rel_addr = (char *) tpnt->dynamic_info[DT_JMPREL];
++	this_reloc = (ELF_RELOC *) (rel_addr + reloc_entry);
++	reloc_type = ELF32_R_TYPE (this_reloc->r_info);
++	symtab_index = ELF32_R_SYM (this_reloc->r_info);
++
++	symtab = (Elf32_Sym *) tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *) tpnt->dynamic_info[DT_STRTAB];
++	symname = strtab + symtab[symtab_index].st_name;
++
++	if (unlikely (reloc_type != R_XTENSA_JMP_SLOT)) {
++		_dl_dprintf (2, "%s: Incorrect relocation type in jump relocations\n",
++					 _dl_progname);
++		_dl_exit (1);
++	}
++
++	/* Address of the literal to fix up.  */
++	got_addr = (char **) (this_reloc->r_offset + tpnt->loadaddr);
++
++	/* Get the address of the GOT entry.  */
++	new_addr = _dl_find_hash (symname, tpnt->symbol_scope, tpnt,
++							  ELF_RTYPE_CLASS_PLT);
++	if (unlikely (!new_addr)) {
++		_dl_dprintf (2, "%s: can't resolve symbol '%s'\n",
++					 _dl_progname, symname);
++		_dl_exit (1);
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_bindings) {
++		_dl_dprintf (_dl_debug_file, "\nresolve function: %s", symname);
++		if (_dl_debug_detail)
++			_dl_dprintf (_dl_debug_file, "\n\tpatched %x ==> %x @ %x\n",
++						 *got_addr, new_addr, got_addr);
++	}
++	if (!_dl_debug_nofixups)
++		*got_addr = new_addr;
++#else
++	*got_addr = new_addr;
++#endif
++
++	return (unsigned long) new_addr;
++}
++
++
++static int
++_dl_parse (struct elf_resolve *tpnt, struct dyn_elf *scope,
++		   unsigned long rel_addr, unsigned long rel_size,
++		   int (*reloc_fnc) (struct elf_resolve *tpnt, struct dyn_elf *scope,
++							 ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab))
++{
++	unsigned int i;
++	char *strtab;
++	Elf32_Sym *symtab;
++	ELF_RELOC *rpnt;
++	int symtab_index;
++
++	/* Parse the relocation information.  */
++	rpnt = (ELF_RELOC *) rel_addr;
++	rel_size /= sizeof (ELF_RELOC);
++
++	symtab = (Elf32_Sym *) tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *) tpnt->dynamic_info[DT_STRTAB];
++
++	for (i = 0; i < rel_size; i++, rpnt++) {
++		int res;
++
++		symtab_index = ELF32_R_SYM (rpnt->r_info);
++
++		debug_sym (symtab, strtab, symtab_index);
++		debug_reloc (symtab, strtab, rpnt);
++
++		res = reloc_fnc (tpnt, scope, rpnt, symtab, strtab);
++
++		if (res == 0)
++			continue;
++
++		_dl_dprintf (2, "\n%s: ", _dl_progname);
++
++		if (symtab_index)
++			_dl_dprintf (2, "symbol '%s': ",
++						 strtab + symtab[symtab_index].st_name);
++
++		if (unlikely (res < 0)) {
++			int reloc_type = ELF32_R_TYPE (rpnt->r_info);
++#if defined (__SUPPORT_LD_DEBUG__)
++			_dl_dprintf (2, "can't handle reloc type %s\n",
++						 _dl_reltypes (reloc_type));
++#else
++			_dl_dprintf (2, "can't handle reloc type %x\n", reloc_type);
++#endif
++			_dl_exit (-res);
++		}
++		if (unlikely (res > 0)) {
++			_dl_dprintf (2, "can't resolve symbol\n");
++			return res;
++		}
++	}
++
++	return 0;
++}
++
++
++static int
++_dl_do_reloc (struct elf_resolve *tpnt, struct dyn_elf *scope,
++			  ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab)
++{
++	int reloc_type;
++	int symtab_index;
++	char *symname;
++	Elf32_Sym *sym;
++	Elf32_Addr *reloc_addr;
++	Elf32_Addr symbol_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	Elf32_Addr old_val;
++#endif
++
++	reloc_addr = (Elf32_Addr *) (tpnt->loadaddr + rpnt->r_offset);
++	reloc_type = ELF32_R_TYPE (rpnt->r_info);
++	symtab_index = ELF32_R_SYM (rpnt->r_info);
++	sym = &symtab[symtab_index];
++	symbol_addr = 0;
++	symname = strtab + sym->st_name;
++
++	if (symtab_index) {
++		symbol_addr = (Elf32_Addr)
++			_dl_find_hash (symname, scope, tpnt,
++						   elf_machine_type_class (reloc_type));
++
++		/*
++		 * We want to allow undefined references to weak symbols - this might
++		 * have been intentional.  We should not be linking local symbols
++		 * here, so all bases should be covered.
++		 */
++		if (unlikely (!symbol_addr &&
++					  ELF32_ST_BIND (sym->st_info) != STB_WEAK)) {
++			_dl_dprintf (2, "%s: can't resolve symbol '%s'\n",
++						 _dl_progname, symname);
++			_dl_exit (1);
++		}
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++	case R_XTENSA_NONE:
++		break;
++
++	case R_XTENSA_GLOB_DAT:
++	case R_XTENSA_JMP_SLOT:
++		*reloc_addr = symbol_addr + rpnt->r_addend;
++		break;
++
++	case R_XTENSA_RTLD:
++		if (rpnt->r_addend == 1) {
++			/* Grab the function pointer stashed at the beginning of the
++			   GOT by the GOT_INIT function.  */
++			*reloc_addr = *(Elf32_Addr *) tpnt->dynamic_info[DT_PLTGOT];
++		} else if (rpnt->r_addend == 2) {
++			/* Store the link map for the object.  */
++			*reloc_addr = (Elf32_Addr) tpnt;
++		} else {
++			_dl_exit (1);
++		}
++		break;
++
++	case R_XTENSA_RELATIVE:
++		*reloc_addr += tpnt->loadaddr + rpnt->r_addend;
++		break;
++
++	default:
++		return -1; /* Calls _dl_exit(1).  */
++	}
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail)
++		_dl_dprintf (_dl_debug_file, "\tpatched: %x ==> %x @ %x",
++					 old_val, *reloc_addr, reloc_addr);
++#endif
++
++	return 0;
++}
++
++
++static int
++_dl_do_lazy_reloc (struct elf_resolve *tpnt, struct dyn_elf *scope,
++				   ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab)
++{
++	int reloc_type;
++	Elf32_Addr *reloc_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	Elf32_Addr old_val;
++#endif
++
++	reloc_addr = (Elf32_Addr *) (tpnt->loadaddr + rpnt->r_offset);
++	reloc_type = ELF32_R_TYPE (rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++	case R_XTENSA_JMP_SLOT:
++		/* Perform a RELATIVE reloc on the GOT entry that transfers
++		   to the stub function.  */
++		*reloc_addr += tpnt->loadaddr;
++		break;
++	case R_XTENSA_NONE:
++		break;
++	default:
++		_dl_exit (1);
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail)
++		_dl_dprintf (_dl_debug_file, "\tpatched: %x ==> %x @ %x",
++					 old_val, *reloc_addr, reloc_addr);
++#endif
++	return 0;
++
++}
++
++void
++_dl_parse_lazy_relocation_information (struct dyn_elf *rpnt,
++									   unsigned long rel_addr,
++									   unsigned long rel_size)
++{
++	(void) _dl_parse (rpnt->dyn, NULL, rel_addr, rel_size, _dl_do_lazy_reloc);
++}
++
++int
++_dl_parse_relocation_information (struct dyn_elf *rpnt,
++								  unsigned long rel_addr,
++								  unsigned long rel_size)
++{
++	return _dl_parse (rpnt->dyn, rpnt->dyn->symbol_scope, rel_addr, rel_size,
++					  _dl_do_reloc);
++}
+diff --git a/ldso/ldso/xtensa/resolve.S b/ldso/ldso/xtensa/resolve.S
+new file mode 100644
+index 000000000..fb298391c
+--- /dev/null
++++ b/ldso/ldso/xtensa/resolve.S
+@@ -0,0 +1,61 @@
++/* Xtensa dynamic resolver.
++   Parts copied from glibc/sysdeps/xtensa/dl-trampoline.S
++   Copyright (C) 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#define MIN_FRAME_SIZE 32
++
++#ifdef __XTENSA_EB__
++#define XTENSA_IMM12_FLD_OFFSET 8
++#else /* __XTENSA_EL__ */
++#define XTENSA_IMM12_FLD_OFFSET 12
++#endif /* __XTENSA_EL__ */
++
++	.text
++	.align	4
++	.global	_dl_linux_resolve
++	.type	_dl_linux_resolve, @function
++_dl_linux_resolve:
++	/* Fix up the high 2 bits of the return address.  */
++	mov	a14, a0		// save a0 temporarily
++	_call0	0f
++	.align	4
++0:	extui	a13, a0, 30, 2
++	slli	a13, a13, 30
++	mov	a0, a14		// restore a0
++	slli	a12, a0, 2
++	srli	a12, a12, 2
++	or	a12, a12, a13
++
++	/* Call the fixup function.  */
++	movi	a8, _dl_linux_resolver
++	callx8	a8
++
++	/* Extract the target's frame size from the ENTRY instruction.  */
++	l32i	a11, a10, 0
++	extui	a11, a11, XTENSA_IMM12_FLD_OFFSET, 12
++	slli	a11, a11, 3
++
++	addi	a11, a11, -MIN_FRAME_SIZE
++	sub	a11, sp, a11
++	movsp	sp, a11
++
++	/* Jump to the next instruction past the ENTRY.  */
++	addi	a10, a10, 3
++	jx	a10
++	.size	_dl_linux_resolve, . - _dl_linux_resolve
+diff --git a/libc/string/xtensa/Makefile b/libc/string/xtensa/Makefile
+new file mode 100644
+index 000000000..0a95346fd
+--- /dev/null
++++ b/libc/string/xtensa/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir:=../../../
++top_builddir:=../../../
++all: objs
++include $(top_builddir)Rules.mak
++include ../Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libc/string/xtensa/memcpy.S b/libc/string/xtensa/memcpy.S
+new file mode 100644
+index 000000000..19f3a6818
+--- /dev/null
++++ b/libc/string/xtensa/memcpy.S
+@@ -0,0 +1,297 @@
++/* Optimized memcpy for Xtensa.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "../../sysdeps/linux/xtensa/sysdep.h"
++#include <bits/xtensa-config.h>
++
++	.macro	src_b	r, w0, w1
++#ifdef __XTENSA_EB__
++	src	\r, \w0, \w1
++#else
++	src	\r, \w1, \w0
++#endif
++	.endm
++
++	.macro	ssa8	r
++#ifdef __XTENSA_EB__
++	ssa8b	\r
++#else
++	ssa8l	\r
++#endif
++	.endm
++
++/* If the Xtensa Unaligned Load Exception option is not used, this
++   code can run a few cycles faster by relying on the low address bits
++   being ignored.  However, if the code is then run with an Xtensa ISS
++   client that checks for unaligned accesses, it will produce a lot of
++   warning messages.  Set this flag to disable the use of unaligned
++   accesses and keep the ISS happy.  */
++
++#define UNALIGNED_ADDRESSES_CHECKED 1
++
++/* Do not use .literal_position in the ENTRY macro.  */
++#undef LITERAL_POSITION
++#define LITERAL_POSITION
++
++
++/* void *memcpy (void *dst, const void *src, size_t len)
++
++   The algorithm is as follows:
++
++   If the destination is unaligned, align it by conditionally
++   copying 1- and/or 2-byte pieces.
++
++   If the source is aligned, copy 16 bytes with a loop, and then finish up
++   with 8, 4, 2, and 1-byte copies conditional on the length.
++
++   Else (if source is unaligned), do the same, but use SRC to align the
++   source data.
++
++   This code tries to use fall-through branches for the common
++   case of aligned source and destination and multiple of 4 (or 8) length.  */
++
++
++/* Byte by byte copy.  */
++
++	.text
++	.align	4
++	.literal_position
++__memcpy_aux:
++
++	/* Skip a byte to get 1 mod 4 alignment for LOOPNEZ
++	   (0 mod 4 alignment for LBEG).  */
++	.byte	0
++
++.Lbytecopy:
++#if XCHAL_HAVE_LOOPS
++	loopnez	a4, 2f
++#else
++	beqz	a4, 2f
++	add	a7, a3, a4	// a7 = end address for source
++#endif
++1:	l8ui	a6, a3, 0
++	addi	a3, a3, 1
++	s8i	a6, a5, 0
++	addi	a5, a5, 1
++#if !XCHAL_HAVE_LOOPS
++	blt	a3, a7, 1b
++#endif
++2:	retw
++
++
++/* Destination is unaligned.  */
++
++	.align	4
++.Ldst1mod2: // dst is only byte aligned
++
++	/* Do short copies byte-by-byte.  */
++	_bltui	a4, 7, .Lbytecopy
++
++	/* Copy 1 byte.  */
++	l8ui	a6, a3, 0
++	addi	a3, a3, 1
++	addi	a4, a4, -1
++	s8i	a6, a5, 0
++	addi	a5, a5, 1
++
++	/* Return to main algorithm if dst is now aligned.  */
++	_bbci.l	a5, 1, .Ldstaligned
++
++.Ldst2mod4: // dst has 16-bit alignment
++
++	/* Do short copies byte-by-byte.  */
++	_bltui	a4, 6, .Lbytecopy
++
++	/* Copy 2 bytes.  */
++	l8ui	a6, a3, 0
++	l8ui	a7, a3, 1
++	addi	a3, a3, 2
++	addi	a4, a4, -2
++	s8i	a6, a5, 0
++	s8i	a7, a5, 1
++	addi	a5, a5, 2
++
++	/* dst is now aligned; return to main algorithm.  */
++	j	.Ldstaligned
++
++
++ENTRY (memcpy)
++	/* a2 = dst, a3 = src, a4 = len */
++
++	mov	a5, a2		// copy dst so that a2 is return value
++	_bbsi.l	a2, 0, .Ldst1mod2
++	_bbsi.l	a2, 1, .Ldst2mod4
++.Ldstaligned:
++
++	/* Get number of loop iterations with 16B per iteration.  */
++	srli	a7, a4, 4
++
++	/* Check if source is aligned.  */
++	movi	a8, 3
++	_bany	a3, a8, .Lsrcunaligned
++
++	/* Destination and source are word-aligned, use word copy.  */
++#if XCHAL_HAVE_LOOPS
++	loopnez	a7, 2f
++#else
++	beqz	a7, 2f
++	slli	a8, a7, 4
++	add	a8, a8, a3	// a8 = end of last 16B source chunk
++#endif
++1:	l32i	a6, a3, 0
++	l32i	a7, a3, 4
++	s32i	a6, a5, 0
++	l32i	a6, a3, 8
++	s32i	a7, a5, 4
++	l32i	a7, a3, 12
++	s32i	a6, a5, 8
++	addi	a3, a3, 16
++	s32i	a7, a5, 12
++	addi	a5, a5, 16
++#if !XCHAL_HAVE_LOOPS
++	blt	a3, a8, 1b
++#endif
++
++	/* Copy any leftover pieces smaller than 16B.  */
++2:	bbci.l	a4, 3, 3f
++
++	/* Copy 8 bytes.  */
++	l32i	a6, a3, 0
++	l32i	a7, a3, 4
++	addi	a3, a3, 8
++	s32i	a6, a5, 0
++	s32i	a7, a5, 4
++	addi	a5, a5, 8
++
++3:	bbsi.l	a4, 2, 4f
++	bbsi.l	a4, 1, 5f
++	bbsi.l	a4, 0, 6f
++	retw
++
++	/* Copy 4 bytes.  */
++4:	l32i	a6, a3, 0
++	addi	a3, a3, 4
++	s32i	a6, a5, 0
++	addi	a5, a5, 4
++	bbsi.l	a4, 1, 5f
++	bbsi.l	a4, 0, 6f
++	retw
++
++	/* Copy 2 bytes.  */
++5:	l16ui	a6, a3, 0
++	addi	a3, a3, 2
++	s16i	a6, a5, 0
++	addi	a5, a5, 2
++	bbsi.l	a4, 0, 6f
++	retw
++
++	/* Copy 1 byte.  */
++6:	l8ui	a6, a3, 0
++	s8i	a6, a5, 0
++
++.Ldone:
++	retw
++
++
++/* Destination is aligned; source is unaligned.  */
++
++	.align	4
++.Lsrcunaligned:
++	/* Avoid loading anything for zero-length copies.  */
++	_beqz	a4, .Ldone
++
++	/* Copy 16 bytes per iteration for word-aligned dst and
++	   unaligned src.  */
++	ssa8	a3		// set shift amount from byte offset
++#if UNALIGNED_ADDRESSES_CHECKED
++	and	a11, a3, a8	// save unalignment offset for below
++	sub	a3, a3, a11	// align a3
++#endif
++	l32i	a6, a3, 0	// load first word
++#if XCHAL_HAVE_LOOPS
++	loopnez	a7, 2f
++#else
++	beqz	a7, 2f
++	slli	a10, a7, 4
++	add	a10, a10, a3	// a10 = end of last 16B source chunk
++#endif
++1:	l32i	a7, a3, 4
++	l32i	a8, a3, 8
++	src_b	a6, a6, a7
++	s32i	a6, a5, 0
++	l32i	a9, a3, 12
++	src_b	a7, a7, a8
++	s32i	a7, a5, 4
++	l32i	a6, a3, 16
++	src_b	a8, a8, a9
++	s32i	a8, a5, 8
++	addi	a3, a3, 16
++	src_b	a9, a9, a6
++	s32i	a9, a5, 12
++	addi	a5, a5, 16
++#if !XCHAL_HAVE_LOOPS
++	blt	a3, a10, 1b
++#endif
++
++2:	bbci.l	a4, 3, 3f
++
++	/* Copy 8 bytes.  */
++	l32i	a7, a3, 4
++	l32i	a8, a3, 8
++	src_b	a6, a6, a7
++	s32i	a6, a5, 0
++	addi	a3, a3, 8
++	src_b	a7, a7, a8
++	s32i	a7, a5, 4
++	addi	a5, a5, 8
++	mov	a6, a8
++
++3:	bbci.l	a4, 2, 4f
++
++	/* Copy 4 bytes.  */
++	l32i	a7, a3, 4
++	addi	a3, a3, 4
++	src_b	a6, a6, a7
++	s32i	a6, a5, 0
++	addi	a5, a5, 4
++	mov	a6, a7
++4:
++#if UNALIGNED_ADDRESSES_CHECKED
++	add	a3, a3, a11	// readjust a3 with correct misalignment
++#endif
++	bbsi.l	a4, 1, 5f
++	bbsi.l	a4, 0, 6f
++	retw
++
++	/* Copy 2 bytes.  */
++5:	l8ui	a6, a3, 0
++	l8ui	a7, a3, 1
++	addi	a3, a3, 2
++	s8i	a6, a5, 0
++	s8i	a7, a5, 1
++	addi	a5, a5, 2
++	bbsi.l	a4, 0, 6f
++	retw
++
++	/* Copy 1 byte.  */
++6:	l8ui	a6, a3, 0
++	s8i	a6, a5, 0
++	retw
++
++libc_hidden_def (memcpy)
+diff --git a/libc/string/xtensa/memset.S b/libc/string/xtensa/memset.S
+new file mode 100644
+index 000000000..c0928825d
+--- /dev/null
++++ b/libc/string/xtensa/memset.S
+@@ -0,0 +1,165 @@
++/* Optimized memset for Xtensa.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "../../sysdeps/linux/xtensa/sysdep.h"
++#include <bits/xtensa-config.h>
++
++/* Do not use .literal_position in the ENTRY macro.  */
++#undef LITERAL_POSITION
++#define LITERAL_POSITION
++
++/* void *memset (void *dst, int c, size_t length)
++
++   The algorithm is as follows:
++
++   Create a word with c in all byte positions.
++	
++   If the destination is aligned, set 16B chunks with a loop, and then
++   finish up with 8B, 4B, 2B, and 1B stores conditional on the length.
++
++   If the destination is unaligned, align it by conditionally
++   setting 1B and/or 2B and then go to aligned case.
++
++   This code tries to use fall-through branches for the common
++   case of an aligned destination (except for the branches to
++   the alignment labels).  */
++
++
++/* Byte-by-byte set.  */
++
++	.text
++	.align	4
++	.literal_position
++__memset_aux:
++
++	/* Skip a byte to get 1 mod 4 alignment for LOOPNEZ
++	   (0 mod 4 alignment for LBEG).  */
++	.byte	0
++
++.Lbyteset:
++#if XCHAL_HAVE_LOOPS
++	loopnez	a4, 2f
++#else
++	beqz	a4, 2f
++	add	a6, a5, a4	// a6 = ending address
++#endif
++1:	s8i	a3, a5, 0
++	addi	a5, a5, 1
++#if !XCHAL_HAVE_LOOPS
++	blt	a5, a6, 1b
++#endif
++2:	retw
++
++
++/* Destination is unaligned.  */
++
++	.align	4
++
++.Ldst1mod2: // dst is only byte aligned
++
++	/* Do short sizes byte-by-byte.  */
++	bltui	a4, 8, .Lbyteset
++
++	/* Set 1 byte.  */
++	s8i	a3, a5, 0
++	addi	a5, a5, 1
++	addi	a4, a4, -1
++
++	/* Now retest if dst is aligned.  */
++	_bbci.l	a5, 1, .Ldstaligned
++
++.Ldst2mod4: // dst has 16-bit alignment
++
++	/* Do short sizes byte-by-byte.  */
++	bltui	a4, 8, .Lbyteset
++
++	/* Set 2 bytes.  */
++	s16i	a3, a5, 0
++	addi	a5, a5, 2
++	addi	a4, a4, -2
++
++	/* dst is now aligned; return to main algorithm */
++	j	.Ldstaligned
++
++
++ENTRY (memset)
++	/* a2 = dst, a3 = c, a4 = length */
++
++	/* Duplicate character into all bytes of word.  */
++	extui	a3, a3, 0, 8
++	slli	a7, a3, 8
++	or	a3, a3, a7
++	slli	a7, a3, 16
++	or	a3, a3, a7
++
++	mov	a5, a2		// copy dst so that a2 is return value
++
++	/* Check if dst is unaligned.  */
++	_bbsi.l	a2, 0, .Ldst1mod2
++	_bbsi.l	a2, 1, .Ldst2mod4
++.Ldstaligned:
++
++	/* Get number of loop iterations with 16B per iteration.  */
++	srli	a7, a4, 4
++
++	/* Destination is word-aligned.  */
++#if XCHAL_HAVE_LOOPS
++	loopnez	a7, 2f
++#else
++	beqz	a7, 2f
++	slli	a6, a7, 4
++	add	a6, a6, a5	// a6 = end of last 16B chunk
++#endif
++	/* Set 16 bytes per iteration.  */
++1:	s32i	a3, a5, 0
++	s32i	a3, a5, 4
++	s32i	a3, a5, 8
++	s32i	a3, a5, 12
++	addi	a5, a5, 16
++#if !XCHAL_HAVE_LOOPS
++	blt	a5, a6, 1b
++#endif
++
++	/* Set any leftover pieces smaller than 16B.  */
++2:	bbci.l	a4, 3, 3f
++
++	/* Set 8 bytes.  */
++	s32i	a3, a5, 0
++	s32i	a3, a5, 4
++	addi	a5, a5, 8
++
++3:	bbci.l	a4, 2, 4f
++
++	/* Set 4 bytes.  */
++	s32i	a3, a5, 0
++	addi	a5, a5, 4
++
++4:	bbci.l	a4, 1, 5f
++
++	/* Set 2 bytes.  */
++	s16i	a3, a5, 0
++	addi	a5, a5, 2
++
++5:	bbci.l	a4, 0, 6f
++
++	/* Set 1 byte.  */
++	s8i	a3, a5, 0
++6:	retw
++
++libc_hidden_def (memset)
+diff --git a/libc/string/xtensa/strcmp.S b/libc/string/xtensa/strcmp.S
+new file mode 100644
+index 000000000..90c418d12
+--- /dev/null
++++ b/libc/string/xtensa/strcmp.S
+@@ -0,0 +1,313 @@
++/* Optimized strcmp for Xtensa.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "../../sysdeps/linux/xtensa/sysdep.h"
++#include <bits/xtensa-config.h>
++
++#ifdef __XTENSA_EB__
++#define	MASK0 0xff000000
++#define	MASK1 0x00ff0000
++#define	MASK2 0x0000ff00
++#define	MASK3 0x000000ff
++#else
++#define	MASK0 0x000000ff
++#define	MASK1 0x0000ff00
++#define	MASK2 0x00ff0000
++#define	MASK3 0xff000000
++#endif
++
++#define MASK4 0x40404040
++
++	.literal .Lmask0, MASK0
++	.literal .Lmask1, MASK1
++	.literal .Lmask2, MASK2
++	.literal .Lmask3, MASK3
++	.literal .Lmask4, MASK4
++
++	.text
++ENTRY (strcmp)
++	/* a2 = s1, a3 = s2 */
++
++	l8ui	a8, a2, 0	// byte 0 from s1
++	l8ui	a9, a3, 0	// byte 0 from s2
++	movi	a10, 3		// mask
++	bne	a8, a9, .Lretdiff
++
++	or	a11, a2, a3
++	bnone	a11, a10, .Laligned
++
++	xor	a11, a2, a3	// compare low two bits of s1 and s2
++	bany	a11, a10, .Lunaligned	// if they have different alignment
++
++	/* s1/s2 are not word-aligned.  */
++	addi	a2, a2, 1	// advance s1
++	beqz	a8, .Leq	// bytes equal, if zero, strings are equal
++	addi	a3, a3, 1	// advance s2
++	bnone	a2, a10, .Laligned // if s1/s2 now aligned
++	l8ui	a8, a2, 0	// byte 1 from s1
++	l8ui	a9, a3, 0	// byte 1 from s2
++	addi	a2, a2, 1	// advance s1
++	bne	a8, a9, .Lretdiff // if different, return difference
++	beqz	a8, .Leq	// bytes equal, if zero, strings are equal
++	addi	a3, a3, 1	// advance s2
++	bnone	a2, a10, .Laligned // if s1/s2 now aligned
++	l8ui	a8, a2, 0	// byte 2 from s1
++	l8ui	a9, a3, 0	// byte 2 from s2
++	addi	a2, a2, 1	// advance s1
++	bne	a8, a9, .Lretdiff // if different, return difference
++	beqz	a8, .Leq	// bytes equal, if zero, strings are equal
++	addi	a3, a3, 1	// advance s2
++	j	.Laligned
++
++/* s1 and s2 have different alignment.
++
++   If the zero-overhead loop option is available, use an (almost)
++   infinite zero-overhead loop with conditional exits so we only pay
++   for taken branches when exiting the loop.
++
++   Note: It is important for this unaligned case to come before the
++   code for aligned strings, because otherwise some of the branches
++   above cannot reach and have to be transformed to branches around
++   jumps.  The unaligned code is smaller and the branches can reach
++   over it.  */
++
++	.align	4
++	/* (2 mod 4) alignment for loop instruction */
++.Lunaligned:
++#if XCHAL_HAVE_LOOPS
++	_movi.n	a8, 0		// set up for the maximum loop count
++	loop	a8, .Lretdiff	// loop forever (almost anyway)
++#endif
++.Lnextbyte:
++	l8ui	a8, a2, 0
++	l8ui	a9, a3, 0
++	addi	a2, a2, 1
++	bne	a8, a9, .Lretdiff
++	addi	a3, a3, 1
++#if XCHAL_HAVE_LOOPS
++	beqz	a8, .Lretdiff
++#else
++	bnez	a8, .Lnextbyte
++#endif
++.Lretdiff:
++	sub	a2, a8, a9
++	retw
++
++/* s1 is word-aligned; s2 is word-aligned.
++
++   If the zero-overhead loop option is available, use an (almost)
++   infinite zero-overhead loop with conditional exits so we only pay
++   for taken branches when exiting the loop.  */
++
++/* New algorithm, relying on the fact that all normal ASCII is between
++   32 and 127.
++
++   Rather than check all bytes for zero:
++   Take one word (4 bytes).  Call it w1.
++   Shift w1 left by one into w1'.
++   Or w1 and w1'.  For all normal ASCII bit 6 will be 1; for zero it won't.
++   Check that all 4 bit 6's (one for each byte) are one:
++   If they are, we are definitely not done.
++   If they are not, we are probably done, but need to check for zero.  */
++
++	.align	4
++#if XCHAL_HAVE_LOOPS
++.Laligned:
++	.begin	no-transform
++	l32r	a4, .Lmask0	// mask for byte 0
++	l32r	a7, .Lmask4
++	/* Loop forever.  (a4 is more than than the maximum number
++	   of iterations) */
++	loop	a4, .Laligned_done
++
++	/* First unrolled loop body.  */
++	l32i	a8, a2, 0	// get word from s1
++	l32i	a9, a3, 0	// get word from s2
++	slli	a5, a8, 1
++	bne	a8, a9, .Lwne2
++	or	a9, a8, a5
++	bnall	a9, a7, .Lprobeq
++
++	/* Second unrolled loop body.  */
++	l32i	a8, a2, 4	// get word from s1+4
++	l32i	a9, a3, 4	// get word from s2+4
++	slli	a5, a8, 1
++	bne	a8, a9, .Lwne2
++	or	a9, a8, a5
++	bnall	a9, a7, .Lprobeq2
++
++	addi	a2, a2, 8	// advance s1 pointer
++	addi	a3, a3, 8	// advance s2 pointer
++.Laligned_done:
++	or	a1, a1, a1	// nop
++
++.Lprobeq2:
++	/* Adjust pointers to account for the loop unrolling.  */
++	addi	a2, a2, 4
++	addi	a3, a3, 4
++
++#else /* !XCHAL_HAVE_LOOPS */
++
++.Laligned:
++	movi	a4, MASK0	// mask for byte 0
++	movi	a7, MASK4
++	j	.Lfirstword
++.Lnextword:
++	addi	a2, a2, 4	// advance s1 pointer
++	addi	a3, a3, 4	// advance s2 pointer
++.Lfirstword:
++	l32i	a8, a2, 0	// get word from s1
++	l32i	a9, a3, 0	// get word from s2
++	slli	a5, a8, 1
++	bne	a8, a9, .Lwne2
++	or	a9, a8, a5
++	ball	a9, a7, .Lnextword
++#endif /* !XCHAL_HAVE_LOOPS */
++
++	/* align (0 mod 4) */
++.Lprobeq:
++	/* Words are probably equal, but check for sure.
++	   If not, loop over the rest of string using normal algorithm.  */
++
++	bnone	a8, a4, .Leq	// if byte 0 is zero
++	l32r	a5, .Lmask1	// mask for byte 1
++	l32r	a6, .Lmask2	// mask for byte 2
++	bnone	a8, a5, .Leq	// if byte 1 is zero
++	l32r	a7, .Lmask3	// mask for byte 3
++	bnone	a8, a6, .Leq	// if byte 2 is zero
++	bnone	a8, a7, .Leq	// if byte 3 is zero
++	addi.n	a2, a2, 4	// advance s1 pointer
++	addi.n	a3, a3, 4	// advance s2 pointer
++#if XCHAL_HAVE_LOOPS
++
++	/* align (1 mod 4) */
++	loop	a4, .Leq	// loop forever (a4 is bigger than max iters)
++	.end	no-transform
++
++	l32i	a8, a2, 0	// get word from s1
++	l32i	a9, a3, 0	// get word from s2
++	addi	a2, a2, 4	// advance s1 pointer
++	bne	a8, a9, .Lwne
++	bnone	a8, a4, .Leq	// if byte 0 is zero
++	bnone	a8, a5, .Leq	// if byte 1 is zero
++	bnone	a8, a6, .Leq	// if byte 2 is zero
++	bnone	a8, a7, .Leq	// if byte 3 is zero
++	addi	a3, a3, 4	// advance s2 pointer
++
++#else /* !XCHAL_HAVE_LOOPS */
++
++	j	.Lfirstword2
++.Lnextword2:
++	addi	a3, a3, 4	// advance s2 pointer
++.Lfirstword2:
++	l32i	a8, a2, 0	// get word from s1
++	l32i	a9, a3, 0	// get word from s2
++	addi	a2, a2, 4	// advance s1 pointer
++	bne	a8, a9, .Lwne
++	bnone	a8, a4, .Leq	// if byte 0 is zero
++	bnone	a8, a5, .Leq	// if byte 1 is zero
++	bnone	a8, a6, .Leq	// if byte 2 is zero
++	bany	a8, a7, .Lnextword2	// if byte 3 is zero
++#endif /* !XCHAL_HAVE_LOOPS */
++
++	/* Words are equal; some byte is zero.  */
++.Leq:	movi	a2, 0		// return equal
++	retw
++
++.Lwne2:	/* Words are not equal.  On big-endian processors, if none of the
++	   bytes are zero, the return value can be determined by a simple
++	   comparison.  */
++#ifdef __XTENSA_EB__
++	or	a10, a8, a5
++	bnall	a10, a7, .Lsomezero
++	bgeu	a8, a9, .Lposreturn
++	movi	a2, -1
++	retw
++.Lposreturn:
++	movi	a2, 1
++	retw
++.Lsomezero:	// There is probably some zero byte.
++#endif /* __XTENSA_EB__ */
++.Lwne:	/* Words are not equal.  */
++	xor	a2, a8, a9	// get word with nonzero in byte that differs
++	bany	a2, a4, .Ldiff0	// if byte 0 differs
++	movi	a5, MASK1	// mask for byte 1
++	bnone	a8, a4, .Leq	// if byte 0 is zero
++	bany	a2, a5, .Ldiff1	// if byte 1 differs
++	movi	a6, MASK2	// mask for byte 2
++	bnone	a8, a5, .Leq	// if byte 1 is zero
++	bany	a2, a6, .Ldiff2	// if byte 2 differs
++	bnone	a8, a6, .Leq	// if byte 2 is zero
++#ifdef __XTENSA_EB__
++.Ldiff3:
++.Ldiff2:
++.Ldiff1:
++	/* Byte 0 is equal (at least) and there is a difference before a zero
++	   byte.  Just subtract words to get the return value.
++	   The high order equal bytes cancel, leaving room for the sign.  */
++	sub	a2, a8, a9
++	retw
++
++.Ldiff0:
++	/* Need to make room for the sign, so can't subtract whole words.  */
++	extui	a10, a8, 24, 8
++	extui	a11, a9, 24, 8
++	sub	a2, a10, a11
++	retw
++
++#else /* !__XTENSA_EB__ */
++	/* Little-endian is a little more difficult because can't subtract
++	   whole words.  */
++.Ldiff3:
++	/* Bytes 0-2 are equal; byte 3 is different.
++	   For little-endian need to have a sign bit for the difference.  */
++	extui	a10, a8, 24, 8
++	extui	a11, a9, 24, 8
++	sub	a2, a10, a11
++	retw
++
++.Ldiff0:
++	/* Byte 0 is different.  */
++	extui	a10, a8, 0, 8
++	extui	a11, a9, 0, 8
++	sub	a2, a10, a11
++	retw
++
++.Ldiff1:
++	/* Byte 0 is equal; byte 1 is different.  */
++	extui	a10, a8, 8, 8
++	extui	a11, a9, 8, 8
++	sub	a2, a10, a11
++	retw
++
++.Ldiff2:
++	/* Bytes 0-1 are equal; byte 2 is different.  */
++	extui	a10, a8, 16, 8
++	extui	a11, a9, 16, 8
++	sub	a2, a10, a11
++	retw
++
++#endif /* !__XTENSA_EB */
++
++libc_hidden_def (strcmp)
++
++#ifndef __UCLIBC_HAS_LOCALE__
++strong_alias (strcmp, strcoll)
++libc_hidden_def (strcoll)
++#endif
+diff --git a/libc/string/xtensa/strcpy.S b/libc/string/xtensa/strcpy.S
+new file mode 100644
+index 000000000..108070384
+--- /dev/null
++++ b/libc/string/xtensa/strcpy.S
+@@ -0,0 +1,150 @@
++/* Optimized strcpy for Xtensa.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "../../sysdeps/linux/xtensa/sysdep.h"
++#include <bits/xtensa-config.h>
++
++#ifdef __XTENSA_EB__
++#define	MASK0 0xff000000
++#define	MASK1 0x00ff0000
++#define	MASK2 0x0000ff00
++#define	MASK3 0x000000ff
++#else
++#define	MASK0 0x000000ff
++#define	MASK1 0x0000ff00
++#define	MASK2 0x00ff0000
++#define	MASK3 0xff000000
++#endif
++
++	.text
++ENTRY (strcpy)
++	/* a2 = dst, a3 = src */
++
++	mov	a10, a2		// leave dst in return value register
++	movi	a4, MASK0
++	movi	a5, MASK1
++	movi	a6, MASK2
++	movi	a7, MASK3
++	bbsi.l	a3, 0, .Lsrc1mod2
++	bbsi.l	a3, 1, .Lsrc2mod4
++.Lsrcaligned:
++
++	/* Check if the destination is aligned.  */
++	movi	a8, 3
++	bnone	a10, a8, .Laligned
++
++	j	.Ldstunaligned
++
++.Lsrc1mod2: // src address is odd
++	l8ui	a8, a3, 0	// get byte 0
++	addi	a3, a3, 1	// advance src pointer
++	s8i	a8, a10, 0	// store byte 0
++	beqz	a8, 1f		// if byte 0 is zero
++	addi	a10, a10, 1	// advance dst pointer
++	bbci.l	a3, 1, .Lsrcaligned // if src is now word-aligned
++
++.Lsrc2mod4: // src address is 2 mod 4
++	l8ui	a8, a3, 0	// get byte 0
++	/* 1-cycle interlock */
++	s8i	a8, a10, 0	// store byte 0
++	beqz	a8, 1f		// if byte 0 is zero
++	l8ui	a8, a3, 1	// get byte 0
++	addi	a3, a3, 2	// advance src pointer
++	s8i	a8, a10, 1	// store byte 0
++	addi	a10, a10, 2	// advance dst pointer
++	bnez	a8, .Lsrcaligned
++1:	retw
++
++
++/* dst is word-aligned; src is word-aligned.  */
++
++	.align	4
++#if XCHAL_HAVE_LOOPS
++	/* (2 mod 4) alignment for loop instruction */
++.Laligned:
++	_movi.n	a8, 0		// set up for the maximum loop count
++	loop	a8, .Lz3	// loop forever (almost anyway)
++	l32i	a8, a3, 0	// get word from src
++	addi	a3, a3, 4	// advance src pointer
++	bnone	a8, a4, .Lz0	// if byte 0 is zero
++	bnone	a8, a5, .Lz1	// if byte 1 is zero
++	bnone	a8, a6, .Lz2	// if byte 2 is zero
++	s32i	a8, a10, 0	// store word to dst
++	bnone	a8, a7, .Lz3	// if byte 3 is zero
++	addi	a10, a10, 4	// advance dst pointer
++
++#else /* !XCHAL_HAVE_LOOPS */
++
++1:	addi	a10, a10, 4	// advance dst pointer
++.Laligned:
++	l32i	a8, a3, 0	// get word from src
++	addi	a3, a3, 4	// advance src pointer
++	bnone	a8, a4, .Lz0	// if byte 0 is zero
++	bnone	a8, a5, .Lz1	// if byte 1 is zero
++	bnone	a8, a6, .Lz2	// if byte 2 is zero
++	s32i	a8, a10, 0	// store word to dst
++	bany	a8, a7, 1b	// if byte 3 is zero
++#endif /* !XCHAL_HAVE_LOOPS */
++
++.Lz3:	/* Byte 3 is zero.  */
++	retw
++
++.Lz0:	/* Byte 0 is zero.  */
++#ifdef __XTENSA_EB__
++	movi	a8, 0
++#endif
++	s8i	a8, a10, 0
++	retw
++
++.Lz1:	/* Byte 1 is zero.  */
++#ifdef __XTENSA_EB__
++        extui   a8, a8, 16, 16
++#endif
++	s16i	a8, a10, 0
++	retw
++
++.Lz2:	/* Byte 2 is zero.  */
++#ifdef __XTENSA_EB__
++        extui   a8, a8, 16, 16
++#endif
++	s16i	a8, a10, 0
++	movi	a8, 0
++	s8i	a8, a10, 2
++	retw
++
++	.align	4
++	/* (2 mod 4) alignment for loop instruction */
++.Ldstunaligned:
++
++#if XCHAL_HAVE_LOOPS
++	_movi.n	a8, 0		// set up for the maximum loop count
++	loop	a8, 2f		// loop forever (almost anyway)
++#endif
++1:	l8ui	a8, a3, 0
++	addi	a3, a3, 1
++	s8i	a8, a10, 0
++	addi	a10, a10, 1
++#if XCHAL_HAVE_LOOPS
++	beqz	a8, 2f
++#else
++	bnez	a8, 1b
++#endif
++2:	retw
++
++libc_hidden_def (strcpy)
+diff --git a/libc/string/xtensa/strlen.S b/libc/string/xtensa/strlen.S
+new file mode 100644
+index 000000000..dd72c16fa
+--- /dev/null
++++ b/libc/string/xtensa/strlen.S
+@@ -0,0 +1,104 @@
++/* Optimized strlen for Xtensa.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "../../sysdeps/linux/xtensa/sysdep.h"
++#include <bits/xtensa-config.h>
++
++#ifdef __XTENSA_EB__
++#define	MASK0 0xff000000
++#define	MASK1 0x00ff0000
++#define	MASK2 0x0000ff00
++#define	MASK3 0x000000ff
++#else
++#define	MASK0 0x000000ff
++#define	MASK1 0x0000ff00
++#define	MASK2 0x00ff0000
++#define	MASK3 0xff000000
++#endif
++
++	.text
++ENTRY (strlen)
++	/* a2 = s */
++
++	addi	a3, a2, -4	// because we overincrement at the end
++	movi	a4, MASK0
++	movi	a5, MASK1
++	movi	a6, MASK2
++	movi	a7, MASK3
++	bbsi.l	a2, 0, .L1mod2
++	bbsi.l	a2, 1, .L2mod4
++	j	.Laligned
++
++.L1mod2: // address is odd
++	l8ui	a8, a3, 4	// get byte 0
++	addi	a3, a3, 1	// advance string pointer
++	beqz	a8, .Lz3	// if byte 0 is zero
++	bbci.l	a3, 1, .Laligned // if string pointer is now word-aligned
++
++.L2mod4: // address is 2 mod 4
++	addi	a3, a3, 2	// advance ptr for aligned access
++	l32i	a8, a3, 0	// get word with first two bytes of string
++	bnone	a8, a6, .Lz2	// if byte 2 (of word, not string) is zero
++	bany	a8, a7, .Laligned // if byte 3 (of word, not string) is nonzero
++
++	/* Byte 3 is zero.  */
++	addi	a3, a3, 3	// point to zero byte
++	sub	a2, a3, a2	// subtract to get length
++	retw
++
++
++/* String is word-aligned.  */
++
++	.align	4
++	/* (2 mod 4) alignment for loop instruction */
++.Laligned:
++#if XCHAL_HAVE_LOOPS
++	_movi.n	a8, 0		// set up for the maximum loop count
++	loop	a8, .Lz3	// loop forever (almost anyway)
++#endif
++1:	l32i	a8, a3, 4	// get next word of string
++	addi	a3, a3, 4	// advance string pointer
++	bnone	a8, a4, .Lz0	// if byte 0 is zero
++	bnone	a8, a5, .Lz1	// if byte 1 is zero
++	bnone	a8, a6, .Lz2	// if byte 2 is zero
++#if XCHAL_HAVE_LOOPS
++	bnone	a8, a7, .Lz3	// if byte 3 is zero
++#else
++	bany	a8, a7, 1b	// repeat if byte 3 is non-zero
++#endif
++
++.Lz3:	/* Byte 3 is zero.  */
++	addi	a3, a3, 3	// point to zero byte
++	/* Fall through....  */
++
++.Lz0:	/* Byte 0 is zero.  */
++	sub	a2, a3, a2	// subtract to get length
++	retw
++
++.Lz1:	/* Byte 1 is zero.  */
++	addi	a3, a3, 1	// point to zero byte
++	sub	a2, a3, a2	// subtract to get length
++	retw
++
++.Lz2:	/* Byte 2 is zero.  */
++	addi	a3, a3, 2	// point to zero byte
++	sub	a2, a3, a2	// subtract to get length
++	retw
++
++libc_hidden_def (strlen)
+diff --git a/libc/string/xtensa/strncpy.S b/libc/string/xtensa/strncpy.S
+new file mode 100644
+index 000000000..7ba2ef77d
+--- /dev/null
++++ b/libc/string/xtensa/strncpy.S
+@@ -0,0 +1,241 @@
++/* Optimized strcpy for Xtensa.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "../../sysdeps/linux/xtensa/sysdep.h"
++#include <bits/xtensa-config.h>
++
++#ifdef __XTENSA_EB__
++#define	MASK0 0xff000000
++#define	MASK1 0x00ff0000
++#define	MASK2 0x0000ff00
++#define	MASK3 0x000000ff
++#else
++#define	MASK0 0x000000ff
++#define	MASK1 0x0000ff00
++#define	MASK2 0x00ff0000
++#define	MASK3 0xff000000
++#endif
++
++/* Do not use .literal_position in the ENTRY macro.  */
++#undef LITERAL_POSITION
++#define LITERAL_POSITION
++
++	.text
++	.align	4
++	.literal_position
++__strncpy_aux:
++
++.Lsrc1mod2: // src address is odd
++	l8ui	a8, a3, 0	// get byte 0
++	addi	a3, a3, 1	// advance src pointer
++	s8i	a8, a10, 0	// store byte 0
++	addi	a4, a4, -1	// decrement n
++	beqz    a4, .Lret       // if n is zero
++	addi	a10, a10, 1	// advance dst pointer
++	beqz	a8, .Lfill	// if byte 0 is zero
++	bbci.l	a3, 1, .Lsrcaligned // if src is now word-aligned
++
++.Lsrc2mod4: // src address is 2 mod 4
++	l8ui	a8, a3, 0	// get byte 0
++	addi	a4, a4, -1	// decrement n
++	s8i	a8, a10, 0	// store byte 0
++	beqz    a4, .Lret       // if n is zero
++	addi	a10, a10, 1	// advance dst pointer
++	beqz	a8, .Lfill	// if byte 0 is zero
++	l8ui	a8, a3, 1	// get byte 0
++	addi	a3, a3, 2	// advance src pointer
++	s8i	a8, a10, 0	// store byte 0
++	addi	a4, a4, -1	// decrement n
++	beqz    a4, .Lret       // if n is zero
++	addi	a10, a10, 1	// advance dst pointer
++	bnez	a8, .Lsrcaligned
++	j	.Lfill
++
++.Lret:
++	retw
++
++
++ENTRY (strncpy)
++	/* a2 = dst, a3 = src */
++
++	mov	a10, a2		// leave dst in return value register
++	beqz    a4, .Lret       // if n is zero
++
++	movi	a11, MASK0
++	movi	a5, MASK1
++	movi	a6, MASK2
++	movi	a7, MASK3
++	bbsi.l	a3, 0, .Lsrc1mod2
++	bbsi.l	a3, 1, .Lsrc2mod4
++.Lsrcaligned:
++
++	/* Check if the destination is aligned.  */
++	movi	a8, 3
++	bnone	a10, a8, .Laligned
++
++	j	.Ldstunaligned
++
++
++/* Fill the dst with zeros -- n is at least 1.  */
++
++.Lfill:
++	movi	a9, 0
++	bbsi.l	a10, 0, .Lfill1mod2
++	bbsi.l	a10, 1, .Lfill2mod4
++.Lfillaligned:
++	blti	a4, 4, .Lfillcleanup
++
++	/* Loop filling complete words with zero.  */
++#if XCHAL_HAVE_LOOPS
++
++	srai	a8, a4, 2
++	loop	a8, 1f
++	s32i	a9, a10, 0
++	addi	a10, a10, 4
++
++1:	slli	a8, a8, 2
++	sub	a4, a4, a8
++
++#else /* !XCHAL_HAVE_LOOPS */
++
++1:	s32i	a9, a10, 0
++	addi	a10, a10, 4
++	addi	a4, a4, -4
++	bgei    a4, 4, 1b
++
++#endif /* !XCHAL_HAVE_LOOPS */
++
++	beqz	a4, 2f
++
++.Lfillcleanup:
++	/* Fill leftover (1 to 3) bytes with zero.  */
++	s8i	a9, a10, 0	// store byte 0
++	addi	a4, a4, -1	// decrement n
++	addi	a10, a10, 1
++	bnez    a4, .Lfillcleanup 
++
++2:	retw
++	
++.Lfill1mod2: // dst address is odd
++	s8i	a9, a10, 0	// store byte 0
++	addi	a4, a4, -1	// decrement n
++	beqz    a4, 2b		// if n is zero
++	addi    a10, a10, 1	// advance dst pointer
++	bbci.l	a10, 1, .Lfillaligned // if dst is now word-aligned
++
++.Lfill2mod4: // dst address is 2 mod 4
++	s8i	a9, a10, 0	// store byte 0
++	addi	a4, a4, -1	// decrement n
++	beqz    a4, 2b		// if n is zero
++	s8i	a9, a10, 1	// store byte 1
++	addi	a4, a4, -1	// decrement n
++	beqz    a4, 2b		// if n is zero
++	addi    a10, a10, 2	// advance dst pointer
++	j	.Lfillaligned
++
++
++/* dst is word-aligned; src is word-aligned; n is at least 1.  */
++
++	.align	4
++	/* (2 mod 4) alignment for loop instruction */
++.Laligned:
++#if XCHAL_HAVE_LOOPS
++	_movi.n	a8, 0		// set up for the maximum loop count
++	loop	a8, 1f		// loop forever (almost anyway)
++	blti	a4, 5, .Ldstunaligned // n is near limit; do one at a time
++	l32i	a8, a3, 0	// get word from src
++	addi	a3, a3, 4	// advance src pointer
++	bnone	a8, a11, .Lz0	// if byte 0 is zero
++	bnone	a8, a5, .Lz1	// if byte 1 is zero
++	bnone	a8, a6, .Lz2	// if byte 2 is zero
++	s32i	a8, a10, 0	// store word to dst
++	addi	a4, a4, -4	// decrement n
++	addi	a10, a10, 4	// advance dst pointer
++	bnone	a8, a7, .Lfill	// if byte 3 is zero
++1:	
++
++#else /* !XCHAL_HAVE_LOOPS */
++
++1:	blti	a4, 5, .Ldstunaligned // n is near limit; do one at a time
++	l32i	a8, a3, 0	// get word from src
++	addi	a3, a3, 4	// advance src pointer
++	bnone	a8, a11, .Lz0	// if byte 0 is zero
++	bnone	a8, a5, .Lz1	// if byte 1 is zero
++	bnone	a8, a6, .Lz2	// if byte 2 is zero
++	s32i	a8, a10, 0	// store word to dst
++	addi	a4, a4, -4	// decrement n
++	addi	a10, a10, 4	// advance dst pointer
++	bany	a8, a7, 1b	// no zeroes
++#endif /* !XCHAL_HAVE_LOOPS */
++
++	j	.Lfill
++
++.Lz0:	/* Byte 0 is zero.  */
++#ifdef __XTENSA_EB__
++	movi	a8, 0
++#endif
++	s8i	a8, a10, 0
++	addi	a4, a4, -1	// decrement n
++	addi	a10, a10, 1	// advance dst pointer
++	j	.Lfill
++
++.Lz1:	/* Byte 1 is zero.  */
++#ifdef __XTENSA_EB__
++        extui   a8, a8, 16, 16
++#endif
++	s16i	a8, a10, 0
++	addi	a4, a4, -2	// decrement n
++	addi	a10, a10, 2	// advance dst pointer
++	j	.Lfill
++
++.Lz2:	/* Byte 2 is zero.  */
++#ifdef __XTENSA_EB__
++        extui   a8, a8, 16, 16
++#endif
++	s16i	a8, a10, 0
++	movi	a8, 0
++	s8i	a8, a10, 2
++	addi	a4, a4, -3	// decrement n
++	addi	a10, a10, 3	// advance dst pointer
++	j	.Lfill
++
++	.align	4
++	/* (2 mod 4) alignment for loop instruction */
++.Ldstunaligned:
++
++#if XCHAL_HAVE_LOOPS
++	_movi.n	a8, 0		// set up for the maximum loop count
++	loop	a8, 2f		// loop forever (almost anyway)
++#endif
++1:	l8ui	a8, a3, 0
++	addi	a3, a3, 1
++	s8i	a8, a10, 0
++	addi	a4, a4, -1
++	beqz	a4, 3f
++	addi	a10, a10, 1
++#if XCHAL_HAVE_LOOPS
++	beqz	a8, 2f
++#else
++	bnez	a8, 1b
++#endif
++2:	j	.Lfill
++
++3:	retw
++
++libc_hidden_def (strncpy)
+diff --git a/libc/sysdeps/linux/xtensa/Makefile b/libc/sysdeps/linux/xtensa/Makefile
+new file mode 100644
+index 000000000..633c91f3e
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/xtensa/Makefile.arch b/libc/sysdeps/linux/xtensa/Makefile.arch
+new file mode 100644
+index 000000000..74510c9f6
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/Makefile.arch
+@@ -0,0 +1,14 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2007 Tensilica Inc.
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++CSRC := brk.c fork.c posix_fadvise.c posix_fadvise64.c pread_write.c \
++     	__syscall_error.c
++
++SSRC := bsd-_setjmp.S bsd-setjmp.S setjmp.S clone.S \
++	syscall.S mmap.S windowspill.S __longjmp.S vfork.S
++
++include $(top_srcdir)libc/sysdeps/linux/Makefile.commonarch
+diff --git a/libc/sysdeps/linux/xtensa/__longjmp.S b/libc/sysdeps/linux/xtensa/__longjmp.S
+new file mode 100644
+index 000000000..0fa939095
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/__longjmp.S
+@@ -0,0 +1,126 @@
++/* longjmp for Xtensa Processors.
++
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* This implementation relies heavily on the Xtensa register window
++   mechanism.  Setjmp flushes all the windows except its own to the
++   stack and then copies registers from the save areas on the stack
++   into the jmp_buf structure, along with the return address of the call
++   to setjmp.  Longjmp invalidates all the windows except its own, and
++   then sets things up so that it will return to the right place,
++   using a window underflow to automatically restore the registers.
++
++   Note that it would probably be sufficient to only copy the
++   registers from setjmp's caller into jmp_buf.  However, we also copy
++   the save area located at the stack pointer of setjmp's caller.
++   This save area will typically remain intact until the longjmp call.
++   The one exception is when there is an intervening alloca in
++   setjmp's caller.  This is certainly an unusual situation and is
++   likely to cause problems in any case (the storage allocated on the
++   stack cannot be safely accessed following the longjmp).  As bad as
++   it is, on most systems this situation would not necessarily lead to
++   a catastrophic failure.  If we did not preserve the extra save area
++   on Xtensa, however, it would.  When setjmp's caller returns after a
++   longjmp, there will be a window underflow; an invalid return
++   address or stack pointer in the save area will almost certainly
++   lead to a crash.  Keeping a copy of the extra save area in the
++   jmp_buf avoids this with only a small additional cost.  If setjmp
++   and longjmp are ever time-critical, this could be removed.  */
++
++
++#include "sysdep.h"
++
++
++ENTRY (__longjmp)
++
++	/* Invalidate all but the current window.  Reading and writing
++	   special registers WINDOWBASE and WINDOWSTART are
++	   privileged operations, so user processes must call the
++	   slower __window_spill() to do the job.  */
++
++	movi	a4, __window_spill
++	callx4	a4
++
++	/* Return to the return address of the setjmp, using the
++	   window size bits from the setjmp call so that the caller
++	   will be able to find the return value that we put in a2.  */
++
++	l32i	a0, a2, 64
++
++	/* Copy the first 4 saved registers from jmp_buf into the save area
++	   at the current sp so that the values will be restored to registers
++	   when longjmp returns. */
++
++	addi	a7, a1, -16
++	l32i	a4, a2, 0
++	l32i	a5, a2, 4
++	s32i	a4, a7, 0
++	s32i	a5, a7, 4
++	l32i	a4, a2, 8
++	l32i	a5, a2, 12
++	s32i	a4, a7, 8
++	s32i	a5, a7, 12
++
++	/* Copy the remaining 0-8 saved registers.  */
++	extui	a7, a0, 30, 2
++	blti	a7, 2, .Lendlj
++	l32i	a8, a2, 52
++	slli	a4, a7, 4
++	sub	a6, a8, a4
++	addi	a5, a2, 16
++	addi	a8, a8, -16		// a8 = end of register overflow area
++.Lljloop:
++	l32i	a7, a5, 0
++	l32i	a4, a5, 4
++	s32i	a7, a6, 0
++	s32i	a4, a6, 4
++	l32i	a7, a5, 8
++	l32i	a4, a5, 12
++	s32i	a7, a6, 8
++	s32i	a4, a6, 12
++	addi	a5, a5, 16
++	addi	a6, a6, 16
++	blt	a6, a8, .Lljloop
++.Lendlj:
++
++	/* The 4 words saved from the register save area at the target's
++	   sp are copied back to the target procedure's save area.  The
++	   only point of this is to prevent a catastrophic failure in
++	   case the contents were moved by an alloca after calling
++	   setjmp.  This is a bit paranoid but it doesn't cost much.  */
++
++	l32i	a7, a2, 4		// load the target stack pointer
++	addi	a7, a7, -16		// find the destination save area
++	l32i	a4, a2, 48
++	l32i	a5, a2, 52
++	s32i	a4, a7, 0
++	s32i	a5, a7, 4
++	l32i	a4, a2, 56
++	l32i	a5, a2, 60
++	s32i	a4, a7, 8
++	s32i	a5, a7, 12
++
++	/* Return v ? v : 1.  */
++	movi	a2, 1
++	movnez	a2, a3, a3
++
++	retw
++END (__longjmp)
++
++libc_hidden_def (__longjmp)
+diff --git a/libc/sysdeps/linux/xtensa/__syscall_error.c b/libc/sysdeps/linux/xtensa/__syscall_error.c
+new file mode 100644
+index 000000000..2b642e816
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/__syscall_error.c
+@@ -0,0 +1,18 @@
++/* Wrapper for setting errno.
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++int __syscall_error(int err_no) attribute_hidden;
++int __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/xtensa/bits/endian.h b/libc/sysdeps/linux/xtensa/bits/endian.h
+new file mode 100644
+index 000000000..38b3af311
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/endian.h
+@@ -0,0 +1,10 @@
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++/* Xtensa can be either big or little endian.  */
++#ifdef __XTENSA_EB__
++# define __BYTE_ORDER __BIG_ENDIAN
++#else
++# define __BYTE_ORDER __LITTLE_ENDIAN
++#endif
+diff --git a/libc/sysdeps/linux/xtensa/bits/fcntl.h b/libc/sysdeps/linux/xtensa/bits/fcntl.h
+new file mode 100644
+index 000000000..2c4e2f01b
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/fcntl.h
+@@ -0,0 +1,196 @@
++/* O_*, F_*, FD_* bit values for Linux.
++   Copyright (C) 1995, 1996, 1997, 1998, 2000, 2004, 2007
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	   0003
++#define O_RDONLY	     00
++#define O_WRONLY	     01
++#define O_RDWR		     02
++#define O_CREAT		   0100	/* not fcntl */
++#define O_EXCL		   0200	/* not fcntl */
++#define O_NOCTTY	   0400	/* not fcntl */
++#define O_TRUNC		  01000	/* not fcntl */
++#define O_APPEND	  02000
++#define O_NONBLOCK	  04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		 010000
++#define O_FSYNC		 O_SYNC
++#define O_ASYNC		 020000
++
++#ifdef __USE_GNU
++# define O_DIRECT	 040000	/* Direct disk access.	*/
++# define O_DIRECTORY	0200000	/* Must be a directory.	 */
++# define O_NOFOLLOW	0400000	/* Do not follow links.	 */
++# define O_NOATIME     01000000 /* Do not set atime.  */
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	0100000
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	12	/* Get record locking info.  */
++#define F_SETLK64	13	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	14	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_UNIX98
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++#endif
++
++/* For F_[GET|SET]FD.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++__BEGIN_DECLS
++
++#ifdef __USE_GNU
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++#endif
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/xtensa/bits/ipc.h b/libc/sysdeps/linux/xtensa/bits/ipc.h
+new file mode 100644
+index 000000000..481bdcc52
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/ipc.h
+@@ -0,0 +1,54 @@
++/* Copyright (C) 1995-1999, 2000, 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_IPC_H
++# error "Never use <bits/ipc.h> directly; include <sys/ipc.h> instead."
++#endif
++
++#include <bits/types.h>
++
++/* Mode bits for `msgget', `semget', and `shmget'.  */
++#define IPC_CREAT	01000		/* Create key if key does not exist. */
++#define IPC_EXCL	02000		/* Fail if key exists.  */
++#define IPC_NOWAIT	04000		/* Return error on wait.  */
++
++/* Control commands for `msgctl', `semctl', and `shmctl'.  */
++#define IPC_RMID	0		/* Remove identifier.  */
++#define IPC_SET		1		/* Set `ipc_perm' options.  */
++#define IPC_STAT	2		/* Get `ipc_perm' options.  */
++#ifdef __USE_GNU
++# define IPC_INFO	3		/* See ipcs.  */
++#endif
++
++/* Special key values.  */
++#define IPC_PRIVATE	((__key_t) 0)	/* Private key.  */
++
++
++/* Data structure used to pass permission information to IPC operations.  */
++struct ipc_perm
++  {
++    __key_t __key;			/* Key.  */
++    __uid_t uid;			/* Owner's user ID.  */
++    __gid_t gid;			/* Owner's group ID.  */
++    __uid_t cuid;			/* Creator's user ID.  */
++    __gid_t cgid;			/* Creator's group ID.  */
++    unsigned int mode;			/* Read/write permission.  */
++    unsigned int __seq;			/* Sequence number.  */
++    unsigned long int __unused1;
++    unsigned long int __unused2;
++  };
+diff --git a/libc/sysdeps/linux/xtensa/bits/kernel_stat.h b/libc/sysdeps/linux/xtensa/bits/kernel_stat.h
+new file mode 100644
+index 000000000..6afb3a697
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/kernel_stat.h
+@@ -0,0 +1,57 @@
++#ifndef _BITS_STAT_STRUCT_H
++#define _BITS_STAT_STRUCT_H
++
++#ifndef _LIBC
++#error bits/kernel_stat.h is for internal uClibc use only!
++#endif
++
++/* This file provides whatever this particular arch's kernel thinks 
++ * struct kernel_stat should look like...  It turns out each arch has a 
++ * different opinion on the subject... */
++
++#define STAT_HAVE_NSEC 1
++
++struct kernel_stat {
++	unsigned long	st_dev;
++	unsigned long	st_ino;
++	unsigned int	st_mode;
++	unsigned int	st_nlink;
++	unsigned int	st_uid;
++	unsigned int	st_gid;
++	unsigned long	st_rdev;
++	long		st_size;
++	unsigned long	st_blksize;
++	unsigned long	st_blocks;
++	unsigned long	st_atime;
++	unsigned long	st_atime_nsec;
++	unsigned long	st_mtime;
++	unsigned long	st_mtime_nsec;
++	unsigned long	st_ctime;
++	unsigned long	st_ctime_nsec;
++	unsigned long	__unused4;
++	unsigned long	__unused5;
++};
++
++struct kernel_stat64 {
++	unsigned long long st_dev;	/* Device */
++	unsigned long long st_ino;	/* File serial number */
++	unsigned int  st_mode;		/* File mode. */
++	unsigned int  st_nlink;		/* Link count. */
++	unsigned int  st_uid;		/* User ID of the file's owner. */
++	unsigned int  st_gid;		/* Group ID of the file's group. */
++	unsigned long long st_rdev;	/* Device number, if device. */
++	long long st_size;		/* Size of file, in bytes. */
++	unsigned long st_blksize;	/* Optimal block size for I/O. */
++	unsigned long __unused2;
++	unsigned long long st_blocks;	/* Number 512-byte blocks allocated. */
++	unsigned long st_atime;		/* Time of last access. */
++	unsigned long st_atime_nsec;
++	unsigned long st_mtime;		/* Time of last modification. */
++	unsigned long st_mtime_nsec;
++	unsigned long st_ctime;		/* Time of last status change. */
++	unsigned long st_ctime_nsec;
++	unsigned long __unused4;
++	unsigned long __unused5;
++};
++
++#endif	/* _BITS_STAT_STRUCT_H */
+diff --git a/libc/sysdeps/linux/xtensa/bits/kernel_types.h b/libc/sysdeps/linux/xtensa/bits/kernel_types.h
+new file mode 100644
+index 000000000..f392ba755
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/kernel_types.h
+@@ -0,0 +1,48 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts 
++ * with the posix_types.h kernel header, and will ensure that 
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#ifndef _XTENSA_POSIX_TYPES_H
++#define _XTENSA_POSIX_TYPES_H
++
++typedef unsigned long	__kernel_ino_t;
++typedef unsigned int	__kernel_mode_t;
++typedef unsigned long	__kernel_nlink_t;
++typedef long		__kernel_off_t;
++typedef int		__kernel_pid_t;
++typedef unsigned short	__kernel_ipc_pid_t;
++typedef unsigned int	__kernel_uid_t;
++typedef unsigned int	__kernel_gid_t;
++typedef unsigned int	__kernel_size_t;
++typedef int		__kernel_ssize_t;
++typedef long		__kernel_ptrdiff_t;
++typedef long		__kernel_time_t;
++typedef long		__kernel_suseconds_t;
++typedef long		__kernel_clock_t;
++typedef int		__kernel_timer_t;
++typedef int		__kernel_clockid_t;
++typedef int		__kernel_daddr_t;
++typedef char *		__kernel_caddr_t;
++typedef unsigned short	__kernel_uid16_t;
++typedef unsigned short	__kernel_gid16_t;
++typedef unsigned int	__kernel_uid32_t;
++typedef unsigned int	__kernel_gid32_t;
++
++typedef unsigned short	__kernel_old_uid_t;
++typedef unsigned short	__kernel_old_gid_t;
++typedef unsigned short	__kernel_old_dev_t;
++typedef long long	__kernel_loff_t;
++
++/* Beginning in 2.6 kernels, which is the first version that includes the
++   Xtensa port, __kernel_dev_t is defined in "linux/types.h" and is no longer
++   architecture-specific.  It is defined here in uClibc for consistency with
++   other uClibc ports and for lack of a better place.  */
++typedef unsigned int	__kernel_dev_t;
++
++typedef struct {
++	int	val[2];
++} __kernel_fsid_t;
++
++#endif /* _XTENSA_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/xtensa/bits/mathdef.h b/libc/sysdeps/linux/xtensa/bits/mathdef.h
+new file mode 100644
+index 000000000..0177fa9fc
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/mathdef.h
+@@ -0,0 +1,43 @@
++/* Copyright (C) 2000, 2001, 2004, 2007
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#if !defined _MATH_H && !defined _COMPLEX_H
++# error "Never use <bits/mathdef.h> directly; include <math.h> instead"
++#endif
++
++#if defined __USE_ISOC99 && defined _MATH_H && !defined _MATH_H_MATHDEF
++# define _MATH_H_MATHDEF	1
++
++/* Xtensa has `float' and `double' operations.  */
++typedef float float_t;		/* `float' expressions are evaluated as
++				   `float'.  */
++typedef double double_t;	/* `double' expressions are evaluated as
++				   `double'.  */
++
++/* The values returned by `ilogb' for 0 and NaN respectively.  */
++# define FP_ILOGB0	(-2147483647)
++# define FP_ILOGBNAN	2147483647
++
++#endif	/* ISO C99 */
++
++#ifndef __NO_LONG_DOUBLE_MATH
++/* Signal that we do not really have a `long double'.  The disables the
++   declaration of all the `long double' function variants.  */
++# define __NO_LONG_DOUBLE_MATH	1
++#endif
+diff --git a/libc/sysdeps/linux/xtensa/bits/mman.h b/libc/sysdeps/linux/xtensa/bits/mman.h
+new file mode 100644
+index 000000000..d3beae6aa
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/mman.h
+@@ -0,0 +1,104 @@
++/* Definitions for POSIX memory map interface.  Linux/Xtensa version.
++   Copyright (C) 1997, 2000, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_MMAN_H
++# error "Never use <bits/mman.h> directly; include <sys/mman.h> instead."
++#endif
++
++/* The following definitions basically come from the kernel headers.
++   But the kernel header is not namespace clean.  */
++
++
++/* Protections are chosen from these bits, OR'd together.  The
++   implementation does not necessarily support PROT_EXEC or PROT_WRITE
++   without PROT_READ.  The only guarantees are that no writing will be
++   allowed without PROT_WRITE and no access will be allowed for PROT_NONE. */
++
++#define PROT_READ	0x1		/* Page can be read.  */
++#define PROT_WRITE	0x2		/* Page can be written.  */
++#define PROT_EXEC	0x4		/* Page can be executed.  */
++#define PROT_NONE	0x0		/* Page can not be accessed.  */
++#define PROT_GROWSDOWN	0x01000000	/* Extend change to start of
++					   growsdown vma (mprotect only).  */
++#define PROT_GROWSUP	0x02000000	/* Extend change to start of
++					   growsup vma (mprotect only).  */
++
++/* Sharing types (must choose one and only one of these).  */
++#define MAP_SHARED	0x01		/* Share changes.  */
++#define MAP_PRIVATE	0x02		/* Changes are private.  */
++#ifdef __USE_MISC
++# define MAP_TYPE	0x0f		/* Mask for type of mapping.  */
++#endif
++
++/* Other flags.  */
++#define MAP_FIXED	0x10		/* Interpret addr exactly.  */
++#ifdef __USE_MISC
++# define MAP_FILE	0
++# define MAP_ANONYMOUS	0x800		/* Don't use a file.  */
++# define MAP_ANON	MAP_ANONYMOUS
++# define MAP_RENAME	MAP_ANONYMOUS
++#endif
++
++/* These are Linux-specific.  */
++#ifdef __USE_MISC
++# define MAP_GROWSDOWN	0x1000		/* Stack-like segment.  */
++# define MAP_DENYWRITE	0x2000		/* ETXTBSY */
++# define MAP_EXECUTABLE	0x4000		/* Mark it as an executable.  */
++# define MAP_LOCKED	0x8000		/* Lock the mapping.  */
++# define MAP_NORESERVE	0x0400		/* Don't check for reservations.  */
++# define MAP_POPULATE	0x10000		/* Populate (prefault) pagetables.  */
++# define MAP_NONBLOCK	0x20000		/* Do not block on IO.  */
++#endif
++
++/* Flags to `msync'.  */
++#define MS_ASYNC	1		/* Sync memory asynchronously.  */
++#define MS_SYNC		4		/* Synchronous memory sync.  */
++#define MS_INVALIDATE	2		/* Invalidate the caches.  */
++
++/* Flags for `mlockall'.  */
++#define MCL_CURRENT	1		/* Lock all currently mapped pages.  */
++#define MCL_FUTURE	2		/* Lock all additions to address
++					   space.  */
++
++/* Flags for `mremap'.  */
++#ifdef __USE_GNU
++# define MREMAP_MAYMOVE	1
++# define MREMAP_FIXED	2
++#endif
++
++/* Advice to `madvise'.  */
++#ifdef __USE_BSD
++# define MADV_NORMAL	 0	/* No further special treatment.  */
++# define MADV_RANDOM	 1	/* Expect random page references.  */
++# define MADV_SEQUENTIAL 2	/* Expect sequential page references.  */
++# define MADV_WILLNEED	 3	/* Will need these pages.  */
++# define MADV_DONTNEED	 4	/* Don't need these pages.  */
++# define MADV_REMOVE	 9	/* Remove these pages and resources.  */
++# define MADV_DONTFORK	 10	/* Do not inherit across fork.  */
++# define MADV_DOFORK	 11	/* Do inherit across fork.  */
++#endif
++
++/* The POSIX people had to invent similar names for the same things.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_MADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_MADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_MADV_SEQUENTIAL	2 /* Expect sequential page references.  */
++# define POSIX_MADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_MADV_DONTNEED	4 /* Don't need these pages.  */
++#endif
+diff --git a/libc/sysdeps/linux/xtensa/bits/msq.h b/libc/sysdeps/linux/xtensa/bits/msq.h
+new file mode 100644
+index 000000000..2eca21e6c
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/msq.h
+@@ -0,0 +1,88 @@
++/* Copyright (C) 1995-1997, 2000, 2004, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_MSG_H
++# error "Never use <bits/msq.h> directly; include <sys/msg.h> instead."
++#endif
++
++#include <bits/types.h>
++
++/* Define options for message queue functions.  */
++#define MSG_NOERROR	010000	/* no error if message is too big */
++#ifdef __USE_GNU
++# define MSG_EXCEPT	020000	/* recv any msg except of specified type */
++#endif
++
++/* Types used in the structure definition.  */
++typedef unsigned long int msgqnum_t;
++typedef unsigned long int msglen_t;
++
++
++/* Structure of record for one message inside the kernel.
++   The type `struct msg' is opaque.  */
++struct msqid_ds
++{
++  struct ipc_perm msg_perm;	/* structure describing operation permission */
++#if defined (__XTENSA_EB__)
++  unsigned long int __unused1;
++  __time_t msg_stime;		/* time of last msgsnd command */
++  unsigned long int __unused2;
++  __time_t msg_rtime;		/* time of last msgrcv command */
++  unsigned long int __unused3;
++  __time_t msg_ctime;		/* time of last change */
++#elif defined (__XTENSA_EL__)
++  __time_t msg_stime;		/* time of last msgsnd command */
++  unsigned long int __unused1;
++  __time_t msg_rtime;		/* time of last msgrcv command */
++  unsigned long int __unused2;
++  __time_t msg_ctime;		/* time of last change */
++  unsigned long int __unused3;
++#else
++# error endian order not defined
++#endif
++  unsigned long int __msg_cbytes; /* current number of bytes on queue */
++  msgqnum_t msg_qnum;		/* number of messages currently on queue */
++  msglen_t msg_qbytes;		/* max number of bytes allowed on queue */
++  __pid_t msg_lspid;		/* pid of last msgsnd() */
++  __pid_t msg_lrpid;		/* pid of last msgrcv() */
++  unsigned long int __unused4;
++  unsigned long int __unused5;
++};
++
++#ifdef __USE_MISC
++
++# define msg_cbytes	__msg_cbytes
++
++/* ipcs ctl commands */
++# define MSG_STAT 11
++# define MSG_INFO 12
++
++/* buffer for msgctl calls IPC_INFO, MSG_INFO */
++struct msginfo
++  {
++    int msgpool;
++    int msgmap;
++    int msgmax;
++    int msgmnb;
++    int msgmni;
++    int msgssz;
++    int msgtql;
++    unsigned short int msgseg;
++  };
++
++#endif /* __USE_MISC */
+diff --git a/libc/sysdeps/linux/xtensa/bits/setjmp.h b/libc/sysdeps/linux/xtensa/bits/setjmp.h
+new file mode 100644
+index 000000000..1bc4896c8
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/setjmp.h
+@@ -0,0 +1,46 @@
++/* Copyright (C) 1997, 1998, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* Define the machine-dependent type `jmp_buf'.  Xtensa version.  */
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H	1
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++/* The jmp_buf structure for Xtensa holds the following (where "proc"
++   is the procedure that calls setjmp): 4-12 registers from the window
++   of proc, the 4 words from the save area at proc's $sp (in case a
++   subsequent alloca in proc moves $sp), and the return address within
++   proc.  Everything else is saved on the stack in the normal save areas.  */
++
++#ifndef	_ASM
++typedef int __jmp_buf[17];
++#endif
++
++#define JB_SP	1
++#define JB_PC	16
++
++/* Test if longjmp to JMPBUF would unwind the frame containing a local
++   variable at ADDRESS.  */
++
++#define _JMPBUF_UNWINDS(jmpbuf, address) \
++  ((void *) (address) < (void *) (jmpbuf)[JB_SP])
++
++#endif	/* bits/setjmp.h */
+diff --git a/libc/sysdeps/linux/xtensa/bits/shm.h b/libc/sysdeps/linux/xtensa/bits/shm.h
+new file mode 100644
+index 000000000..de41d0d99
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/shm.h
+@@ -0,0 +1,115 @@
++/* Copyright (C) 1995, 1996, 1997, 2000, 2002, 2007
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_SHM_H
++# error "Never include <bits/shm.h> directly; use <sys/shm.h> instead."
++#endif
++
++#include <bits/types.h>
++
++/* Permission flag for shmget.  */
++#define SHM_R		0400		/* or S_IRUGO from <linux/stat.h> */
++#define SHM_W		0200		/* or S_IWUGO from <linux/stat.h> */
++
++/* Flags for `shmat'.  */
++#define SHM_RDONLY	010000		/* attach read-only else read-write */
++#define SHM_RND		020000		/* round attach address to SHMLBA */
++#define SHM_REMAP	040000		/* take-over region on attach */
++
++/* Commands for `shmctl'.  */
++#define SHM_LOCK	11		/* lock segment (root only) */
++#define SHM_UNLOCK	12		/* unlock segment (root only) */
++
++__BEGIN_DECLS
++
++/* Segment low boundary address multiple.  */
++#define SHMLBA		(__getpagesize ())
++extern int __getpagesize (void) __THROW __attribute__ ((__const__));
++
++
++/* Type to count number of attaches.  */
++typedef unsigned long int shmatt_t;
++
++/* Data structure describing a set of semaphores.  */
++struct shmid_ds
++  {
++    struct ipc_perm shm_perm;		/* operation permission struct */
++    size_t shm_segsz;			/* size of segment in bytes */
++#if defined (__XTENSA_EL__)
++    __time_t shm_atime;			/* time of last shmat() */
++    unsigned long int __unused1;
++    __time_t shm_dtime;			/* time of last shmdt() */
++    unsigned long int __unused2;
++    __time_t shm_ctime;			/* time of last change by shmctl() */
++    unsigned long int __unused3;
++#elif defined (__XTENSA_EB__)
++    unsigned long int __unused1;
++    __time_t shm_atime;			/* time of last shmat() */
++    unsigned long int __unused2;
++    __time_t shm_dtime;			/* time of last shmdt() */
++    unsigned long int __unused3;
++    __time_t shm_ctime;			/* time of last change by shmctl() */
++#else
++# error endian order not defined
++#endif
++    __pid_t shm_cpid;			/* pid of creator */
++    __pid_t shm_lpid;			/* pid of last shmop */
++    shmatt_t shm_nattch;		/* number of current attaches */
++    unsigned long int __unused4;
++    unsigned long int __unused5;
++  };
++
++#ifdef __USE_MISC
++
++/* ipcs ctl commands */
++# define SHM_STAT 	13
++# define SHM_INFO 	14
++
++/* shm_mode upper byte flags */
++# define SHM_DEST	01000	/* segment will be destroyed on last detach */
++# define SHM_LOCKED	02000   /* segment will not be swapped */
++# define SHM_HUGETLB	04000	/* segment is mapped via hugetlb */
++# define SHM_NORESERVE	010000	/* don't check for reservations */
++
++struct	shminfo
++  {
++    unsigned long int shmmax;
++    unsigned long int shmmin;
++    unsigned long int shmmni;
++    unsigned long int shmseg;
++    unsigned long int shmall;
++    unsigned long int __unused1;
++    unsigned long int __unused2;
++    unsigned long int __unused3;
++    unsigned long int __unused4;
++  };
++
++struct shm_info
++  {
++    int used_ids;
++    unsigned long int shm_tot;	/* total allocated shm */
++    unsigned long int shm_rss;	/* total resident shm */
++    unsigned long int shm_swp;	/* total swapped shm */
++    unsigned long int swap_attempts;
++    unsigned long int swap_successes;
++  };
++
++#endif /* __USE_MISC */
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/xtensa/bits/sigcontextinfo.h b/libc/sysdeps/linux/xtensa/bits/sigcontextinfo.h
+new file mode 100644
+index 000000000..8f3301c9a
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/sigcontextinfo.h
+@@ -0,0 +1,33 @@
++/* Copyright (C) 2003, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* Also see register-dump.h, where we spill live registers to the
++   stack so that we can trace the stack backward.  */
++
++#define SIGCONTEXT unsigned long _info, ucontext_t *
++#define SIGCONTEXT_EXTRA_ARGS _info,
++
++/* ANDing with 0x3fffffff clears the window-size bits.
++   Assumes TASK_SIZE = 0x40000000.  */
++
++#define GET_PC(ctx)	((void *) (ctx->uc_mcontext.sc_pc & 0x3fffffff))
++#define GET_FRAME(ctx)	((void *) ctx->uc_mcontext.sc_a[1])
++#define GET_STACK(ctx)	((void *) ctx->uc_mcontext.sc_a[1])
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
++
+diff --git a/libc/sysdeps/linux/xtensa/bits/stackinfo.h b/libc/sysdeps/linux/xtensa/bits/stackinfo.h
+new file mode 100644
+index 000000000..50ddf2514
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/stackinfo.h
+@@ -0,0 +1,28 @@
++/* Copyright (C) 2000, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++/* On Xtensa the stack grows down.  */
++#define _STACK_GROWS_DOWN	1
++
++#endif	/* stackinfo.h */
+diff --git a/libc/sysdeps/linux/xtensa/bits/stat.h b/libc/sysdeps/linux/xtensa/bits/stat.h
+new file mode 100644
+index 000000000..c6debc894
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/stat.h
+@@ -0,0 +1,153 @@
++/* Copyright (C) 1992, 1995-2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_STAT_H
++# error "Never include <bits/stat.h> directly; use <sys/stat.h> instead."
++#endif
++
++/* Versions of the `struct stat' data structure.  */
++#define _STAT_VER_KERNEL	0
++#define _STAT_VER_LINUX		1
++#define _STAT_VER		_STAT_VER_LINUX
++
++/* Versions of the `xmknod' interface.  */
++#define _MKNOD_VER_LINUX	0
++
++
++struct stat
++  {
++    __dev_t st_dev;			/* Device.  */
++#ifndef __USE_FILE_OFFSET64
++    __ino_t st_ino;			/* File serial number.	*/
++#else
++    __ino64_t st_ino;			/* File serial number.	*/
++#endif
++    __mode_t st_mode;			/* File mode.  */
++    __nlink_t st_nlink;			/* Link count.  */
++    __uid_t st_uid;			/* User ID of the file's owner.	*/
++    __gid_t st_gid;			/* Group ID of the file's group.*/
++    __dev_t st_rdev;			/* Device number, if device.  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t st_size;			/* Size of file, in bytes.  */
++#else
++    __off64_t st_size;			/* Size of file, in bytes.  */
++#endif
++    __blksize_t st_blksize;		/* Optimal block size for I/O.  */
++
++#ifndef __USE_FILE_OFFSET64
++    __blkcnt_t st_blocks;		/* Number 512-byte blocks allocated. */
++#else
++    unsigned long __pad2;
++    __blkcnt64_t st_blocks;		/* Number 512-byte blocks allocated. */
++#endif
++#if 0 /*def __USE_MISC*/
++    /* Nanosecond resolution timestamps are stored in a format
++       equivalent to 'struct timespec'.  This is the type used
++       whenever possible but the Unix namespace rules do not allow the
++       identifier 'timespec' to appear in the <sys/stat.h> header.
++       Therefore we have to handle the use of this header in strictly
++       standard-compliant sources special.  */
++    struct timespec st_atim;		/* Time of last access.  */
++    struct timespec st_mtim;		/* Time of last modification.  */
++    struct timespec st_ctim;		/* Time of last status change.  */
++# define st_atime st_atim.tv_sec	/* Backward compatibility.  */
++# define st_mtime st_mtim.tv_sec
++# define st_ctime st_ctim.tv_sec
++#else
++    __time_t st_atime;			/* Time of last access.  */
++    unsigned long int st_atimensec;	/* Nscecs of last access.  */
++    __time_t st_mtime;			/* Time of last modification.  */
++    unsigned long int st_mtimensec;	/* Nsecs of last modification.  */
++    __time_t st_ctime;			/* Time of last status change.  */
++    unsigned long int st_ctimensec;	/* Nsecs of last status change.  */
++#endif
++    unsigned long int __unused4;
++    unsigned long int __unused5;
++  };
++
++#ifdef __USE_LARGEFILE64
++struct stat64
++  {
++    __dev_t st_dev;			/* Device.  */
++    __ino64_t st_ino;			/* File serial number.  */
++    __mode_t st_mode;			/* File mode.  */
++    __nlink_t st_nlink;			/* Link count.  */
++    __uid_t st_uid;			/* User ID of the file's owner.	*/
++    __gid_t st_gid;			/* Group ID of the file's group.*/
++    __dev_t st_rdev;			/* Device number, if device.  */
++    __off64_t st_size;			/* Size of file, in bytes.  */
++    __blksize_t st_blksize;		/* Optimal block size for I/O.  */
++
++    unsigned long __pad2;
++    __blkcnt64_t st_blocks;		/* Number 512-byte blocks allocated. */
++#if 0 /*def __USE_MISC*/
++    /* Nanosecond resolution timestamps are stored in a format
++       equivalent to 'struct timespec'.  This is the type used
++       whenever possible but the Unix namespace rules do not allow the
++       identifier 'timespec' to appear in the <sys/stat.h> header.
++       Therefore we have to handle the use of this header in strictly
++       standard-compliant sources special.  */
++    struct timespec st_atim;		/* Time of last access.  */
++    struct timespec st_mtim;		/* Time of last modification.  */
++    struct timespec st_ctim;		/* Time of last status change.  */
++#else
++    __time_t st_atime;			/* Time of last access.  */
++    unsigned long int st_atimensec;	/* Nscecs of last access.  */
++    __time_t st_mtime;			/* Time of last modification.  */
++    unsigned long int st_mtimensec;	/* Nsecs of last modification.  */
++    __time_t st_ctime;			/* Time of last status change.  */
++    unsigned long int st_ctimensec;	/* Nsecs of last status change.  */
++#endif
++    unsigned long __unused4;
++    unsigned long __unused5;
++  };
++#endif
++
++/* Tell code we have these members.  */
++#define	_STATBUF_ST_BLKSIZE
++#define _STATBUF_ST_RDEV
++/* Nanosecond resolution time values are supported.  */
++#define _STATBUF_ST_NSEC
++
++/* Encoding of the file mode.  */
++
++#define	__S_IFMT	0170000	/* These bits determine file type.  */
++
++/* File types.  */
++#define	__S_IFDIR	0040000	/* Directory.  */
++#define	__S_IFCHR	0020000	/* Character device.  */
++#define	__S_IFBLK	0060000	/* Block device.  */
++#define	__S_IFREG	0100000	/* Regular file.  */
++#define	__S_IFIFO	0010000	/* FIFO.  */
++#define	__S_IFLNK	0120000	/* Symbolic link.  */
++#define	__S_IFSOCK	0140000	/* Socket.  */
++
++/* POSIX.1b objects.  Note that these macros always evaluate to zero.  But
++   they do it by enforcing the correct use of the macros.  */
++#define __S_TYPEISMQ(buf)  ((buf)->st_mode - (buf)->st_mode)
++#define __S_TYPEISSEM(buf) ((buf)->st_mode - (buf)->st_mode)
++#define __S_TYPEISSHM(buf) ((buf)->st_mode - (buf)->st_mode)
++
++/* Protection bits.  */
++
++#define	__S_ISUID	04000	/* Set user ID on execution.  */
++#define	__S_ISGID	02000	/* Set group ID on execution.  */
++#define	__S_ISVTX	01000	/* Save swapped text after use (sticky).  */
++#define	__S_IREAD	0400	/* Read by owner.  */
++#define	__S_IWRITE	0200	/* Write by owner.  */
++#define	__S_IEXEC	0100	/* Execute by owner.  */
+diff --git a/libc/sysdeps/linux/xtensa/bits/syscalls.h b/libc/sysdeps/linux/xtensa/bits/syscalls.h
+new file mode 100644
+index 000000000..76bcf404f
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/syscalls.h
+@@ -0,0 +1,140 @@
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++/*
++   Some of the sneaky macros in the code were taken from 
++   glibc .../sysdeps/unix/sysv/linux/xtensa/sysdep.h
++*/
++
++#define SYS_ify(syscall_name)	__NR_##syscall_name
++
++#ifdef __ASSEMBLER__
++
++/* The register layout upon entering the function is:
++
++   return addr	stack ptr	arg0, arg1, arg2, arg3, arg4, arg5
++   -----------	---------	----------------------------------
++   a0		a1		a2,   a3,   a4,   a5,   a6,   a7
++
++   (Of course a function with say 3 arguments does not have entries for
++   arguments 4, 5, and 6.)
++
++   Linux takes system-call arguments in registers.  The ABI and Xtensa
++   software conventions require the system-call number in a2.  We move any
++   argument that was in a2 to a7, and a7 to a8 if we have all 6 arguments.
++   Note that for improved efficiency, we do NOT shift all parameters down
++   one register to maintain the original order.
++
++   syscall number		arg0, arg1, arg2, arg3, arg4, arg5
++   --------------		----------------------------------
++   a2				a6,   a3,   a4,   a5,   a8,   a9
++
++   Upon return, a2 and a3 are clobbered; all other registers are preserved.  */
++
++#undef  DO_CALL
++#define DO_CALL(syscall_name, nargs)					      \
++	DO_ARGS_##nargs							      \
++	movi	a2, SYS_ify (syscall_name);				      \
++	syscall
++
++#define DO_ARGS_0
++#define DO_ARGS_1	mov a6, a2;
++#define DO_ARGS_2	mov a6, a2;
++#define DO_ARGS_3	mov a6, a2;
++#define DO_ARGS_4	mov a6, a2;
++#define DO_ARGS_5	mov a8, a6; mov a6, a2;
++#define DO_ARGS_6	mov a9, a7; mov a8, a6; mov a6, a2;
++
++#else /* not __ASSEMBLER__ */
++
++#include <errno.h>
++
++#define STR(s) #s
++#define LD_ARG(n,ar)	register int _a##n asm (STR(a##n)) = (int) (ar)
++
++#define LD_ARGS_0()
++#define LD_ARGS_1(a0)			LD_ARG(6,a0)
++#define LD_ARGS_2(a0,a1)		LD_ARGS_1(a0); LD_ARG(3,a1)
++#define LD_ARGS_3(a0,a1,a2)		LD_ARGS_2(a0,a1); LD_ARG(4,a2)
++#define LD_ARGS_4(a0,a1,a2,a3)		LD_ARGS_3(a0,a1,a2); LD_ARG(5,a3)
++#define LD_ARGS_5(a0,a1,a2,a3,a4)	LD_ARGS_4(a0,a1,a2,a3); LD_ARG(8,a4)
++#define LD_ARGS_6(a0,a1,a2,a3,a4,a5)	LD_ARGS_5(a0,a1,a2,a3,a4); LD_ARG(9,a5)
++
++#define ASM_ARGS_0			"r"(_a2)
++#define ASM_ARGS_1			ASM_ARGS_0, "r"(_a6)
++#define ASM_ARGS_2			ASM_ARGS_1, "r"(_a3)
++#define ASM_ARGS_3			ASM_ARGS_2, "r"(_a4)
++#define ASM_ARGS_4			ASM_ARGS_3, "r"(_a5)
++#define ASM_ARGS_5			ASM_ARGS_4, "r"(_a8)
++#define ASM_ARGS_6			ASM_ARGS_5, "r"(_a9)
++
++/* Define a macro which expands into the inline wrapper code for a system
++   call.  */
++
++#undef INLINE_SYSCALL
++#define INLINE_SYSCALL(name, nr, args...)				      \
++  ({ unsigned long resultvar = INTERNAL_SYSCALL (name, , nr, args);	      \
++     if (__builtin_expect (INTERNAL_SYSCALL_ERROR_P (resultvar, ), 0))	      \
++       {								      \
++         __set_errno (INTERNAL_SYSCALL_ERRNO (resultvar, ));		      \
++        resultvar = (unsigned long) -1;					      \
++       }								      \
++   (long) resultvar; })
++
++#undef INTERNAL_SYSCALL_DECL
++#define INTERNAL_SYSCALL_DECL(err) do { } while (0)
++
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)			      \
++  ({ LD_ARG(2, name);							      \
++     LD_ARGS_##nr(args);						      \
++     asm volatile ("syscall\n" 						      \
++	 	   : "=a" (_a2)						      \
++	 	   : ASM_ARGS_##nr					      \
++	 	   : "memory");						      \
++     (long) _a2; })
++
++#undef INTERNAL_SYSCALL
++#define INTERNAL_SYSCALL(name, err, nr, args...)			      \
++  INTERNAL_SYSCALL_NCS (__NR_##name, err, nr, ##args)
++
++#undef INTERNAL_SYSCALL_ERROR_P
++#define INTERNAL_SYSCALL_ERROR_P(val, err)				      \
++  ((unsigned long) (val) >= -4095L)
++
++#undef INTERNAL_SYSCALL_ERRNO
++#define INTERNAL_SYSCALL_ERRNO(val, err)	(-(val))
++
++#define _syscall0(args...)		SYSCALL_FUNC (0, args)
++#define _syscall1(args...)		SYSCALL_FUNC (1, args)
++#define _syscall2(args...)		SYSCALL_FUNC (2, args)
++#define _syscall3(args...)		SYSCALL_FUNC (3, args)
++#define _syscall4(args...)		SYSCALL_FUNC (4, args)
++#define _syscall5(args...)		SYSCALL_FUNC (5, args)
++#define _syscall6(args...)		SYSCALL_FUNC (6, args)
++
++#define C_DECL_ARGS_0()			void
++#define C_DECL_ARGS_1(t, v)		t v
++#define C_DECL_ARGS_2(t, v, args...)	t v, C_DECL_ARGS_1(args)
++#define C_DECL_ARGS_3(t, v, args...)	t v, C_DECL_ARGS_2(args)
++#define C_DECL_ARGS_4(t, v, args...)	t v, C_DECL_ARGS_3(args)
++#define C_DECL_ARGS_5(t, v, args...)	t v, C_DECL_ARGS_4(args)
++#define C_DECL_ARGS_6(t, v, args...)	t v, C_DECL_ARGS_5(args)
++
++#define C_ARGS_0()	
++#define C_ARGS_1(t, v)			v
++#define C_ARGS_2(t, v, args...)		v, C_ARGS_1 (args)
++#define C_ARGS_3(t, v, args...)		v, C_ARGS_2 (args)
++#define C_ARGS_4(t, v, args...)		v, C_ARGS_3 (args)
++#define C_ARGS_5(t, v, args...)		v, C_ARGS_4 (args)
++#define C_ARGS_6(t, v, args...)		v, C_ARGS_5 (args)
++
++#define SYSCALL_FUNC(nargs, type, name, args...)			      \
++type name (C_DECL_ARGS_##nargs (args)) {				      \
++	return (type) INLINE_SYSCALL (name, nargs, C_ARGS_##nargs (args));    \
++}
++
++#endif /* not __ASSEMBLER__ */
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/xtensa/bits/uClibc_arch_features.h b/libc/sysdeps/linux/xtensa/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..7abd0cefc
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/uClibc_arch_features.h
+@@ -0,0 +1,44 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++/* instruction used when calling abort() to kill yourself */
++#define __UCLIBC_ABORT_INSTRUCTION__ "ill"
++
++/* can your target use syscall6() for mmap ? */
++#define __UCLIBC_MMAP_HAS_6_ARGS__
++
++/* does your target use syscall4() for truncate64 ? (32bit arches only) */
++#undef __UCLIBC_TRUNCATE64_HAS_4_ARGS__
++
++/* does your target have a broken create_module() ? */
++#undef __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#undef __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target prefix all symbols with an _ ? */
++#define __UCLIBC_NO_UNDERSCORES__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target doesn't like .global */
++#undef __UCLIBC_ASM_GLOBAL_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* needed probably only for ppc64 */
++#undef __UCLIBC_HAVE_ASM_GLOBAL_DOT_NAME__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/xtensa/bits/uClibc_page.h b/libc/sysdeps/linux/xtensa/bits/uClibc_page.h
+new file mode 100644
+index 000000000..74a9f60ba
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/uClibc_page.h
+@@ -0,0 +1,31 @@
++/*  Copyright (C) 2004     Erik Andersen
++ *
++ *  This library is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU Lesser General Public
++ *  License as published by the Free Software Foundation; either
++ *  version 2.1 of the License, or (at your option) any later version.
++ *
++ *  The GNU C Library is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *  Lesser General Public License for more details.
++ *
++ *  You should have received a copy of the GNU Lesser General Public
++ *  License along with the GNU C Library; if not, write to the Free
++ *  Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++ *  02111-1307 USA.
++ */
++
++/* Supply an architecture specific value for PAGE_SIZE and friends.  */
++
++#ifndef _UCLIBC_PAGE_H
++#define _UCLIBC_PAGE_H
++
++#include <bits/xtensa-config.h>
++
++/* PAGE_SHIFT determines the page size -- in this case 4096 */
++#define PAGE_SHIFT	XCHAL_MMU_MIN_PTE_PAGE_SIZE
++#define PAGE_SIZE	(1UL << PAGE_SHIFT)
++#define PAGE_MASK	(~(PAGE_SIZE-1))
++
++#endif /* _UCLIBC_PAGE_H */
+diff --git a/libc/sysdeps/linux/xtensa/bits/wordsize.h b/libc/sysdeps/linux/xtensa/bits/wordsize.h
+new file mode 100644
+index 000000000..ba643b60a
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/wordsize.h
+@@ -0,0 +1,19 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define __WORDSIZE	32
+diff --git a/libc/sysdeps/linux/xtensa/bits/xtensa-config.h b/libc/sysdeps/linux/xtensa/bits/xtensa-config.h
+new file mode 100644
+index 000000000..34cf28c0a
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bits/xtensa-config.h
+@@ -0,0 +1,53 @@
++/* Xtensa configuration settings.
++   Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007
++   Free Software Foundation, Inc.
++   Contributed by Bob Wilson (bwilson@tensilica.com) at Tensilica.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef XTENSA_CONFIG_H
++#define XTENSA_CONFIG_H
++
++/* The macros defined here match those with the same names in the Xtensa
++   compile-time HAL (Hardware Abstraction Layer).  Please refer to the
++   Xtensa System Software Reference Manual for documentation of these
++   macros.  */
++
++/* The following macros reflect the default expectations for Xtensa
++   processor configurations that can run glibc.  If you want to try
++   building glibc for an Xtensa configuration that is missing these
++   options, you will at least need to change the values of these
++   macros.  */
++
++#undef XCHAL_HAVE_NSA
++#define XCHAL_HAVE_NSA			1
++
++#undef XCHAL_HAVE_LOOPS
++#define XCHAL_HAVE_LOOPS		1
++
++/* Assume the maximum number of AR registers.  This currently only affects
++   the __window_spill function, and it is always safe to flush extra.  */
++
++#undef XCHAL_NUM_AREGS
++#define XCHAL_NUM_AREGS			64
++
++/* Set a default page size.  This is currently needed when bootstrapping
++   the runtime linker.  See comments in dl-machine.h where this is used.  */
++
++#undef XCHAL_MMU_MIN_PTE_PAGE_SIZE
++#define XCHAL_MMU_MIN_PTE_PAGE_SIZE	12
++
++#endif /* !XTENSA_CONFIG_H */
+diff --git a/libc/sysdeps/linux/xtensa/brk.c b/libc/sysdeps/linux/xtensa/brk.c
+new file mode 100644
+index 000000000..51f610b70
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/brk.c
+@@ -0,0 +1,43 @@
++/* brk system call for Linux/Xtensa.
++   Copyright (C) 1996, 1997, 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include <errno.h>
++#include <unistd.h>
++#include <sys/syscall.h>
++
++/* This must be initialized data because commons can't have aliases.  */
++void *__curbrk attribute_hidden = 0;
++
++libc_hidden_proto(brk)
++int
++brk (void *addr)
++{
++  void *newbrk;
++
++  __curbrk = newbrk = (void *) INLINE_SYSCALL (brk, 1, addr);
++
++  if (newbrk < addr)
++    {
++      __set_errno (ENOMEM);
++      return -1;
++    }
++
++  return 0;
++}
++libc_hidden_def(brk)
+diff --git a/libc/sysdeps/linux/xtensa/bsd-_setjmp.S b/libc/sysdeps/linux/xtensa/bsd-_setjmp.S
+new file mode 100644
+index 000000000..4e6a2da56
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bsd-_setjmp.S
+@@ -0,0 +1 @@
++/* _setjmp is in setjmp.S  */
+diff --git a/libc/sysdeps/linux/xtensa/bsd-setjmp.S b/libc/sysdeps/linux/xtensa/bsd-setjmp.S
+new file mode 100644
+index 000000000..1da848d2f
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/bsd-setjmp.S
+@@ -0,0 +1 @@
++/* setjmp is in setjmp.S  */
+diff --git a/libc/sysdeps/linux/xtensa/clone.S b/libc/sysdeps/linux/xtensa/clone.S
+new file mode 100644
+index 000000000..31921ea47
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/clone.S
+@@ -0,0 +1,103 @@
++/* Copyright (C) 2001, 2005, 2007 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* clone is even more special than fork as it mucks with stacks
++   and invokes a function in the right context after it's all over.  */
++
++#include "sysdep.h"
++#include <sys/syscall.h>
++#define _ERRNO_H	1
++#include <bits/errno.h>
++
++/* int clone (a2 = int (*fn)(void *arg),
++	      a3 = void *child_stack,
++	      a4 = int flags,
++	      a5 = void *arg,
++              a6 = pid_t *ptid,
++	      a7 = struct user_desc *tls,
++	      16(sp) = pid_t *ctid) */
++
++        .text
++ENTRY (__clone)
++
++	/* Sanity check arguments.  */
++	beqz	a2, .Leinval	/* no NULL function pointers */
++	beqz	a3, .Leinval	/* no NULL stack pointers */
++
++	/* a2 and a3 are candidates for destruction by system-call return
++	   parameters.  We don't need the stack pointer after the system
++	   call.  We trust that the kernel will preserve a7, a9, and a6.  */
++
++	mov	a9, a5			/* save function argument */
++	mov	a5, a7
++	mov	a7, a2			/* save function pointer */
++	mov	a8, a6			/* use a8 as a temp */
++	mov	a6, a4
++	mov	a4, a8
++	l32i	a8, a1, 16		/* child_tid */
++	movi	a2, SYS_ify (clone)
++
++	/* syscall (a2 = NR_clone,
++		    a6 = clone_flags,
++		    a3 = usp,
++		    a4 = parent_tid,
++		    a5 = child_tls,
++		    a8 = child_tid) */
++	syscall
++	bltz	a2, SYSCALL_ERROR_LABEL
++	beqz	a2, .Lthread_start
++
++	/* Fall through for parent.  */
++.Lpseudo_end:
++	retw
++
++.Leinval:
++	movi	a2, -EINVAL
++	j	SYSCALL_ERROR_LABEL
++
++.Lthread_start:
++	/* Start child thread.  */
++	movi	a0, 0			/* terminate the stack frame */
++
++#ifdef RESET_PID
++	/* Check and see if we need to reset the PID.  */
++	bbsi.l	a6, 16, 1f		/* CLONE_THREAD = 0x00010000 */
++	movi	a2, -1
++	bbsi.l	a6, 8, 2f		/* CLONE_VM = 0x00000100 */
++	movi	a2, SYS_ify (getpid)
++	syscall
++2:	rur	a3, THREADPTR
++	movi	a4, PID_OFFSET
++	add	a4, a4, a3
++	s32i	a2, a4, 0
++	movi	a4, TID_OFFSET
++	add	a4, a4, a3
++	s32i	a2, a3, 0
++1:
++#endif /* RESET_PID */
++
++	mov	a6, a9			/* load up the 'arg' parameter */
++	callx4	a7			/* call the user's function */
++
++	/* Call _exit.  Note that any return parameter from the user's
++	   function in a6 is seen as inputs to _exit.  */
++	movi	a2, JUMPTARGET(_exit)
++	callx4	a2
++
++PSEUDO_END (__clone)
++
++weak_alias (__clone, clone)
+diff --git a/libc/sysdeps/linux/xtensa/crt1.S b/libc/sysdeps/linux/xtensa/crt1.S
+new file mode 100644
+index 000000000..63fbadc15
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/crt1.S
+@@ -0,0 +1,119 @@
++/* Startup code compliant to the ELF Xtensa ABI.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   In addition to the permissions in the GNU Lesser General Public
++   License, the Free Software Foundation gives you unlimited
++   permission to link the compiled version of this file with other
++   programs, and to distribute those programs without any restriction
++   coming from the use of this file. (The GNU Lesser General Public
++   License restrictions do apply in other respects; for example, they
++   cover modification of the file, and distribution when not linked
++   into another program.)
++
++   Note that people who make modified versions of this file are not
++   obligated to grant this special exception for their modified
++   versions; it is their choice whether to do so. The GNU Lesser
++   General Public License gives permission to release a modified
++   version without this exception; this exception also makes it
++   possible to release a modified version which carries forward this
++   exception.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include <features.h>
++
++#ifndef __UCLIBC_CTOR_DTOR__
++        .weak _init
++        .weak _fini
++#endif
++
++/* This is the canonical entry point, usually the first thing in the text
++   segment.  When the entry point runs, most register values are unspecified,
++   except for:
++
++	a2	Contains a function pointer to be registered with `atexit'.
++		This is how the dynamic linker arranges to have DT_FINI
++		functions called for shared libraries that have been loaded
++		before this code runs.
++
++	a1	The stack (i.e., a1+16) contains the arguments and environment:
++		a1+0			argc
++		a1+4			argv[0]
++		...
++		a1+(4*argc)		NULL
++		a1+(4*(argc+1))		envp[0]
++		...
++					NULL
++
++  Setup parameters accordingly (for a call4).  See function prototype
++  from sysdeps/generic/libc-start.c
++
++	a6 = *main
++	a7 = argc
++	a8 = ubp_av
++	a9 = *init
++	a10 = *fini
++	a11 = *rtld_fini
++	[sp+0] = stack_end
++ */
++
++	.text
++	.align	4
++	.literal_position
++	.global	_start
++	.type	_start, @function
++_start:
++	/* Clear a0 to obviously mark the outermost frame.  */
++	movi	a0, 0
++
++	/* Load up the user's main function.  */
++	movi	a6, main
++
++	/* Extract the arguments as encoded on the stack and set up
++	   the arguments for `main': argc, argv.  envp will be determined
++	   later in __uClibc_main.  */
++	l32i	a7, a1, 0	/* Load the argument count.  */
++	addi	a8, a1, 4	/* Compute the argv pointer.  */
++
++	/* Push address of our own entry points to .fini and .init.  */
++	movi	a9, _init
++	movi	a10, _fini
++
++	/* Setup the shared library termination function.  */
++	mov	a11, a2
++
++	/* Provide the highest stack address to the user code (for stacks
++	   which grow downwards).  Note that we destroy the stack version
++	   of argc here.  */
++	s32i	a1, a1, 0
++
++	/* Call the user's main function, and exit with its value.
++	   But let the libc call main.    */
++	movi	a4, __uClibc_main
++	callx4	a4
++
++	/* Crash if somehow `exit' does return.  */
++	ill
++
++	/* Define a symbol for the first piece of initialized data.  */
++	.data
++	.align	4
++	.global	__data_start
++__data_start:
++	.long	0
++	.weak	data_start
++	data_start = __data_start
+diff --git a/libc/sysdeps/linux/xtensa/crti.S b/libc/sysdeps/linux/xtensa/crti.S
+new file mode 100644
+index 000000000..a01c02c9f
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/crti.S
+@@ -0,0 +1,16 @@
++/* glibc's sysdeps/xtensa/elf/initfini.c used for reference [PROLOG] */
++
++	.section .init
++	.align	4
++	.global	_init
++	.type	_init, @function
++_init:
++	entry	sp, 48
++
++
++	.section .fini
++	.align	4
++	.global	_fini
++	.type	_fini, @function
++_fini:
++	entry	sp, 48
+diff --git a/libc/sysdeps/linux/xtensa/crtn.S b/libc/sysdeps/linux/xtensa/crtn.S
+new file mode 100644
+index 000000000..ab1a489c5
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/crtn.S
+@@ -0,0 +1,8 @@
++/* glibc's sysdeps/xtensa/elf/initfini.c used for reference [EPILOG] */
++
++	.section .init
++	retw
++
++
++	.section .fini
++	retw
+diff --git a/libc/sysdeps/linux/xtensa/fork.c b/libc/sysdeps/linux/xtensa/fork.c
+new file mode 100644
+index 000000000..034844122
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/fork.c
+@@ -0,0 +1,25 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * fork() for Xtensa uClibc
++ *
++ * Copyright (C) 2007 Tensilica Inc.
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */ 
++
++#include <unistd.h>
++#include <sys/syscall.h>
++#define _SIGNAL_H
++#include <bits/signum.h>
++
++/* Xtensa doesn't provide a 'fork' system call, so we use 'clone'.  */
++
++extern __typeof(fork) __libc_fork;
++
++libc_hidden_proto (fork)
++pid_t __libc_fork (void)
++{
++  return (pid_t) INLINE_SYSCALL (clone, 2, SIGCHLD, 0);
++}
++weak_alias (__libc_fork, fork)
++libc_hidden_weak (fork)
+diff --git a/libc/sysdeps/linux/xtensa/mmap.S b/libc/sysdeps/linux/xtensa/mmap.S
+new file mode 100644
+index 000000000..c991e7d27
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/mmap.S
+@@ -0,0 +1,57 @@
++/* Copyright (C) 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "sysdep.h"
++#include <sys/syscall.h>
++
++#define PAGE_SHIFT 12
++
++/* __ptr_t __mmap (a2 = __ptr_t addr,
++		   a3 = size_t len,
++		   a4 = int prot,
++		   a5 = int flags,
++		   a6 = int fd,
++		   a7 = off_t offset) */
++
++ENTRY (__mmap)
++
++	/* We only support mmap2 in the kernel, so shift offset by
++	   page - size.  */
++	mov	a8, a6
++	mov	a6, a2
++	movi	a2, SYS_ify (mmap2)
++	srli	a9, a7, PAGE_SHIFT
++
++	/* syscall (a2 = NR_mmap2,
++		    a6 = arg0,
++		    a3 = arg1,
++		    a4 = arg2,
++		    a5 = arg3,
++		    a8 = arg4,
++		    a9 = arg5) */
++
++	syscall
++	bltz	a2, SYSCALL_ERROR_LABEL
++
++.Lpseudo_end:
++	retw
++
++PSEUDO_END (__mmap)
++
++weak_alias (__mmap, mmap)
++libc_hidden_weak (mmap)
+diff --git a/libc/sysdeps/linux/xtensa/posix_fadvise.c b/libc/sysdeps/linux/xtensa/posix_fadvise.c
+new file mode 100644
+index 000000000..0fe13a1e9
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/posix_fadvise.c
+@@ -0,0 +1,29 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * posix_fadvise() for Xtensa uClibc
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ * Copyright (C) 2007 Tensilica Inc.
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sys/syscall.h>
++#include <fcntl.h>
++
++int posix_fadvise (int fd, off_t offset, off_t len, int advice)
++{
++#ifdef __NR_fadvise64_64
++	INTERNAL_SYSCALL_DECL (err);
++	int ret = INTERNAL_SYSCALL (fadvise64_64, err, 6, fd, advice,
++								__LONG_LONG_PAIR ((long) (offset >> 31),
++												  (long) offset),
++								__LONG_LONG_PAIR ((long) (len >> 31),
++												  (long) len));
++	if (!INTERNAL_SYSCALL_ERROR_P (ret, err))
++		return 0;
++	return INTERNAL_SYSCALL_ERRNO (ret, err);
++#else
++	return ENOSYS;
++#endif
++}
+diff --git a/libc/sysdeps/linux/xtensa/posix_fadvise64.c b/libc/sysdeps/linux/xtensa/posix_fadvise64.c
+new file mode 100644
+index 000000000..1fdeeba79
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/posix_fadvise64.c
+@@ -0,0 +1,39 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * posix_fadvise64() for Xtensa uClibc
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ * Copyright (C) 2007 Tensilica Inc.
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <features.h>
++#include <unistd.h>
++#include <errno.h>
++#include <endian.h>
++#include <stdint.h>
++#include <sys/types.h>
++#include <sys/syscall.h>
++#include <fcntl.h>
++
++#ifdef __UCLIBC_HAS_LFS__
++
++int posix_fadvise64 (int fd, __off64_t offset, __off64_t len, int advice)
++{
++#ifdef __NR_fadvise64_64
++	INTERNAL_SYSCALL_DECL (err);
++	int ret = INTERNAL_SYSCALL (fadvise64_64, err, 6, fd, advice,
++								__LONG_LONG_PAIR ((long) (offset >> 32),
++												  (long) offset),
++								__LONG_LONG_PAIR ((long) (len >> 32),
++												  (long) len));
++	if (!INTERNAL_SYSCALL_ERROR_P (ret, err))
++		return 0;
++	return INTERNAL_SYSCALL_ERRNO (ret, err);
++#else
++	return ENOSYS;
++#endif
++}
++
++#endif /* __UCLIBC_HAS_LFS__ */
+diff --git a/libc/sysdeps/linux/xtensa/pread_write.c b/libc/sysdeps/linux/xtensa/pread_write.c
+new file mode 100644
+index 000000000..9e8813210
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/pread_write.c
+@@ -0,0 +1,193 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++/*
++ * Based in part on the files
++ *		./sysdeps/unix/sysv/linux/pwrite.c,
++ *		./sysdeps/unix/sysv/linux/pread.c,
++ *		sysdeps/posix/pread.c
++ *		sysdeps/posix/pwrite.c
++ * from GNU libc 2.2.5, but reworked considerably...
++ */
++
++#include <sys/syscall.h>
++#include <unistd.h>
++#include <stdint.h>
++#include <endian.h>
++
++extern __typeof(pread) __libc_pread;
++extern __typeof(pwrite) __libc_pwrite;
++#ifdef __UCLIBC_HAS_LFS__
++extern __typeof(pread64) __libc_pread64;
++extern __typeof(pwrite64) __libc_pwrite64;
++#endif
++
++#include <bits/kernel_types.h>
++
++#ifdef __NR_pread
++
++# define __NR___syscall_pread __NR_pread
++/* On Xtensa, 64-bit values are aligned in even/odd register pairs.  */
++static inline _syscall6(ssize_t, __syscall_pread, int, fd, void *, buf,
++		size_t, count, int, pad, off_t, offset_hi, off_t, offset_lo);
++
++ssize_t __libc_pread(int fd, void *buf, size_t count, off_t offset)
++{
++	return __syscall_pread(fd, buf, count, 0, __LONG_LONG_PAIR(offset >> 31, offset));
++}
++weak_alias(__libc_pread,pread)
++
++# ifdef __UCLIBC_HAS_LFS__
++ssize_t __libc_pread64(int fd, void *buf, size_t count, off64_t offset)
++{
++    uint32_t low = offset & 0xffffffff;
++    uint32_t high = offset >> 32;
++	return __syscall_pread(fd, buf, count, 0, __LONG_LONG_PAIR(high, low));
++}
++weak_alias(__libc_pread64,pread64)
++# endif /* __UCLIBC_HAS_LFS__  */
++
++#endif /* __NR_pread */
++
++#ifdef __NR_pwrite
++
++# define __NR___syscall_pwrite __NR_pwrite
++/* On Xtensa, 64-bit values are aligned in even/odd register pairs.  */
++static inline _syscall6(ssize_t, __syscall_pwrite, int, fd, const void *, buf,
++		size_t, count, int, pad, off_t, offset_hi, off_t, offset_lo);
++
++ssize_t __libc_pwrite(int fd, const void *buf, size_t count, off_t offset)
++{
++	return __syscall_pwrite(fd, buf, count, 0, __LONG_LONG_PAIR(offset >> 31, offset));
++}
++weak_alias(__libc_pwrite,pwrite)
++
++# ifdef __UCLIBC_HAS_LFS__
++ssize_t __libc_pwrite64(int fd, const void *buf, size_t count, off64_t offset)
++{
++    uint32_t low = offset & 0xffffffff;
++    uint32_t high = offset >> 32;
++	return __syscall_pwrite(fd, buf, count, 0, __LONG_LONG_PAIR(high, low));
++}
++weak_alias(__libc_pwrite64,pwrite64)
++# endif /* __UCLIBC_HAS_LFS__  */
++#endif /* __NR_pwrite */
++
++#if ! defined __NR_pread || ! defined __NR_pwrite
++libc_hidden_proto(read)
++libc_hidden_proto(write)
++libc_hidden_proto(lseek)
++
++static ssize_t __fake_pread_write(int fd, void *buf,
++		size_t count, off_t offset, int do_pwrite)
++{
++	int save_errno;
++	ssize_t result;
++	off_t old_offset;
++
++	/* Since we must not change the file pointer preserve the
++	 * value so that we can restore it later.  */
++	if ((old_offset=lseek(fd, 0, SEEK_CUR)) == (off_t) -1)
++		return -1;
++
++	/* Set to wanted position.  */
++	if (lseek(fd, offset, SEEK_SET) == (off_t) -1)
++		return -1;
++
++	if (do_pwrite == 1) {
++		/* Write the data.  */
++		result = write(fd, buf, count);
++	} else {
++		/* Read the data.  */
++		result = read(fd, buf, count);
++	}
++
++	/* Now we have to restore the position.  If this fails we
++	 * have to return this as an error.  */
++	save_errno = errno;
++	if (lseek(fd, old_offset, SEEK_SET) == (off_t) -1)
++	{
++		if (result == -1)
++			__set_errno(save_errno);
++		return -1;
++	}
++	__set_errno(save_errno);
++	return(result);
++}
++
++# ifdef __UCLIBC_HAS_LFS__
++libc_hidden_proto(lseek64)
++
++static ssize_t __fake_pread_write64(int fd, void *buf,
++		size_t count, off64_t offset, int do_pwrite)
++{
++	int save_errno;
++	ssize_t result;
++	off64_t old_offset;
++
++	/* Since we must not change the file pointer preserve the
++	 * value so that we can restore it later.  */
++	if ((old_offset=lseek64(fd, 0, SEEK_CUR)) == (off64_t) -1)
++		return -1;
++
++	/* Set to wanted position.  */
++	if (lseek64(fd, offset, SEEK_SET) == (off64_t) -1)
++		return -1;
++
++	if (do_pwrite == 1) {
++		/* Write the data.  */
++		result = write(fd, buf, count);
++	} else {
++		/* Read the data.  */
++		result = read(fd, buf, count);
++	}
++
++	/* Now we have to restore the position. */
++	save_errno = errno;
++	if (lseek64(fd, old_offset, SEEK_SET) == (off64_t) -1) {
++		if (result == -1)
++			__set_errno (save_errno);
++		return -1;
++	}
++	__set_errno (save_errno);
++	return result;
++}
++# endif /* __UCLIBC_HAS_LFS__  */
++#endif /*  ! defined __NR_pread || ! defined __NR_pwrite */
++
++#ifndef __NR_pread
++ssize_t __libc_pread(int fd, void *buf, size_t count, off_t offset)
++{
++	return __fake_pread_write(fd, buf, count, offset, 0);
++}
++weak_alias(__libc_pread,pread)
++
++# ifdef __UCLIBC_HAS_LFS__
++ssize_t __libc_pread64(int fd, void *buf, size_t count, off64_t offset)
++{
++	return __fake_pread_write64(fd, buf, count, offset, 0);
++}
++weak_alias(__libc_pread64,pread64)
++# endif /* __UCLIBC_HAS_LFS__  */
++#endif /* ! __NR_pread */
++
++#ifndef __NR_pwrite
++ssize_t __libc_pwrite(int fd, const void *buf, size_t count, off_t offset)
++{
++	/* we won't actually be modifying the buffer,
++	 *just cast it to get rid of warnings */
++	return __fake_pread_write(fd, (void*)buf, count, offset, 1);
++}
++weak_alias(__libc_pwrite,pwrite)
++
++# ifdef __UCLIBC_HAS_LFS__
++ssize_t __libc_pwrite64(int fd, const void *buf, size_t count, off64_t offset)
++{
++	return __fake_pread_write64(fd, (void*)buf, count, offset, 1);
++}
++weak_alias(__libc_pwrite64,pwrite64)
++# endif /* __UCLIBC_HAS_LFS__  */
++#endif /* ! __NR_pwrite */
+diff --git a/libc/sysdeps/linux/xtensa/setjmp.S b/libc/sysdeps/linux/xtensa/setjmp.S
+new file mode 100644
+index 000000000..5e81460c7
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/setjmp.S
+@@ -0,0 +1,131 @@
++/* setjmp for Xtensa Processors.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++/* This implementation relies heavily on the Xtensa register window
++   mechanism.  Setjmp flushes all the windows except its own to the
++   stack and then copies registers from the save areas on the stack
++   into the jmp_buf structure, along with the return address of the call
++   to setjmp.  Longjmp invalidates all the windows except its own, and
++   then sets things up so that it will return to the right place,
++   using a window underflow to automatically restore the registers.
++
++   Note that it would probably be sufficient to only copy the
++   registers from setjmp's caller into jmp_buf.  However, we also copy
++   the save area located at the stack pointer of setjmp's caller.
++   This save area will typically remain intact until the longjmp call.
++   The one exception is when there is an intervening alloca in
++   setjmp's caller.  This is certainly an unusual situation and is
++   likely to cause problems in any case (the storage allocated on the
++   stack cannot be safely accessed following the longjmp).  As bad as
++   it is, on most systems this situation would not necessarily lead to
++   a catastrophic failure.  If we did not preserve the extra save area
++   on Xtensa, however, it would.  When setjmp's caller returns after a
++   longjmp, there will be a window underflow; an invalid return
++   address or stack pointer in the save area will almost certainly
++   lead to a crash.  Keeping a copy of the extra save area in the
++   jmp_buf avoids this with only a small additional cost.  If setjmp
++   and longjmp are ever time-critical, this could be removed.  */
++
++#include "sysdep.h"
++
++/* int setjmp (a2 = jmp_buf env) */
++
++ENTRY (_setjmp)
++	movi	a3, 0
++	j	1f
++END (_setjmp)
++libc_hidden_def (_setjmp)
++
++ENTRY (setjmp)
++	movi	a3, 1
++	j	1f
++END (setjmp)
++
++/* int __sigsetjmp (a2 = jmp_buf env,
++		    a3 = int savemask)  */
++
++ENTRY (__sigsetjmp)
++1:	
++	/* Flush registers.  */
++	movi	a4, __window_spill
++	callx4	a4
++
++	/* Preserve the second argument (savemask) in a15.  The selection
++ 	   of a15 is arbitrary, except it's otherwise unused.  There is no
++	   risk of triggering a window overflow since we just returned
++	   from __window_spill().  */
++	mov	a15, a3
++
++	/* Copy the register save area at (sp - 16).  */
++	addi	a5, a1, -16
++	l32i	a3, a5, 0
++	l32i	a4, a5, 4
++	s32i	a3, a2, 0
++	s32i	a4, a2, 4
++	l32i	a3, a5, 8
++	l32i	a4, a5, 12
++	s32i	a3, a2, 8
++	s32i	a4, a2, 12
++
++	/* Copy 0-8 words from the register overflow area.  */
++	extui	a3, a0, 30, 2
++	blti	a3, 2, .Lendsj
++	l32i	a7, a1, 4
++	slli	a4, a3, 4
++	sub	a5, a7, a4
++	addi	a6, a2, 16
++	addi	a7, a7, -16		// a7 = end of register overflow area
++.Lsjloop:
++	l32i	a3, a5, 0
++	l32i	a4, a5, 4
++	s32i	a3, a6, 0
++	s32i	a4, a6, 4
++	l32i	a3, a5, 8
++	l32i	a4, a5, 12
++	s32i	a3, a6, 8
++	s32i	a4, a6, 12
++	addi	a5, a5, 16
++	addi	a6, a6, 16
++	blt	a5, a7, .Lsjloop
++.Lendsj:
++
++	/* Copy the register save area at sp.  */
++	l32i	a3, a1, 0
++	l32i	a4, a1, 4
++	s32i	a3, a2, 48
++	s32i	a4, a2, 52
++	l32i	a3, a1, 8
++	l32i	a4, a1, 12
++	s32i	a3, a2, 56
++	s32i	a4, a2, 60
++
++	/* Save the return address, including the window size bits.  */
++	s32i	a0, a2, 64
++
++	/* a2 still addresses jmp_buf.  a15 contains savemask.  */
++	mov	a6, a2
++	mov	a7, a15
++	movi	a3, __sigjmp_save
++	callx4	a3
++	mov	a2, a6
++	retw
++END(__sigsetjmp)
++
++weak_extern(_setjmp)
++weak_extern(setjmp)
+diff --git a/libc/sysdeps/linux/xtensa/sys/procfs.h b/libc/sysdeps/linux/xtensa/sys/procfs.h
+new file mode 100644
+index 000000000..785c400c8
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/sys/procfs.h
+@@ -0,0 +1,121 @@
++/* Copyright (C) 1996, 1997, 1999, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++
++#define ELF_NGREG 32
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Register set for the floating-point registers.  */
++#define ELF_NFPREG 18
++typedef unsigned long elf_fpreg_t;
++typedef elf_fpreg_t elf_fpregset_t[ELF_NFPREG];
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned short int pr_uid;
++    unsigned short int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/xtensa/sys/ptrace.h b/libc/sysdeps/linux/xtensa/sys/ptrace.h
+new file mode 100644
+index 000000000..7aad929bb
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/sys/ptrace.h
+@@ -0,0 +1,156 @@
++/* `ptrace' debugger support interface.  Linux version.
++   Copyright (C) 1996, 1997, 1998, 1999, 2000, 2007
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_PTRACE_H
++#define _SYS_PTRACE_H	1
++
++#include <features.h>
++
++/* Kludge away careless namespace pollution from the kernel. */
++
++#undef PTRACE_GETREGS
++#undef PTRACE_SETREGS
++#undef PTRACE_GETFPREGS
++#undef PTRACE_SETFPREGS
++#undef PTRACE_GETFPREGSIZE
++
++
++__BEGIN_DECLS
++
++/* Type of the REQUEST argument to `ptrace.'  */
++enum __ptrace_request
++{
++  /* Indicate that the process making this request should be traced.
++     All signals received by this process can be intercepted by its
++     parent, and its parent can use the other `ptrace' requests.  */
++  PTRACE_TRACEME = 0,
++#define PT_TRACE_ME PTRACE_TRACEME
++
++  /* Return the word in the process's text space at address ADDR.  */
++  PTRACE_PEEKTEXT = 1,
++#define PT_READ_I PTRACE_PEEKTEXT
++
++  /* Return the word in the process's data space at address ADDR.  */
++  PTRACE_PEEKDATA = 2,
++#define PT_READ_D PTRACE_PEEKDATA
++
++  /* Return the word in the process's user area at offset ADDR.  */
++  PTRACE_PEEKUSER = 3,
++#define PT_READ_U PTRACE_PEEKUSER
++
++  /* Write the word DATA into the process's text space at address ADDR.  */
++  PTRACE_POKETEXT = 4,
++#define PT_WRITE_I PTRACE_POKETEXT
++
++  /* Write the word DATA into the process's data space at address ADDR.  */
++  PTRACE_POKEDATA = 5,
++#define PT_WRITE_D PTRACE_POKEDATA
++
++  /* Write the word DATA into the process's user area at offset ADDR.  */
++  PTRACE_POKEUSER = 6,
++#define PT_WRITE_U PTRACE_POKEUSER
++
++  /* Continue the process.  */
++  PTRACE_CONT = 7,
++#define PT_CONTINUE PTRACE_CONT
++
++  /* Kill the process.  */
++  PTRACE_KILL = 8,
++#define PT_KILL PTRACE_KILL
++
++  /* Single step the process.
++     This is not supported on all machines.  */
++  PTRACE_SINGLESTEP = 9,
++#define PT_STEP PTRACE_SINGLESTEP
++
++  /* Get all general purpose registers used by a processes.
++     This is not supported on all machines.  */
++   PTRACE_GETREGS = 12,
++#define PT_GETREGS PTRACE_GETREGS
++
++  /* Set all general purpose registers used by a processes.
++     This is not supported on all machines.  */
++   PTRACE_SETREGS = 13,
++#define PT_SETREGS PTRACE_SETREGS
++
++  /* Get all floating point registers used by a processes.
++     This is not supported on all machines.  */
++   PTRACE_GETFPREGS = 14,
++#define PT_GETFPREGS PTRACE_GETFPREGS
++
++  /* Set all floating point registers used by a processes.
++     This is not supported on all machines.  */
++   PTRACE_SETFPREGS = 15,
++#define PT_SETFPREGS PTRACE_SETFPREGS
++
++  /* Attach to a process that is already running. */
++  PTRACE_ATTACH = 16,
++#define PT_ATTACH PTRACE_ATTACH
++
++  /* Detach from a process attached to with PTRACE_ATTACH.  */
++  PTRACE_DETACH = 17,
++#define PT_DETACH PTRACE_DETACH
++
++  /* Get size required for the buffer holding the floating point registers.
++     This is not supported on all machines.  */
++   PTRACE_GETFPREGSIZE = 18,
++#define PT_GETFPREGSIZE PTRACE_GETFPREGSIZE
++
++  /* Continue and stop at the next (return from) syscall.  */
++  PTRACE_SYSCALL = 24
++#define PT_SYSCALL PTRACE_SYSCALL
++};
++
++/* Options set using PTRACE_SETOPTIONS.  */
++enum __ptrace_setoptions {
++  PTRACE_O_TRACESYSGOOD	= 0x00000001,
++  PTRACE_O_TRACEFORK	= 0x00000002,
++  PTRACE_O_TRACEVFORK   = 0x00000004,
++  PTRACE_O_TRACECLONE	= 0x00000008,
++  PTRACE_O_TRACEEXEC	= 0x00000010,
++  PTRACE_O_TRACEVFORKDONE = 0x00000020,
++  PTRACE_O_TRACEEXIT	= 0x00000040,
++  PTRACE_O_MASK		= 0x0000007f
++};
++
++/* Wait extended result codes for the above trace options.  */
++enum __ptrace_eventcodes {
++  PTRACE_EVENT_FORK	= 1,
++  PTRACE_EVENT_VFORK	= 2,
++  PTRACE_EVENT_CLONE	= 3,
++  PTRACE_EVENT_EXEC	= 4,
++  PTRACE_EVENT_VFORK_DONE = 5,
++  PTRACE_EVENT_EXIT	= 6
++};
++
++/* Perform process tracing functions.  REQUEST is one of the values
++   above, and determines the action to be taken.
++   For all requests except PTRACE_TRACEME, PID specifies the process to be
++   traced.
++
++   PID and the other arguments described above for the various requests should
++   appear (those that are used for the particular request) as:
++     pid_t PID, void *ADDR, int DATA, void *ADDR2
++   after REQUEST.  */
++extern long int ptrace (enum __ptrace_request __request, ...) __THROW;
++
++__END_DECLS
++
++#endif /* _SYS_PTRACE_H */
+diff --git a/libc/sysdeps/linux/xtensa/sys/ucontext.h b/libc/sysdeps/linux/xtensa/sys/ucontext.h
+new file mode 100644
+index 000000000..4c37201ea
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/sys/ucontext.h
+@@ -0,0 +1,49 @@
++/* Copyright (C) 2001, 2006, 2007  Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++
++/* We need the signal context definitions even if they are not used
++   included in <signal.h>.  */
++#include <bits/sigcontext.h>
++
++/* Revise this structure when we add support for coprocessors.  */
++
++/* Structure to describe FPU registers.  */
++typedef struct fpregset
++{
++  int dummy;
++} fpregset_t;
++
++typedef struct sigcontext mcontext_t;
++
++/* Userlevel context.  */
++typedef struct ucontext
++  {
++    unsigned long int uc_flags;
++    struct ucontext *uc_link;
++    stack_t uc_stack;
++    mcontext_t uc_mcontext;
++    __sigset_t uc_sigmask;
++  } ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/xtensa/syscall.S b/libc/sysdeps/linux/xtensa/syscall.S
+new file mode 100644
+index 000000000..955e889cf
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/syscall.S
+@@ -0,0 +1,42 @@
++/* Copyright (C) 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "sysdep.h"
++
++/* The register layout upon entering the function is:
++
++   arguments	syscall number	arg0, arg1, arg2, arg3, arg4, arg5
++   ---------	--------------	----------------------------------
++   function	a2		a3,   a4,   a5,   a6,   a7,   (sp)
++   syscall	a2		a6,   a3,   a4,   a5,   a8,   a9
++ */
++
++ENTRY (syscall)
++	l32i	a9, a1, 16	/* load extra argument from stack */
++	mov	a8, a7
++	mov	a7, a3		/* preserve a3 in a7 */
++	mov	a3, a4
++	mov	a4, a5
++	mov	a5, a6
++	mov	a6, a7
++	syscall
++	movi    a4, -4095
++	bgeu    a2, a4, SYSCALL_ERROR_LABEL
++.Lpseudo_end:
++	retw
++PSEUDO_END (syscall)
+diff --git a/libc/sysdeps/linux/xtensa/sysdep.h b/libc/sysdeps/linux/xtensa/sysdep.h
+new file mode 100644
+index 000000000..5708a8114
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/sysdep.h
+@@ -0,0 +1,160 @@
++/* Assembler macros for Xtensa processors.
++   Copyright (C) 2001, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifdef __ASSEMBLER__
++
++#define ALIGNARG(log2) 1 << log2
++#define ASM_TYPE_DIRECTIVE(name, typearg) .type name, typearg
++#define ASM_SIZE_DIRECTIVE(name) .size name, . - name
++
++#ifdef __STDC__
++#define C_LABEL(name)	name :
++#else
++#define C_LABEL(name)	name/**/:
++#endif
++
++#define	ENTRY(name)							\
++  ASM_GLOBAL_DIRECTIVE C_SYMBOL_NAME(name);				\
++  ASM_TYPE_DIRECTIVE (C_SYMBOL_NAME(name), @function);			\
++  .align ALIGNARG(2);							\
++  LITERAL_POSITION;							\
++  C_LABEL(name)								\
++  entry sp, FRAMESIZE;							\
++  CALL_MCOUNT
++
++#undef END
++#define END(name) ASM_SIZE_DIRECTIVE(name)
++
++/* Define a macro for this directive so it can be removed in a few places.  */
++#define LITERAL_POSITION .literal_position
++
++#undef JUMPTARGET
++#ifdef PIC
++/* The "@PLT" suffix is currently a no-op for non-shared linking, but
++   it doesn't hurt to use it conditionally for PIC code in case that
++   changes someday.  */
++#define JUMPTARGET(name) name##@PLT
++#else
++#define JUMPTARGET(name) name
++#endif
++
++#define FRAMESIZE 16
++#define CALL_MCOUNT		/* Do nothing.  */
++
++
++/* Linux uses a negative return value to indicate syscall errors,
++   unlike most Unices, which use the condition codes' carry flag.
++
++   Since version 2.1 the return value of a system call might be
++   negative even if the call succeeded.  E.g., the `lseek' system call
++   might return a large offset.  Therefore we must not anymore test
++   for < 0, but test for a real error by making sure the value in a2
++   is a real error number.  Linus said he will make sure the no syscall
++   returns a value in -1 .. -4095 as a valid result so we can safely
++   test with -4095.  */
++
++/* We don't want the label for the error handler to be global when we define
++   it here.  */
++#define SYSCALL_ERROR_LABEL 0f
++
++#undef  PSEUDO
++#define	PSEUDO(name, syscall_name, args)				      \
++  .text;								      \
++  ENTRY (name)								      \
++	DO_CALL	(syscall_name, args);					      \
++	movi	a4, -4095;						      \
++	bgeu	a2, a4, SYSCALL_ERROR_LABEL;				      \
++  .Lpseudo_end:
++
++#undef	PSEUDO_END
++#define	PSEUDO_END(name)						      \
++  SYSCALL_ERROR_HANDLER							      \
++  END (name)
++
++#undef	PSEUDO_NOERRNO
++#define	PSEUDO_NOERRNO(name, syscall_name, args)			      \
++  .text;								      \
++  ENTRY (name)								      \
++	DO_CALL	(syscall_name, args)
++
++#undef	PSEUDO_END_NOERRNO
++#define	PSEUDO_END_NOERRNO(name)					      \
++  END (name)
++
++#undef	ret_NOERRNO
++#define ret_NOERRNO retw
++
++/* The function has to return the error code.  */
++#undef	PSEUDO_ERRVAL
++#define	PSEUDO_ERRVAL(name, syscall_name, args)				      \
++  .text;								      \
++  ENTRY (name)								      \
++	DO_CALL	(syscall_name, args);					      \
++	neg	a2, a2
++
++#undef	PSEUDO_END_ERRVAL
++#define	PSEUDO_END_ERRVAL(name)						      \
++  END (name)
++
++#define ret_ERRVAL retw
++
++#if RTLD_PRIVATE_ERRNO
++# define SYSCALL_ERROR_HANDLER						      \
++0:	movi	a4, rtld_errno;						      \
++	neg	a2, a2;							      \
++	s32i	a2, a4, 0;						      \
++	movi	a2, -1;							      \
++	j	.Lpseudo_end;
++
++#elif defined _LIBC_REENTRANT
++
++# if USE___THREAD
++#  ifndef NOT_IN_libc
++#   define SYSCALL_ERROR_ERRNO __libc_errno
++#  else
++#   define SYSCALL_ERROR_ERRNO errno
++#  endif
++#  define SYSCALL_ERROR_HANDLER						      \
++0:	rur	a4, THREADPTR;						      \
++	movi	a3, SYSCALL_ERROR_ERRNO@TPOFF;				      \
++	neg	a2, a2;							      \
++	add	a4, a4, a3;						      \
++	s32i	a2, a4, 0;						      \
++	movi	a2, -1;							      \
++	j	.Lpseudo_end;
++# else /* !USE___THREAD */
++#  define SYSCALL_ERROR_HANDLER						      \
++0:	neg	a2, a2;							      \
++	mov	a6, a2;							      \
++	movi	a4, __errno_location@PLT;				      \
++	callx4	a4;						              \
++	s32i	a2, a6, 0;						      \
++	movi	a2, -1;							      \
++	j	.Lpseudo_end;
++# endif /* !USE___THREAD */
++#else /* !_LIBC_REENTRANT */
++#define SYSCALL_ERROR_HANDLER						      \
++0:	movi	a4, errno;						      \
++	neg	a2, a2;							      \
++	s32i	a2, a4, 0;						      \
++	movi	a2, -1;							      \
++	j	.Lpseudo_end;
++#endif /* _LIBC_REENTRANT */
++
++#endif	/* __ASSEMBLER__ */
+diff --git a/libc/sysdeps/linux/xtensa/vfork.S b/libc/sysdeps/linux/xtensa/vfork.S
+new file mode 100644
+index 000000000..830a0cd4d
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/vfork.S
+@@ -0,0 +1,170 @@
++/* Copyright (C) 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include "sysdep.h"
++#include <sys/syscall.h>
++#define _SIGNAL_H
++#include <bits/signum.h>
++
++
++/* Clone the calling process, but without copying the whole address space.
++   The calling process is suspended until the new process exits or is
++   replaced by a call to `execve'.  Return -1 for errors, 0 to the new process,
++   and the process ID of the new process to the old process.
++
++   Note that it is important that we don't create a new stack frame for the
++   caller.  */
++
++
++/* The following are defined in linux/sched.h, which unfortunately
++   is not safe for inclusion in an assembly file.  */
++#define CLONE_VM        0x00000100     /* set if VM shared between processes */
++#define CLONE_VFORK     0x00004000     /* set if the parent wants the child to
++					  wake it up on mm_release */
++
++#ifndef SAVE_PID
++#define SAVE_PID
++#endif
++
++#ifndef RESTORE_PID
++#define RESTORE_PID
++#endif
++
++
++/* pid_t vfork(void);
++   Implemented as __clone_syscall(CLONE_VFORK | CLONE_VM | SIGCHLD, 0) */
++
++ENTRY (__vfork)
++
++	movi	a6, .Ljumptable
++	extui	a2, a0, 30, 2		// call-size: call4/8/12 = 1/2/3
++	addx4	a4, a2, a6		// find return address in jumptable
++	l32i	a4, a4, 0
++	add	a4, a4, a6
++
++	slli	a2, a2, 30
++	xor	a3, a0, a2		// remove call-size from return address
++	extui	a5, a4, 30, 2		// get high bits of jump target
++	slli	a5, a5, 30
++	or	a3, a3, a5		// stuff them into the return address
++	xor	a4, a4, a5		// clear high bits of jump target
++	or	a0, a4, a2		// create temporary return address
++	retw				// "return" to .L4, .L8, or .L12
++
++	.align	4
++.Ljumptable:
++	.word	0
++	.word	.L4 - .Ljumptable
++	.word	.L8 - .Ljumptable
++	.word	.L12 - .Ljumptable
++
++	/* a7: return address */
++.L4:	mov	a12, a2
++	mov	a13, a3
++
++	SAVE_PID
++
++	/* Use syscall 'clone'.  Set new stack pointer to the same address.  */
++	movi	a2, SYS_ify (clone)
++ 	movi	a3, 0
++	movi	a6, CLONE_VM | CLONE_VFORK | SIGCHLD
++        syscall
++
++	RESTORE_PID
++
++	movi	a5, -4096
++
++	mov	a6, a2
++	mov	a2, a12
++	mov	a3, a13
++
++	bgeu	a6, a5, 1f
++	jx	a7
++1:	call4	.Lerr			// returns to original caller
++
++
++	/* a11: return address */
++.L8:	mov	a12, a2
++	mov	a13, a3
++	mov	a14, a6
++
++	SAVE_PID
++
++	movi	a2, SYS_ify (clone)
++	movi	a3, 0
++	movi	a6, CLONE_VM | CLONE_VFORK | SIGCHLD
++	syscall
++
++	RESTORE_PID
++
++	movi	a9, -4096
++
++	mov	a10, a2
++	mov	a2, a12
++	mov	a3, a13
++	mov	a6, a14
++
++	bgeu	a10, a9, 1f
++	jx	a11
++1:	call8	.Lerr			// returns to original caller
++
++
++	/* a15: return address */
++.L12:	mov	a12, a2
++	mov	a13, a3
++	mov	a14, a6
++
++	SAVE_PID
++
++	movi	a2, SYS_ify (clone)
++	movi	a3, 0
++	movi	a6, CLONE_VM | CLONE_VFORK | SIGCHLD
++	syscall
++
++	RESTORE_PID
++
++	mov	a3, a13
++	movi	a13, -4096
++
++	mov	a6, a14
++	mov	a14, a2
++
++	mov	a2, a12
++
++	bgeu	a14, a13, 1f
++	jx	a15
++1:	call12	.Lerr			// returns to original caller
++
++
++	.align 4
++.Lerr:	entry	a1, 16
++
++	/* Restore the return address.  */
++	extui	a4, a0, 30, 2		// get the call-size bits
++	slli	a4, a4, 30
++	slli	a3, a3, 2		// clear high bits of target address
++	srli	a3, a3, 2
++	or	a0, a3, a4		// combine them
++
++	PSEUDO_END (__vfork)
++.Lpseudo_end:
++	retw
++
++libc_hidden_def (__vfork)
++
++weak_alias (__vfork, vfork)
+diff --git a/libc/sysdeps/linux/xtensa/windowspill.S b/libc/sysdeps/linux/xtensa/windowspill.S
+new file mode 100644
+index 000000000..950c27b1b
+--- /dev/null
++++ b/libc/sysdeps/linux/xtensa/windowspill.S
+@@ -0,0 +1,95 @@
++/* Function to force register windows to the stack.
++   Copyright (C) 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#include <bits/xtensa-config.h>
++
++	.text
++	.align  4
++	.literal_position
++	.global __window_spill
++	.type   __window_spill, @function
++__window_spill:
++	entry	a1, 48
++        bbci.l  a0, 31, .L4		// branch if called with call4
++        bbsi.l  a0, 30, .L12		// branch if called with call12
++
++	/* Called with call8: touch register NUM_REGS-12 (4/20/52) */
++.L8:
++#if XCHAL_NUM_AREGS > 16
++	call12	1f
++	retw
++
++	.align	4
++1:	_entry	a1, 48			// touch NUM_REGS-24 (x/8/40)
++
++#if XCHAL_NUM_AREGS == 32
++	mov	a8, a0
++	retw
++#else
++	_entry	a1, 48			// touch NUM_REGS-36 (x/x/28)
++	mov	a12, a0
++	_entry	a1, 48			// touch NUM_REGS-48 (x/x/16)
++	mov	a12, a0
++	_entry	a1, 16			// touch NUM_REGS-60 (x/x/4)
++#endif
++#endif
++	mov	a4, a0
++	retw
++
++	/* Called with call4: touch register NUM_REGS-8 (8/24/56) */
++.L4:
++#if XCHAL_NUM_AREGS == 16
++	mov	a8, a0
++#else
++	call12	1f
++	retw
++
++	.align	4
++1:	_entry	a1, 48			// touch NUM_REGS-20 (x/12/44)
++	mov	a12, a0
++#if XCHAL_NUM_AREGS > 32
++	_entry	a1, 48			// touch NUM_REGS-32 (x/x/32)
++	mov	a12, a0
++	_entry	a1, 48			// touch NUM_REGS-44 (x/x/20)
++	mov	a12, a0
++	_entry	a1, 48			// touch NUM_REGS-56 (x/x/8)
++	mov	a8, a0
++#endif
++#endif
++	retw
++
++	/* Called with call12: touch register NUM_REGS-16 (x/16/48) */
++.L12:
++#if XCHAL_NUM_AREGS > 16
++	call12	1f
++	retw
++
++	.align	4
++1:	_entry	a1, 48			// touch NUM_REGS-28 (x/4/36)
++#if XCHAL_NUM_AREGS == 32
++	mov	a4, a0
++#else
++	mov	a12, a0
++	_entry	a1, 48			// touch NUM_REGS-40 (x/x/24)
++	mov	a12, a0
++	_entry	a1, 48			// touch NUM_REGS-52 (x/x/12)
++	mov	a12, a0
++#endif
++#endif
++	retw
+diff --git a/libpthread/linuxthreads.old/sysdeps/xtensa/pt-machine.h b/libpthread/linuxthreads.old/sysdeps/xtensa/pt-machine.h
+new file mode 100644
+index 000000000..d5ab9f0ec
+--- /dev/null
++++ b/libpthread/linuxthreads.old/sysdeps/xtensa/pt-machine.h
+@@ -0,0 +1,48 @@
++/* Machine-dependent pthreads configuration and inline functions.
++   Xtensa version.
++
++   Copyright (C) 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _PT_MACHINE_H
++#define _PT_MACHINE_H   1
++
++#include <sys/syscall.h>
++#include <asm/unistd.h>
++
++#ifndef PT_EI
++# define PT_EI extern inline
++#endif
++
++/* Memory barrier.  */
++#define MEMORY_BARRIER() __asm__ ("memw" : : : "memory")
++
++/* Spinlock implementation; required.  */
++PT_EI long int
++testandset (int *spinlock)
++{
++  int unused = 0;
++  return INTERNAL_SYSCALL (xtensa, , 4, SYS_XTENSA_ATOMIC_SET,
++			   spinlock, 1, unused);
++}
++
++/* Get some notion of the current stack.  Need not be exactly the top
++   of the stack, just something somewhere in the current frame.  */
++#define CURRENT_STACK_FRAME __builtin_frame_address (0)
++
++#endif /* _PT_MACHINE_H */
+diff --git a/test/Rules.mak b/test/Rules.mak
+index ce639778a..f6d9fcdc2 100644
+--- a/test/Rules.mak
++++ b/test/Rules.mak
+@@ -39,6 +39,7 @@ TARGET_ARCH:=$(shell $(CC) -dumpmachine | sed -e s'/-.*//' \
+ 	-e 's/sh[234]/sh/' \
+ 	-e 's/mips.*/mips/' \
+ 	-e 's/cris.*/cris/' \
++	-e 's/xtensa.*/xtensa/' \
+ 	)
+ endif
+ export TARGET_ARCH

@@ -1,0 +1,222 @@
+"2016-02-23 15:54:03 -0300"
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index f71566d3..b3823949 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -49,7 +49,7 @@ config COAP
+ config OIC
+ 	bool "OIC"
+ 	default y
+-	depends on COAP && HAVE_TINYCBOR_SRC
++	depends on COAP && FEATURE_OIC && HAVE_TINYCBOR_SRC
+ 	help
+             Implementation of protocol defined by Open Interconnect Consortium
+             (OIC - http://openinterconnect.org/)
+diff --git a/src/lib/comms/include/sol-lwm2m.h b/src/lib/comms/include/sol-lwm2m.h
+index e21426c0..b2fc1f21 100644
+--- a/src/lib/comms/include/sol-lwm2m.h
++++ b/src/lib/comms/include/sol-lwm2m.h
+@@ -434,7 +434,7 @@ struct sol_lwm2m_object {
+      * @param res_id The resource that should be read.
+      * @param res The resource content, it should be set using
+      * sol_lwm2m_resource_init()
+-     * @return 0 on success, -ENOENT if the resource is empty, -EBADRQC
++     * @return 0 on success, -ENOENT if the resource is empty, -EINVAL
+      * if the resource does not exist or -errno on error.
+      * @see sol_lwm2m_resource_init()
+      */
+diff --git a/src/lib/comms/sol-lwm2m.c b/src/lib/comms/sol-lwm2m.c
+index 29352761..2eb2c0c0 100644
+--- a/src/lib/comms/sol-lwm2m.c
++++ b/src/lib/comms/sol-lwm2m.c
+@@ -2690,7 +2690,7 @@ read_object_instance(struct sol_lwm2m_client *client,
+             (void)sol_vector_del_element(resources, res);
+             continue;
+         }
+-        if (r == -EBADRQC) {
++        if (r == -EINVAL) {
+             (void)sol_vector_del_element(resources, res);
+             break;
+         }
+@@ -2700,8 +2700,10 @@ read_object_instance(struct sol_lwm2m_client *client,
+ 
+     return 0;
+ 
++#ifndef SOL_NO_API_VERSION
+ err_api:
+     r = -EINVAL;
++#endif
+ err_exit:
+     (void)sol_vector_del_element(resources, res);
+     return r;
+@@ -2733,7 +2735,7 @@ handle_read(struct sol_lwm2m_client *client,
+             (void *)client->user_data, client,
+             obj_instance->id, resource_id, res);
+ 
+-        if (r == -ENOENT || r == -EBADRQC) {
++        if (r == -ENOENT || r == -EINVAL) {
+             sol_vector_clear(&resources);
+             return SOL_COAP_RSPCODE_NOT_FOUND;
+         }
+@@ -2904,7 +2906,7 @@ handle_resource(struct sol_coap_server *server,
+     struct sol_lwm2m_client *client = data;
+     struct obj_ctx *obj_ctx;
+     struct obj_instance *obj_instance = NULL;
+-    uint16_t path[3], path_size, content_format;
++    uint16_t path[3], path_size = 0, content_format;
+     uint8_t header_code;
+     struct sol_str_slice payload = SOL_STR_SLICE_EMPTY;
+     bool is_execute = false;
+@@ -3257,8 +3259,10 @@ read_resources(struct sol_lwm2m_client *client,
+     va_end(ap);
+     return 0;
+ 
++#ifndef SOL_NO_API_VERSION
+ err_exit_api:
+     r = -EINVAL;
++#endif
+ err_exit:
+     clear_resource_array(res, i);
+     va_end(ap);
+@@ -3477,7 +3481,7 @@ register_with_server(struct sol_lwm2m_client *client,
+     struct server_conn_ctx *conn_ctx, bool is_update)
+ {
+     struct sol_coap_packet *pkt;
+-    struct sol_str_slice binding;
++    struct sol_str_slice binding = SOL_STR_SLICE_EMPTY;
+     struct sol_buffer query = SOL_BUFFER_INIT_EMPTY, objs_payload;
+     uint8_t format = SOL_COAP_CONTENTTYPE_APPLICATION_LINKFORMAT;
+     int r;
+diff --git a/src/lib/comms/sol-network-impl-riot.c b/src/lib/comms/sol-network-impl-riot.c
+index d2968f50..5516aef7 100644
+--- a/src/lib/comms/sol-network-impl-riot.c
++++ b/src/lib/comms/sol-network-impl-riot.c
+@@ -30,9 +30,7 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include <netinet/in.h>
+ #include <errno.h>
+-#include <sys/socket.h>
+ 
+ #if MODULE_GNRC_IPV6_NETIF
+ #include "net/ipv6/addr.h"
+diff --git a/src/lib/crypto/sol-message-digest-impl-riot.c b/src/lib/crypto/sol-message-digest-impl-riot.c
+index d8b6ba4a..f80b6f63 100644
+--- a/src/lib/crypto/sol-message-digest-impl-riot.c
++++ b/src/lib/crypto/sol-message-digest-impl-riot.c
+@@ -32,7 +32,7 @@
+ 
+ #include <errno.h>
+ 
+-#include "crypto/sha256.h"
++#include "hashes/sha256.h"
+ #include "hashes/md5.h"
+ 
+ #include "sol-message-digest-common.h"
+diff --git a/src/lib/io/sol-pwm-impl-riot.c b/src/lib/io/sol-pwm-impl-riot.c
+index 6baaf971..e587243a 100644
+--- a/src/lib/io/sol-pwm-impl-riot.c
++++ b/src/lib/io/sol-pwm-impl-riot.c
+@@ -193,7 +193,9 @@ sol_pwm_set_duty_cycle(struct sol_pwm *pwm, uint32_t duty_cycle_ns)
+     pwm->duty_cycle = duty_cycle_ns;
+     value = (RESOLUTION * duty_cycle_ns) / pwm->period;
+ 
+-    return pwm_set(pwm->dev, pwm->channel, value) == 0;
++    pwm_set(pwm->dev, pwm->channel, value);
++
++    return true;
+ }
+ 
+ SOL_API int32_t
+diff --git a/src/samples/coap/lwm2m-client.c b/src/samples/coap/lwm2m-client.c
+index 84f6ad7a..371c85d6 100644
+--- a/src/samples/coap/lwm2m-client.c
++++ b/src/samples/coap/lwm2m-client.c
+@@ -261,7 +261,7 @@ read_location_obj(void *instance_data, void *user_data,
+         if (res_id >= 2 && res_id <= 4)
+             r = -ENOENT;
+         else
+-            r = -EBADRQC;
++            r = -EINVAL;
+     }
+ 
+     return r;
+@@ -293,7 +293,7 @@ read_security_server_obj(void *instance_data, void *user_data,
+         if (res_id >= 2 && res_id <= 11)
+             r = -ENOENT;
+         else
+-            r = -EBADRQC;
++            r = -EINVAL;
+     }
+ 
+     return r;
+@@ -325,7 +325,7 @@ read_server_obj(void *instance_data, void *user_data,
+         if (res_id >= 2 && res_id <= 6)
+             r = -ENOENT;
+         else
+-            r = -EBADRQC;
++            r = -EINVAL;
+     }
+ 
+     return r;
+@@ -337,7 +337,7 @@ execute_server_obj(void *instance_data, void *user_data,
+     uint16_t res_id, const struct sol_str_slice args)
+ {
+     if (res_id != SERVER_OBJ_REGISTRATION_UPDATE_RES_ID)
+-        return -EBADRQC;
++        return -EINVAL;
+ 
+     return sol_lwm2m_send_update(client);
+ }
+diff --git a/src/test/test-lwm2m.c b/src/test/test-lwm2m.c
+index db62b2f4..47e81d54 100644
+--- a/src/test/test-lwm2m.c
++++ b/src/test/test-lwm2m.c
+@@ -113,7 +113,7 @@ security_object_read(void *instance_data, void *user_data,
+             SOL_LWM2M_RESOURCE_DATA_TYPE_INT, 101);
+         break;
+     default:
+-        r = -EBADRQC;
++        r = -EINVAL;
+     }
+ 
+     return r;
+@@ -141,7 +141,7 @@ server_object_read(void *instance_data, void *user_data,
+             sol_str_slice_from_str("U"));
+         break;
+     default:
+-        r = -EBADRQC;
++        r = -EINVAL;
+     }
+ 
+     return r;
+@@ -335,7 +335,7 @@ read_dummy_resource(void *instance_data, void *user_data,
+             SOL_LWM2M_RESOURCE_DATA_TYPE_INT, ctx->array[0], ctx->array[1]);
+         break;
+     default:
+-        r = -EBADRQC;
++        r = -EINVAL;
+     }
+ 
+     return r;
+diff --git a/tools/build/Kconfig.features b/tools/build/Kconfig.features
+index bf87f2c2..c94e305a 100644
+--- a/tools/build/Kconfig.features
++++ b/tools/build/Kconfig.features
+@@ -51,3 +51,6 @@ config FEATURE_FILESYSTEM
+ 
+ config FEATURE_CC_SANITIZE
+     bool
++
++config FEATURE_OIC
++    bool
+diff --git a/tools/build/Kconfig.linux b/tools/build/Kconfig.linux
+index d42d91af..6dbc7691 100644
+--- a/tools/build/Kconfig.linux
++++ b/tools/build/Kconfig.linux
+@@ -18,3 +18,4 @@ config LINUX
+     select FEATURE_FLOW
+     select FEATURE_FILESYSTEM
+     select FEATURE_CC_SANITIZE
++    select FEATURE_OIC

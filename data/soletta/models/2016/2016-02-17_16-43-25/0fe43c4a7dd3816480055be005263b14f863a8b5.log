@@ -1,0 +1,669 @@
+"2016-02-17 16:43:25 -0200"
+diff --git a/Kconfig b/Kconfig
+index 38f0fe1f..dda970a5 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -8,6 +8,7 @@ config BASE_OS
+     default "contiki" if HAVE_CONTIKI
+     default "linux" if HAVE_LINUX
+     default "riot" if HAVE_RIOTOS
++    default "zephyr" if HAVE_ZEPHYR
+ 
+ source "tools/build/Kconfig.$BASE_OS"
+ 
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index a8c293f1..95959635 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -209,6 +209,13 @@
+         "<contiki.h>"
+       ]
+     },
++    {
++      "dependency": "zephyr",
++      "type": "ccode",
++      "headers": [
++        "<microkernel.h>"
++      ]
++    },
+     {
+       "dependency": "dlfcn_h",
+       "type": "ccode",
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 7265a147..65b2a2b1 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -38,6 +38,7 @@ choice
+ 	default PLATFORM_LINUX_MICRO if LINUX
+ 	default PLATFORM_RIOTOS if RIOT
+ 	default PLATFORM_CONTIKI if CONTIKI
++	default PLATFORM_ZEPHYR if ZEPHYR
+ 	default PLATFORM_DUMMY
+ 	help
+ 
+@@ -136,6 +137,18 @@ config PLATFORM_CONTIKI
+             Soletta aims to do its best to offer the same experience on
+             all platforms, including Contiki.
+ 
++config PLATFORM_ZEPHYR
++	bool "zephyr"
++	depends on ZEPHYR
++	help
++            This platform is to be used with Zephyr OS.
++
++            Zephyr (http://zephyr-project.intel.com/) is an open source operating
++            system for the Internet of Things.
++
++            Soletta aims to do its best to offer the same experience on
++            all platforms, including Zephyr.
++
+ endchoice
+ 
+ config SOL_BUS
+@@ -152,6 +165,7 @@ choice
+ 	default MAINLOOP_POSIX if LINUX
+ 	default MAINLOOP_RIOTOS if RIOT
+ 	default MAINLOOP_CONTIKI if CONTIKI
++	default MAINLOOP_ZEPHYR if ZEPHYR
+ 	help
+             The main loop is used to provide uniform event delivering
+             accross multiple operating systems.
+@@ -226,6 +240,12 @@ config MAINLOOP_CONTIKI
+ 	help
+             The mainloop to be used in Contiki platform.
+ 
++config MAINLOOP_ZEPHYR
++	bool "zephyr"
++	depends on ZEPHYR
++	help
++            The mainloop to be used in Zephyr platform.
++
+ endchoice
+ 
+ config PTHREAD
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index 62df9713..c7f8303d 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -23,6 +23,8 @@ obj-log-$(PLATFORM_RIOTOS) += \
+     sol-log-impl-riot.o
+ obj-log-$(PLATFORM_CONTIKI) += \
+     sol-log-impl-contiki.o
++obj-log-$(PLATFORM_ZEPHYR) += \
++    sol-log-impl-zephyr.o
+ 
+ obj-core-$(SOL_BUS) += \
+     sol-bus.o
+@@ -47,12 +49,18 @@ obj-core-$(MAINLOOP_CONTIKI) += \
+     sol-mainloop-common.o \
+     sol-mainloop-impl-contiki.o
+ 
++obj-core-$(MAINLOOP_ZEPHYR) += \
++    sol-mainloop-common.o \
++    sol-mainloop-impl-zephyr.o
++
+ obj-core-$(PLATFORM_LINUX_MICRO) += \
+     sol-platform-impl-linux-micro.o
+ obj-core-$(PLATFORM_RIOTOS) += \
+     sol-platform-impl-riot.o
+ obj-core-$(PLATFORM_CONTIKI) += \
+     sol-platform-impl-contiki.o
++obj-core-$(PLATFORM_ZEPHYR) += \
++    sol-platform-impl-zephyr.o
+ 
+ obj-core-$(PLATFORM_LINUX) += \
+     sol-platform-linux-common.o
+diff --git a/src/lib/common/include/sol-mainloop.h b/src/lib/common/include/sol-mainloop.h
+index 0af462a8..ef10a774 100644
+--- a/src/lib/common/include/sol-mainloop.h
++++ b/src/lib/common/include/sol-mainloop.h
+@@ -1118,6 +1118,18 @@ struct sol_main_callbacks {
+     int main(void) { \
+         return sol_mainloop_default_main(&(CALLBACKS), 0, NULL); \
+     }
++#elif defined SOL_PLATFORM_ZEPHYR
++/* We can't include zephyr.h during the Soletta build, because it wil bring
++ * in sysgen.h, that's only generated later on during the build process of
++ * the application */
++#ifndef MAINLOOP_ZEPHYR
++#include <zephyr.h>
++#endif
++
++#define SOL_MAIN(CALLBACKS) \
++    void main_task(void) { \
++        sol_mainloop_default_main(&(CALLBACKS), 0, NULL); \
++    }
+ #else
+ #define SOL_MAIN(CALLBACKS)                                          \
+     int main(int argc, char *argv[]) {                              \
+diff --git a/src/lib/common/sol-common-buildopts.h.in b/src/lib/common/sol-common-buildopts.h.in
+index 62b11103..7c10d926 100644
+--- a/src/lib/common/sol-common-buildopts.h.in
++++ b/src/lib/common/sol-common-buildopts.h.in
+@@ -36,6 +36,7 @@
+ st.on_value("PLATFORM_LINUX", "y", "#define SOL_PLATFORM_LINUX 1", "")
+ st.on_value("PLATFORM_RIOTOS", "y", "#define SOL_PLATFORM_RIOT 1", "")
+ st.on_value("PLATFORM_CONTIKI", "y", "#define SOL_PLATFORM_CONTIKI 1", "")
++st.on_value("PLATFORM_ZEPHYR", "y", "#define SOL_PLATFORM_ZEPHYR 1", "")
+ }}
+ 
+ {{
+diff --git a/src/lib/common/sol-log-impl-zephyr.c b/src/lib/common/sol-log-impl-zephyr.c
+new file mode 100644
+index 00000000..8fb6b0a0
+--- /dev/null
++++ b/src/lib/common/sol-log-impl-zephyr.c
+@@ -0,0 +1,104 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "sol-log-impl.h"
++
++int
++sol_log_impl_init(void)
++{
++    return 0;
++}
++
++void
++sol_log_impl_shutdown(void)
++{
++}
++
++bool
++sol_log_impl_lock(void)
++{
++    return true;
++}
++
++void
++sol_log_impl_unlock(void)
++{
++}
++
++void
++sol_log_impl_domain_init_level(struct sol_log_domain *domain)
++{
++    domain->level = _global_domain.level;
++}
++
++void
++sol_log_impl_print_function_stderr(void *data, const struct sol_log_domain *domain, uint8_t message_level, const char *file, const char *function, int line, const char *format, va_list args)
++{
++    const char *name = domain->name ? domain->name : "";
++    char level_str[4];
++    size_t len;
++    int errno_bkp = errno;
++
++    sol_log_level_to_str(message_level, level_str, sizeof(level_str));
++
++    if (_show_file && _show_function && _show_line) {
++        printf("%s:%s %s:%d %s() ",
++            level_str, name, file, line, function);
++    } else {
++        printf("%s:%s ", level_str, name);
++
++        if (_show_file)
++            printf("%s", file);
++        if (_show_file && _show_line)
++            printf(":");
++        if (_show_line)
++            printf("%d", line);
++
++        if (_show_file || _show_line)
++            printf(" ");
++
++        if (_show_function)
++            printf("%s() ", function);
++    }
++
++    errno = errno_bkp;
++
++    vprintf(format, args);
++
++    len = strlen(format);
++    if (len > 0 && format[len - 1] != '\n')
++        printf("\n");
++}
+diff --git a/src/lib/common/sol-mainloop-common.h b/src/lib/common/sol-mainloop-common.h
+index 324025c3..808d5453 100644
+--- a/src/lib/common/sol-mainloop-common.h
++++ b/src/lib/common/sol-mainloop-common.h
+@@ -32,7 +32,11 @@
+ 
+ #pragma once
+ 
++#include "sol-common-buildopts.h"
++
++#ifndef SOL_PLATFORM_ZEPHYR
+ #include <time.h>
++#endif
+ 
+ #include "sol-util-internal.h"
+ #include "sol-vector.h"
+diff --git a/src/lib/common/sol-mainloop-impl-zephyr.c b/src/lib/common/sol-mainloop-impl-zephyr.c
+new file mode 100644
+index 00000000..3196d5d3
+--- /dev/null
++++ b/src/lib/common/sol-mainloop-impl-zephyr.c
+@@ -0,0 +1,106 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdbool.h>
++#include <stdlib.h>
++#include <unistd.h>
++
++/* Zephyr headers */
++#include <microkernel.h>
++
++#include "sol-mainloop-common.h"
++#include "sol-mainloop-impl.h"
++#include "sol-vector.h"
++
++#define PIPE_BUFFER_SIZE 32
++DEFINE_PIPE(_sol_mainloop_pipe, PIPE_BUFFER_SIZE)
++
++void
++sol_mainloop_impl_lock(void)
++{
++}
++
++void
++sol_mainloop_impl_unlock(void)
++{
++}
++
++bool
++sol_mainloop_impl_main_thread_check(void)
++{
++    return true;
++}
++
++void
++sol_mainloop_impl_main_thread_notify(void)
++{
++}
++
++int
++sol_mainloop_impl_platform_init(void)
++{
++    return 0;
++}
++
++void
++sol_mainloop_impl_platform_shutdown(void)
++{
++    sol_mainloop_common_source_shutdown();
++}
++
++static inline int32_t
++ticks_until_next_timeout(void)
++{
++    struct timespec ts;
++
++    if (!sol_mainloop_common_timespec_first(&ts))
++        return 0;
++
++    if (ts.tv_sec < 0)
++        return 0;
++
++    return ts.tv_sec * sys_clock_ticks_per_sec +
++           (sys_clock_ticks_per_sec / NSEC_PER_SEC) * ts.tv_nsec;
++}
++
++void
++sol_mainloop_impl_iter(void)
++{
++    sol_mainloop_common_timeout_process();
++    sol_mainloop_common_idler_process();
++    sol_mainloop_common_timeout_process();
++
++    if (!sol_mainloop_common_loop_check())
++        return;
++
++    task_sleep(ticks_until_next_timeout());
++}
+diff --git a/src/lib/common/sol-platform-impl-zephyr.c b/src/lib/common/sol-platform-impl-zephyr.c
+new file mode 100644
+index 00000000..77d35ae0
+--- /dev/null
++++ b/src/lib/common/sol-platform-impl-zephyr.c
+@@ -0,0 +1,190 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sol-platform.h"
++#include "sol-platform-impl.h"
++
++int
++sol_platform_impl_init(void)
++{
++    return 0;
++}
++
++void
++sol_platform_impl_shutdown(void)
++{
++}
++
++int
++sol_platform_impl_get_state(void)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_add_service_monitor(const char *service)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_del_service_monitor(const char *service)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_start_service(const char *service)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_stop_service(const char *service)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_restart_service(const char *service)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_set_target(const char *target)
++{
++    SOL_WRN("Unsupported");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_get_machine_id(char id[static 33])
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_get_serial_number(char **number)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_get_os_version(char **version)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_get_mount_points(struct sol_ptr_vector *vector)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_umount(const char *mpoint, void (*cb)(void *data, const char *mpoint, int WRNor), const void *data)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_set_locale(char **locales)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++const char *
++sol_platform_impl_get_locale(enum sol_platform_locale_category type)
++{
++    SOL_WRN("Not implemented");
++    errno = ENOTSUP;
++    return NULL;
++}
++
++int
++sol_platform_register_locale_monitor(void)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_unregister_locale_monitor(void)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_apply_locale(enum sol_platform_locale_category type, const char *locale)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_load_locales(char **locale_cache)
++{
++    SOL_WRN("Not implemented");
++    return 0;
++}
++
++int
++sol_platform_impl_locale_to_c_category(enum sol_platform_locale_category category)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++const char *
++sol_platform_impl_locale_to_c_str_category(enum sol_platform_locale_category category)
++{
++    SOL_WRN("Not implemented");
++    return NULL;
++}
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+index 54a0dac9..b181bfae 100644
+--- a/src/shared/Makefile
++++ b/src/shared/Makefile
+@@ -31,6 +31,9 @@ obj-libshared-$(PLATFORM_RIOTOS) += \
+ obj-libshared-$(PLATFORM_CONTIKI) += \
+     sol-util-impl-contiki.o
+ 
++obj-libshared-$(PLATFORM_ZEPHYR) += \
++    sol-util-impl-zephyr.o
++
+ obj-libshared-y-extra-cflags += -fvisibility=default
+ 
+ headers-y += \
+diff --git a/src/shared/sol-util-impl-zephyr.c b/src/shared/sol-util-impl-zephyr.c
+new file mode 100644
+index 00000000..6f45b1f2
+--- /dev/null
++++ b/src/shared/sol-util-impl-zephyr.c
+@@ -0,0 +1,57 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/* Zephyr includes */
++#include "microkernel.h"
++
++#include "sol-util.h"
++
++struct timespec
++sol_util_timespec_get_current(void)
++{
++    struct timespec ret;
++    int64_t ticks;
++
++    ticks = sys_tick_get();
++    ret.tv_sec = ticks / sys_clock_ticks_per_sec;
++    ticks -= ret.tv_sec * sys_clock_ticks_per_sec;
++    ret.tv_nsec = (ticks * NSEC_PER_SEC) / sys_clock_ticks_per_sec;
++
++    return ret;
++}
++
++int
++sol_util_timespec_get_realtime(struct timespec *t)
++{
++    errno = ENOSYS;
++    return -1;
++}
+diff --git a/tools/build/Kconfig.zephyr b/tools/build/Kconfig.zephyr
+new file mode 100644
+index 00000000..82545381
+--- /dev/null
++++ b/tools/build/Kconfig.zephyr
+@@ -0,0 +1,2 @@
++config ZEPHYR
++    def_bool y

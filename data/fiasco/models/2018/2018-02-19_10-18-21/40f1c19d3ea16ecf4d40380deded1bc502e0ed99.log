@@ -1,0 +1,1056 @@
+"2018-02-19 10:18:21 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index 423d3d5..c595cfd 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -318,9 +318,24 @@ config VIRT_OBJ_SPACE
+ 	def_bool y
+ 	depends on HAS_VIRT_OBJ_SPACE_OPTION
+ 	depends on !DISABLE_VIRT_OBJ_SPACE
++	depends on !KERNEL_ISOLATION
++
++config KERNEL_ISOLATION
++	bool "Enable Kernel Address-Space Isolation" if AMD64
++	depends on AMD64
++	select NO_LDT
++	select NO_IO_PAGEFAULT
++	select CPU_LOCAL_MAP
++	help
++	  Use an extra address space (page table) for the microkernel.
++	  Only map a small trampoline and some static code and data into
++	  each user address space and keep the kernel in its own address
++	  space. This mitigates the deferred access rights check of some
++	  Intel CPUs during speculative execution. However, there is the
++	  extra TLB penalty for each system call.
+ 
+ config CPU_LOCAL_MAP
+-	bool "Enable CPU local page-tables for kernel mappings" if AMD64
++	bool "Enable CPU local page-tables for kernel mappings" if AMD64 && !KERNEL_ISOLATION
+ 	depends on AMD64
+ 	help
+ 	  Enable to use per CPU page directories to allow CPU-local
+@@ -330,7 +345,7 @@ config CPU_LOCAL_MAP
+ 	  If unsure say N.
+ 
+ config NO_IO_PAGEFAULT
+-	bool "Disable IO-Port fault IPC" if IA32 || AMD64
++	bool "Disable IO-Port fault IPC" if (IA32 || AMD64) && !KERNEL_ISOLATION
+ 	depends on IA32 || AMD64
+ 	default y if  IA32 || AMD64
+ 	help
+@@ -339,7 +354,7 @@ config NO_IO_PAGEFAULT
+ 	  IO-Port accesses instead an excpetion IPC with a #GP is generated.
+ 
+ config NO_LDT
+-	bool "Disable support for the LDT" if IA32 || AMD64
++	bool "Disable support for the LDT" if (IA32 || AMD64) && !KERNEL_ISOLATION
+ 	depends on IA32 || AMD64
+ 	default y if IA32 || AMD64
+ 	help
+diff --git a/src/kern/ia32/32/low_level.h b/src/kern/ia32/32/low_level.h
+index d67c538..82a0d2f 100644
+--- a/src/kern/ia32/32/low_level.h
++++ b/src/kern/ia32/32/low_level.h
+@@ -12,6 +12,9 @@
+ 	iret
+ .endm
+ 
++.macro  SWITCH_TO_KERNEL_CR3 err
++.endm
++
+ 	.macro save_all_regs
+ 	pusha
+ 	.endm
+diff --git a/src/kern/ia32/64/cpu-64.cpp b/src/kern/ia32/64/cpu-64.cpp
+index 382a4ff..ad7fb0b 100644
+--- a/src/kern/ia32/64/cpu-64.cpp
++++ b/src/kern/ia32/64/cpu-64.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [amd64]:
++INTERFACE [amd64 && !kernel_isolation]:
+ 
+ #include "syscall_entry.h"
+ 
+@@ -8,7 +8,7 @@ EXTENSION class Cpu
+ };
+ 
+ 
+-IMPLEMENTATION[amd64]:
++IMPLEMENTATION[amd64 && !kernel_isolation]:
+ 
+ #include "mem_layout.h"
+ #include "tss.h"
+@@ -36,6 +36,35 @@ Cpu::setup_sysenter()
+   _syscall_entry.set_rsp((Address)&kernel_sp());
+ }
+ 
++IMPLEMENTATION[amd64 && kernel_isolation]:
++
++#include "mem_layout.h"
++#include "tss.h"
++
++PUBLIC
++void
++Cpu::set_fast_entry(void (*func)())
++{
++  *reinterpret_cast<Signed32 *>(Mem_layout::Mem_layout::Kentry_cpu_page + 0xc5) = (Signed32)(Signed64)func;
++}
++
++PUBLIC inline
++void
++Cpu::setup_sysenter() const
++{
++  wrmsr(0, GDT_CODE_KERNEL | ((GDT_CODE_USER32 | 3) << 16), MSR_STAR);
++  wrmsr((Unsigned64)Mem_layout::Kentry_cpu_page + 0xa0, MSR_LSTAR);
++  wrmsr((Unsigned64)Mem_layout::Kentry_cpu_page + 0xa0, MSR_CSTAR);
++  wrmsr(~0ULL, MSR_SFMASK);
++}
++
++IMPLEMENT inline NEEDS["mem_layout.h"]
++Address volatile &
++Cpu::kernel_sp() const
++{ return *reinterpret_cast<Address volatile *>(Mem_layout::Kentry_cpu_page + sizeof(Mword)); }
++
++IMPLEMENTATION[amd64]:
++
+ extern "C" void entry_sys_fast_ipc_c();
+ 
+ PUBLIC FIASCO_INIT_AND_PM
+diff --git a/src/kern/ia32/64/entry-native.S b/src/kern/ia32/64/entry-native.S
+index 7dd392c..76ea26a 100644
+--- a/src/kern/ia32/64/entry-native.S
++++ b/src/kern/ia32/64/entry-native.S
+@@ -8,11 +8,13 @@
+ #include "shortcut.h"
+ #include "tcboffset.h"
+ 
++	.section ".entry.text.debug_exc", "ax", @progbits
+ 	.p2align 4
+ 	.globl	entry_vec01_debug
+ entry_vec01_debug:
+ /* XXX we have to check single step bug */
+-1:	push	$(0)
++1:	SWITCH_TO_KERNEL_CR3 0
++	push	$(0)
+ 	push	$(1)
+ 	push	%rax
+ 	push	%rcx
+@@ -34,9 +36,11 @@ entry_vec01_debug:
+ 	jmp	slowtraps
+ 
+ 
++	.section ".entry.text.dbf", "ax", @progbits
+ 	.p2align(4)
+ 	.globl	entry_vec08_dbf
+ entry_vec08_dbf:
++	SWITCH_TO_KERNEL_CR3 0
+ 	push	$(0)
+ 	push	$(8)
+ 	push	%rax
+@@ -61,6 +65,7 @@ entry_vec08_dbf:
+ 	jmp	entry_vec08_dbf
+ 
+ 
++	.section ".entry.text.tss", "ax", @progbits
+ 	.p2align(4)
+ 	.globl	entry_vec0a_invalid_tss
+ entry_vec0a_invalid_tss:
+@@ -68,6 +73,7 @@ entry_vec0a_invalid_tss:
+ 	add	$8, %rsp			/* skip error code */
+ 	iretq
+ 
++	.section ".entry.text.apic", "ax", @progbits
+ /* PPro spurious interrupt bug: 
+  * See "Pentium Pro Processor Specification Update / January 1999"
+  * Erratum "Virtual Wire mode through local APIC may cause int 15"
+@@ -75,7 +81,9 @@ entry_vec0a_invalid_tss:
+ 	.p2align(4)
+ 	.globl	entry_vec0f_apic_spurious_interrupt_bug
+ entry_vec0f_apic_spurious_interrupt_bug:
++#ifndef CONFIG_KERNEL_ISOLATION
+ 	incl	apic_spurious_interrupt_bug_cnt
++#endif
+ 	iretq
+ 
+ 
+@@ -85,6 +93,7 @@ entry_vec0f_apic_spurious_interrupt_bug:
+ 	.globl	entry_apic_error_interrupt
+ entry_apic_error_interrupt:
+ 	cld
++	SWITCH_TO_KERNEL_CR3 0
+ 	SAVE_SCRATCH
+ 	lea	SCRATCH_REGISTER_SIZE(%rsp), %rdi
+ 	call	apic_error_interrupt
+@@ -99,12 +108,15 @@ entry_apic_error_interrupt:
+ 	.p2align(4)
+ 	.globl	entry_apic_spurious_interrupt
+ entry_apic_spurious_interrupt:
++#ifndef CONFIG_KERNEL_ISOLATION
+ 	incl	apic_spurious_interrupt_cnt
++#endif
+ 	iretq
+ 
+ 	.p2align(4)
+ 	.global	entry_int_apic_ignore
+ entry_int_apic_ignore:
++	SWITCH_TO_KERNEL_CR3 0
+ 	push	%rcx
+ 	push	%rdx
+ 	mov	apic_io_base, %rcx
+@@ -115,13 +127,17 @@ entry_int_apic_ignore:
+ 	SAFE_IRET
+ 
+ #if defined(CONFIG_JDB)
+-
++	.section ".entry.text.syscalls_log", "ax", @progbits
+ 	.p2align(4)
+ 	.global entry_syscall_log
+ 	.global entry_sys_fast_ipc_log
+ entry_syscall_log:
+ entry_sys_fast_ipc_log:
++#ifndef CONFIG_KERNEL_ISOLATION
++	/* with kernel isolation wee need r11 as scratch in the entry
++	   code and save it there */
+ 	push	%r11				/* save user rflags */
++#endif
+ 	push	$(GDT_CODE_USER | SEL_PL_U | 0x80)	/* fake user cs */
+ 	push	%rcx				/* save user rip */
+ 	sub     $16, %rsp
+@@ -145,12 +161,17 @@ alien_sys_fast_ipc_log:
+ 
+ #endif // CONFIG_JDB
+ 
++	.section ".entry.text.syscalls", "ax", @progbits
+ 	.p2align(4)
+ 	.global entry_syscall_c
+ 	.global entry_sys_fast_ipc_c
+ entry_syscall_c:
+ entry_sys_fast_ipc_c:
++#ifndef CONFIG_KERNEL_ISOLATION
++	/* with kernel isolation wee need r11 as scratch in the entry
++	   code and save it there */
+ 	push	%r11				/* save user rflags */
++#endif
+ 	push	$(GDT_CODE_USER | SEL_PL_U | 0x80)	/* fake user cs */
+ 	push	%rcx				/* save user rip */
+ 	sub     $16, %rsp
+@@ -187,3 +208,64 @@ leave_from_syscall_by_iret:
+ 	.global	dbf_stack_top
+ dbf_stack_top:
+ 
++	.section ".text.syscall_entry"
++/* This code shall be copied to Kentry_cpu_page + 0xa0 */
++#define CPUE_OFFSET syscall_entry_code - 0xa0
++	.global syscall_entry_code
++syscall_entry_code:
++	mov	%rsp, CPUE_STACK(CPUE_OFFSET + 0, %rip)
++	mov	(CPUE_OFFSET + CPUE_CR3_OFS)(%rip), %rsp
++	mov	%rsp, %cr3
++	mov	(CPUE_OFFSET + CPUE_KSP_OFS)(%rip), %rsp
++	pushq	$(GDT_DATA_USER | 3)
++	pushq	CPUE_STACK(CPUE_OFFSET + 0, %rip)
++	push	%r11				/* save user rflags */
++	mov	$entry_sys_fast_ipc_c, %r11
++	jmp	*%r11
++	.global syscall_entry_code_end
++syscall_entry_code_end:
++
++#ifdef CONFIG_KERNEL_ISOLATION
++	.section ".entry.text.safe_sysret"
++	.global safe_sysret
++safe_sysret:
++	mov	%rax, %cr3
++	sysretq
++
++	.section ".entry.text.safe_iret"
++	.global safe_iret
++safe_iret:
++	cli
++	sub	$24, %rsp
++	push	%r14
++	mov	40(%rsp), %r14
++	test	$3, %r14
++	jz	1f
++
++	mov	$0xffff817fffffc000, %r14
++	mov	%r13, CPUE_STACK( 0, %r14)
++	mov	(%rsp), %r13
++	mov	%r13, CPUE_STACK( 8, %r14)
++	mov	32(%rsp), %r13
++	mov	%r13, CPUE_STACK(16, %r14)
++	mov	40(%rsp), %r13
++	mov	%r13, CPUE_STACK(24, %r14)
++	mov	48(%rsp), %r13
++	mov	%r13, CPUE_STACK(32, %r14)
++	mov	56(%rsp), %r13
++	mov	%r13, CPUE_STACK(40, %r14)
++	mov	64(%rsp), %r13
++	mov	%r13, CPUE_STACK(48, %r14)
++	lea	CPUE_STACK(0, %r14), %rsp
++	mov	CPUE_CR3(%r14), %r13
++	or	$0x1000, %r13
++	mov	%r13, %cr3
++	pop	%r13
++	pop	%r14
++	iretq
++1:
++	pop	%r14
++	add	$24, %rsp
++	iretq	/* direct iret to kernel mode */
++#endif
++
+diff --git a/src/kern/ia32/64/entry.S b/src/kern/ia32/64/entry.S
+index b9c5f4d..20155bd 100644
+--- a/src/kern/ia32/64/entry.S
++++ b/src/kern/ia32/64/entry.S
+@@ -28,6 +28,7 @@
+ 	GATE_ENTRY	\n, entry_\name, (ACC_PL_K | ACC_INTR_GATE)
+ 	.p2align 3
+ entry_\name:
++	SWITCH_TO_KERNEL_CR3 0
+ 	push	$(0)
+ 	push	$(\n)
+ 	save_all_regs
+@@ -41,6 +42,7 @@ entry_\name:
+ 	GATE_ENTRY	\n, entry_\name, (ACC_PL_U | ACC_INTR_GATE)
+ 	.p2align 3
+ entry_\name:
++	SWITCH_TO_KERNEL_CR3 0
+ 	push	$(0)
+ 	push	$(\n)
+ 	save_all_regs
+@@ -54,6 +56,7 @@ entry_\name:
+ 	GATE_ENTRY	\n, entry_\name, (ACC_PL_K | ACC_INTR_GATE)
+ 	.p2align 3
+ entry_\name:
++	SWITCH_TO_KERNEL_CR3 1
+ 	push	$(\n)
+ 	save_all_regs
+ 	jmp	_slowtraps
+@@ -61,6 +64,8 @@ entry_\name:
+ 
+ GATE_INITTAB_BEGIN idt_init_table
+ 
++	.section ".entry.text.vec", "ax", @progbits
++
+ EXCEPTION	0x00, vec00_zero_div
+ /* IA32 has to handle breakpoint exceptions if occured exactly at 
+    entry_sys_fast_ipc -- see ia32/entry-ia32.S */
+@@ -86,7 +91,7 @@ EXCEP_ERR	0x11, vec11_align
+ EXCEPTION	0x12, vec12_mcheck
+ EXCEPTION	0x13, vec13_simd_err
+ 
+-
++	.section ".entry.text.slowtrap", "ax", @progbits
+ 	.p2align 4
+ 	.type	slowtraps,@function
+ 	.globl	slowtraps
+@@ -137,6 +142,7 @@ unexpected_trap:
+ 	mov	%rsp,%rdi		/* 1st arg: trap state */
+ 	call	trap_dump_panic
+ 
++	.section ".entry.text.vec0e", "ax", @progbits
+ GATE_ENTRY	0x0e, entry_vec0e_page_fault, (ACC_PL_K | ACC_INTR_GATE)
+ 
+ /* we must save %cr2 before we can be preempted -- therefore we're an
+@@ -152,6 +158,7 @@ GATE_ENTRY	0x0e, entry_vec0e_page_fault, (ACC_PL_K | ACC_INTR_GATE)
+ .globl entry_vec0e_page_fault
+ entry_vec0e_page_fault:
+ 	cld
++	SWITCH_TO_KERNEL_CR3	1
+ 	SAVE_SCRATCH
+ 
+ /* We must reset the cancel flag here atomically
+@@ -204,7 +211,7 @@ in_page_fault:
+ 	save_all_regs
+ 	jmp	slowtraps
+ 
+-
++	.section ".entry.text.vec07", "ax", @progbits
+ /* FPU not available in this context. */
+ GATE_ENTRY	0x07, entry_vec07_fpu_unavail, (ACC_PL_K | ACC_INTR_GATE)
+ 
+@@ -213,6 +220,7 @@ GATE_ENTRY	0x07, entry_vec07_fpu_unavail, (ACC_PL_K | ACC_INTR_GATE)
+ 	.type	entry_vec07_fpu_unavail,@function
+ entry_vec07_fpu_unavail:
+ 	cld
++	SWITCH_TO_KERNEL_CR3 0
+ 	SAVE_SCRATCH
+ 	mov 	SCRATCH_REGISTER_SIZE(%rsp), %rdi
+ 	call	thread_handle_fputrap
+@@ -228,7 +236,7 @@ real_fpu_exception:
+ 	save_all_regs
+ 	jmp	_slowtraps
+ 
+-
++	.section ".entry.text.timer", "ax", @progbits
+ /* timer interrupt */
+ #ifdef CONFIG_SCHED_PIT
+ GATE_ENTRY	0x20, entry_int_timer, (ACC_PL_K | ACC_INTR_GATE)
+@@ -246,6 +254,7 @@ GATE_ENTRY	APIC_IRQ_BASE, entry_int_timer, (ACC_PL_K | ACC_INTR_GATE)
+ 	.p2align 4
+ 	.globl	entry_int_timer
+ entry_int_timer:
++	SWITCH_TO_KERNEL_CR3	0
+ 	SAVE_SCRATCH
+ do_timer_interrupt:
+ 	cld
+@@ -259,6 +268,7 @@ in_timer_interrupt:
+ 	.globl	entry_int_timer_slow
+ entry_int_timer_slow:
+ 	cld
++	SWITCH_TO_KERNEL_CR3	0
+ 	SAVE_SCRATCH
+ 	call	thread_timer_interrupt_slow	/* enter with disabled irqs */
+ in_timer_interrupt_slow:
+@@ -269,6 +279,7 @@ in_timer_interrupt_slow:
+ 	.globl	entry_int_timer_stop
+ entry_int_timer_stop:
+ 	cld
++	SWITCH_TO_KERNEL_CR3	0
+ 	SAVE_SCRATCH
+ 	call	thread_timer_interrupt_stop
+ 	RESTORE_SCRATCH
+@@ -280,6 +291,7 @@ entry_int_timer_stop:
+ 	GATE_ENTRY	\int, entry_\name, (ACC_PL_K | ACC_INTR_GATE)
+ 	.p2align 3
+ entry_\name:
++	SWITCH_TO_KERNEL_CR3 0
+ 	SAVE_SCRATCH
+ 	mov	0x28(%rsp), %rsi
+ 	mov	$ (\int - 0x20), %rdi
+@@ -293,6 +305,7 @@ entry_\name:
+  * address of an Irq_base object that is later attached to
+  * the corresponding IDT vector.
+  */
++	.section ".entry.text.irqs", "ax", @progbits
+ 	.global idt_irq_vector_stubs
+ 	.align 64
+ idt_irq_vector_stubs:
+@@ -307,6 +320,7 @@ idt_irq_vector_stubs:
+ 	.global __generic_irq_entry
+ 
+ __generic_irq_entry:
++	SWITCH_TO_KERNEL_CR3 1
+ 	push    %rsi
+ 	push	%rax
+ 	push	%rcx
+@@ -345,12 +359,15 @@ INTERRUPT	0x28, int8
+ 	GATE_ENTRY	\int, entry_\name, (ACC_PL_U | ACC_INTR_GATE)
+ 	.p2align 4
+ entry_\name:
++	cld
++	SWITCH_TO_KERNEL_CR3 0
+ 	sub	$16, %rsp
+ 	push	%rax
+ 	mov	$(syscall_table+8*(\int-0x30)), %rax
+ 	jmp	all_syscalls
+ .endm
+ 
++	.section ".entry.text.syscalls", "ax", @progbits
+ 	.p2align 4
+ 	.type	all_syscalls,@function
+ all_syscalls:
+@@ -376,6 +393,7 @@ GATE_ENTRY	0x30, entry_sys_ipc_c, (ACC_PL_U | ACC_INTR_GATE)
+ 	.globl	entry_sys_ipc_c
+ entry_sys_ipc_c:
+ 	cld
++	SWITCH_TO_KERNEL_CR3 0
+ 	sub	$16, %rsp
+ 	push	%rax
+ 	SAVE_STATE
+@@ -401,6 +419,7 @@ in_sc_ipc1:
+ 
+ entry_sys_ipc_log:
+ 	cld
++	SWITCH_TO_KERNEL_CR3 0
+ 	sub	$16, %rsp
+ 	push	%rax
+ 	SAVE_STATE
+@@ -456,6 +475,7 @@ alien_sys_ipc_log:
+ alien_sys_call:
+ 	ALIEN_SYSCALL syscall="call *(%rax)" trap_target=_slowtraps
+ 
++	.section ".entry.text.upcalls", "ax", @progbits
+ 	.p2align
+ 	.globl	leave_by_trigger_exception
+ leave_by_trigger_exception:
+diff --git a/src/kern/ia32/64/linking.h b/src/kern/ia32/64/linking.h
+index f487789..ab9a19e 100644
+--- a/src/kern/ia32/64/linking.h
++++ b/src/kern/ia32/64/linking.h
+@@ -4,5 +4,5 @@
+ #define FIASCO_IMAGE_PHYS_START  0x400000
+ //#define FIASCO_IMAGE_PHYS_START  0x2000
+ #define FIASCO_IMAGE_VIRT_START  0xfffffffff0000000
+-
++#define FIASCO_KENTRY_SYSCALL_PAGE 0xffff817fffff8000
+ #define FIASCO_IMAGE_PHYS_OFFSET (FIASCO_IMAGE_VIRT_START - (FIASCO_IMAGE_PHYS_START & 0xffffffffffc00000))
+diff --git a/src/kern/ia32/64/low_level.h b/src/kern/ia32/64/low_level.h
+index 2e15a9e..c4b1abd 100644
+--- a/src/kern/ia32/64/low_level.h
++++ b/src/kern/ia32/64/low_level.h
+@@ -9,17 +9,78 @@
+ 
+ #define REGISTER_SIZE 8
+ 
++#define CPUE_STACK(x, reg) (x + 0x20)(reg)
++#define CPUE_CR3_OFS 0
++#define CPUE_KSP_OFS 8
++#define CPUE_KSP(reg) 8(reg)
++#define CPUE_CR3(reg) 0(reg)
++
+ .macro SAFE_SYSRET
+ 	/* make RIP canonical, workaround for intel IA32e flaw */
+ 	shl     $16, %rcx
+ 	sar     $16, %rcx
++#ifdef CONFIG_KERNEL_ISOLATION
++	mov	$0xffff817fffffc000, %r15
++	mov	CPUE_CR3(%r15), %r15
++	or	$0x1000, %r15
++#endif
+ 	mov	32(%rsp), %r11				/* load user rflags */
+ 	mov	40(%rsp), %rsp				/* load user rsp */
++#ifdef CONFIG_KERNEL_ISOLATION
++	mov	%r15, %cr3
++#endif
+ 	sysretq
+ .endm
+ 
+ .macro SAFE_IRET
++#ifndef CONFIG_KERNEL_ISOLATION
+ 	iretq
++#else
++	jmp	safe_iret
++#endif
++.endm
++
++.macro  SWITCH_TO_KERNEL_CR3 err
++#ifdef CONFIG_KERNEL_ISOLATION
++	push	%r14
++	.if \err == 1
++	  mov	24(%rsp), %r14
++	.else
++	  mov	16(%rsp), %r14
++	.endif
++	test	$3, %r14
++	jz	5551f
++
++	push	%r13
++	mov	$0xffff817fffffc000, %r13
++	mov	CPUE_CR3(%r13), %r14
++	mov	%r14, %cr3
++	mov	CPUE_KSP(%r13), %r14
++	.if \err == 1
++	  sub	$56, %r14
++	  mov	56(%rsp), %r13
++	  mov	%r13, 48(%r14)
++	.else
++	  sub	$48, %r14
++	.endif
++	mov	48(%rsp), %r13
++	mov	%r13, 40(%r14)
++	mov	40(%rsp), %r13
++	mov	%r13, 32(%r14)
++	mov	32(%rsp), %r13
++	mov	%r13, 24(%r14)
++	mov	24(%rsp), %r13
++	mov	%r13, 16(%r14)
++	mov	16(%rsp), %r13
++	mov	%r13, 8(%r14)
++	mov	8(%rsp), %r13
++	mov	%r13, (%r14)
++	mov	(%rsp), %r13
++	mov	%r14, %rsp
++
++5551:
++	pop	%r14
++#endif
+ .endm
+ 
+ .macro  PRE_ALIEN_IPC target=slowtraps
+diff --git a/src/kern/ia32/64/mem_layout-ia32-64.cpp b/src/kern/ia32/64/mem_layout-ia32-64.cpp
+index feffaa1..6fbe9c1 100644
+--- a/src/kern/ia32/64/mem_layout-ia32-64.cpp
++++ b/src/kern/ia32/64/mem_layout-ia32-64.cpp
+@@ -17,6 +17,7 @@ public:
+   enum
+   {
+     Kentry_start      = 0xffff810000000000UL, ///< 512GB slot 258
++    Kentry_syscall    = FIASCO_KENTRY_SYSCALL_PAGE,
+     Kentry_cpu_page   = 0xffff817fffffc000UL, ///< last 4KB in solt 258
+     Io_bitmap         = 0xffff818000000000UL, ///< 512GB slot 259 first page
+     Caps_start        = 0xffff818000800000UL,    ///< % 4MB
+@@ -35,7 +36,6 @@ public:
+     Tbuf_ustatus_page = Tbuf_status_page,
+     Jdb_bench_page    = Service_page + 0x8000,   ///< % 4KB
+     utcb_ptr_align    = Tl_math::Ld<64>::Res,    // 64byte cachelines
+-    Idt               = Service_page + 0xfe000,  ///< % 4KB
+     Syscalls          = Service_page + 0xff000,  ///< % 4KB syscall page
+     Tbuf_buffer_area  = Service_page + 0x200000, ///< % 2MB
+     Tbuf_ubuffer_area = Tbuf_buffer_area,
+@@ -64,6 +64,7 @@ public:
+ 
+     // used for CPU_LOCAL_MAP only
+     Kentry_cpu_pdir   = 0xfffffffff0800000UL,
++    Cpu_local_start   = 0xfffffffff0012000UL,
+ 
+     Physmem           = 0xffffffff80000000UL,    ///< % 4MB   kernel memory
+     Physmem_end       = 0xffffffffe0000000UL,    ///< % 4MB   kernel memory
+@@ -87,6 +88,26 @@ private:
+   static Address physmem_offs asm ("PHYSMEM_OFFS");
+ };
+ 
++//-----------------------------------------------------------
++INTERFACE [amd64 && !kernel_isolation]:
++
++EXTENSION class Mem_layout
++{
++public:
++  enum { Idt = Service_page + 0xfe000 };
++};
++
++//-----------------------------------------------------------
++INTERFACE [amd64 && kernel_isolation]:
++
++EXTENSION class Mem_layout
++{
++public:
++  // IDT in Kentry area
++  enum { Idt = 0xffff817fffffa000UL };
++};
++
++//-----------------------------------------------------------
+ IMPLEMENTATION [amd64]:
+ 
+ #include <cassert>
+diff --git a/src/kern/ia32/64/thread-ia32-64.cpp b/src/kern/ia32/64/thread-ia32-64.cpp
+index 0d0fb2d..00484d3 100644
+--- a/src/kern/ia32/64/thread-ia32-64.cpp
++++ b/src/kern/ia32/64/thread-ia32-64.cpp
+@@ -1,5 +1,7 @@
+ //----------------------------------------------------------------------------
+-IMPLEMENTATION [amd64]:
++IMPLEMENTATION [amd64 && !kernel_isolation]:
++
++#define FIASCO_ASM_IRET "iretq \n\t"
+ 
+ PUBLIC template<typename T> inline
+ void FIASCO_NORETURN
+@@ -18,6 +20,32 @@ Thread::fast_return_to_user(Mword ip, Mword sp, T arg)
+   __builtin_trap();
+ }
+ 
++//----------------------------------------------------------------------------
++IMPLEMENTATION [amd64 && kernel_isolation]:
++
++#define FIASCO_ASM_IRET "jmp safe_iret \n\t"
++
++PUBLIC template<typename T> inline
++void FIASCO_NORETURN
++Thread::fast_return_to_user(Mword ip, Mword sp, T arg)
++{
++  assert(cpu_lock.test());
++  assert(current() == this);
++
++  asm volatile
++    ("mov %[sp], %%rsp \t\n"
++     "mov %[flags], %%r11 \t\n"
++     "jmp safe_sysret \t\n"
++     :
++     : [cr3] "a" (*((Address *)Mem_layout::Kentry_cpu_page) | 0x1000),
++       [flags] "i" (EFLAGS_IF), "c" (ip), [sp] "r" (sp), "D"(arg)
++    );
++  __builtin_trap();
++}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [amd64]:
++
+ PROTECTED inline NEEDS[Thread::sys_gdt_x86]
+ L4_msg_tag
+ Thread::invoke_arch(L4_msg_tag tag, Utcb *utcb)
+@@ -222,8 +250,7 @@ Thread::user_invoke()
+      "  xor %%r13,%%r13 \n"
+      "  xor %%r14,%%r14 \n"
+      "  xor %%r15,%%r15 \n"
+-
+-     "  iretq           \n"
++     FIASCO_ASM_IRET
+      :                          // no output
+      : "a" (nonull_static_cast<Return_frame*>(current()->regs())),
+        "c" (Gdt::gdt_data_user | Gdt::Selector_user),
+diff --git a/src/kern/ia32/config-ia32.cpp b/src/kern/ia32/config-ia32.cpp
+index 8a32b75..a4164b6 100644
+--- a/src/kern/ia32/config-ia32.cpp
++++ b/src/kern/ia32/config-ia32.cpp
+@@ -9,8 +9,12 @@ public:
+ 
+   enum
+   {
++#ifdef CONFIG_KERNEL_ISOLATION
++    Access_user_mem = No_access_user_mem,
++#else
+     // can access user memory directly
+     Access_user_mem = Access_user_mem_direct,
++#endif
+ 
+     /// Timer vector used with APIC timer or IOAPIC
+     Apic_timer_vector = APIC_IRQ_BASE + 0,
+diff --git a/src/kern/ia32/entry-mp.S b/src/kern/ia32/entry-mp.S
+index b2e0acb..fa72e28 100644
+--- a/src/kern/ia32/entry-mp.S
++++ b/src/kern/ia32/entry-mp.S
+@@ -2,25 +2,31 @@
+ #include "tcboffset.h"
+ #include <low_level.h>
+ 
++	.section ".entry.text.ipi", "ax", @progbits
+ 	.p2align 4
+ 	.globl entry_ipi_remote_request
+ entry_ipi_remote_request:
++	SWITCH_TO_KERNEL_CR3 0
+ 	SAVE_SCRATCH
+ 	call	handle_remote_cpu_requests
+ 	RESTORE_SCRATCH
+ 	SAFE_IRET
+ 
++	.section ".entry.text.ipi", "ax", @progbits
+ 	.p2align 4
+ 	.globl entry_ipi
+ entry_ipi:
++	SWITCH_TO_KERNEL_CR3 0
+ 	SAVE_SCRATCH
+ 	call	ipi_remote_call
+ 	RESTORE_SCRATCH
+ 	SAFE_IRET
+ 
++	.section ".entry.text.debug_ipi", "ax", @progbits
+ 	.p2align 4
+ 	.globl entry_debug_ipi
+ entry_debug_ipi:
++	SWITCH_TO_KERNEL_CR3 0
+ 	push	$(0)
+ 	push	$(0xee)
+ 	save_all_regs
+diff --git a/src/kern/ia32/idt.cpp b/src/kern/ia32/idt.cpp
+index 42f963d..ae17db9 100644
+--- a/src/kern/ia32/idt.cpp
++++ b/src/kern/ia32/idt.cpp
+@@ -20,6 +20,7 @@ public:
+   static const unsigned _idt_max = FIASCO_IDT_MAX;
+ private:
+   static const Address  _idt = Mem_layout::Idt;
++  static Address _idt_pa;
+ };
+ 
+ IMPLEMENTATION:
+@@ -30,7 +31,10 @@ IMPLEMENTATION:
+ #include "mem_unit.h"
+ #include "paging.h"
+ #include "panic.h"
+-#include "vmem_alloc.h"
++#include "kmem_alloc.h"
++#include <cstring>
++
++Address Idt::_idt_pa;
+ 
+ /**
+  * IDT write-protect/write-unprotect function.
+@@ -40,7 +44,7 @@ PRIVATE static
+ void
+ Idt::set_writable(bool writable)
+ {
+-  auto e = Kmem::dir()->walk(Virt_addr(_idt));
++  auto e = Kmem::current_cpu_kdir()->walk(Virt_addr(_idt));
+ 
+   // Make sure page directory entry is valid and not a 4MB page
+   assert (e.is_valid() && e.level == Pdir::Depth);
+@@ -55,14 +59,12 @@ Idt::set_writable(bool writable)
+ 
+ PUBLIC static FIASCO_INIT
+ void
+-Idt::init_table(Idt_init_entry *src)
++Idt::init_table(Idt_init_entry *src, Idt_entry *idt)
+ {
+-  Idt_entry *entries = (Idt_entry*)_idt;
+-
+   while (src->entry)
+     {
+       assert (src->vector < _idt_max);
+-      entries[src->vector] =
++      idt[src->vector] =
+         ((src->type & 0x1f) == 0x05) // task gate?
+         ? Idt_entry(src->entry, src->type)
+         : Idt_entry(src->entry, Gdt::gdt_code_kernel, src->type);
+@@ -79,13 +81,35 @@ void
+ Idt::init()
+ {
+   assert (_idt_max * sizeof(Idt_entry) <= Config::PAGE_SIZE && "IDT too large");
+-  if (!Vmem_alloc::page_alloc((void *) _idt, Vmem_alloc::ZERO_FILL))
+-    panic("IDT allocation failure");
++  auto alloc = Kmem_alloc::allocator();
++  Idt_entry *idt = (Idt_entry *)alloc->unaligned_alloc(Config::PAGE_SIZE);
++  if (!idt)
++    panic("IDT allocation failure: %d", __LINE__);
+ 
+-  init_table((Idt_init_entry*)&idt_init_table);
+-  load();
++  _idt_pa = Mem_layout::pmem_to_phys(idt);
++  memset(idt, 0, Config::PAGE_SIZE);
++  init_table((Idt_init_entry*)&idt_init_table, idt);
+ 
+-  set_writable(false);
++  init_current_cpu();
++}
++
++PUBLIC static
++void
++Idt::init_current_cpu()
++{
++  auto d = Kmem::current_cpu_kdir()->walk(Virt_addr(_idt), Pdir::Depth);
++  if (d.level != Pdir::Depth)
++    panic("IDT allocation failure: %d: level=%d %lx", __LINE__,
++          d.level, *d.pte);
++
++  if (!d.is_valid())
++    d.set_page(_idt_pa, Pt_entry::Referenced | Pt_entry::global());
++
++  if (d.page_addr() != _idt_pa)
++    panic("IDT allocation failure: %d: some other page mapped here %lx",
++          __LINE__, _idt);
++
++  load();
+ }
+ 
+ 
+diff --git a/src/kern/ia32/kmem-ia32.cpp b/src/kern/ia32/kmem-ia32.cpp
+index 0c5f863..9078f48 100644
+--- a/src/kern/ia32/kmem-ia32.cpp
++++ b/src/kern/ia32/kmem-ia32.cpp
+@@ -652,20 +652,91 @@ Kmem::resume_cpu(Cpu_number)
+ 
+ 
+ //--------------------------------------------------------------------------
+-IMPLEMENTATION [(amd64 || ia32) && cpu_local_map]:
++IMPLEMENTATION [(amd64 || ia32) && cpu_local_map && !kernel_isolation]:
+ 
+-DEFINE_PER_CPU static Per_cpu<Kpdir *> _per_cpu_dir;
++EXTENSION class Kmem
++{
++  enum { Num_cpu_dirs = 1 };
++};
+ 
+ PUBLIC static inline
+ Kpdir *
+-Kmem::current_cpu_kdir()
++Kmem::current_cpu_udir()
+ {
+   return reinterpret_cast<Kpdir *>(Kentry_cpu_pdir);
+ }
+ 
++PRIVATE static inline
++void
++Kmem::setup_cpu_structures_isolation(Cpu &cpu, Kpdir *, cxx::Simple_alloc *cpu_m)
++{
++  setup_cpu_structures(cpu, cpu_m, cpu_m);
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && kernel_isolation]:
++
++EXTENSION class Kmem
++{
++  enum { Num_cpu_dirs = 2 };
++};
++
+ PUBLIC static inline
+ Kpdir *
+ Kmem::current_cpu_udir()
++{
++  return reinterpret_cast<Kpdir *>(Kentry_cpu_pdir + 4096);
++}
++
++PRIVATE static
++void
++Kmem::setup_cpu_structures_isolation(Cpu &cpu, Kpdir *cpu_dir, cxx::Simple_alloc *cpu_m)
++{
++
++  auto src = cpu_dir->walk(Virt_addr(Kentry_cpu_page), 0);
++  auto dst = cpu_dir[1].walk(Virt_addr(Kentry_cpu_page), 0);
++  write_now(dst.pte, *src.pte);
++
++  // map kernel code to user space dir
++  extern char _kernel_text_start[];
++  extern char _kernel_text_entry_end[];
++  Address ki_page = ((Address)_kernel_text_start) & ~(Config::PAGE_SIZE - 1);
++  Address kie_page = (((Address)_kernel_text_entry_end) + (Config::PAGE_SIZE - 1)) & ~(Config::PAGE_SIZE - 1);
++
++  if (1)
++    printf("kernel code: %p(%lx)-%p(%lx)\n", _kernel_text_start,
++           ki_page, _kernel_text_entry_end, kie_page);
++
++  // FIXME: Move entry + exit code into dedicated sections and link
++  // into compact area to avoid mapping all kernel code to user land
++  // FIXME: Make sure we can and do share level 1 to 3 among all CPUs
++  cpu_dir[1].map(ki_page - Kernel_image_offset, Virt_addr(ki_page),
++                 Virt_size(kie_page - ki_page),
++                 Pt_entry::Referenced | Pt_entry::global(),
++                 Pdir::Depth,
++                 false, pdir_alloc(Kmem_alloc::allocator()));
++
++  unsigned const estack_sz = 128;
++  char *estack = (char *)cpu_m->alloc_bytes(estack_sz, 16);
++
++  extern char const syscall_entry_code[];
++  extern char const syscall_entry_code_end[];
++  char *sccode = (char *)cpu_m->alloc_bytes(syscall_entry_code_end - syscall_entry_code, 16);
++  assert ((Address)sccode == Kentry_cpu_page + 0xa0);
++  memcpy(sccode, syscall_entry_code, syscall_entry_code_end - syscall_entry_code);
++
++  setup_cpu_structures(cpu, cpu_m, cpu_m);
++  cpu.get_tss()->_rsp0 = (Address)(estack + estack_sz);
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && cpu_local_map]:
++
++DEFINE_PER_CPU static Per_cpu<Kpdir *> _per_cpu_dir;
++
++PUBLIC static inline
++Kpdir *
++Kmem::current_cpu_kdir()
+ {
+   return reinterpret_cast<Kpdir *>(Kentry_cpu_pdir);
+ }
+@@ -684,7 +755,7 @@ Kmem::init_cpu(Cpu &cpu)
+ {
+   Kmem_alloc *const alloc = Kmem_alloc::allocator();
+ 
+-  unsigned const cpu_dir_sz = sizeof(Kpdir);
++  unsigned const cpu_dir_sz = sizeof(Kpdir) * Num_cpu_dirs;
+ 
+   Kpdir *cpu_dir = (Kpdir*)alloc->unaligned_alloc(cpu_dir_sz);
+   memset (cpu_dir, 0, cpu_dir_sz);
+@@ -804,10 +875,9 @@ Kmem::init_cpu(Cpu &cpu)
+   Cpu::set_pdbr(cpu_dir_pa);
+ 
+   cxx::Simple_alloc cpu_m(Kentry_cpu_page, Config::PAGE_SIZE);
+-
+   // CPU dir pa and 
+   write_now(cpu_m.alloc<Mword>(4), cpu_dir_pa);
+-  setup_cpu_structures(cpu, &cpu_m, &cpu_m);
++  setup_cpu_structures_isolation(cpu, cpu_dir, &cpu_m);
+ }
+ 
+ PUBLIC static
+diff --git a/src/kern/ia32/main-ia32.cpp b/src/kern/ia32/main-ia32.cpp
+index 89f2b16..10992a1 100644
+--- a/src/kern/ia32/main-ia32.cpp
++++ b/src/kern/ia32/main-ia32.cpp
+@@ -131,11 +131,11 @@ int FIASCO_FASTCALL boot_ap_cpu()
+ 
+   Cpu &cpu = Cpu::cpus.cpu(_cpu);
+ 
+-  Idt::load();
+ 
+   if (cpu_is_new)
+     {
+       Kmem::init_cpu(cpu);
++      Idt::init_current_cpu();
+       Apic::init_ap();
+       Apic::apic.cpu(_cpu).construct(_cpu);
+       Ipi::init(_cpu);
+@@ -143,6 +143,7 @@ int FIASCO_FASTCALL boot_ap_cpu()
+   else
+     {
+       Kmem::resume_cpu(_cpu);
++      Idt::load();
+       cpu.pm_resume();
+       Pm_object::run_on_resume_hooks(_cpu);
+     }
+diff --git a/src/kern/ia32/mem_space-ia32.cpp b/src/kern/ia32/mem_space-ia32.cpp
+index 98d5861..e20f678 100644
+--- a/src/kern/ia32/mem_space-ia32.cpp
++++ b/src/kern/ia32/mem_space-ia32.cpp
+@@ -458,8 +458,13 @@ Mem_space::make_current()
+ 
+   pd[259] = d[259];
+ 
++  //pd->sync(Virt_addr(0), _dir, Virt_addr(0), Virt_size(1UL << 47), 0);
++  //pd->sync(Virt_addr(Mem_layout::Io_bitmap), _dir, Virt_addr(Mem_layout::Io_bitmap), Virt_size(512UL << 30), 0);
++#ifndef CONFIG_KERNEL_ISOLATION
++  asm volatile ("" : : : "memory");
+   Address pd_pa = access_once(reinterpret_cast<Address *>(Mem_layout::Kentry_cpu_page));
+   Cpu::set_pdbr(pd_pa);
++#endif
+   _current.cpu(current_cpu()) = this;
+ }
+ 
+diff --git a/src/kern/ia32/paging-ia32.cpp b/src/kern/ia32/paging-ia32.cpp
+index be0ac3d..d719078 100644
+--- a/src/kern/ia32/paging-ia32.cpp
++++ b/src/kern/ia32/paging-ia32.cpp
+@@ -238,6 +238,28 @@ Pte_ptr::del_rights(L4_fpage::Rights r)
+     *pte |= XD;
+ }
+ 
++//---------------------------------------------------------------------------
++IMPLEMENTATION [(ia32 || amd64 || ux) && kernel_isolation]:
++
++PUBLIC static inline
++void
++Pt_entry::enable_global()
++{}
++
++/**
++ * Global entries are entries that are not automatically flushed when the
++ * page-table base register is reloaded. They are intended for kernel data
++ * that is shared between all tasks.
++ * @return global page-table--entry flags
++ */
++PUBLIC static inline
++Unsigned32
++Pt_entry::global()
++{ return 0; }
++
++//---------------------------------------------------------------------------
++IMPLEMENTATION [(ia32 || amd64 || ux) && !kernel_isolation]:
++
+ Unsigned32 Pt_entry::_cpu_global = Pt_entry::L4_global;
+ 
+ PUBLIC static inline
+@@ -258,6 +280,7 @@ Pt_entry::global()
+ 
+ 
+ //--------------------------------------------------------------------------
++IMPLEMENTATION [ia32 || amd64 || ux]:
+ #include "cpu.h"
+ #include "mem_layout.h"
+ #include "regdefs.h"
+diff --git a/src/kernel.amd64.ld b/src/kernel.amd64.ld
+index d047c41..974baae 100644
+--- a/src/kernel.amd64.ld
++++ b/src/kernel.amd64.ld
+@@ -81,6 +81,8 @@ SECTIONS {
+ #endif
+   .text : AT (ADDR(.text) - _fiasco_image_offset) {
+     PROVIDE ( _kernel_text_start = . );
++    *(SORT(.entry.text.*))
++    PROVIDE ( _kernel_text_entry_end = . );
+     crt0.o(.text)
+     *(.init)
+     *(.text SORT(.text.*) .gnu.linkonce.t.*)
+diff --git a/src/kernel.ia32.ld b/src/kernel.ia32.ld
+index 9c4d5ba..3e74520 100644
+--- a/src/kernel.ia32.ld
++++ b/src/kernel.ia32.ld
+@@ -79,6 +79,8 @@ SECTIONS {
+ #endif
+   .text : AT (ADDR(.text) - _fiasco_image_offset) {
+     PROVIDE ( _kernel_text_start = . );
++    *(SORT(.entry.text.*))
++    PROVIDE ( _kernel_text_entry_end = . );
+     crt0.o(.text)
+     *(.init)
+     *(.text SORT(.text.*) .gnu.linkonce.t.*)

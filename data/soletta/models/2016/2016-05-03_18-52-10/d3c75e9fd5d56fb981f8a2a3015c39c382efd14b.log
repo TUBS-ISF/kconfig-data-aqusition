@@ -1,0 +1,4187 @@
+"2016-05-03 18:52:10 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index 2488c278..0cc26190 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -59,6 +59,7 @@ source "src/modules/flow/filter-repeated/Kconfig"
+ source "src/modules/flow/float/Kconfig"
+ source "src/modules/flow/flower-power/Kconfig"
+ source "src/modules/flow/form/Kconfig"
++source "src/modules/flow/format/Kconfig"
+ source "src/modules/flow/gpio/Kconfig"
+ source "src/modules/flow/grove/Kconfig"
+ source "src/modules/flow/gtk/Kconfig"
+@@ -67,9 +68,9 @@ source "src/modules/flow/http-client/Kconfig"
+ source "src/modules/flow/http-server/Kconfig"
+ source "src/modules/flow/iio/Kconfig"
+ source "src/modules/flow/int/Kconfig"
++source "src/modules/flow/jhd1313m1/Kconfig"
+ source "src/modules/flow/json/Kconfig"
+ source "src/modules/flow/keyboard/Kconfig"
+-source "src/modules/flow/jhd1313m1/Kconfig"
+ source "src/modules/flow/led-7seg/Kconfig"
+ source "src/modules/flow/led-strip/Kconfig"
+ source "src/modules/flow/location/Kconfig"
+diff --git a/src/modules/flow/converter/Kconfig b/src/modules/flow/converter/Kconfig
+index 944afb98..86281e84 100644
+--- a/src/modules/flow/converter/Kconfig
++++ b/src/modules/flow/converter/Kconfig
+@@ -1,3 +1,20 @@
+ config FLOW_NODE_TYPE_CONVERTER
+ 	tristate "Node type: converter"
+ 	default y
++	help
++		The converter family of nodes will convert Soletta
++		packets from one type to another (e.g. boolean to
++		byte). Some of them will do more fancy things, like
++		splitting a byte into (boolean) individual bits.
++		Others will compose a final packet from others, like
++		assembling four bytes into a final integer. You'll
++		also find a node that splits an error packet in other
++		twoits integer code and its string message. There are
++		also the nodes dealing with JSON data (e.g. one that
++		gets a string packet and outputs a JSON array packet,
++		if the string is valid). Finally, there are some nodes
++		converting some packet types to string packets,
++		namely float-to-string and int-to-string. These last
++		two have sibling nodes doing a more elaborate string
++		formatting output, but they belong in another flow
++		module: py-formatting.
+diff --git a/src/modules/flow/converter/Makefile b/src/modules/flow/converter/Makefile
+index b3794001..2966963b 100644
+--- a/src/modules/flow/converter/Makefile
++++ b/src/modules/flow/converter/Makefile
+@@ -1,3 +1,3 @@
+ obj-$(FLOW_NODE_TYPE_CONVERTER) += converter.mod
+-obj-converter-$(FLOW_NODE_TYPE_CONVERTER) := converter.json converter.o string-format.o
++obj-converter-$(FLOW_NODE_TYPE_CONVERTER) := converter.json converter.o
+ obj-converter-$(FLOW_NODE_TYPE_CONVERTER)-type := flow
+diff --git a/src/modules/flow/converter/converter.c b/src/modules/flow/converter/converter.c
+index c340987f..3dccc7c8 100644
+--- a/src/modules/flow/converter/converter.c
++++ b/src/modules/flow/converter/converter.c
+@@ -17,8 +17,8 @@
+  */
+ 
+ #include "sol-flow/converter.h"
+-#include "string-format.h"
+ #include "sol-mainloop.h"
++#include "sol-flow-internal.h"
+ 
+ #include <sol-json.h>
+ #include <limits.h>
+@@ -30,6 +30,8 @@
+ struct string_converter {
+     struct sol_flow_node *node;
+     char *format;
++    char *format_prefix;
++    char *format_suffix;
+ };
+ 
+ struct sol_converter_byte {
+@@ -822,7 +824,18 @@ drange_to_string_convert(struct sol_flow_node *node, void *data, uint16_t port,
+     r = sol_flow_packet_get_drange(packet, &in_value);
+     SOL_INT_CHECK(r, < 0, r);
+ 
+-    r = do_float_markup(node, mdata->format, in_value, &out);
++    r = sol_buffer_append_slice(&out,
++        sol_str_slice_from_str(mdata->format_prefix));
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wformat-nonliteral"
++    r = sol_buffer_append_printf(&out, mdata->format, in_value.val);
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++#pragma GCC diagnostic pop
++
++    r = sol_buffer_append_slice(&out,
++        sol_str_slice_from_str(mdata->format_suffix));
+     SOL_INT_CHECK_GOTO(r, < 0, end);
+ 
+     r = sol_flow_send_string_slice_packet(node,
+@@ -834,6 +847,48 @@ end:
+     return r;
+ }
+ 
++static bool
++validate_flags(const char *s)
++{
++    const char *ptr = s;
++
++    while (*ptr) {
++        switch (*ptr) {
++        case '#':
++        case '0':
++        case '-':
++        case ' ':
++        case '+':
++            ptr++;
++            continue;
++        default:
++            return false;
++        }
++    }
++
++    return true;
++}
++
++static bool
++validate_drange_conversion_specifier(const char *s)
++{
++    if ((s[0] == 'e' || s[0] == 'f' || s[0] == 'F' || s[0] == 'g' ||
++        s[0] == 'G' || s[0] == 'a' || s[0] == 'A') && s[1] == '\0')
++        return true;
++
++    return false;
++}
++
++static bool
++validate_irange_conversion_specifier(const char *s)
++{
++    if ((s[0] == 'd' || s[0] == 'i' || s[0] == 'o' || s[0] == 'u' ||
++        s[0] == 'x' || s[0] == 'X' || s[0] == 'c') && s[1] == '\0')
++        return true;
++
++    return false;
++}
++
+ static int
+ drange_to_string_open(struct sol_flow_node *node,
+     void *data,
+@@ -841,6 +896,7 @@ drange_to_string_open(struct sol_flow_node *node,
+ {
+     struct string_converter *mdata = data;
+     const struct sol_flow_node_type_converter_float_to_string_options *opts;
++    bool flags = false, valid_conv = false;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
+         SOL_FLOW_NODE_TYPE_CONVERTER_FLOAT_TO_STRING_OPTIONS_API_VERSION,
+@@ -848,18 +904,48 @@ drange_to_string_open(struct sol_flow_node *node,
+ 
+     opts = (const struct sol_flow_node_type_converter_float_to_string_options *)options;
+ 
+-    mdata->format = strdup(opts->format_spec);
+-    SOL_NULL_CHECK(mdata->format, -ENOMEM);
++    if (opts->format_prefix)
++        mdata->format_prefix = strdup(opts->format_prefix);
++    if (opts->format_suffix)
++        mdata->format_suffix = strdup(opts->format_suffix);
++    if (opts->format_flags) {
++        if (!validate_flags(opts->format_flags))
++            SOL_WRN("Invalid format flags provided: %s,"
++                " proceeding with no flags", opts->format_flags);
++        else
++            flags = true;
++    }
++    if (opts->format_conversion_specifier) {
++        if (!validate_drange_conversion_specifier
++                (opts->format_conversion_specifier))
++            SOL_WRN("Invalid format conversion specifier provided: %s,"
++                " proceeding with default one (f)",
++                opts->format_conversion_specifier);
++        else
++            valid_conv = true;
++    }
+ 
+-    return 0;
++    if (opts->format_precision > 0)
++        return asprintf(&mdata->format, "%%%s%" PRId32 ".%" PRId32 "%s",
++            flags ? opts->format_flags : "",
++            opts->format_field_width,
++            opts->format_precision,
++            valid_conv ? opts->format_conversion_specifier : "f");
++    else
++        return asprintf(&mdata->format, "%%%s%" PRId32 "%s",
++            flags ? opts->format_flags : "",
++            opts->format_field_width,
++            valid_conv ? opts->format_conversion_specifier : "f");
+ }
+ 
+ static void
+-drange_to_string_close(struct sol_flow_node *node, void *data)
++irange_drange_to_string_close(struct sol_flow_node *node, void *data)
+ {
+     struct string_converter *mdata = data;
+ 
+     free(mdata->format);
++    free(mdata->format_prefix);
++    free(mdata->format_suffix);
+ }
+ 
+ static int
+@@ -879,7 +965,18 @@ irange_to_string_convert(struct sol_flow_node *node,
+     r = sol_flow_packet_get_irange(packet, &in_value);
+     SOL_INT_CHECK(r, < 0, r);
+ 
+-    r = do_integer_markup(node, mdata->format, in_value, &out);
++    r = sol_buffer_append_slice(&out,
++        sol_str_slice_from_str(mdata->format_prefix));
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wformat-nonliteral"
++    r = sol_buffer_append_printf(&out, mdata->format, in_value.val);
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++#pragma GCC diagnostic pop
++
++    r = sol_buffer_append_slice(&out,
++        sol_str_slice_from_str(mdata->format_suffix));
+     SOL_INT_CHECK_GOTO(r, < 0, end);
+ 
+     r = sol_flow_send_string_slice_packet(node,
+@@ -898,6 +995,7 @@ irange_to_string_open(struct sol_flow_node *node,
+ {
+     struct string_converter *mdata = data;
+     const struct sol_flow_node_type_converter_int_to_string_options *opts;
++    bool flags = false, valid_conv = false;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
+         SOL_FLOW_NODE_TYPE_CONVERTER_INT_TO_STRING_OPTIONS_API_VERSION,
+@@ -905,18 +1003,38 @@ irange_to_string_open(struct sol_flow_node *node,
+ 
+     opts = (const struct sol_flow_node_type_converter_int_to_string_options *)options;
+ 
+-    mdata->format = strdup(opts->format_spec);
+-    SOL_NULL_CHECK(mdata->format, -ENOMEM);
+-
+-    return 0;
+-}
+-
+-static void
+-irange_to_string_close(struct sol_flow_node *node, void *data)
+-{
+-    struct string_converter *mdata = data;
++    if (opts->format_prefix)
++        mdata->format_prefix = strdup(opts->format_prefix);
++    if (opts->format_suffix)
++        mdata->format_suffix = strdup(opts->format_suffix);
++    if (opts->format_flags) {
++        if (!validate_flags(opts->format_flags))
++            SOL_WRN("Invalid format flags provided: %s,"
++                " proceeding with no flags", opts->format_flags);
++        else
++            flags = true;
++    }
++    if (opts->format_conversion_specifier) {
++        if (!validate_irange_conversion_specifier
++                (opts->format_conversion_specifier))
++            SOL_WRN("Invalid format conversion specifier provided: %s,"
++                " proceeding with default one (d)",
++                opts->format_conversion_specifier);
++        else
++            valid_conv = true;
++    }
+ 
+-    free(mdata->format);
++    if (opts->format_precision > 0)
++        return asprintf(&mdata->format, "%%%s%" PRId32 ".%" PRId32 "%s",
++            flags ? opts->format_flags : "",
++            opts->format_field_width,
++            opts->format_precision,
++            valid_conv ? opts->format_conversion_specifier : "f");
++    else
++        return asprintf(&mdata->format, "%%%s%" PRId32 "%s",
++            flags ? opts->format_flags : "",
++            opts->format_field_width,
++            valid_conv ? opts->format_conversion_specifier : "f");
+ }
+ 
+ static int
+diff --git a/src/modules/flow/converter/converter.json b/src/modules/flow/converter/converter.json
+index 90b1c567..61aa661a 100644
+--- a/src/modules/flow/converter/converter.json
++++ b/src/modules/flow/converter/converter.json
+@@ -848,7 +848,7 @@
+     },
+     {
+       "category": "converter",
+-      "description": "Receives a float packet and converts it to a string one.",
++      "description": "Receives a float packet and converts it to a string one. By its options, one is able to form a POSIX printf-like format string, besides entering literal prefix/suffix for that. The format string itself will be composed by flags, field width, precision and conversion specifiers given by options. The user is responsible for forming a valid string format at the end, but Soletta will prevent bad usage by not allowing '*', 'n', 'm' and such, while validing input.",
+       "in_ports": [
+         {
+           "data_type": "float",
+@@ -861,16 +861,46 @@
+       ],
+       "methods": {
+         "open": "drange_to_string_open",
+-        "close": "drange_to_string_close"
++        "close": "irange_drange_to_string_close"
+       },
+       "name": "converter/float-to-string",
+       "options": {
+         "members": [
+           {
+             "data_type": "string",
+-            "default": "{val:f}",
+-            "description": "Format string to be used in the conversion. The syntax is the same as Python's string.format() -- https://docs.python.org/3/library/stdtypes.html#str.format --, except that we got no format recursion, no '!' conversions, and the attribute names must be one of the integer fields (val, min, max, step). Numbered fields will get to them in this order. Naturally, there is no field attribute nor field index dereferencing either.",
+-            "name": "format_spec"
++            "default": "",
++            "description": "(Literal) prefix to compose the final string.",
++            "name": "format_prefix"
++          },
++          {
++            "data_type": "string",
++            "default": "",
++            "description": "(Literal) suffix to compose the final string",
++            "name": "format_suffix"
++          },
++          {
++            "data_type": "string",
++            "default": "",
++            "description": "Flags to compose the final format string (combination of '#', '0', '-', ' ' and '+' characters).",
++            "name": "format_flags"
++          },
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "Field width specification to compose the final format string (may be negative).",
++            "name": "format_field_width"
++          },
++          {
++            "data_type": "int",
++            "default": -1,
++            "description": "Precision specification to compose the final format string (negative values mean no precision specified on output format string).",
++            "name": "format_precision"
++          },
++          {
++            "data_type": "string",
++            "default": "f",
++            "description": "Conversion specification to compose the final format string (one of 'e', 'E', 'f', 'F', 'g', 'G', 'a' or 'A')",
++            "name": "format_conversion_specifier"
+           }
+         ],
+         "version": 1
+@@ -1556,7 +1586,7 @@
+     },
+     {
+       "category": "converter",
+-      "description": "Receives an int packet and converts it to a string one.",
++      "description": "Receives an integer packet and converts it to a string one. By its options, one is able to form a POSIX printf-like format string, besides entering literal prefix/suffix for that. The format string itself will be composed by flags, field width, precision and conversion specifiers given by options. The user is responsible for forming a valid string format at the end, but Soletta will prevent bad usage by not allowing '*', 'n', 'm' and such, while validing input.",
+       "in_ports": [
+         {
+           "data_type": "int",
+@@ -1569,16 +1599,46 @@
+       ],
+       "methods": {
+         "open": "irange_to_string_open",
+-        "close": "irange_to_string_close"
++        "close": "irange_drange_to_string_close"
+       },
+       "name": "converter/int-to-string",
+       "options": {
+         "members": [
+           {
+             "data_type": "string",
+-            "default": "{val:d}",
+-            "description": "Format string to be used in the conversion. The syntax is the same as Python's string.format() -- https://docs.python.org/3/library/stdtypes.html#str.format --, except that we got no format recursion, no '!' conversions, and the attribute names must be one of the integer fields (val, min, max, step). Numbered fields will get to them in this order. Naturally, there is no field attribute nor field index dereferencing either.",
+-            "name": "format_spec"
++            "default": "",
++            "description": "(Literal) prefix to compose the final string.",
++            "name": "format_prefix"
++          },
++          {
++            "data_type": "string",
++            "default": "",
++            "description": "(Literal) suffix to compose the final string",
++            "name": "format_suffix"
++          },
++          {
++            "data_type": "string",
++            "default": "",
++            "description": "Flags to compose the final format string (combination of '#', '0', '-', ' ' and '+' characters)",
++            "name": "format_flags"
++          },
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "Field width specification to compose the final format string (may be negative).",
++            "name": "format_field_width"
++          },
++          {
++            "data_type": "int",
++            "default": -1,
++            "description": "Precision specification to compose the final format string (negative values mean no precision specified on output format string).",
++            "name": "format_precision"
++          },
++          {
++            "data_type": "string",
++            "default": "f",
++            "description": "Conversion specification to compose the final format string (one of 'd', 'i', 'o', 'u', 'x', 'X' or 'c')",
++            "name": "format_conversion_specifier"
+           }
+         ],
+         "version": 1
+diff --git a/src/modules/flow/form/Makefile b/src/modules/flow/form/Makefile
+index 4988532b..6b205362 100644
+--- a/src/modules/flow/form/Makefile
++++ b/src/modules/flow/form/Makefile
+@@ -1,6 +1,3 @@
+ obj-$(FLOW_NODE_TYPE_FORM) += form.mod
+-obj-form-$(FLOW_NODE_TYPE_FORM) := form.json form.o ../converter/string-format.o ../converter/string-format.h
++obj-form-$(FLOW_NODE_TYPE_FORM) := form.json form.o form-common.o
+ obj-form-$(FLOW_NODE_TYPE_FORM)-type := flow
+-obj-form-$(FLOW_NODE_TYPE_FORM)-deps := flow/converter.mod
+-obj-form-$(FLOW_NODE_TYPE_FORM)-extra-ldflags := \
+-        -lm
+diff --git a/src/modules/flow/form/form-common.c b/src/modules/flow/form/form-common.c
+new file mode 100644
+index 00000000..7b279c0f
+--- /dev/null
++++ b/src/modules/flow/form/form-common.c
+@@ -0,0 +1,369 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include "form-common.h"
++SOL_LOG_INTERNAL_DECLARE(_form_common_log_domain, "form-common");
++
++#define CUR_POS (coords_to_pos(n_cols, *row, *col))
++#define CUR_EXTRA_COL (coords_to_pos(n_cols, *row, n_cols - 1) + 1)
++
++int
++fill_spaces(struct sol_buffer *buf,
++    size_t n_cols,
++    size_t *row,
++    size_t *col,
++    size_t length)
++{
++    int r;
++
++    while (*col < n_cols && length) {
++        r = sol_buffer_set_char_at(buf, CUR_POS, SPC);
++        SOL_INT_CHECK(r, < 0, r);
++        (*col)++;
++        length--;
++    }
++    /* If we did not reach the row's end, we're done, otherwise we
++     * must break the line */
++    if (!length)
++        return CUR_POS;
++    r = sol_buffer_set_char_at(buf, CUR_EXTRA_COL, NL);
++    SOL_INT_CHECK(r, < 0, r);
++    *col = 0;
++    (*row)++;
++
++    return CUR_POS;
++}
++
++int
++fill_line(struct sol_buffer *buf,
++    size_t n_rows,
++    size_t n_cols,
++    size_t *row,
++    size_t *col,
++    bool calc_only)
++{
++    int r;
++
++    while (*col < n_cols) {
++        if (!calc_only) {
++            r = sol_buffer_set_char_at(buf, CUR_POS, SPC);
++            SOL_INT_CHECK(r, < 0, r);
++        }
++        (*col)++;
++    }
++    if (*row < n_rows - 1) {
++        if (!calc_only) {
++            r = sol_buffer_set_char_at
++                    (buf, CUR_EXTRA_COL, NL);
++            SOL_INT_CHECK(r, < 0, r);
++        }
++    }
++    (*row)++;
++    *col = 0;
++
++    return CUR_POS;
++}
++
++int
++go_to_new_line(struct sol_buffer *buf,
++    size_t n_rows,
++    size_t n_cols,
++    size_t *row,
++    size_t *col)
++{
++    int r = 0;
++
++    if (*col > 0)
++        r = fill_line(buf, n_rows, n_cols, row, col, DO_FORMAT);
++
++    return r;
++}
++
++int
++format_chunk(struct sol_buffer *buf,
++    size_t n_rows,
++    size_t n_cols,
++    const char *ptr,
++    const char *end_ptr,
++    size_t *row,
++    size_t *col,
++    bool calc_only,
++    bool ditch_new_lines)
++{
++    size_t sz = buf->capacity;
++    int r;
++
++    while (ptr < end_ptr && CUR_POS < sz && *row < n_rows) {
++        /* translate middle-of-line \n's to spaces till the end +
++         * \n */
++        if (*ptr == CR || *ptr == NL) {
++            if (ditch_new_lines) {
++                if (!calc_only) {
++                    r = sol_buffer_set_char_at(buf, CUR_POS, SPC);
++                    SOL_INT_CHECK(r, < 0, r);
++                }
++                (*col)++;
++            } else {
++                r = fill_line(buf, n_rows, n_cols, row, col, calc_only);
++                SOL_INT_CHECK(r, < 0, r);
++            }
++            if (*ptr == CR)
++                ptr++;
++            if (*ptr == NL)
++                ptr++;
++            goto col_check;
++        }
++        if (!calc_only) {
++            r = sol_buffer_set_char_at(buf, CUR_POS, *ptr);
++            SOL_INT_CHECK(r, < 0, r);
++        }
++        (*col)++;
++        ptr++;
++
++col_check:
++        /* crop lines that don't fit */
++        if (*col == n_cols) {
++            if (!calc_only) {
++                if (*row < n_rows - 1) {
++                    r = sol_buffer_set_char_at(buf, CUR_EXTRA_COL, NL);
++                    SOL_INT_CHECK(r, < 0, r);
++                }
++            }
++            *col = 0;
++            (*row)++;
++            while (*ptr && *ptr != CR && *ptr != NL) {
++                ptr++;
++            }
++            if (*ptr == CR)
++                ptr++;
++            if (*ptr == NL)
++                ptr++;
++            if (ditch_new_lines) /* if ditching NL's, stop at 1st crop */
++                break;
++        } else if (ptr == end_ptr && !ditch_new_lines) {
++            /* the source ended before the line */
++            r = fill_line(buf, n_rows, n_cols, row, col, calc_only);
++            SOL_INT_CHECK(r, < 0, r);
++        }
++    }
++
++    return CUR_POS;
++#undef CUR_POS
++#undef CUR_EXTRA_COL
++}
++
++int
++format_title(struct sol_buffer *buf,
++    size_t buf_size,
++    size_t n_rows,
++    size_t n_cols,
++    size_t *row_ptr,
++    size_t *col_ptr,
++    const char *format,
++    const char *title,
++    const char *title_tag,
++    const char *value_tag,
++    bool *no_more_space)
++{
++    int r;
++    const char *ptr = format;
++
++    *no_more_space = false;
++
++    /* Format pre-title/value chunk */
++    r = format_chunk(buf, n_rows, n_cols, ptr,
++        title_tag ? title_tag : value_tag,
++        row_ptr, col_ptr, DO_FORMAT, KEEP_NL);
++    SOL_INT_CHECK(r, < 0, r);
++    if (r >= (int)buf_size || *row_ptr >= n_rows) {
++        *no_more_space = true;
++        return 0;
++    }
++
++    if (!title || !title_tag)
++        return 0;
++
++    /* Format title */
++    r = format_chunk(buf, n_rows, n_cols, title, title + strlen(title),
++        row_ptr, col_ptr, DO_FORMAT, DITCH_NL);
++    SOL_INT_CHECK(r, < 0, r);
++    if (r >= (int)buf_size || *row_ptr >= n_rows) {
++        *no_more_space = true;
++        return 0;
++    }
++
++    if (n_rows > 1) {
++        r = go_to_new_line(buf, n_rows, n_cols, row_ptr, col_ptr);
++        SOL_INT_CHECK(r, < 0, r);
++    } else {
++        r = fill_spaces(buf, n_cols, row_ptr, col_ptr, 1);
++        SOL_INT_CHECK(r, < 0, r);
++    }
++
++    /* Format post-title, pre-value chunk. If we got only one
++     * line, ditch new lines in an attempt to have both title and
++     * value in it */
++    ptr = title_tag + strlen(TITLE_TAG);
++    r = format_chunk(buf, n_rows, n_cols, ptr, value_tag, row_ptr,
++        col_ptr, DO_FORMAT, n_rows > 1 ? KEEP_NL : DITCH_NL);
++    SOL_INT_CHECK(r, < 0, r);
++    if (r >= (int)buf_size || *row_ptr >= n_rows)
++        *no_more_space = true;
++
++    return 0;
++}
++
++int
++format_post_value(struct sol_buffer *buf,
++    size_t n_rows,
++    size_t n_cols,
++    size_t *row_ptr,
++    size_t *col_ptr,
++    const char *format,
++    const char *value_tag)
++{
++    const char *ptr = value_tag + sizeof(VALUE_TAG) - 1;
++    int r;
++
++    r = go_to_new_line(buf, n_rows, n_cols, row_ptr, col_ptr);
++    SOL_INT_CHECK(r, < 0, r);
++
++    /* Format post-value chunk */
++    return format_chunk(buf, n_rows, n_cols, ptr,
++        format + strlen(format), row_ptr, col_ptr, DO_FORMAT, KEEP_NL);
++}
++
++int
++format_send(struct sol_flow_node *node,
++    struct sol_buffer *buf,
++    uint16_t out_port)
++{
++    int r;
++
++    /* Don't ever end with NL and guarantee ending NUL byte */
++    if (buf->used) {
++        char *value = (char *)sol_buffer_at_end(buf);
++        *value = NUL;
++        value = (char *)sol_buffer_at_end(buf) - 1;
++        if (*value == NL)
++            *value = NUL;
++    } else {
++        r = sol_buffer_set_char_at(buf, 0, NUL);
++        SOL_INT_CHECK(r, < 0, r);
++    }
++
++    return sol_flow_send_string_slice_packet(node,
++        out_port, sol_buffer_get_slice(buf));
++}
++
++int
++common_form_init(struct sol_buffer *buf,
++    int32_t in_rows,
++    size_t *out_rows,
++    int32_t in_cols,
++    size_t *out_cols,
++    const char *in_format,
++    char **out_format,
++    const char *in_title,
++    char **out_title,
++    char **out_title_tag,
++    char **out_value_tag,
++    char **out_text_mem)
++{
++    int r = 0;
++    size_t size;
++
++    SOL_NULL_CHECK(in_format, -EINVAL);
++
++    if (in_rows <= 0) {
++        SOL_WRN("Form rows number must be a positive integer, "
++            "but %" PRId32 " was given. Fallbacking to minimum value of 1.",
++            in_rows);
++        *out_rows = 1;
++    } else
++        *out_rows = in_rows;
++
++    if (in_cols <= 0) {
++        SOL_WRN("Boolean columns number must be a positive integer, "
++            "but %" PRId32 " was given. Fallbacking to minimum value of 1.",
++            in_cols);
++        *out_cols = 1;
++    } else
++        *out_cols = in_cols;
++
++    r = get_buf_size(*out_rows, *out_cols, &size);
++    SOL_INT_CHECK(r, < 0, r);
++
++    *out_text_mem = calloc(1, size);
++    SOL_NULL_CHECK(*out_text_mem, -ENOMEM);
++
++    *out_format = strdup(in_format);
++    if (!*out_format) {
++        r = -ENOMEM;
++        goto err_format;
++    }
++
++    *out_title_tag = strstr(*out_format, TITLE_TAG);
++    *out_value_tag = strstr(*out_format, VALUE_TAG);
++
++    if (!*out_value_tag) {
++        SOL_WRN("Bad format, no {value} tag: %s. Fallbacking to "
++            "pristine one, i. e. '{value}'.", *out_format);
++        r = sol_util_replace_str_if_changed(out_format, VALUE_TAG);
++        *out_value_tag = *out_format;
++        *out_title_tag = NULL;
++        SOL_INT_CHECK_GOTO(r, < 0, err_tags);
++    }
++
++    if (*out_title_tag > *out_value_tag) {
++        SOL_WRN("Bad format, {title} tag placed after {value} tag: %s."
++            " Fallbacking to pristine one, i. e. '{value}'.",
++            *out_format);
++        r = sol_util_replace_str_if_changed(out_format, VALUE_TAG);
++        *out_value_tag = *out_format;
++        *out_title_tag = NULL;
++        SOL_INT_CHECK_GOTO(r, < 0, err_tags);
++    }
++
++    if (in_title && *out_title_tag) {
++        *out_title = strdup(in_title);
++        if (!*out_title) {
++            r = -ENOMEM;
++            goto err_title;
++        }
++    } else {
++        *out_title = NULL;
++    }
++
++    r = buffer_re_init(buf, *out_text_mem, *out_rows, *out_cols);
++    if (r < 0) {
++        sol_buffer_fini(buf);
++        goto err_tags;
++    }
++
++    return 0;
++
++err_tags:
++err_title:
++    free(*out_format);
++
++err_format:
++    free(*out_text_mem);
++
++    return r;
++}
+diff --git a/src/modules/flow/form/form-common.h b/src/modules/flow/form/form-common.h
+new file mode 100644
+index 00000000..2fb8209a
+--- /dev/null
++++ b/src/modules/flow/form/form-common.h
+@@ -0,0 +1,99 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#pragma once
++
++#ifndef SOL_LOG_DOMAIN
++#define SOL_LOG_DOMAIN &_form_common_log_domain
++extern struct sol_log_domain _form_common_log_domain;
++#endif
++
++#include "sol-flow-internal.h"
++
++#define DITCH_NL (true)
++#define KEEP_NL (false)
++
++#define DO_FORMAT (false)
++#define CALC_ONLY (true)
++
++static const char CR = '\r', NL = '\n', SPC = ' ', UNDERSCORE = '_',
++    NUL = '\0', CURL_BRACKET_OPEN = '{', CURL_BRACKET_CLOSE = '}', COMMA = ',';
++
++static const char TITLE_TAG[] = "{title}", VALUE_TAG[] = "{value}",
++    EMPTY_STR[] = "";
++
++static inline size_t
++coords_to_pos(size_t n_cols, size_t r, size_t c)
++{
++    /* account for extra col for (implicit) trailing NLs, thus + r */
++    return (r * n_cols) + c + r;
++}
++
++static inline int
++get_buf_size(size_t rows, size_t columns, size_t *out)
++{
++    size_t n_cols;
++    int r;
++
++    /* +1 on cols for '\n' and (final) NUL chars */
++    r = sol_util_size_add(columns, 1, &n_cols);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_util_size_mul(rows, n_cols, out);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++static inline int
++buffer_re_init(struct sol_buffer *buf,
++    char *mem,
++    size_t rows,
++    size_t columns)
++{
++    size_t size;
++
++    int r = get_buf_size(rows, columns, &size);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    /* We choose to do the ending nul byte ourselves, since we're
++     * doing fixed capacity, to be able to set the second to last byte
++     * on the buffer without reallocation attempts. */
++    sol_buffer_init_flags(buf, mem, size,
++        SOL_BUFFER_FLAGS_FIXED_CAPACITY | SOL_BUFFER_FLAGS_NO_NUL_BYTE);
++
++    return 0;
++}
++
++int format_title(struct sol_buffer *buf, size_t buf_size, size_t n_rows, size_t n_cols, size_t *row_ptr, size_t *col_ptr, const char *format, const char *title, const char *title_tag, const char *value_tag, bool *no_more_space);
++
++int format_chunk(struct sol_buffer *buf, size_t n_rows, size_t n_cols, const char *ptr, const char *end_ptr, size_t *row, size_t *col, bool calc_only, bool ditch_new_lines);
++
++int format_post_value(struct sol_buffer *buf, size_t n_rows, size_t n_cols, size_t *row_ptr, size_t *col_ptr, const char *format, const char *value_tag);
++
++int format_send(struct sol_flow_node *node, struct sol_buffer *buf, uint16_t out_port);
++
++int common_form_init(struct sol_buffer *buf, int32_t in_rows, size_t *out_rows,  int32_t in_cols, size_t *out_cols, const char *in_format, char **out_format, const char *in_title, char **out_title, char **out_title_tag, char **out_value_tag, char **out_text_mem);
++
++int go_to_new_line(struct sol_buffer *buf, size_t n_rows, size_t n_cols, size_t *row, size_t *col);
++
++int fill_spaces(struct sol_buffer *buf, size_t n_cols, size_t *row, size_t *col, size_t length);
++
++int fill_line(struct sol_buffer *buf, size_t n_rows, size_t n_cols, size_t *row, size_t *col, bool calc_only);
++
+diff --git a/src/modules/flow/form/form.c b/src/modules/flow/form/form.c
+index 9dbfd12e..0c4a9b24 100644
+--- a/src/modules/flow/form/form.c
++++ b/src/modules/flow/form/form.c
+@@ -20,21 +20,12 @@
+ #include <stdio.h>
+ 
+ #include "sol-flow/form.h"
+-#include "../converter/string-format.h"
+ #include "sol-buffer.h"
+ #include "sol-mainloop.h"
++#include "sol-flow-internal.h"
+ #include "sol-util-internal.h"
+ 
+-#define DITCH_NL (true)
+-#define KEEP_NL (false)
+-
+-#define DO_FORMAT (false)
+-#define CALC_ONLY (true)
+-
+-static const char CR = '\r', NL = '\n', SPC = ' ', UNDERSCORE = '_',
+-    NUL = '\0', CURL_BRACKET_OPEN = '{', CURL_BRACKET_CLOSE = '}', COMMA = ',';
+-static const char TITLE_TAG[] = "{title}", VALUE_TAG[] = "{value}",
+-    EMPTY_STR[] = "";
++#include "form-common.h"
+ 
+ struct selector_data {
+     char *title, *sel_mark, *cursor_mark, *text_mem;
+@@ -48,295 +39,6 @@ struct selector_data {
+     bool n_values_done : 1;
+ };
+ 
+-static inline int
+-get_buf_size(size_t rows, size_t columns, size_t *out)
+-{
+-    size_t n_cols;
+-    int r;
+-
+-    /* +1 on cols for '\n' and (final) NUL chars */
+-    r = sol_util_size_add(columns, 1, &n_cols);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    r = sol_util_size_mul(rows, n_cols, out);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return 0;
+-}
+-
+-static inline int
+-buffer_re_init(struct sol_buffer *buf,
+-    char *mem,
+-    size_t rows,
+-    size_t columns)
+-{
+-    size_t size;
+-
+-    int r = get_buf_size(rows, columns, &size);
+-
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    /* We choose to do the ending nul byte ourselves, since we're
+-     * doing fixed capacity, to be able to set the second to last byte
+-     * on the buffer without reallocation attempts. */
+-    sol_buffer_init_flags(buf, mem, size,
+-        SOL_BUFFER_FLAGS_FIXED_CAPACITY | SOL_BUFFER_FLAGS_NO_NUL_BYTE);
+-
+-    return 0;
+-}
+-
+-static int
+-common_form_init(struct sol_buffer *buf,
+-    int32_t in_rows,
+-    size_t *out_rows,
+-    int32_t in_cols,
+-    size_t *out_cols,
+-    const char *in_format,
+-    char **out_format,
+-    const char *in_title,
+-    char **out_title,
+-    char **out_title_tag,
+-    char **out_value_tag,
+-    char **out_text_mem)
+-{
+-    int r = 0;
+-    size_t size;
+-
+-    SOL_NULL_CHECK(in_format, -EINVAL);
+-
+-    if (in_rows <= 0) {
+-        SOL_WRN("Form rows number must be a positive integer, "
+-            "but %" PRId32 " was given. Fallbacking to minimum value of 1.",
+-            in_rows);
+-        *out_rows = 1;
+-    } else
+-        *out_rows = in_rows;
+-
+-    if (in_cols <= 0) {
+-        SOL_WRN("Boolean columns number must be a positive integer, "
+-            "but %" PRId32 " was given. Fallbacking to minimum value of 1.",
+-            in_cols);
+-        *out_cols = 1;
+-    } else
+-        *out_cols = in_cols;
+-
+-    r = get_buf_size(*out_rows, *out_cols, &size);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    *out_text_mem = calloc(1, size);
+-    SOL_NULL_CHECK(*out_text_mem, -ENOMEM);
+-
+-    *out_format = strdup(in_format);
+-    if (!*out_format) {
+-        r = -ENOMEM;
+-        goto err_format;
+-    }
+-
+-    *out_title_tag = strstr(*out_format, TITLE_TAG);
+-    *out_value_tag = strstr(*out_format, VALUE_TAG);
+-
+-    if (!*out_value_tag) {
+-        SOL_WRN("Bad format, no {value} tag: %s. Fallbacking to "
+-            "pristine one, i. e. '{value}'.", *out_format);
+-        r = sol_util_replace_str_if_changed(out_format, VALUE_TAG);
+-        *out_value_tag = *out_format;
+-        *out_title_tag = NULL;
+-        SOL_INT_CHECK_GOTO(r, < 0, err_tags);
+-    }
+-
+-    if (*out_title_tag > *out_value_tag) {
+-        SOL_WRN("Bad format, {title} tag placed after {value} tag: %s."
+-            " Fallbacking to pristine one, i. e. '{value}'.",
+-            *out_format);
+-        r = sol_util_replace_str_if_changed(out_format, VALUE_TAG);
+-        *out_value_tag = *out_format;
+-        *out_title_tag = NULL;
+-        SOL_INT_CHECK_GOTO(r, < 0, err_tags);
+-    }
+-
+-    if (in_title && *out_title_tag) {
+-        *out_title = strdup(in_title);
+-        if (!*out_title) {
+-            r = -ENOMEM;
+-            goto err_title;
+-        }
+-    } else {
+-        *out_title = NULL;
+-    }
+-
+-    r = buffer_re_init(buf, *out_text_mem, *out_rows, *out_cols);
+-    if (r < 0) {
+-        sol_buffer_fini(buf);
+-        goto err_tags;
+-    }
+-
+-    return 0;
+-
+-err_tags:
+-err_title:
+-    free(*out_format);
+-
+-err_format:
+-    free(*out_text_mem);
+-
+-    return r;
+-}
+-
+-static inline size_t
+-coords_to_pos(size_t n_cols, size_t r, size_t c)
+-{
+-    /* account for extra col for (implicit) trailing NLs, thus + r */
+-    return (r * n_cols) + c + r;
+-}
+-
+-#define CUR_POS (coords_to_pos(n_cols, *row, *col))
+-#define CUR_EXTRA_COL (coords_to_pos(n_cols, *row, n_cols - 1) + 1)
+-
+-static int
+-fill_spaces(struct sol_buffer *buf,
+-    size_t n_cols,
+-    size_t *row,
+-    size_t *col,
+-    size_t length)
+-{
+-    int r;
+-
+-    while (*col < n_cols && length) {
+-        r = sol_buffer_set_char_at(buf, CUR_POS, SPC);
+-        SOL_INT_CHECK(r, < 0, r);
+-        (*col)++;
+-        length--;
+-    }
+-    /* If we did not reach the row's end, we're done, otherwise we
+-     * must break the line */
+-    if (!length)
+-        return CUR_POS;
+-    r = sol_buffer_set_char_at(buf, CUR_EXTRA_COL, NL);
+-    SOL_INT_CHECK(r, < 0, r);
+-    *col = 0;
+-    (*row)++;
+-
+-    return CUR_POS;
+-}
+-
+-static int
+-fill_line(struct sol_buffer *buf,
+-    size_t n_rows,
+-    size_t n_cols,
+-    size_t *row,
+-    size_t *col,
+-    bool calc_only)
+-{
+-    int r;
+-
+-    while (*col < n_cols) {
+-        if (!calc_only) {
+-            r = sol_buffer_set_char_at(buf, CUR_POS, SPC);
+-            SOL_INT_CHECK(r, < 0, r);
+-        }
+-        (*col)++;
+-    }
+-    if (*row < n_rows - 1) {
+-        if (!calc_only) {
+-            r = sol_buffer_set_char_at
+-                    (buf, CUR_EXTRA_COL, NL);
+-            SOL_INT_CHECK(r, < 0, r);
+-        }
+-    }
+-    (*row)++;
+-    *col = 0;
+-
+-    return CUR_POS;
+-}
+-
+-static int
+-go_to_new_line(struct sol_buffer *buf,
+-    size_t n_rows,
+-    size_t n_cols,
+-    size_t *row,
+-    size_t *col)
+-{
+-    int r = 0;
+-
+-    if (*col > 0)
+-        r = fill_line(buf, n_rows, n_cols, row, col, DO_FORMAT);
+-
+-    return r;
+-}
+-
+-static int
+-format_chunk(struct sol_buffer *buf,
+-    size_t n_rows,
+-    size_t n_cols,
+-    const char *ptr,
+-    const char *end_ptr,
+-    size_t *row,
+-    size_t *col,
+-    bool calc_only,
+-    bool ditch_new_lines)
+-{
+-    size_t sz = buf->capacity;
+-    int r;
+-
+-    while (ptr < end_ptr && CUR_POS < sz && *row < n_rows) {
+-        /* translate middle-of-line \n's to spaces till the end +
+-         * \n */
+-        if (*ptr == CR || *ptr == NL) {
+-            if (ditch_new_lines) {
+-                if (!calc_only) {
+-                    r = sol_buffer_set_char_at(buf, CUR_POS, SPC);
+-                    SOL_INT_CHECK(r, < 0, r);
+-                }
+-                (*col)++;
+-            } else {
+-                r = fill_line(buf, n_rows, n_cols, row, col, calc_only);
+-                SOL_INT_CHECK(r, < 0, r);
+-            }
+-            if (*ptr == CR)
+-                ptr++;
+-            if (*ptr == NL)
+-                ptr++;
+-            goto col_check;
+-        }
+-        if (!calc_only) {
+-            r = sol_buffer_set_char_at(buf, CUR_POS, *ptr);
+-            SOL_INT_CHECK(r, < 0, r);
+-        }
+-        (*col)++;
+-        ptr++;
+-
+-col_check:
+-        /* crop lines that don't fit */
+-        if (*col == n_cols) {
+-            if (!calc_only) {
+-                if (*row < n_rows - 1) {
+-                    r = sol_buffer_set_char_at(buf, CUR_EXTRA_COL, NL);
+-                    SOL_INT_CHECK(r, < 0, r);
+-                }
+-            }
+-            *col = 0;
+-            (*row)++;
+-            while (*ptr && *ptr != CR && *ptr != NL) {
+-                ptr++;
+-            }
+-            if (*ptr == CR)
+-                ptr++;
+-            if (*ptr == NL)
+-                ptr++;
+-            if (ditch_new_lines) /* if ditching NL's, stop at 1st crop */
+-                break;
+-        } else if (ptr == end_ptr && !ditch_new_lines) {
+-            /* the source ended before the line */
+-            r = fill_line(buf, n_rows, n_cols, row, col, calc_only);
+-            SOL_INT_CHECK(r, < 0, r);
+-        }
+-    }
+-
+-    return CUR_POS;
+-#undef CUR_POS
+-#undef CUR_EXTRA_COL
+-}
+-
+ static int
+ calculate_n_values(struct selector_data *mdata, size_t *row, size_t *col)
+ {
+@@ -366,110 +68,6 @@ calculate_n_values(struct selector_data *mdata, size_t *row, size_t *col)
+     return 0;
+ }
+ 
+-static int
+-format_title(struct sol_buffer *buf,
+-    size_t buf_size,
+-    size_t n_rows,
+-    size_t n_cols,
+-    size_t *row_ptr,
+-    size_t *col_ptr,
+-    const char *format,
+-    const char *title,
+-    const char *title_tag,
+-    const char *value_tag,
+-    bool *no_more_space)
+-{
+-    int r;
+-    const char *ptr = format;
+-
+-    *no_more_space = false;
+-
+-    /* Format pre-title/value chunk */
+-    r = format_chunk(buf, n_rows, n_cols, ptr,
+-        title_tag ? title_tag : value_tag,
+-        row_ptr, col_ptr, DO_FORMAT, KEEP_NL);
+-    SOL_INT_CHECK(r, < 0, r);
+-    if (r >= (int)buf_size || *row_ptr >= n_rows) {
+-        *no_more_space = true;
+-        return 0;
+-    }
+-
+-    if (!title || !title_tag)
+-        return 0;
+-
+-    /* Format title */
+-    r = format_chunk(buf, n_rows, n_cols, title, title + strlen(title),
+-        row_ptr, col_ptr, DO_FORMAT, DITCH_NL);
+-    SOL_INT_CHECK(r, < 0, r);
+-    if (r >= (int)buf_size || *row_ptr >= n_rows) {
+-        *no_more_space = true;
+-        return 0;
+-    }
+-
+-    if (n_rows > 1) {
+-        r = go_to_new_line(buf, n_rows, n_cols, row_ptr, col_ptr);
+-        SOL_INT_CHECK(r, < 0, r);
+-    } else {
+-        r = fill_spaces(buf, n_cols, row_ptr, col_ptr, 1);
+-        SOL_INT_CHECK(r, < 0, r);
+-    }
+-
+-    /* Format post-title, pre-value chunk. If we got only one
+-     * line, ditch new lines in an attempt to have both title and
+-     * value in it */
+-    ptr = title_tag + strlen(TITLE_TAG);
+-    r = format_chunk(buf, n_rows, n_cols, ptr, value_tag, row_ptr,
+-        col_ptr, DO_FORMAT, n_rows > 1 ? KEEP_NL : DITCH_NL);
+-    SOL_INT_CHECK(r, < 0, r);
+-    if (r >= (int)buf_size || *row_ptr >= n_rows)
+-        *no_more_space = true;
+-
+-    return 0;
+-}
+-
+-static int
+-format_post_value(struct sol_buffer *buf,
+-    size_t n_rows,
+-    size_t n_cols,
+-    size_t *row_ptr,
+-    size_t *col_ptr,
+-    const char *format,
+-    const char *value_tag)
+-{
+-    const char *ptr = value_tag + sizeof(VALUE_TAG) - 1;
+-    int r;
+-
+-    r = go_to_new_line(buf, n_rows, n_cols, row_ptr, col_ptr);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    /* Format post-value chunk */
+-    return format_chunk(buf, n_rows, n_cols, ptr,
+-        format + strlen(format), row_ptr, col_ptr, DO_FORMAT, KEEP_NL);
+-}
+-
+-static int
+-format_send(struct sol_flow_node *node,
+-    struct sol_buffer *buf,
+-    uint16_t out_port)
+-{
+-    int r;
+-
+-    /* Don't ever end with NL and guarantee ending NUL byte */
+-    if (buf->used) {
+-        char *value = (char *)sol_buffer_at_end(buf);
+-        *value = NUL;
+-        value = (char *)sol_buffer_at_end(buf) - 1;
+-        if (*value == NL)
+-            *value = NUL;
+-    } else {
+-        r = sol_buffer_set_char_at(buf, 0, NUL);
+-        SOL_INT_CHECK(r, < 0, r);
+-    }
+-
+-    return sol_flow_send_string_slice_packet(node,
+-        out_port, sol_buffer_get_slice(buf));
+-}
+-
+ //FIXME: - autoscroll/markee effect on tags
+ //       - minimum formatting abilities for the value tag itself
+ //         (think printf "%-10.10s" "aoeiu")
+@@ -2557,966 +2155,4 @@ send:
+     return string_format(node);
+ }
+ 
+-struct string_formatted_data {
+-    size_t columns, rows, value_prefix_len, cursor;
+-    char *title, *text_mem, *format, *value, *title_tag, *value_tag;
+-    struct sol_buffer text_grid, formatted_value;
+-    struct sol_vector chunks;
+-    struct sol_timeout *timer;
+-    int blink_time;
+-    bool circular : 1;
+-    bool enabled : 1;
+-    bool blink_on : 1;
+-    bool state_changed : 1;
+-    bool cursor_initialized : 1;
+-};
+-
+-enum string_formatted_chunk_type {
+-    STR_FORMAT_INT,
+-    STR_FORMAT_FLOAT,
+-    STR_FORMAT_LITERAL
+-};
+-
+-struct string_formatted_chunk {
+-    /* Slice from mdata->formatted_value.data, on INT/FLOAT types, or
+-     * from mdata->value, for LITERALs. We have to keep this to have
+-     * the information again on the blinking process (for INT/FLOAT)
+-     * or to easily resolve the LITERAL when formatting. */
+-    struct sol_str_slice rendered;
+-
+-    /* Re-built from mdata->value, on INT/FLOAT types, to match
+-     * do_{integer,float}_markup()'s syntax */
+-    char *format;
+-
+-    /* Starting position at mdata->text_grid.data, on INT/FLOAT types.
+-     * If the field does not fit at all, it will contain NULL */
+-    const char *pos_in_text_grid;
+-
+-    enum string_formatted_chunk_type type;
+-
+-    /* Numerical state, for INT/FLOAT types */
+-    union {
+-        struct sol_irange i;
+-        struct sol_drange d;
+-    } state;
+-};
+-
+-static int
+-string_formatted_format_do(struct sol_flow_node *node)
+-{
+-    struct string_formatted_data *mdata = sol_flow_node_get_private_data(node);
+-    int r, buf_size = mdata->text_grid.capacity;
+-    size_t row = 0, col = 0, tmp_col;
+-    struct sol_vector indexes;
+-    bool no_more_space = false;
+-    char *tmp = NULL;
+-
+-    if (!mdata->state_changed) {
+-        char *value;
+-        size_t start, len;
+-        struct string_formatted_chunk *chunk =
+-            sol_vector_get(&mdata->chunks, mdata->cursor);
+-
+-        if (!chunk->pos_in_text_grid)
+-            goto send;
+-
+-        start = chunk->pos_in_text_grid - (char *)mdata->text_grid.data;
+-
+-        /* abs. pos modulo number of cols gives us the actual col */
+-        len = mdata->columns - (start % mdata->columns) + 1;
+-
+-        value = (char *)sol_buffer_at(&mdata->text_grid, start);
+-
+-        if (mdata->blink_on) {
+-            mdata->blink_on = false;
+-            for (size_t l = 0; l < chunk->rendered.len && len; l++, len--)
+-                value[l] = SPC;
+-        } else {
+-            mdata->blink_on = true;
+-            for (size_t l = 0; l < chunk->rendered.len && len; l++, len--)
+-                value[l] = chunk->rendered.data[l];
+-        }
+-
+-        goto send;
+-    }
+-
+-    sol_vector_init(&indexes, sizeof(size_t));
+-
+-    r = format_title(&mdata->text_grid, buf_size, mdata->rows,
+-        mdata->columns, &row, &col, mdata->format, mdata->title,
+-        mdata->title_tag, mdata->value_tag, &no_more_space);
+-    SOL_INT_CHECK_GOTO(r, < 0, err);
+-    SOL_EXP_CHECK_GOTO(no_more_space, send);
+-
+-    mdata->value_prefix_len = tmp_col = col;
+-
+-    sol_buffer_fini(&mdata->formatted_value);
+-    sol_buffer_init(&mdata->formatted_value);
+-
+-    for (size_t l = 0; l < mdata->chunks.len; l++) {
+-        struct string_formatted_chunk *chunk =
+-            sol_vector_get(&mdata->chunks, l);
+-        size_t start, sz, *start_ptr;
+-
+-        start = mdata->formatted_value.used;
+-
+-        switch (chunk->type) {
+-        case STR_FORMAT_INT:
+-            r = do_integer_markup(node, chunk->format, chunk->state.i,
+-                &mdata->formatted_value);
+-            break;
+-        case STR_FORMAT_FLOAT:
+-            r = do_float_markup(node, chunk->format, chunk->state.d,
+-                &mdata->formatted_value);
+-            break;
+-        case STR_FORMAT_LITERAL:
+-            r = sol_buffer_append_slice
+-                    (&mdata->formatted_value, chunk->rendered);
+-            break;
+-        }
+-        SOL_INT_CHECK_GOTO(r, < 0, err);
+-        sz = mdata->formatted_value.used - start;
+-
+-        if (chunk->type == STR_FORMAT_LITERAL)
+-            continue;
+-
+-        /* We can't assume mdata->formatted_value.data + start will
+-         * stay as is, because the buffer may grow on these iterations
+-         * and be realloc()ed! We save the value to compute the ptr
+-         * offsets later */
+-        start_ptr = sol_vector_append(&indexes);
+-        if (!start_ptr) {
+-            r = -ENOMEM;
+-            goto err;
+-        }
+-
+-        *start_ptr = start;
+-        chunk->rendered.len = sz;
+-
+-        if (tmp_col /* + sz */ > mdata->columns - 1)
+-            chunk->pos_in_text_grid = NULL;
+-        else {
+-            chunk->pos_in_text_grid = (char *)mdata->text_grid.data +
+-                coords_to_pos(mdata->columns, row, mdata->value_prefix_len)
+-                + start;
+-            tmp_col += sz;
+-        }
+-
+-        if (!mdata->cursor_initialized) {
+-            mdata->cursor = l;
+-            mdata->cursor_initialized = true;
+-        }
+-    }
+-
+-    for (size_t l = 0, s = 0; l < mdata->chunks.len; l++) {
+-        size_t *start_ptr;
+-        struct string_formatted_chunk *chunk =
+-            sol_vector_get(&mdata->chunks, l);
+-
+-        if (chunk->type == STR_FORMAT_LITERAL)
+-            continue;
+-
+-        start_ptr = sol_vector_get(&indexes, s++);
+-        if (!start_ptr) {
+-            r = -ERANGE;
+-            goto err;
+-        }
+-
+-        chunk->rendered.data =
+-            (char *)mdata->formatted_value.data + *start_ptr;
+-    }
+-
+-    sol_vector_clear(&indexes);
+-
+-    tmp = mdata->formatted_value.data;
+-    r = format_chunk(&mdata->text_grid, mdata->rows,
+-        mdata->columns, tmp, tmp + mdata->formatted_value.used, &row, &col,
+-        DO_FORMAT, DITCH_NL);
+-    SOL_INT_CHECK_GOTO(r, < 0, err);
+-    if (r >= buf_size || row >= mdata->rows)
+-        goto send;
+-
+-    r = format_post_value(&mdata->text_grid, mdata->rows,
+-        mdata->columns, &row, &col, mdata->format,
+-        mdata->value_tag);
+-    SOL_INT_CHECK_GOTO(r, < 0, err);
+-
+-    mdata->state_changed = false;
+-
+-send:
+-    r = format_send(node, &mdata->text_grid,
+-        SOL_FLOW_NODE_TYPE_FORM_STRING_FORMATTED__OUT__STRING);
+-
+-    return r;
+-
+-err:
+-    /* we got to re-init because of the error cases. if this function
+-     * fails we're no better, so don't check. */
+-    buffer_re_init(&mdata->text_grid, mdata->text_mem,
+-        mdata->rows, mdata->columns);
+-
+-    sol_buffer_fini(&mdata->formatted_value);
+-    sol_vector_clear(&indexes);
+-
+-    return r;
+-}
+-
+-static bool
+-string_formatted_timeout(void *data)
+-{
+-    struct string_formatted_data *mdata = sol_flow_node_get_private_data(data);
+-
+-    if (!string_formatted_format_do(data)) {
+-        mdata->timer = NULL;
+-        return true;
+-    }
+-
+-    return false;
+-}
+-
+-static void
+-string_formatted_force_imediate_format(struct string_formatted_data *mdata,
+-    bool re_init)
+-{
+-    if (re_init)
+-        buffer_re_init(&mdata->text_grid, mdata->text_mem,
+-            mdata->rows, mdata->columns);
+-    if (mdata->timer) {
+-        sol_timeout_del(mdata->timer);
+-        mdata->timer = NULL;
+-    }
+-}
+-
+-static int
+-string_formatted_format(struct sol_flow_node *node)
+-{
+-    struct string_formatted_data *mdata = sol_flow_node_get_private_data(node);
+-
+-    if (!mdata->timer) {
+-        mdata->timer = sol_timeout_add
+-                (mdata->blink_time, string_formatted_timeout, node);
+-        SOL_NULL_CHECK(mdata->timer, -ENOMEM);
+-        return string_formatted_format_do(node);
+-    }
+-
+-    return 0;
+-}
+-
+-static void
+-string_formatted_close(struct sol_flow_node *node, void *data)
+-{
+-    struct string_formatted_data *mdata = data;
+-    struct string_formatted_chunk *chunk;
+-    uint16_t i;
+-
+-    sol_buffer_fini(&mdata->text_grid);
+-    sol_buffer_fini(&mdata->formatted_value);
+-
+-    SOL_VECTOR_FOREACH_IDX (&mdata->chunks, chunk, i)
+-        free(chunk->format);
+-
+-    sol_vector_clear(&mdata->chunks);
+-
+-    if (mdata->timer)
+-        sol_timeout_del(mdata->timer);
+-
+-    free(mdata->title);
+-    free(mdata->format);
+-    free(mdata->value);
+-}
+-
+-static inline double
+-strtod_no_locale(const char *nptr, char **endptr)
+-{
+-    return sol_util_strtodn(nptr, endptr, -1, false);
+-}
+-
+-static double
+-midpoint(double min, double max)
+-{
+-    if (min < 0 && max > 0)
+-        return (max + min) / 2.0;
+-
+-    return ((max - min) / 2.0) + min;
+-}
+-
+-static int
+-string_formatted_selected_set_do(struct sol_flow_node *node,
+-    void *data,
+-    const char *value)
+-{
+-    struct string_formatted_data *mdata = data;
+-    const char *ptr, *end;
+-    size_t len;
+-    int r;
+-
+-    len = strlen(value);
+-    ptr = value;
+-    end = value + len;
+-    for (size_t l = 0; l < mdata->chunks.len && *ptr; l++) {
+-        struct string_formatted_chunk *chunk
+-            = sol_vector_get(&mdata->chunks, l), *next_chunk;
+-
+-        switch (chunk->type) {
+-        case STR_FORMAT_INT:
+-        {
+-            char *endptr;
+-            int32_t *i_ptr;
+-
+-            if (l + 1 < mdata->chunks.len) {
+-                next_chunk = sol_vector_get(&mdata->chunks, l + 1);
+-
+-                if (next_chunk->type != STR_FORMAT_LITERAL) {
+-                    r = -ENOTSUP;
+-                    goto error;
+-                }
+-                endptr = memmem(ptr, end - ptr,
+-                    next_chunk->rendered.data, next_chunk->rendered.len);
+-                if (!endptr) {
+-                    r = -EINVAL;
+-                    goto error;
+-                }
+-            } else
+-                endptr = (char *)end;
+-
+-            i_ptr = &chunk->state.i.val;
+-            *i_ptr = strtoll(ptr, &endptr, 0);
+-
+-            if (ptr == endptr || errno != 0) {
+-                r = -errno;
+-                goto error;
+-            }
+-            ptr = endptr;
+-            break;
+-        }
+-        case STR_FORMAT_FLOAT:
+-        {
+-            char *endptr;
+-            double *d_ptr;
+-
+-            if (l + 1 < mdata->chunks.len) {
+-                next_chunk = sol_vector_get(&mdata->chunks, l + 1);
+-
+-                if (next_chunk->type != STR_FORMAT_LITERAL) {
+-                    r = -ENOTSUP;
+-                    goto error;
+-                }
+-                endptr = memmem(ptr, end - ptr,
+-                    next_chunk->rendered.data, next_chunk->rendered.len);
+-                if (!endptr) {
+-                    r = -EINVAL;
+-                    goto error;
+-                }
+-            } else
+-                endptr = (char *)end;
+-
+-            d_ptr = &chunk->state.d.val;
+-            *d_ptr = strtod_no_locale(ptr, &endptr);
+-
+-            if (ptr == endptr || errno != 0) {
+-                r = -errno;
+-                goto error;
+-            }
+-            ptr = endptr;
+-            break;
+-        }
+-        case STR_FORMAT_LITERAL:
+-            if (chunk->rendered.len > (size_t)(end - ptr) ||
+-                memcmp(chunk->rendered.data, ptr, chunk->rendered.len) != 0) {
+-                r = -EINVAL;
+-                goto error;
+-            }
+-            ptr += chunk->rendered.len;
+-            break;
+-        }
+-    }
+-
+-    return 0;
+-
+-error:
+-    sol_flow_send_error_packet(node, ENOTSUP, "The node's value formatting "
+-        "string (%s) is so that this entry (%s) is not parseable: %s",
+-        mdata->value, value, sol_util_strerrora(-r));
+-    return r;
+-}
+-
+-static int
+-string_formatted_open(struct sol_flow_node *node,
+-    void *data,
+-    const struct sol_flow_node_options *options)
+-{
+-    int r;
+-    const char *ptr;
+-    bool numeric_field_present = false;
+-    struct string_formatted_data *mdata = data;
+-    static const char syntax_msg[] =
+-        "Please use the {<type>:<min>,<max>,<step>} syntax.";
+-    struct string_formatted_chunk *chunk = NULL;
+-    const struct sol_flow_node_type_form_string_formatted_options *opts =
+-        (const struct sol_flow_node_type_form_string_formatted_options *)options;
+-
+-    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
+-        SOL_FLOW_NODE_TYPE_FORM_INT_OPTIONS_API_VERSION, -EINVAL);
+-
+-    if (!opts->value) {
+-        SOL_WRN("A value format must be passed.");
+-        return -EINVAL;
+-    } else {
+-        mdata->value = strdup(opts->value);
+-        SOL_NULL_CHECK(mdata->value, -ENOMEM);
+-    }
+-    ptr = mdata->value;
+-
+-    r = common_form_init(&mdata->text_grid,
+-        opts->rows,
+-        &mdata->rows,
+-        opts->columns,
+-        &mdata->columns,
+-        opts->format,
+-        &mdata->format,
+-        opts->title,
+-        &mdata->title,
+-        &mdata->title_tag,
+-        &mdata->value_tag,
+-        &mdata->text_mem);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    mdata->circular = opts->circular;
+-
+-    mdata->enabled = true;
+-
+-    mdata->blink_time = opts->blink_time;
+-    if (opts->blink_time < 0) {
+-        SOL_WRN("Invalid blink_time (%" PRId32 "), that must be positive. "
+-            "Setting to 1ms.", opts->blink_time);
+-        mdata->blink_time = 1;
+-    }
+-
+-    mdata->blink_on = true;
+-    mdata->state_changed = true;
+-
+-    sol_vector_init(&mdata->chunks, sizeof(struct string_formatted_chunk));
+-
+-    /* For instance, a format could be something like
+-     * "LITERAL{3d:0,255,1}LITERAL{3d:0,255,1}LITERAL" */
+-
+-    if (*ptr == CURL_BRACKET_OPEN)
+-        goto numeric_loop;
+-
+-    /* literals state loop */
+-literal_loop:
+-    chunk = sol_vector_append(&mdata->chunks);
+-    if (!chunk) {
+-        r = -errno;
+-        goto value_err;
+-    }
+-
+-    chunk->type = STR_FORMAT_LITERAL;
+-    chunk->rendered.data = ptr;
+-    chunk->pos_in_text_grid = NULL;
+-
+-    while (*ptr) {
+-        if (*ptr != CURL_BRACKET_OPEN) {
+-            chunk->rendered.len++;
+-            ptr++;
+-        } else
+-            break;
+-    }
+-
+-    /* numeric field state loop */
+-numeric_loop:
+-    while (*ptr) {
+-        const char *field_start = ptr, *field_end, *field_format_end;
+-        char *tmp;
+-
+-        if (*ptr != CURL_BRACKET_OPEN)
+-            goto literal_loop;
+-
+-        tmp = strchr(ptr, ':');
+-
+-        if (!tmp) {
+-            r = -EINVAL;
+-            goto value_err;
+-        }
+-
+-        /* at least one char between '{' and ':' */
+-        if (tmp - ptr < 2) {
+-            SOL_WRN("No numeric field type specification passed (%.*s). %s.",
+-                (int)(tmp - ptr), ptr, syntax_msg);
+-            r = -EINVAL;
+-            goto value_err;
+-        }
+-
+-        field_format_end = tmp - 1;
+-
+-        chunk = sol_vector_append(&mdata->chunks);
+-        if (!chunk) {
+-            r = -errno;
+-            goto value_err;
+-        }
+-
+-        switch (*(tmp - 1)) {
+-        case 'b':
+-        case 'c':
+-        case 'd':
+-        case 'o':
+-        case 'x':
+-        case 'X':
+-        case 'n':
+-            chunk->type = STR_FORMAT_INT;
+-            break;
+-        case 'e':
+-        case 'E':
+-        case 'f':
+-        case 'F':
+-        case 'g':
+-        case 'G':
+-        case '%':
+-            chunk->type = STR_FORMAT_FLOAT;
+-            break;
+-        default:
+-            SOL_WRN("Bad numeric type (%c) given on format string. It must be "
+-                "one of b/c/d/o/x/X/n, for integers, or e/E/f/F/g/G/%%, for"
+-                " floating point numbers.", *(tmp - 1));
+-            r = -EINVAL;
+-            goto value_err;
+-        }
+-
+-        sol_buffer_init(&mdata->formatted_value);
+-
+-#define NUM_SPEC_FIELDS (3)
+-        /* check for min, max, step */
+-        for (size_t i = 0; i < NUM_SPEC_FIELDS; i++) {
+-            char *endptr, backup;
+-
+-            ptr = tmp + 1;
+-            if (!*ptr) {
+-                r = -EINVAL;
+-                SOL_WRN("Numeric field format ended with missing min, max, "
+-                    "step triple (%.*s). %s.", (int)(ptr - field_start),
+-                    field_start, syntax_msg);
+-                goto value_err;
+-            }
+-
+-            tmp = strchr(ptr,
+-                i < NUM_SPEC_FIELDS - 1 ? COMMA : CURL_BRACKET_CLOSE);
+-            if (!tmp) {
+-                SOL_WRN("Numeric field format ended with missing min, max, "
+-                    "step triple (%.s). %s.", field_start, syntax_msg);
+-                r = -EINVAL;
+-                goto value_err;
+-            }
+-            /* we edit the buffer to ease strtoll()'s job, but we can
+-             * still free it */
+-            backup = *tmp;
+-            *tmp = NUL;
+-#undef NUM_SPEC_FIELDS
+-
+-            errno = 0;
+-            if (chunk->type == STR_FORMAT_INT) {
+-                int32_t *i_ptr = &chunk->state.i.val + i + 1;
+-                *i_ptr = strtoll(ptr, &endptr, 0);
+-
+-                if (ptr == endptr || errno != 0) {
+-                    SOL_WRN("Failed to parse integer number %s: %s. %s.",
+-                        ptr, errno ? sol_util_strerrora(errno) : "bad format",
+-                        syntax_msg);
+-                    r = -errno;
+-                    *tmp = backup;
+-                    goto value_err;
+-                }
+-
+-                /* val = min, to start with */
+-                if (!i) {
+-                    i_ptr--;
+-                    *i_ptr = i_ptr[1];
+-                }
+-            } else {
+-                double *d_ptr = &chunk->state.d.val + i + 1;
+-                *d_ptr = strtod_no_locale(ptr, &endptr);
+-
+-                if (ptr == endptr || errno != 0) {
+-                    SOL_WRN("Failed to parse floating point number"
+-                        " %s: %s. %s.", ptr,
+-                        errno ? sol_util_strerrora(errno) : "bad format",
+-                        syntax_msg);
+-                    r = -errno;
+-                    *tmp = backup;
+-                    goto value_err;
+-                }
+-
+-                /* val = min, to start with */
+-                if (!i) {
+-                    d_ptr--;
+-                    *d_ptr = d_ptr[1];
+-                }
+-            }
+-            *tmp = backup;
+-        }
+-        field_end = tmp;
+-
+-        if (chunk->type == STR_FORMAT_INT) {
+-            int64_t range;
+-
+-            if (chunk->state.i.min > chunk->state.i.max) {
+-                int32_t v;
+-                SOL_WRN("Max value should be greater than "
+-                    "min on %.*s. Swapping both values.",
+-                    (int)(field_end - field_start + 1), field_start);
+-                v = chunk->state.i.max;
+-                chunk->state.i.max = chunk->state.i.min;
+-                chunk->state.i.min = v;
+-            }
+-            range = (int64_t)chunk->state.i.max
+-                - (int64_t)chunk->state.i.min;
+-            if ((chunk->state.i.step > 0
+-                && chunk->state.i.step > range)
+-                || (chunk->state.i.step < 0
+-                && chunk->state.i.step < -range)) {
+-                SOL_WRN("Step value must fit the given range for %.*s."
+-                    " Assuming 1 for it.",
+-                    (int)(field_end - field_start + 1), field_start);
+-                chunk->state.i.step = 1;
+-            }
+-        } else {
+-            double mid_point, mid_step, mid_range;
+-
+-            if (chunk->state.d.min > chunk->state.d.max) {
+-                double v;
+-                SOL_WRN("Max value should be greater than "
+-                    "min on %.*s. Swapping both values.",
+-                    (int)(field_end - field_start + 1), field_start);
+-                v = chunk->state.d.max;
+-                chunk->state.d.max = chunk->state.d.min;
+-                chunk->state.d.min = v;
+-            }
+-            mid_point = midpoint(chunk->state.d.min,
+-                chunk->state.d.max);
+-            mid_range = chunk->state.d.max - mid_point;
+-            mid_step = chunk->state.d.step / 2.0;
+-            if ((mid_step > 0 && mid_step > mid_range)
+-                || (mid_step < 0 && mid_step < -mid_range)) {
+-                SOL_WRN("Step value must fit the given range for %.*s."
+-                    " Setting it to that exact range.",
+-                    (int)(field_end - field_start + 1), field_start);
+-                chunk->state.d.step = 2.0 * mid_step;
+-            }
+-        }
+-
+-        r = asprintf(&chunk->format, "{:%.*s}",
+-            (int)(field_format_end - field_start), field_start + 1);
+-        SOL_INT_CHECK_GOTO(r, < 0, value_err);
+-
+-        /* here we just validate de format string with initial 0
+-         * state's value */
+-        if (chunk->type == STR_FORMAT_INT)
+-            r = do_integer_markup(NULL, chunk->format, chunk->state.i,
+-                &mdata->formatted_value);
+-        else
+-            r = do_float_markup(NULL, chunk->format, chunk->state.d,
+-                &mdata->formatted_value);
+-
+-        /* warning already issued, on errors */
+-        SOL_INT_CHECK_GOTO(r, < 0, value_err);
+-
+-        numeric_field_present = true;
+-
+-        ptr = tmp + 1;
+-        sol_buffer_fini(&mdata->formatted_value);
+-    }
+-
+-    if (!numeric_field_present) {
+-        SOL_WRN("At least one numeric field must occur in the value format"
+-            " string (%s), but none was detected. %s at least once in that"
+-            " format string.", mdata->value, syntax_msg);
+-        r = -EINVAL;
+-        goto value_err;
+-    }
+-
+-    if (opts->value_default)
+-        string_formatted_selected_set_do(node, data, opts->value_default);
+-
+-    return string_formatted_format(node);
+-
+-value_err:
+-    string_formatted_close(node, mdata);
+-    return r;
+-}
+-
+-static int
+-string_formatted_up_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    struct string_formatted_chunk *chunk;
+-
+-    if (!mdata->enabled)
+-        return 0;
+-
+-    chunk = sol_vector_get(&mdata->chunks, mdata->cursor);
+-
+-    if (chunk->type == STR_FORMAT_INT) {
+-        if (chunk->state.i.step > 0) {
+-            /* step > 0 && max - step > min, so no overflow */
+-            if (chunk->state.i.val <= chunk->state.i.max
+-                - chunk->state.i.step) {
+-                chunk->state.i.val += chunk->state.i.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.i.val = chunk->state.i.min;
+-            }
+-        } else {
+-            /* step < 0 && min - step > max, so no overflow */
+-            if (chunk->state.i.val >= chunk->state.i.min
+-                - chunk->state.i.step) {
+-                chunk->state.i.val += chunk->state.i.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.i.val = chunk->state.i.max;
+-            }
+-        }
+-    } else {
+-        if (chunk->state.d.step > 0) {
+-            /* step > 0 && max - step > min, so no overflow */
+-            if (chunk->state.d.val <= chunk->state.d.max
+-                - chunk->state.d.step) {
+-                chunk->state.d.val += chunk->state.d.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.d.val = chunk->state.d.min;
+-            }
+-        } else {
+-            /* step < 0 && min - step > max, so no overflow */
+-            if (chunk->state.d.val >= chunk->state.d.min
+-                - chunk->state.d.step) {
+-                chunk->state.d.val += chunk->state.d.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.d.val = chunk->state.d.max;
+-            }
+-        }
+-    }
+-
+-    mdata->state_changed = true;
+-    mdata->blink_on = true;
+-
+-    string_formatted_force_imediate_format(mdata, true);
+-    return string_formatted_format(node);
+-}
+-
+-static int
+-string_formatted_down_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    struct string_formatted_chunk *chunk;
+-
+-    if (!mdata->enabled)
+-        return 0;
+-
+-    chunk = sol_vector_get(&mdata->chunks, mdata->cursor);
+-
+-    if (chunk->type == STR_FORMAT_INT) {
+-        if (chunk->state.i.step > 0) {
+-            /* step > 0 && min + step < max, so no overflow */
+-            if (chunk->state.i.val >= chunk->state.i.min
+-                + chunk->state.i.step) {
+-                chunk->state.i.val -= chunk->state.i.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.i.val = chunk->state.i.max;
+-            }
+-        } else {
+-            /* step < 0 && max + step < min, so no overflow */
+-            if (chunk->state.i.val <= chunk->state.i.max
+-                + chunk->state.i.step) {
+-                chunk->state.i.val -= chunk->state.i.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.i.val = chunk->state.i.min;
+-            }
+-        }
+-    } else {
+-        if (chunk->state.d.step > 0) {
+-            /* step > 0 && min + step < max, so no overflow */
+-            if (chunk->state.d.val >= chunk->state.d.min
+-                + chunk->state.d.step) {
+-                chunk->state.d.val -= chunk->state.d.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.d.val = chunk->state.d.max;
+-            }
+-        } else {
+-            /* step < 0 && max + step < min, so no overflow */
+-            if (chunk->state.d.val <= chunk->state.d.max
+-                + chunk->state.d.step) {
+-                chunk->state.d.val -= chunk->state.d.step;
+-            } else {
+-                if (mdata->circular)
+-                    chunk->state.d.val = chunk->state.d.min;
+-            }
+-        }
+-    }
+-
+-    mdata->state_changed = true;
+-    mdata->blink_on = true;
+-
+-    string_formatted_force_imediate_format(mdata, true);
+-    return string_formatted_format(node);
+-}
+-
+-static int
+-string_formatted_next_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    size_t cursor_pos = mdata->cursor, l = mdata->chunks.len;
+-    bool found = false;
+-
+-    if (!mdata->enabled)
+-        return 0;
+-
+-    for (cursor_pos = mdata->cursor + 1; cursor_pos < l; cursor_pos++) {
+-        struct string_formatted_chunk *chunk;
+-
+-        chunk = sol_vector_get(&mdata->chunks, cursor_pos);
+-        if (chunk->type != STR_FORMAT_LITERAL) {
+-            found = true;
+-            break;
+-        }
+-    }
+-
+-    if (!found)
+-        return 0;
+-
+-    mdata->cursor = cursor_pos;
+-
+-    mdata->state_changed = true;
+-    mdata->blink_on = true;
+-
+-    string_formatted_force_imediate_format(mdata, true);
+-    return string_formatted_format(node);
+-}
+-
+-static int
+-string_formatted_previous_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    size_t cursor_pos = mdata->cursor;
+-    bool found = false;
+-
+-    if (!mdata->enabled)
+-        return 0;
+-
+-    while (cursor_pos) {
+-        struct string_formatted_chunk *chunk;
+-
+-        cursor_pos--;
+-        chunk = sol_vector_get(&mdata->chunks, cursor_pos);
+-        if (chunk->type == STR_FORMAT_LITERAL)
+-            continue;
+-        else {
+-            found = true;
+-            break;
+-        }
+-    }
+-
+-    if (!found)
+-        return 0;
+-
+-    mdata->cursor = cursor_pos;
+-
+-    mdata->state_changed = true;
+-    mdata->blink_on = true;
+-
+-    string_formatted_force_imediate_format(mdata, true);
+-    return string_formatted_format(node);
+-}
+-
+-static int
+-string_formatted_select_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    int r;
+-
+-    if (!mdata->enabled)
+-        return 0;
+-
+-    /* force new format with state changed and blink state on, so we
+-     * always get the full output here */
+-    string_formatted_force_imediate_format(mdata, false);
+-    mdata->state_changed = true;
+-    mdata->blink_on = true;
+-
+-    r = string_formatted_format(node);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return sol_flow_send_string_slice_packet(node,
+-        SOL_FLOW_NODE_TYPE_FORM_INT__OUT__SELECTED,
+-        sol_buffer_get_slice(&mdata->formatted_value));
+-}
+-
+-static int
+-string_formatted_selected_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    const char *value;
+-    int r;
+-
+-    r = sol_flow_packet_get_string(packet, &value);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    r = string_formatted_selected_set_do(node, data, value);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    if (!mdata->enabled)
+-        return 0;
+-
+-    string_formatted_force_imediate_format(mdata, true);
+-    mdata->state_changed = true;
+-    mdata->blink_on = true;
+-
+-    return string_formatted_format(node);
+-}
+-
+-static int
+-string_formatted_enabled_set(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct string_formatted_data *mdata = data;
+-    bool value;
+-    int r;
+-
+-    r = sol_flow_packet_get_boolean(packet, &value);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    mdata->enabled = value;
+-
+-    return 0;
+-}
+-
+ #include "form-gen.c"
+diff --git a/src/modules/flow/form/form.json b/src/modules/flow/form/form.json
+index 3e2cdae5..41ba4433 100644
+--- a/src/modules/flow/form/form.json
++++ b/src/modules/flow/form/form.json
+@@ -636,138 +636,6 @@
+       ],
+       "private_data_type": "string_data",
+       "url": "http://solettaproject.org/doc/latest/node_types/form/string.html"
+-    },
+-    {
+-      "category": "io/sw",
+-      "description": "Receives packages to control the formation/edition of a formatted string. That string may be formatted to have any number of numerical fields, that will then be open to edition by the node's input port interactions. Four input ports control the position on the format numerical fields (and the values of the fields themselves) of a forming string. One of the input ports will commit to a state when trigerred, and the formed string will be outputted. A (broader) string output with the current state, defined by the format string, is also outputted (one time per second, to emulate a blinking cursor). All strings in this node should be ASCII only, as it is meant to output to LCD displays.",
+-      "in_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "Change the current state (useful for initial setups on a flow). Be careful to use this only when your 'value' option is reasonably backwards parseable, i.e., does not contain neighbor numerical fields (no literal fields in between them), does not mix number punctuation and that same punctuation symbols in the literals, etc.",
+-          "methods": {
+-            "process": "string_formatted_selected_set"
+-          },
+-          "name": "SELECTED"
+-        },
+-        {
+-          "data_type": "any",
+-          "description": "Increase the value of the field under the cursor position.",
+-          "methods": {
+-            "process": "string_formatted_up_set"
+-          },
+-          "name": "UP"
+-        },
+-        {
+-          "data_type": "any",
+-          "description": "Decrease the value of the field under the cursor position.",
+-          "methods": {
+-            "process": "string_formatted_down_set"
+-          },
+-          "name": "DOWN"
+-        },
+-        {
+-          "data_type": "any",
+-          "description": "Advance the cursor position (to the right), to the next numeric field.",
+-          "methods": {
+-            "process": "string_formatted_next_set"
+-          },
+-          "name": "NEXT"
+-        },
+-        {
+-          "data_type": "any",
+-          "description": "Retract the cursor position (to the left), to the previous numeric field.",
+-          "methods": {
+-            "process": "string_formatted_previous_set"
+-          },
+-          "name": "PREVIOUS"
+-        },
+-        {
+-          "data_type": "any",
+-          "description": "Confirm the selection to be current one, generating output packets on both STRING and SELECTED output ports.",
+-          "methods": {
+-            "process": "string_formatted_select_set"
+-          },
+-          "name": "SELECT"
+-        },
+-        {
+-          "data_type": "boolean",
+-          "description": "Make the interaction possible, otherwise don't produce strings or process UP/DOWN/SELECT inputs. In other words, enable/disable the node at run-time. The node starts in the enabled state. Note that this does not affect the use of the SELECTED port.",
+-          "methods": {
+-            "process": "string_formatted_enabled_set"
+-          },
+-          "name": "ENABLED"
+-        }
+-      ],
+-      "methods": {
+-        "close": "string_formatted_close",
+-        "open": "string_formatted_open"
+-      },
+-      "name": "form/string-formatted",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "int",
+-            "description": "The number of available columns to lay out the output string with. It must be a positive integer.",
+-            "name": "columns"
+-          },
+-          {
+-            "data_type": "int",
+-            "description": "The number of available rows to lay out the output string with. It must be a positive integer.",
+-            "name": "rows"
+-          },
+-          {
+-            "data_type": "int",
+-            "default": 1000,
+-            "description": "Cursor blinking time, in miliseconds.",
+-            "name": "blink_time"
+-          },
+-          {
+-            "data_type": "boolean",
+-            "default": true,
+-            "description": "Whether the numeric field edition by the UP/DOWN ports is circular or not (wraps from mininim value to maximum and vice-versa).",
+-            "name": "circular"
+-          },
+-          {
+-            "data_type": "string",
+-            "default": null,
+-            "description": "The value (format) string, to be available for referencing when evaluating the format one by means of the '{value}' tag. Any line breaking characters in this string will be translated to a space instead. This is a format inside the broader one, meant to define the numbered fields to be actually editable by the node. The syntax is a free-form string where fields enclosed by '{}' are treated specially. They must have an entry with Python's number format specification mini-language (https://docs.python.org/3/library/string.html#formatspec), followed by a colon and three comma-separated values defining the field's minimum, maximum and step values. As an exception for the Python's language, empty types are not allowed, and 'n' will always translate to integer. As an example, '{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}' would make the node have four three-digit integer numbers separated by periods as output--an IPv4 number for user edition.",
+-            "name": "value"
+-          },
+-          {
+-            "data_type": "string",
+-            "default": null,
+-            "description": "The default value for the numeric fields' node state, in string form. The string should match the expected form given by the 'value' option, naturally. As an example, if '{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}' is in the 'value' option, something like '255.255.255.255' would be expected for this option. If this option is not set, the minimum values for each field will be the initial state.",
+-            "name": "value_default"
+-          },
+-          {
+-            "data_type": "string",
+-            "default": null,
+-            "description": "The title string, to be available for referencing when evaluating the format one by means of the '{title}' tag. Any line breaking characters in this string will be translated to a space instead. If no title is provided, a '{title}' tag in the format will be ignored.",
+-            "name": "title"
+-          },
+-          {
+-            "data_type": "string",
+-            "default": "{value}",
+-            "description": "The format string to produce the final STRING output with. The syntax is a free-form string with one '{value}' sub-string in it (and one optional '{title}' one). The value tag will be replaced by the actual true/false strings defined for the node (true_str/false_str options), while the title one will be replaced by the title string option, if set. The title tag must occur before the value one.",
+-            "name": "format"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "out_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "The formatted string output. This is meant to feed real display nodes (like grove/lcd-string).",
+-          "name": "STRING"
+-        },
+-        {
+-          "data_type": "string",
+-          "description": "The current string state.",
+-          "name": "SELECTED"
+-        }
+-      ],
+-      "private_data_type": "string_data",
+-      "url": "http://solettaproject.org/doc/latest/node_types/form/string-formatted.html"
+     }
+   ]
+ }
+diff --git a/src/modules/flow/format/Kconfig b/src/modules/flow/format/Kconfig
+new file mode 100644
+index 00000000..a1f1d726
+--- /dev/null
++++ b/src/modules/flow/format/Kconfig
+@@ -0,0 +1,16 @@
++config FLOW_NODE_TYPE_FORMAT
++	tristate "Node type: format"
++	default m
++	help
++                The format family of nodes aggregates those nodes that
++                make use of Python string-formatting code. We have the
++                converter nodes, converting some packet types to
++                string packets, namely float-to-string-format and
++                int-to-string-format. They possess Python-like string
++                formatting capabilities, as in
++                https://docs.python.org/3/library/stdtypes.html#str.format.
++                Those are meant to be used in place of their siblings
++                on the converter family of nodes, when there is more
++                processing power and ROM space. There's also the
++                string-formatted-form node, that provides a form to
++                control the formation/edition of a string.
+diff --git a/src/modules/flow/converter/LICENSE.PSFL b/src/modules/flow/format/LICENSE.PSFL
+similarity index 100%
+rename from src/modules/flow/converter/LICENSE.PSFL
+rename to src/modules/flow/format/LICENSE.PSFL
+diff --git a/src/modules/flow/format/Makefile b/src/modules/flow/format/Makefile
+new file mode 100644
+index 00000000..5e6a0164
+--- /dev/null
++++ b/src/modules/flow/format/Makefile
+@@ -0,0 +1,4 @@
++obj-$(FLOW_NODE_TYPE_FORMAT) += format.mod
++obj-format-$(FLOW_NODE_TYPE_FORMAT) := format.json format.o string-format.o ../form/form-common.o
++obj-format-$(FLOW_NODE_TYPE_FORMAT)-type := flow
++obj-format-$(FLOW_NODE_TYPE_FORMAT)-extra-ldflags := -lm
+diff --git a/src/modules/flow/format/format.c b/src/modules/flow/format/format.c
+new file mode 100644
+index 00000000..5333ffb6
+--- /dev/null
++++ b/src/modules/flow/format/format.c
+@@ -0,0 +1,1107 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include "sol-flow/format.h"
++#include "string-format.h"
++#include "../form/form-common.h"
++#include "sol-mainloop.h"
++
++struct string_converter {
++    struct sol_flow_node *node;
++    char *format;
++};
++
++static int
++drange_to_string_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct string_converter *mdata = data;
++    const struct sol_flow_node_type_format_float_to_string_options *opts;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
++        SOL_FLOW_NODE_TYPE_FORMAT_FLOAT_TO_STRING_OPTIONS_API_VERSION,
++        -EINVAL);
++
++    opts = (const struct sol_flow_node_type_format_float_to_string_options *)options;
++
++    mdata->format = strdup(opts->format_spec);
++    SOL_NULL_CHECK(mdata->format, -ENOMEM);
++
++    return 0;
++}
++
++static void
++drange_to_string_close(struct sol_flow_node *node, void *data)
++{
++    struct string_converter *mdata = data;
++
++    free(mdata->format);
++}
++
++static int
++irange_to_string_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct string_converter *mdata = data;
++    const struct sol_flow_node_type_format_int_to_string_options *opts;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
++        SOL_FLOW_NODE_TYPE_FORMAT_INT_TO_STRING_OPTIONS_API_VERSION,
++        -EINVAL);
++
++    opts = (const struct sol_flow_node_type_format_int_to_string_options *)options;
++
++    mdata->format = strdup(opts->format_spec);
++    SOL_NULL_CHECK(mdata->format, -ENOMEM);
++
++    return 0;
++}
++
++static void
++irange_to_string_close(struct sol_flow_node *node, void *data)
++{
++    struct string_converter *mdata = data;
++
++    free(mdata->format);
++}
++
++static int
++drange_to_string_convert(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    int r;
++    struct sol_drange in_value;
++    struct string_converter *mdata = data;
++    struct sol_buffer out = SOL_BUFFER_INIT_EMPTY;
++
++    mdata->node = node;
++
++    r = sol_flow_packet_get_drange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = do_float_markup(node, mdata->format, in_value, &out);
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++    r = sol_flow_send_string_slice_packet(node,
++        SOL_FLOW_NODE_TYPE_FORMAT_FLOAT_TO_STRING__OUT__OUT,
++        sol_buffer_get_slice(&out));
++
++end:
++    sol_buffer_fini(&out);
++    return r;
++}
++
++static int
++irange_to_string_convert(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    int r;
++    struct sol_irange in_value;
++    struct string_converter *mdata = data;
++    struct sol_buffer out = SOL_BUFFER_INIT_EMPTY;
++
++    mdata->node = node;
++
++    r = sol_flow_packet_get_irange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = do_integer_markup(node, mdata->format, in_value, &out);
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++    r = sol_flow_send_string_slice_packet(node,
++        SOL_FLOW_NODE_TYPE_FORMAT_INT_TO_STRING__OUT__OUT,
++        sol_buffer_get_slice(&out));
++
++end:
++    sol_buffer_fini(&out);
++    return r;
++}
++
++struct string_formatted_data {
++    size_t columns, rows, value_prefix_len, cursor;
++    char *title, *text_mem, *format, *value, *title_tag, *value_tag;
++    struct sol_buffer text_grid, formatted_value;
++    struct sol_vector chunks;
++    struct sol_timeout *timer;
++    int blink_time;
++    bool circular : 1;
++    bool enabled : 1;
++    bool blink_on : 1;
++    bool state_changed : 1;
++    bool cursor_initialized : 1;
++};
++
++enum string_formatted_chunk_type {
++    STR_FORMAT_INT,
++    STR_FORMAT_FLOAT,
++    STR_FORMAT_LITERAL
++};
++
++struct string_formatted_chunk {
++    /* Slice from mdata->formatted_value.data, on INT/FLOAT types, or
++     * from mdata->value, for LITERALs. We have to keep this to have
++     * the information again on the blinking process (for INT/FLOAT)
++     * or to easily resolve the LITERAL when formatting. */
++    struct sol_str_slice rendered;
++
++    /* Re-built from mdata->value, on INT/FLOAT types, to match
++     * do_{integer,float}_markup()'s syntax */
++    char *format;
++
++    /* Starting position at mdata->text_grid.data, on INT/FLOAT types.
++     * If the field does not fit at all, it will contain NULL */
++    const char *pos_in_text_grid;
++
++    enum string_formatted_chunk_type type;
++
++    /* Numerical state, for INT/FLOAT types */
++    union {
++        struct sol_irange i;
++        struct sol_drange d;
++    } state;
++};
++
++static int
++string_formatted_format_do(struct sol_flow_node *node)
++{
++    struct string_formatted_data *mdata = sol_flow_node_get_private_data(node);
++    int r, buf_size = mdata->text_grid.capacity;
++    size_t row = 0, col = 0, tmp_col;
++    struct sol_vector indexes;
++    bool no_more_space = false;
++    char *tmp = NULL;
++
++    if (!mdata->state_changed) {
++        char *value;
++        size_t start, len;
++        struct string_formatted_chunk *chunk =
++            sol_vector_get(&mdata->chunks, mdata->cursor);
++
++        if (!chunk->pos_in_text_grid)
++            goto send;
++
++        start = chunk->pos_in_text_grid - (char *)mdata->text_grid.data;
++
++        /* abs. pos modulo number of cols gives us the actual col */
++        len = mdata->columns - (start % mdata->columns) + 1;
++
++        value = (char *)sol_buffer_at(&mdata->text_grid, start);
++
++        if (mdata->blink_on) {
++            mdata->blink_on = false;
++            for (size_t l = 0; l < chunk->rendered.len && len; l++, len--)
++                value[l] = SPC;
++        } else {
++            mdata->blink_on = true;
++            for (size_t l = 0; l < chunk->rendered.len && len; l++, len--)
++                value[l] = chunk->rendered.data[l];
++        }
++
++        goto send;
++    }
++
++    sol_vector_init(&indexes, sizeof(size_t));
++
++    r = format_title(&mdata->text_grid, buf_size, mdata->rows,
++        mdata->columns, &row, &col, mdata->format, mdata->title,
++        mdata->title_tag, mdata->value_tag, &no_more_space);
++    SOL_INT_CHECK_GOTO(r, < 0, err);
++    SOL_EXP_CHECK_GOTO(no_more_space, send);
++
++    mdata->value_prefix_len = tmp_col = col;
++
++    sol_buffer_fini(&mdata->formatted_value);
++    sol_buffer_init(&mdata->formatted_value);
++
++    for (size_t l = 0; l < mdata->chunks.len; l++) {
++        struct string_formatted_chunk *chunk =
++            sol_vector_get(&mdata->chunks, l);
++        size_t start, sz, *start_ptr;
++
++        start = mdata->formatted_value.used;
++
++        switch (chunk->type) {
++        case STR_FORMAT_INT:
++            r = do_integer_markup(node, chunk->format, chunk->state.i,
++                &mdata->formatted_value);
++            break;
++        case STR_FORMAT_FLOAT:
++            r = do_float_markup(node, chunk->format, chunk->state.d,
++                &mdata->formatted_value);
++            break;
++        case STR_FORMAT_LITERAL:
++            r = sol_buffer_append_slice
++                    (&mdata->formatted_value, chunk->rendered);
++            break;
++        }
++        SOL_INT_CHECK_GOTO(r, < 0, err);
++        sz = mdata->formatted_value.used - start;
++
++        if (chunk->type == STR_FORMAT_LITERAL)
++            continue;
++
++        /* We can't assume mdata->formatted_value.data + start will
++         * stay as is, because the buffer may grow on these iterations
++         * and be realloc()ed! We save the value to compute the ptr
++         * offsets later */
++        start_ptr = sol_vector_append(&indexes);
++        if (!start_ptr) {
++            r = -ENOMEM;
++            goto err;
++        }
++
++        *start_ptr = start;
++        chunk->rendered.len = sz;
++
++        if (tmp_col /* + sz */ > mdata->columns - 1)
++            chunk->pos_in_text_grid = NULL;
++        else {
++            chunk->pos_in_text_grid = (char *)mdata->text_grid.data +
++                coords_to_pos(mdata->columns, row, mdata->value_prefix_len)
++                + start;
++            tmp_col += sz;
++        }
++
++        if (!mdata->cursor_initialized) {
++            mdata->cursor = l;
++            mdata->cursor_initialized = true;
++        }
++    }
++
++    for (size_t l = 0, s = 0; l < mdata->chunks.len; l++) {
++        size_t *start_ptr;
++        struct string_formatted_chunk *chunk =
++            sol_vector_get(&mdata->chunks, l);
++
++        if (chunk->type == STR_FORMAT_LITERAL)
++            continue;
++
++        start_ptr = sol_vector_get(&indexes, s++);
++        if (!start_ptr) {
++            r = -ERANGE;
++            goto err;
++        }
++
++        chunk->rendered.data =
++            (char *)mdata->formatted_value.data + *start_ptr;
++    }
++
++    sol_vector_clear(&indexes);
++
++    tmp = mdata->formatted_value.data;
++    r = format_chunk(&mdata->text_grid, mdata->rows,
++        mdata->columns, tmp, tmp + mdata->formatted_value.used, &row, &col,
++        DO_FORMAT, DITCH_NL);
++    SOL_INT_CHECK_GOTO(r, < 0, err);
++    if (r >= buf_size || row >= mdata->rows)
++        goto send;
++
++    r = format_post_value(&mdata->text_grid, mdata->rows,
++        mdata->columns, &row, &col, mdata->format,
++        mdata->value_tag);
++    SOL_INT_CHECK_GOTO(r, < 0, err);
++
++    mdata->state_changed = false;
++
++send:
++    r = format_send(node, &mdata->text_grid,
++        SOL_FLOW_NODE_TYPE_FORMAT_STRING_FORMATTED_FORM__OUT__STRING);
++
++    return r;
++
++err:
++    /* we got to re-init because of the error cases. if this function
++     * fails we're no better, so don't check. */
++    buffer_re_init(&mdata->text_grid, mdata->text_mem,
++        mdata->rows, mdata->columns);
++
++    sol_buffer_fini(&mdata->formatted_value);
++    sol_vector_clear(&indexes);
++
++    return r;
++}
++
++static bool
++string_formatted_timeout(void *data)
++{
++    struct string_formatted_data *mdata = sol_flow_node_get_private_data(data);
++
++    if (!string_formatted_format_do(data)) {
++        mdata->timer = NULL;
++        return true;
++    }
++
++    return false;
++}
++
++static void
++string_formatted_force_imediate_format(struct string_formatted_data *mdata,
++    bool re_init)
++{
++    if (re_init)
++        buffer_re_init(&mdata->text_grid, mdata->text_mem,
++            mdata->rows, mdata->columns);
++    if (mdata->timer) {
++        sol_timeout_del(mdata->timer);
++        mdata->timer = NULL;
++    }
++}
++
++static int
++string_formatted_format(struct sol_flow_node *node)
++{
++    struct string_formatted_data *mdata = sol_flow_node_get_private_data(node);
++
++    if (!mdata->timer) {
++        mdata->timer = sol_timeout_add
++                (mdata->blink_time, string_formatted_timeout, node);
++        SOL_NULL_CHECK(mdata->timer, -ENOMEM);
++        return string_formatted_format_do(node);
++    }
++
++    return 0;
++}
++
++static void
++string_formatted_close(struct sol_flow_node *node, void *data)
++{
++    struct string_formatted_data *mdata = data;
++    struct string_formatted_chunk *chunk;
++    uint16_t i;
++
++    sol_buffer_fini(&mdata->text_grid);
++    sol_buffer_fini(&mdata->formatted_value);
++
++    SOL_VECTOR_FOREACH_IDX (&mdata->chunks, chunk, i)
++        free(chunk->format);
++
++    sol_vector_clear(&mdata->chunks);
++
++    if (mdata->timer)
++        sol_timeout_del(mdata->timer);
++
++    free(mdata->title);
++    free(mdata->format);
++    free(mdata->value);
++}
++
++static inline double
++strtod_no_locale(const char *nptr, char **endptr)
++{
++    return sol_util_strtodn(nptr, endptr, -1, false);
++}
++
++static double
++midpoint(double min, double max)
++{
++    if (min < 0 && max > 0)
++        return (max + min) / 2.0;
++
++    return ((max - min) / 2.0) + min;
++}
++
++static int
++string_formatted_selected_set_do(struct sol_flow_node *node,
++    void *data,
++    const char *value)
++{
++    struct string_formatted_data *mdata = data;
++    const char *ptr, *end;
++    size_t len;
++    int r;
++
++    len = strlen(value);
++    ptr = value;
++    end = value + len;
++    for (size_t l = 0; l < mdata->chunks.len && *ptr; l++) {
++        struct string_formatted_chunk *chunk
++            = sol_vector_get(&mdata->chunks, l), *next_chunk;
++
++        switch (chunk->type) {
++        case STR_FORMAT_INT:
++        {
++            char *endptr;
++            int32_t *i_ptr;
++
++            if (l + 1 < mdata->chunks.len) {
++                next_chunk = sol_vector_get(&mdata->chunks, l + 1);
++
++                if (next_chunk->type != STR_FORMAT_LITERAL) {
++                    r = -ENOTSUP;
++                    goto error;
++                }
++                endptr = memmem(ptr, end - ptr,
++                    next_chunk->rendered.data, next_chunk->rendered.len);
++                if (!endptr) {
++                    r = -EINVAL;
++                    goto error;
++                }
++            } else
++                endptr = (char *)end;
++
++            i_ptr = &chunk->state.i.val;
++            *i_ptr = strtoll(ptr, &endptr, 0);
++
++            if (ptr == endptr || errno != 0) {
++                r = -errno;
++                goto error;
++            }
++            ptr = endptr;
++            break;
++        }
++        case STR_FORMAT_FLOAT:
++        {
++            char *endptr;
++            double *d_ptr;
++
++            if (l + 1 < mdata->chunks.len) {
++                next_chunk = sol_vector_get(&mdata->chunks, l + 1);
++
++                if (next_chunk->type != STR_FORMAT_LITERAL) {
++                    r = -ENOTSUP;
++                    goto error;
++                }
++                endptr = memmem(ptr, end - ptr,
++                    next_chunk->rendered.data, next_chunk->rendered.len);
++                if (!endptr) {
++                    r = -EINVAL;
++                    goto error;
++                }
++            } else
++                endptr = (char *)end;
++
++            d_ptr = &chunk->state.d.val;
++            *d_ptr = strtod_no_locale(ptr, &endptr);
++
++            if (ptr == endptr || errno != 0) {
++                r = -errno;
++                goto error;
++            }
++            ptr = endptr;
++            break;
++        }
++        case STR_FORMAT_LITERAL:
++            if (chunk->rendered.len > (size_t)(end - ptr) ||
++                memcmp(chunk->rendered.data, ptr, chunk->rendered.len) != 0) {
++                r = -EINVAL;
++                goto error;
++            }
++            ptr += chunk->rendered.len;
++            break;
++        }
++    }
++
++    return 0;
++
++error:
++    sol_flow_send_error_packet(node, ENOTSUP, "The node's value formatting "
++        "string (%s) is so that this entry (%s) is not parseable: %s",
++        mdata->value, value, sol_util_strerrora(-r));
++    return r;
++}
++
++static int
++string_formatted_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    int r;
++    const char *ptr;
++    bool numeric_field_present = false;
++    struct string_formatted_data *mdata = data;
++    static const char syntax_msg[] =
++        "Please use the {<type>:<min>,<max>,<step>} syntax.";
++    struct string_formatted_chunk *chunk = NULL;
++    const struct sol_flow_node_type_format_string_formatted_form_options
++    *opts =
++        (const struct sol_flow_node_type_format_string_formatted_form_options *)options;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
++        SOL_FLOW_NODE_TYPE_FORMAT_STRING_FORMATTED_FORM_OPTIONS_API_VERSION,
++        -EINVAL);
++
++    if (!opts->value) {
++        SOL_WRN("A value format must be passed.");
++        return -EINVAL;
++    } else {
++        mdata->value = strdup(opts->value);
++        SOL_NULL_CHECK(mdata->value, -ENOMEM);
++    }
++    ptr = mdata->value;
++
++    r = common_form_init(&mdata->text_grid,
++        opts->rows,
++        &mdata->rows,
++        opts->columns,
++        &mdata->columns,
++        opts->format,
++        &mdata->format,
++        opts->title,
++        &mdata->title,
++        &mdata->title_tag,
++        &mdata->value_tag,
++        &mdata->text_mem);
++    SOL_INT_CHECK(r, < 0, r);
++
++    mdata->circular = opts->circular;
++
++    mdata->enabled = true;
++
++    mdata->blink_time = opts->blink_time;
++    if (opts->blink_time < 0) {
++        SOL_WRN("Invalid blink_time (%" PRId32 "), that must be positive. "
++            "Setting to 1ms.", opts->blink_time);
++        mdata->blink_time = 1;
++    }
++
++    mdata->blink_on = true;
++    mdata->state_changed = true;
++
++    sol_vector_init(&mdata->chunks, sizeof(struct string_formatted_chunk));
++
++    /* For instance, a format could be something like
++     * "LITERAL{3d:0,255,1}LITERAL{3d:0,255,1}LITERAL" */
++
++    if (*ptr == CURL_BRACKET_OPEN)
++        goto numeric_loop;
++
++    /* literals state loop */
++literal_loop:
++    chunk = sol_vector_append(&mdata->chunks);
++    if (!chunk) {
++        r = -errno;
++        goto value_err;
++    }
++
++    chunk->type = STR_FORMAT_LITERAL;
++    chunk->rendered.data = ptr;
++    chunk->pos_in_text_grid = NULL;
++
++    while (*ptr) {
++        if (*ptr != CURL_BRACKET_OPEN) {
++            chunk->rendered.len++;
++            ptr++;
++        } else
++            break;
++    }
++
++    /* numeric field state loop */
++numeric_loop:
++    while (*ptr) {
++        const char *field_start = ptr, *field_end, *field_format_end;
++        char *tmp;
++
++        if (*ptr != CURL_BRACKET_OPEN)
++            goto literal_loop;
++
++        tmp = strchr(ptr, ':');
++
++        if (!tmp) {
++            r = -EINVAL;
++            goto value_err;
++        }
++
++        /* at least one char between '{' and ':' */
++        if (tmp - ptr < 2) {
++            SOL_WRN("No numeric field type specification passed (%.*s). %s.",
++                (int)(tmp - ptr), ptr, syntax_msg);
++            r = -EINVAL;
++            goto value_err;
++        }
++
++        field_format_end = tmp - 1;
++
++        chunk = sol_vector_append(&mdata->chunks);
++        if (!chunk) {
++            r = -errno;
++            goto value_err;
++        }
++
++        switch (*(tmp - 1)) {
++        case 'b':
++        case 'c':
++        case 'd':
++        case 'o':
++        case 'x':
++        case 'X':
++        case 'n':
++            chunk->type = STR_FORMAT_INT;
++            break;
++        case 'e':
++        case 'E':
++        case 'f':
++        case 'F':
++        case 'g':
++        case 'G':
++        case '%':
++            chunk->type = STR_FORMAT_FLOAT;
++            break;
++        default:
++            SOL_WRN("Bad numeric type (%c) given on format string. It must be "
++                "one of b/c/d/o/x/X/n, for integers, or e/E/f/F/g/G/%%, for"
++                " floating point numbers.", *(tmp - 1));
++            r = -EINVAL;
++            goto value_err;
++        }
++
++        sol_buffer_init(&mdata->formatted_value);
++
++#define NUM_SPEC_FIELDS (3)
++        /* check for min, max, step */
++        for (size_t i = 0; i < NUM_SPEC_FIELDS; i++) {
++            char *endptr, backup;
++
++            ptr = tmp + 1;
++            if (!*ptr) {
++                r = -EINVAL;
++                SOL_WRN("Numeric field format ended with missing min, max, "
++                    "step triple (%.*s). %s.", (int)(ptr - field_start),
++                    field_start, syntax_msg);
++                goto value_err;
++            }
++
++            tmp = strchr(ptr,
++                i < NUM_SPEC_FIELDS - 1 ? COMMA : CURL_BRACKET_CLOSE);
++            if (!tmp) {
++                SOL_WRN("Numeric field format ended with missing min, max, "
++                    "step triple (%.s). %s.", field_start, syntax_msg);
++                r = -EINVAL;
++                goto value_err;
++            }
++            /* we edit the buffer to ease strtoll()'s job, but we can
++             * still free it */
++            backup = *tmp;
++            *tmp = NUL;
++#undef NUM_SPEC_FIELDS
++
++            errno = 0;
++            if (chunk->type == STR_FORMAT_INT) {
++                int32_t *i_ptr = &chunk->state.i.val + i + 1;
++                *i_ptr = strtoll(ptr, &endptr, 0);
++
++                if (ptr == endptr || errno != 0) {
++                    SOL_WRN("Failed to parse integer number %s: %s. %s.",
++                        ptr, errno ? sol_util_strerrora(errno) : "bad format",
++                        syntax_msg);
++                    r = -errno;
++                    *tmp = backup;
++                    goto value_err;
++                }
++
++                /* val = min, to start with */
++                if (!i) {
++                    i_ptr--;
++                    *i_ptr = i_ptr[1];
++                }
++            } else {
++                double *d_ptr = &chunk->state.d.val + i + 1;
++                *d_ptr = strtod_no_locale(ptr, &endptr);
++
++                if (ptr == endptr || errno != 0) {
++                    SOL_WRN("Failed to parse floating point number"
++                        " %s: %s. %s.", ptr,
++                        errno ? sol_util_strerrora(errno) : "bad format",
++                        syntax_msg);
++                    r = -errno;
++                    *tmp = backup;
++                    goto value_err;
++                }
++
++                /* val = min, to start with */
++                if (!i) {
++                    d_ptr--;
++                    *d_ptr = d_ptr[1];
++                }
++            }
++            *tmp = backup;
++        }
++        field_end = tmp;
++
++        if (chunk->type == STR_FORMAT_INT) {
++            int64_t range;
++
++            if (chunk->state.i.min > chunk->state.i.max) {
++                int32_t v;
++                SOL_WRN("Max value should be greater than "
++                    "min on %.*s. Swapping both values.",
++                    (int)(field_end - field_start + 1), field_start);
++                v = chunk->state.i.max;
++                chunk->state.i.max = chunk->state.i.min;
++                chunk->state.i.min = v;
++            }
++            range = (int64_t)chunk->state.i.max
++                - (int64_t)chunk->state.i.min;
++            if ((chunk->state.i.step > 0
++                && chunk->state.i.step > range)
++                || (chunk->state.i.step < 0
++                && chunk->state.i.step < -range)) {
++                SOL_WRN("Step value must fit the given range for %.*s."
++                    " Assuming 1 for it.",
++                    (int)(field_end - field_start + 1), field_start);
++                chunk->state.i.step = 1;
++            }
++        } else {
++            double mid_point, mid_step, mid_range;
++
++            if (chunk->state.d.min > chunk->state.d.max) {
++                double v;
++                SOL_WRN("Max value should be greater than "
++                    "min on %.*s. Swapping both values.",
++                    (int)(field_end - field_start + 1), field_start);
++                v = chunk->state.d.max;
++                chunk->state.d.max = chunk->state.d.min;
++                chunk->state.d.min = v;
++            }
++            mid_point = midpoint(chunk->state.d.min,
++                chunk->state.d.max);
++            mid_range = chunk->state.d.max - mid_point;
++            mid_step = chunk->state.d.step / 2.0;
++            if ((mid_step > 0 && mid_step > mid_range)
++                || (mid_step < 0 && mid_step < -mid_range)) {
++                SOL_WRN("Step value must fit the given range for %.*s."
++                    " Setting it to that exact range.",
++                    (int)(field_end - field_start + 1), field_start);
++                chunk->state.d.step = 2.0 * mid_step;
++            }
++        }
++
++        r = asprintf(&chunk->format, "{:%.*s}",
++            (int)(field_format_end - field_start), field_start + 1);
++        SOL_INT_CHECK_GOTO(r, < 0, value_err);
++
++        /* here we just validate de format string with initial 0
++         * state's value */
++        if (chunk->type == STR_FORMAT_INT)
++            r = do_integer_markup(NULL, chunk->format, chunk->state.i,
++                &mdata->formatted_value);
++        else
++            r = do_float_markup(NULL, chunk->format, chunk->state.d,
++                &mdata->formatted_value);
++
++        /* warning already issued, on errors */
++        SOL_INT_CHECK_GOTO(r, < 0, value_err);
++
++        numeric_field_present = true;
++
++        ptr = tmp + 1;
++        sol_buffer_fini(&mdata->formatted_value);
++    }
++
++    if (!numeric_field_present) {
++        SOL_WRN("At least one numeric field must occur in the value format"
++            " string (%s), but none was detected. %s at least once in that"
++            " format string.", mdata->value, syntax_msg);
++        r = -EINVAL;
++        goto value_err;
++    }
++
++    if (opts->value_default)
++        string_formatted_selected_set_do(node, data, opts->value_default);
++
++    return string_formatted_format(node);
++
++value_err:
++    string_formatted_close(node, mdata);
++    return r;
++}
++
++static int
++string_formatted_up_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    struct string_formatted_chunk *chunk;
++
++    if (!mdata->enabled)
++        return 0;
++
++    chunk = sol_vector_get(&mdata->chunks, mdata->cursor);
++
++    if (chunk->type == STR_FORMAT_INT) {
++        if (chunk->state.i.step > 0) {
++            /* step > 0 && max - step > min, so no overflow */
++            if (chunk->state.i.val <= chunk->state.i.max
++                - chunk->state.i.step) {
++                chunk->state.i.val += chunk->state.i.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.i.val = chunk->state.i.min;
++            }
++        } else {
++            /* step < 0 && min - step > max, so no overflow */
++            if (chunk->state.i.val >= chunk->state.i.min
++                - chunk->state.i.step) {
++                chunk->state.i.val += chunk->state.i.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.i.val = chunk->state.i.max;
++            }
++        }
++    } else {
++        if (chunk->state.d.step > 0) {
++            /* step > 0 && max - step > min, so no overflow */
++            if (chunk->state.d.val <= chunk->state.d.max
++                - chunk->state.d.step) {
++                chunk->state.d.val += chunk->state.d.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.d.val = chunk->state.d.min;
++            }
++        } else {
++            /* step < 0 && min - step > max, so no overflow */
++            if (chunk->state.d.val >= chunk->state.d.min
++                - chunk->state.d.step) {
++                chunk->state.d.val += chunk->state.d.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.d.val = chunk->state.d.max;
++            }
++        }
++    }
++
++    mdata->state_changed = true;
++    mdata->blink_on = true;
++
++    string_formatted_force_imediate_format(mdata, true);
++    return string_formatted_format(node);
++}
++
++static int
++string_formatted_down_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    struct string_formatted_chunk *chunk;
++
++    if (!mdata->enabled)
++        return 0;
++
++    chunk = sol_vector_get(&mdata->chunks, mdata->cursor);
++
++    if (chunk->type == STR_FORMAT_INT) {
++        if (chunk->state.i.step > 0) {
++            /* step > 0 && min + step < max, so no overflow */
++            if (chunk->state.i.val >= chunk->state.i.min
++                + chunk->state.i.step) {
++                chunk->state.i.val -= chunk->state.i.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.i.val = chunk->state.i.max;
++            }
++        } else {
++            /* step < 0 && max + step < min, so no overflow */
++            if (chunk->state.i.val <= chunk->state.i.max
++                + chunk->state.i.step) {
++                chunk->state.i.val -= chunk->state.i.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.i.val = chunk->state.i.min;
++            }
++        }
++    } else {
++        if (chunk->state.d.step > 0) {
++            /* step > 0 && min + step < max, so no overflow */
++            if (chunk->state.d.val >= chunk->state.d.min
++                + chunk->state.d.step) {
++                chunk->state.d.val -= chunk->state.d.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.d.val = chunk->state.d.max;
++            }
++        } else {
++            /* step < 0 && max + step < min, so no overflow */
++            if (chunk->state.d.val <= chunk->state.d.max
++                + chunk->state.d.step) {
++                chunk->state.d.val -= chunk->state.d.step;
++            } else {
++                if (mdata->circular)
++                    chunk->state.d.val = chunk->state.d.min;
++            }
++        }
++    }
++
++    mdata->state_changed = true;
++    mdata->blink_on = true;
++
++    string_formatted_force_imediate_format(mdata, true);
++    return string_formatted_format(node);
++}
++
++static int
++string_formatted_next_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    size_t cursor_pos = mdata->cursor, l = mdata->chunks.len;
++    bool found = false;
++
++    if (!mdata->enabled)
++        return 0;
++
++    for (cursor_pos = mdata->cursor + 1; cursor_pos < l; cursor_pos++) {
++        struct string_formatted_chunk *chunk;
++
++        chunk = sol_vector_get(&mdata->chunks, cursor_pos);
++        if (chunk->type != STR_FORMAT_LITERAL) {
++            found = true;
++            break;
++        }
++    }
++
++    if (!found)
++        return 0;
++
++    mdata->cursor = cursor_pos;
++
++    mdata->state_changed = true;
++    mdata->blink_on = true;
++
++    string_formatted_force_imediate_format(mdata, true);
++    return string_formatted_format(node);
++}
++
++static int
++string_formatted_previous_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    size_t cursor_pos = mdata->cursor;
++    bool found = false;
++
++    if (!mdata->enabled)
++        return 0;
++
++    while (cursor_pos) {
++        struct string_formatted_chunk *chunk;
++
++        cursor_pos--;
++        chunk = sol_vector_get(&mdata->chunks, cursor_pos);
++        if (chunk->type == STR_FORMAT_LITERAL)
++            continue;
++        else {
++            found = true;
++            break;
++        }
++    }
++
++    if (!found)
++        return 0;
++
++    mdata->cursor = cursor_pos;
++
++    mdata->state_changed = true;
++    mdata->blink_on = true;
++
++    string_formatted_force_imediate_format(mdata, true);
++    return string_formatted_format(node);
++}
++
++static int
++string_formatted_select_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    int r;
++
++    if (!mdata->enabled)
++        return 0;
++
++    /* force new format with state changed and blink state on, so we
++     * always get the full output here */
++    string_formatted_force_imediate_format(mdata, false);
++    mdata->state_changed = true;
++    mdata->blink_on = true;
++
++    r = string_formatted_format(node);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return sol_flow_send_string_slice_packet(node,
++        SOL_FLOW_NODE_TYPE_FORMAT_STRING_FORMATTED_FORM__OUT__SELECTED,
++        sol_buffer_get_slice(&mdata->formatted_value));
++}
++
++static int
++string_formatted_selected_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    const char *value;
++    int r;
++
++    r = sol_flow_packet_get_string(packet, &value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = string_formatted_selected_set_do(node, data, value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    if (!mdata->enabled)
++        return 0;
++
++    string_formatted_force_imediate_format(mdata, true);
++    mdata->state_changed = true;
++    mdata->blink_on = true;
++
++    return string_formatted_format(node);
++}
++
++static int
++string_formatted_enabled_set(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct string_formatted_data *mdata = data;
++    bool value;
++    int r;
++
++    r = sol_flow_packet_get_boolean(packet, &value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    mdata->enabled = value;
++
++    return 0;
++}
++
++#include "format-gen.c"
+diff --git a/src/modules/flow/format/format.json b/src/modules/flow/format/format.json
+new file mode 100644
+index 00000000..089c2ae9
+--- /dev/null
++++ b/src/modules/flow/format/format.json
+@@ -0,0 +1,230 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "format",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "Apache-2.0",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "converter",
++      "description": "Receives a float packet and converts it to a string one.",
++      "in_ports": [
++        {
++          "data_type": "float",
++          "description": "Where to receive the float value to be converted.",
++          "methods": {
++            "process": "drange_to_string_convert"
++          },
++          "name": "IN"
++        }
++      ],
++      "methods": {
++        "open": "drange_to_string_open",
++        "close": "drange_to_string_close"
++      },
++      "name": "format/float-to-string",
++      "aliases": [
++          "converter/float-to-string-format"
++      ],
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "default": "{val:f}",
++            "description": "Format string to be used in the conversion. The syntax is the same as Python's string.format() -- https://docs.python.org/3/library/stdtypes.html#str.format --, except that we got no format recursion, no '!' conversions, and the attribute names must be one of the integer fields (val, min, max, step). Numbered fields will get to them in this order. Naturally, there is no field attribute nor field index dereferencing either.",
++            "name": "format_spec"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "Float converted to string with 6 digits after decimal-point character.",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "string_converter",
++      "url": "http://solettaproject.org/doc/latest/node_types/converter/float-to-string.html"
++    },
++    {
++      "category": "converter",
++      "description": "Receives an int packet and converts it to a string one.",
++      "in_ports": [
++        {
++          "data_type": "int",
++          "description": "Where to receive the int value to be converted.",
++          "methods": {
++            "process": "irange_to_string_convert"
++          },
++          "name": "IN"
++        }
++      ],
++      "methods": {
++        "open": "irange_to_string_open",
++        "close": "irange_to_string_close"
++      },
++      "name": "format/int-to-string",
++      "aliases": [
++          "converter/int-to-string-format"
++      ],
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "default": "{val:d}",
++            "description": "Format string to be used in the conversion. The syntax is the same as Python's string.format() -- https://docs.python.org/3/library/stdtypes.html#str.format --, except that we got no format recursion, no '!' conversions, and the attribute names must be one of the integer fields (val, min, max, step). Numbered fields will get to them in this order. Naturally, there is no field attribute nor field index dereferencing either.",
++            "name": "format_spec"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "Int converted to string.",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "string_converter",
++      "url": "http://solettaproject.org/doc/latest/node_types/converter/int-to-string.html"
++    },
++    {
++      "category": "io/sw",
++      "description": "Receives packages to control the formation/edition of a formatted string. That string may be formatted to have any number of numerical fields, that will then be open to edition by the node's input port interactions. Four input ports control the position on the format numerical fields (and the values of the fields themselves) of a forming string. One of the input ports will commit to a state when trigerred, and the formed string will be outputted. A (broader) string output with the current state, defined by the format string, is also outputted (one time per second, to emulate a blinking cursor). All strings in this node should be ASCII only, as it is meant to output to LCD displays.",
++      "in_ports": [
++        {
++          "data_type": "string",
++          "description": "Change the current state (useful for initial setups on a flow). Be careful to use this only when your 'value' option is reasonably backwards parseable, i.e., does not contain neighbor numerical fields (no literal fields in between them), does not mix number punctuation and that same punctuation symbols in the literals, etc.",
++          "methods": {
++            "process": "string_formatted_selected_set"
++          },
++          "name": "SELECTED"
++        },
++        {
++          "data_type": "any",
++          "description": "Increase the value of the field under the cursor position.",
++          "methods": {
++            "process": "string_formatted_up_set"
++          },
++          "name": "UP"
++        },
++        {
++          "data_type": "any",
++          "description": "Decrease the value of the field under the cursor position.",
++          "methods": {
++            "process": "string_formatted_down_set"
++          },
++          "name": "DOWN"
++        },
++        {
++          "data_type": "any",
++          "description": "Advance the cursor position (to the right), to the next numeric field.",
++          "methods": {
++            "process": "string_formatted_next_set"
++          },
++          "name": "NEXT"
++        },
++        {
++          "data_type": "any",
++          "description": "Retract the cursor position (to the left), to the previous numeric field.",
++          "methods": {
++            "process": "string_formatted_previous_set"
++          },
++          "name": "PREVIOUS"
++        },
++        {
++          "data_type": "any",
++          "description": "Confirm the selection to be current one, generating output packets on both STRING and SELECTED output ports.",
++          "methods": {
++            "process": "string_formatted_select_set"
++          },
++          "name": "SELECT"
++        },
++        {
++          "data_type": "boolean",
++          "description": "Make the interaction possible, otherwise don't produce strings or process UP/DOWN/SELECT inputs. In other words, enable/disable the node at run-time. The node starts in the enabled state. Note that this does not affect the use of the SELECTED port.",
++          "methods": {
++            "process": "string_formatted_enabled_set"
++          },
++          "name": "ENABLED"
++        }
++      ],
++      "methods": {
++        "close": "string_formatted_close",
++        "open": "string_formatted_open"
++      },
++      "name": "format/string-formatted-form",
++      "aliases": [
++          "form/string-formatted"
++      ],
++      "options": {
++        "members": [
++          {
++            "data_type": "int",
++            "description": "The number of available columns to lay out the output string with. It must be a positive integer.",
++            "name": "columns"
++          },
++          {
++            "data_type": "int",
++            "description": "The number of available rows to lay out the output string with. It must be a positive integer.",
++            "name": "rows"
++          },
++          {
++            "data_type": "int",
++            "default": 1000,
++            "description": "Cursor blinking time, in miliseconds.",
++            "name": "blink_time"
++          },
++          {
++            "data_type": "boolean",
++            "default": true,
++            "description": "Whether the numeric field edition by the UP/DOWN ports is circular or not (wraps from mininim value to maximum and vice-versa).",
++            "name": "circular"
++          },
++          {
++            "data_type": "string",
++            "default": null,
++            "description": "The value (format) string, to be available for referencing when evaluating the format one by means of the '{value}' tag. Any line breaking characters in this string will be translated to a space instead. This is a format inside the broader one, meant to define the numbered fields to be actually editable by the node. The syntax is a free-form string where fields enclosed by '{}' are treated specially. They must have an entry with Python's number format specification mini-language (https://docs.python.org/3/library/string.html#formatspec), followed by a colon and three comma-separated values defining the field's minimum, maximum and step values. As an exception for the Python's language, empty types are not allowed, and 'n' will always translate to integer. As an example, '{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}' would make the node have four three-digit integer numbers separated by periods as output--an IPv4 number for user edition.",
++            "name": "value"
++          },
++          {
++            "data_type": "string",
++            "default": null,
++            "description": "The default value for the numeric fields' node state, in string form. The string should match the expected form given by the 'value' option, naturally. As an example, if '{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}.{3d:0,255,1}' is in the 'value' option, something like '255.255.255.255' would be expected for this option. If this option is not set, the minimum values for each field will be the initial state.",
++            "name": "value_default"
++          },
++          {
++            "data_type": "string",
++            "default": null,
++            "description": "The title string, to be available for referencing when evaluating the format one by means of the '{title}' tag. Any line breaking characters in this string will be translated to a space instead. If no title is provided, a '{title}' tag in the format will be ignored.",
++            "name": "title"
++          },
++          {
++            "data_type": "string",
++            "default": "{value}",
++            "description": "The format string to produce the final STRING output with. The syntax is a free-form string with one '{value}' sub-string in it (and one optional '{title}' one). The value tag will be replaced by the actual true/false strings defined for the node (true_str/false_str options), while the title one will be replaced by the title string option, if set. The title tag must occur before the value one.",
++            "name": "format"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "The formatted string output. This is meant to feed real display nodes (like grove/lcd-string).",
++          "name": "STRING"
++        },
++        {
++          "data_type": "string",
++          "description": "The current string state.",
++          "name": "SELECTED"
++        }
++      ],
++      "private_data_type": "string_formatted_data",
++      "url": "http://solettaproject.org/doc/latest/node_types/form/string-formatted.html"
++    }
++  ]
++}
+diff --git a/src/modules/flow/converter/string-format.c b/src/modules/flow/format/string-format.c
+similarity index 100%
+rename from src/modules/flow/converter/string-format.c
+rename to src/modules/flow/format/string-format.c
+diff --git a/src/modules/flow/converter/string-format.h b/src/modules/flow/format/string-format.h
+similarity index 100%
+rename from src/modules/flow/converter/string-format.h
+rename to src/modules/flow/format/string-format.h
+diff --git a/src/modules/flow/string/Kconfig b/src/modules/flow/string/Kconfig
+index 18a0fb75..89eb19ea 100644
+--- a/src/modules/flow/string/Kconfig
++++ b/src/modules/flow/string/Kconfig
+@@ -30,14 +30,14 @@ config FLOW_NODE_TYPE_STRING
+ 		build Soletta with ICU, so that the full UTF-8 set of
+ 		characters is properly handled by the string nodes.
+ 
+-# This is the solely user of ICU. If gets wider use, move up in the
++# This is the sole user of ICU. If it gets wider use, move it up in the
+ # hierarchy.
+ config USE_ICU
+ 	bool "Use ICU library"
+ 	depends on HAVE_ICU && FLOW_NODE_TYPE_STRING
+ 	default y
+ 
+-# This is the solely user of LIBPCRE. If gets wider use, move up in
++# This is the sole user of LIBPCRE. If it gets wider use, move it up in
+ # the hierarchy.
+ config USE_LIBPCRE
+ 	bool "Use LIBPCRE library"
+diff --git a/src/samples/flow/http-json/temperature_display.fbp b/src/samples/flow/http-json/temperature_display.fbp
+index 8d1c7bd3..d751c946 100755
+--- a/src/samples/flow/http-json/temperature_display.fbp
++++ b/src/samples/flow/http-json/temperature_display.fbp
+@@ -24,6 +24,6 @@ _(constant/string:value="Temperature (in celsius) avg=") OUT -> IN[0] temp_strin
+ _(constant/string:value=", low=") OUT -> IN[2] temp_string
+ _(constant/string:value=", high=") OUT -> IN[4] temp_string
+ 
+-temp_avg(converter/float-to-string:format_spec="{:.2f}") OUT -> IN[1] temp_string
+-temp_low(converter/float-to-string:format_spec="{:.2f}") OUT -> IN[3] temp_string
+-temp_high(converter/float-to-string:format_spec="{:.2f}") OUT -> IN[5] temp_string
++temp_avg(converter/float-to-string:format_precision=".2") OUT -> IN[1] temp_string
++temp_low(converter/float-to-string:format_precision=".2") OUT -> IN[3] temp_string
++temp_high(converter/float-to-string:format_precision=".2") OUT -> IN[5] temp_string
+diff --git a/src/test-fbp/converter-float-string-bad-format.fbp b/src/test-fbp/converter-float-string-bad-format.fbp
+index 40ac8dac..7b6a1193 100644
+--- a/src/test-fbp/converter-float-string-bad-format.fbp
++++ b/src/test-fbp/converter-float-string-bad-format.fbp
+@@ -14,19 +14,19 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-_(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_spec="{4:f}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_01(string/compare)
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string-format:format_spec="{4:f}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_01(string/compare)
+ _(constant/string:value="Field index 4 does not exist for float type") OUT -> IN[1] test_cmp_01 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_spec="{4:f") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_02(string/compare)
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string-format:format_spec="{4:f") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_02(string/compare)
+ _(constant/string:value="unmatched '{' in format spec") OUT -> IN[1] test_cmp_02 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_spec="{:Q}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_03(string/compare)
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string-format:format_spec="{:Q}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_03(string/compare)
+ _(constant/string:value="Unknown format code 'Q' for object of type 'float'") OUT -> IN[1] test_cmp_03 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_spec="{vala:f}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_04(string/compare)
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string-format:format_spec="{vala:f}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_04(string/compare)
+ _(constant/string:value="Field vala does not exist for float type") OUT -> IN[1] test_cmp_04 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_spec="{:d}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_05(string/compare)
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string-format:format_spec="{:d}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_05(string/compare)
+ _(constant/string:value="Unknown format code 'd' for object of type 'float'") OUT -> IN[1] test_cmp_05 EQUAL -> RESULT _(test/result)
+ 
+ ## TEST-OUTPUT-REGEX
+diff --git a/src/test-fbp/converter-int-string-bad-format.fbp b/src/test-fbp/converter-int-string-bad-format.fbp
+index a0421e0b..d7e285e0 100644
+--- a/src/test-fbp/converter-int-string-bad-format.fbp
++++ b/src/test-fbp/converter-int-string-bad-format.fbp
+@@ -14,16 +14,16 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{4:d}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_01(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{4:d}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_01(string/compare)
+ _(constant/string:value="Field index 4 does not exist for integer type") OUT -> IN[1] test_cmp_01 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{4:d") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_02(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{4:d") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_02(string/compare)
+ _(constant/string:value="unmatched '{' in format spec") OUT -> IN[1] test_cmp_02 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:Q}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_03(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:Q}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_03(string/compare)
+ _(constant/string:value="Unknown format code 'Q' for object of type 'integer'") OUT -> IN[1] test_cmp_03 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{vala:d}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_04(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{vala:d}") ERROR -> IN _(converter/error) MESSAGE -> IN[0] test_cmp_04(string/compare)
+ _(constant/string:value="Field vala does not exist for integer type") OUT -> IN[1] test_cmp_04 EQUAL -> RESULT _(test/result)
+ 
+ ## TEST-OUTPUT-REGEX
+diff --git a/src/test-fbp/converter-string-float.fbp b/src/test-fbp/converter-string-float.fbp
+index 287b2801..b2b9352c 100644
+--- a/src/test-fbp/converter-string-float.fbp
++++ b/src/test-fbp/converter-string-float.fbp
+@@ -17,7 +17,7 @@
+ const_float(constant/float:value=3.1415)
+ const_float_str(constant/string:value="3.141500")
+ 
+-const_float OUT -> IN float_to_str(converter/float-to-string) OUT -> IN[0] str_cmp(string/compare)
++const_float OUT -> IN float_to_str(converter/float-to-string-format) OUT -> IN[0] str_cmp(string/compare)
+ const_float_str OUT -> IN[1] str_cmp EQUAL -> RESULT float_converts_to_string(test/result)
+ 
+ float_to_str OUT -> IN str_to_float(converter/string-to-float)
+@@ -25,29 +25,54 @@ str_to_float OUT -> IN[0] is_float_equal(float/equal)
+ const_float OUT -> IN[1] is_float_equal OUT -> RESULT string_converts_to_float(test/result)
+ 
+ #stressing float formatting
+-_(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_spec="{:}") OUT -> IN[0] fmt_test_cmp_33(string/compare)
+-_(constant/string:value="3.000000") OUT -> IN[1] fmt_test_cmp_33 EQUAL -> RESULT _(test/result)
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string-format:format_spec="{:}") OUT -> IN[0] fmt_test_cmp_01(string/compare)
++_(constant/string:value="3.000000") OUT -> IN[1] fmt_test_cmp_01 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=DBL_MAX) OUT -> IN _(converter/float-to-string:format_spec="{:e}") OUT -> IN[0] fmt_test_cmp_34(string/compare)
+-_(constant/string:value="1.797693e+308") OUT -> IN[1] fmt_test_cmp_34 EQUAL -> RESULT _(test/result)
++_(constant/float:value=DBL_MAX) OUT -> IN _(converter/float-to-string-format:format_spec="{:e}") OUT -> IN[0] fmt_test_cmp_02(string/compare)
++_(constant/string:value="1.797693e+308") OUT -> IN[1] fmt_test_cmp_02 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=DBL_MAX) OUT -> IN _(converter/float-to-string:format_spec="{:E}") OUT -> IN[0] fmt_test_cmp_35(string/compare)
+-_(constant/string:value="1.797693E+308") OUT -> IN[1] fmt_test_cmp_35 EQUAL -> RESULT _(test/result)
++_(constant/float:value=DBL_MAX) OUT -> IN _(converter/float-to-string-format:format_spec="{:E}") OUT -> IN[0] fmt_test_cmp_03(string/compare)
++_(constant/string:value="1.797693E+308") OUT -> IN[1] fmt_test_cmp_03 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3.1415) OUT -> IN _(converter/float-to-string:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_36(string/compare)
+-_(constant/string:value="3.1415") OUT -> IN[1] fmt_test_cmp_36 EQUAL -> RESULT _(test/result)
++_(constant/float:value=3.1415) OUT -> IN _(converter/float-to-string-format:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_04(string/compare)
++_(constant/string:value="3.1415") OUT -> IN[1] fmt_test_cmp_04 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=30000000) OUT -> IN _(converter/float-to-string:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_37(string/compare)
+-_(constant/string:value="3e+07") OUT -> IN[1] fmt_test_cmp_37 EQUAL -> RESULT _(test/result)
++_(constant/float:value=30000000) OUT -> IN _(converter/float-to-string-format:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_05(string/compare)
++_(constant/string:value="3e+07") OUT -> IN[1] fmt_test_cmp_05 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=30000000) OUT -> IN _(converter/float-to-string:format_spec="{:G}") OUT -> IN[0] fmt_test_cmp_38(string/compare)
+-_(constant/string:value="3E+07") OUT -> IN[1] fmt_test_cmp_38 EQUAL -> RESULT _(test/result)
++_(constant/float:value=30000000) OUT -> IN _(converter/float-to-string-format:format_spec="{:G}") OUT -> IN[0] fmt_test_cmp_06(string/compare)
++_(constant/string:value="3E+07") OUT -> IN[1] fmt_test_cmp_06 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=30000000) OUT -> IN _(converter/float-to-string:format_spec="{:,f}") OUT -> IN[0] fmt_test_cmp_39(string/compare)
+-_(constant/string:value="30,000,000.000000") OUT -> IN[1] fmt_test_cmp_39 EQUAL -> RESULT _(test/result)
++_(constant/float:value=30000000) OUT -> IN _(converter/float-to-string-format:format_spec="{:,f}") OUT -> IN[0] fmt_test_cmp_07(string/compare)
++_(constant/string:value="30,000,000.000000") OUT -> IN[1] fmt_test_cmp_07 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3.1415) OUT -> IN _(converter/float-to-string:format_spec="{:%}") OUT -> IN[0] fmt_test_cmp_40(string/compare)
+-_(constant/string:value="314.150000%") OUT -> IN[1] fmt_test_cmp_40 EQUAL -> RESULT _(test/result)
++_(constant/float:value=3.1415) OUT -> IN _(converter/float-to-string-format:format_spec="{:%}") OUT -> IN[0] fmt_test_cmp_08(string/compare)
++_(constant/string:value="314.150000%") OUT -> IN[1] fmt_test_cmp_08 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/float:value=3.1415) OUT -> IN _(converter/float-to-string:format_spec="{val:07n}  {min:.3f}  {max:G}  {step:%}") OUT -> IN[0] fmt_test_cmp_41(string/compare)
+-_(constant/string:value="03.1415  -179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000  1.79769E+308  0.000000%") OUT -> IN[1] fmt_test_cmp_41 EQUAL -> RESULT _(test/result)
++_(constant/float:value=3.1415) OUT -> IN _(converter/float-to-string-format:format_spec="{val:07n}  {min:.3f}  {max:G}  {step:%}") OUT -> IN[0] fmt_test_cmp_09(string/compare)
++_(constant/string:value="03.1415  -179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000  1.79769E+308  0.000000%") OUT -> IN[1] fmt_test_cmp_09 EQUAL -> RESULT _(test/result)
++
++#float formatting for non-rich-format
++_(constant/float:value=3) OUT -> IN _(converter/float-to-string) OUT -> IN[0] fmt_test_cmp_10(string/compare)
++_(constant/string:value="3.000000") OUT -> IN[1] fmt_test_cmp_10 EQUAL -> RESULT _(test/result)
++
++_(constant/float:value=3.23000) OUT -> IN _(converter/float-to-string:format_flags="#",format_conversion_specifier="g") OUT -> IN[0] fmt_test_cmp_11(string/compare)
++_(constant/string:value="3.23000") OUT -> IN[1] fmt_test_cmp_11 EQUAL -> RESULT _(test/result)
++
++_(constant/float:value=3.2) OUT -> IN _(converter/float-to-string:format_flags="0",format_field_width=5,format_conversion_specifier="g") OUT -> IN[0] fmt_test_cmp_12(string/compare)
++_(constant/string:value="003.2") OUT -> IN[1] fmt_test_cmp_12 EQUAL -> RESULT _(test/result)
++
++# _(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_flags="-",format_field_width=13,format_conversion_specifier="f") OUT -> IN[0] fmt_test_cmp_13(string/compare)
++# _(constant/string:value="3.000000     ") OUT -> IN[1] fmt_test_cmp_13 EQUAL -> RESULT _(test/result)
++
++# _(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_flags=" ",format_conversion_specifier="f") OUT -> IN[0] fmt_test_cmp_14(string/compare)
++# _(constant/string:value=" 3.000000") OUT -> IN[1] fmt_test_cmp_14 EQUAL -> RESULT _(test/result)
++
++# _(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_flags="+",format_conversion_specifier="f") OUT -> IN[0] fmt_test_cmp_15(string/compare)
++# _(constant/string:value="+3.000000") OUT -> IN[1] fmt_test_cmp_15 EQUAL -> RESULT _(test/result)
++
++# _(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_field_width=5,format_precision=2,format_conversion_specifier="f") OUT -> IN[0] fmt_test_cmp_16(string/compare)
++# _(constant/string:value=" 3.00") OUT -> IN[1] fmt_test_cmp_16 EQUAL -> RESULT _(test/result)
++
++# # _(constant/float:value=3) OUT -> IN _(converter/float-to-string:format_prefix="prefix",format_suffix="suffix",format_field_width=5,format_precision=2,format_conversion_specifier="f") OUT -> IN[0] fmt_test_cmp_17(string/compare)
++# # _(constant/string:value="prefix 3.00suffix") OUT -> IN[1] fmt_test_cmp_17 EQUAL -> RESULT _(test/result)
+diff --git a/src/test-fbp/converter-string-int.fbp b/src/test-fbp/converter-string-int.fbp
+index f1b20b03..377cf4c6 100644
+--- a/src/test-fbp/converter-string-int.fbp
++++ b/src/test-fbp/converter-string-int.fbp
+@@ -17,7 +17,7 @@
+ const_int(constant/int:value=666)
+ const_int_str(constant/string:value="666")
+ 
+-const_int OUT -> IN int_to_str(converter/int-to-string) OUT -> IN[0] str_cmp(string/compare)
++const_int OUT -> IN int_to_str(converter/int-to-string-format) OUT -> IN[0] str_cmp(string/compare)
+ const_int_str OUT -> IN[1] str_cmp EQUAL -> RESULT int_converts_to_string(test/result)
+ 
+ int_to_str OUT -> IN str_to_int(converter/string-to-int)
+@@ -25,98 +25,123 @@ str_to_int OUT -> IN[0] is_int_equal(int/equal)
+ const_int OUT -> IN[1] is_int_equal OUT -> RESULT string_converts_to_int(test/result)
+ 
+ #stressing integer formatting
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:d}") OUT -> IN[0] fmt_test_cmp_01(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:d}") OUT -> IN[0] fmt_test_cmp_01(string/compare)
+ _(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_01 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:010d}") OUT -> IN[0] fmt_test_cmp_02(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:010d}") OUT -> IN[0] fmt_test_cmp_02(string/compare)
+ _(constant/string:value="0000000003") OUT -> IN[1] fmt_test_cmp_02 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:!^10d}") OUT -> IN[0] fmt_test_cmp_03(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:!^10d}") OUT -> IN[0] fmt_test_cmp_03(string/compare)
+ _(constant/string:value="!!!!3!!!!!") OUT -> IN[1] fmt_test_cmp_03 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{: <10d}") OUT -> IN[0] fmt_test_cmp_04(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{: <10d}") OUT -> IN[0] fmt_test_cmp_04(string/compare)
+ _(constant/string:value="3         ") OUT -> IN[1] fmt_test_cmp_04 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:_>10d}") OUT -> IN[0] fmt_test_cmp_05(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:_>10d}") OUT -> IN[0] fmt_test_cmp_05(string/compare)
+ _(constant/string:value="_________3") OUT -> IN[1] fmt_test_cmp_05 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=-3) OUT -> IN _(converter/int-to-string:format_spec="{: =10d}") OUT -> IN[0] fmt_test_cmp_06(string/compare)
++_(constant/int:value=-3) OUT -> IN _(converter/int-to-string-format:format_spec="{: =10d}") OUT -> IN[0] fmt_test_cmp_06(string/compare)
+ _(constant/string:value="-        3") OUT -> IN[1] fmt_test_cmp_06 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{: d}") OUT -> IN[0] fmt_test_cmp_07(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{: d}") OUT -> IN[0] fmt_test_cmp_07(string/compare)
+ _(constant/string:value=" 3") OUT -> IN[1] fmt_test_cmp_07 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=-3) OUT -> IN _(converter/int-to-string:format_spec="{: d}") OUT -> IN[0] fmt_test_cmp_08(string/compare)
++_(constant/int:value=-3) OUT -> IN _(converter/int-to-string-format:format_spec="{: d}") OUT -> IN[0] fmt_test_cmp_08(string/compare)
+ _(constant/string:value="-3") OUT -> IN[1] fmt_test_cmp_08 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:+d}") OUT -> IN[0] fmt_test_cmp_09(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:+d}") OUT -> IN[0] fmt_test_cmp_09(string/compare)
+ _(constant/string:value="+3") OUT -> IN[1] fmt_test_cmp_09 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:b}") OUT -> IN[0] fmt_test_cmp_10(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:b}") OUT -> IN[0] fmt_test_cmp_10(string/compare)
+ _(constant/string:value="11") OUT -> IN[1] fmt_test_cmp_10 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:#b}") OUT -> IN[0] fmt_test_cmp_11(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:#b}") OUT -> IN[0] fmt_test_cmp_11(string/compare)
+ _(constant/string:value="0b11") OUT -> IN[1] fmt_test_cmp_11 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=51) OUT -> IN _(converter/int-to-string:format_spec="{:c}") OUT -> IN[0] fmt_test_cmp_12(string/compare)
++_(constant/int:value=51) OUT -> IN _(converter/int-to-string-format:format_spec="{:c}") OUT -> IN[0] fmt_test_cmp_12(string/compare)
+ _(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_12 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=13) OUT -> IN _(converter/int-to-string:format_spec="{:o}") OUT -> IN[0] fmt_test_cmp_13(string/compare)
++_(constant/int:value=13) OUT -> IN _(converter/int-to-string-format:format_spec="{:o}") OUT -> IN[0] fmt_test_cmp_13(string/compare)
+ _(constant/string:value="15") OUT -> IN[1] fmt_test_cmp_13 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=13) OUT -> IN _(converter/int-to-string:format_spec="{:#o}") OUT -> IN[0] fmt_test_cmp_14(string/compare)
++_(constant/int:value=13) OUT -> IN _(converter/int-to-string-format:format_spec="{:#o}") OUT -> IN[0] fmt_test_cmp_14(string/compare)
+ _(constant/string:value="0o15") OUT -> IN[1] fmt_test_cmp_14 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=13) OUT -> IN _(converter/int-to-string:format_spec="{:x}") OUT -> IN[0] fmt_test_cmp_15(string/compare)
++_(constant/int:value=13) OUT -> IN _(converter/int-to-string-format:format_spec="{:x}") OUT -> IN[0] fmt_test_cmp_15(string/compare)
+ _(constant/string:value="d") OUT -> IN[1] fmt_test_cmp_15 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=13) OUT -> IN _(converter/int-to-string:format_spec="{:#x}") OUT -> IN[0] fmt_test_cmp_16(string/compare)
++_(constant/int:value=13) OUT -> IN _(converter/int-to-string-format:format_spec="{:#x}") OUT -> IN[0] fmt_test_cmp_16(string/compare)
+ _(constant/string:value="0xd") OUT -> IN[1] fmt_test_cmp_16 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=13) OUT -> IN _(converter/int-to-string:format_spec="{:X}") OUT -> IN[0] fmt_test_cmp_17(string/compare)
++_(constant/int:value=13) OUT -> IN _(converter/int-to-string-format:format_spec="{:X}") OUT -> IN[0] fmt_test_cmp_17(string/compare)
+ _(constant/string:value="D") OUT -> IN[1] fmt_test_cmp_17 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:n}") OUT -> IN[0] fmt_test_cmp_18(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:n}") OUT -> IN[0] fmt_test_cmp_18(string/compare)
+ _(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_18 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{}") OUT -> IN[0] fmt_test_cmp_19(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{}") OUT -> IN[0] fmt_test_cmp_19(string/compare)
+ _(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_19 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:}") OUT -> IN[0] fmt_test_cmp_20(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:}") OUT -> IN[0] fmt_test_cmp_20(string/compare)
+ _(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_20 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:f}") OUT -> IN[0] fmt_test_cmp_21(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:f}") OUT -> IN[0] fmt_test_cmp_21(string/compare)
+ _(constant/string:value="3.000000") OUT -> IN[1] fmt_test_cmp_21 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:.3f}") OUT -> IN[0] fmt_test_cmp_22(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:.3f}") OUT -> IN[0] fmt_test_cmp_22(string/compare)
+ _(constant/string:value="3.000") OUT -> IN[1] fmt_test_cmp_22 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=INT32_MAX) OUT -> IN _(converter/int-to-string:format_spec="{:e}") OUT -> IN[0] fmt_test_cmp_23(string/compare)
++_(constant/int:value=INT32_MAX) OUT -> IN _(converter/int-to-string-format:format_spec="{:e}") OUT -> IN[0] fmt_test_cmp_23(string/compare)
+ _(constant/string:value="2.147484e+09") OUT -> IN[1] fmt_test_cmp_23 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=INT32_MAX) OUT -> IN _(converter/int-to-string:format_spec="{:E}") OUT -> IN[0] fmt_test_cmp_24(string/compare)
++_(constant/int:value=INT32_MAX) OUT -> IN _(converter/int-to-string-format:format_spec="{:E}") OUT -> IN[0] fmt_test_cmp_24(string/compare)
+ _(constant/string:value="2.147484E+09") OUT -> IN[1] fmt_test_cmp_24 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_25(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_25(string/compare)
+ _(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_25 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=30000000) OUT -> IN _(converter/int-to-string:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_26(string/compare)
++_(constant/int:value=30000000) OUT -> IN _(converter/int-to-string-format:format_spec="{:g}") OUT -> IN[0] fmt_test_cmp_26(string/compare)
+ _(constant/string:value="3e+07") OUT -> IN[1] fmt_test_cmp_26 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=30000000) OUT -> IN _(converter/int-to-string:format_spec="{:G}") OUT -> IN[0] fmt_test_cmp_27(string/compare)
++_(constant/int:value=30000000) OUT -> IN _(converter/int-to-string-format:format_spec="{:G}") OUT -> IN[0] fmt_test_cmp_27(string/compare)
+ _(constant/string:value="3E+07") OUT -> IN[1] fmt_test_cmp_27 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=30000000) OUT -> IN _(converter/int-to-string:format_spec="{:,f}") OUT -> IN[0] fmt_test_cmp_28(string/compare)
++_(constant/int:value=30000000) OUT -> IN _(converter/int-to-string-format:format_spec="{:,f}") OUT -> IN[0] fmt_test_cmp_28(string/compare)
+ _(constant/string:value="30,000,000.000000") OUT -> IN[1] fmt_test_cmp_28 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:%}") OUT -> IN[0] fmt_test_cmp_29(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:%}") OUT -> IN[0] fmt_test_cmp_29(string/compare)
+ _(constant/string:value="300.000000%") OUT -> IN[1] fmt_test_cmp_29 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{val:03d} / {min:.3f} / {max:o} / {step:#x}") OUT -> IN[0] fmt_test_cmp_30(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{val:03d} / {min:.3f} / {max:o} / {step:#x}") OUT -> IN[0] fmt_test_cmp_30(string/compare)
+ _(constant/string:value="003 / -2147483648.000 / 17777777777 / 0x1") OUT -> IN[1] fmt_test_cmp_30 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{:03d} / {:.3f} / {:o} / {:#x}") OUT -> IN[0] fmt_test_cmp_31(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{:03d} / {:.3f} / {:o} / {:#x}") OUT -> IN[0] fmt_test_cmp_31(string/compare)
+ _(constant/string:value="003 / -2147483648.000 / 17777777777 / 0x1") OUT -> IN[1] fmt_test_cmp_31 EQUAL -> RESULT _(test/result)
+ 
+-_(constant/int:value=3) OUT -> IN _(converter/int-to-string:format_spec="{3:#x}  {2:o}  {1:.3f}  {0:03d}") OUT -> IN[0] fmt_test_cmp_32(string/compare)
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string-format:format_spec="{3:#x}  {2:o}  {1:.3f}  {0:03d}") OUT -> IN[0] fmt_test_cmp_32(string/compare)
+ _(constant/string:value="0x1  17777777777  -2147483648.000  003") OUT -> IN[1] fmt_test_cmp_32 EQUAL -> RESULT _(test/result)
++
++#integer formatting for non-rich-format
++_(constant/int:value=3) OUT -> IN _(converter/int-to-string) OUT -> IN[0] fmt_test_cmp_33(string/compare)
++_(constant/string:value="3") OUT -> IN[1] fmt_test_cmp_33 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_flags="#",format_conversion_specifier="o") OUT -> IN[0] fmt_test_cmp_34(string/compare)
++_(constant/string:value="05") OUT -> IN[1] fmt_test_cmp_34 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_flags="0",format_field_width=5,format_conversion_specifier="d") OUT -> IN[0] fmt_test_cmp_35(string/compare)
++_(constant/string:value="00005") OUT -> IN[1] fmt_test_cmp_35 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_flags="-",format_field_width=13,format_conversion_specifier="d") OUT -> IN[0] fmt_test_cmp_36(string/compare)
++_(constant/string:value="5            ") OUT -> IN[1] fmt_test_cmp_36 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_flags=" ",format_conversion_specifier="d") OUT -> IN[0] fmt_test_cmp_37(string/compare)
++_(constant/string:value=" 5") OUT -> IN[1] fmt_test_cmp_37 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_flags="+",format_conversion_specifier="d") OUT -> IN[0] fmt_test_cmp_38(string/compare)
++_(constant/string:value="+5") OUT -> IN[1] fmt_test_cmp_38 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_field_width=5,format_precision=6,format_conversion_specifier="d") OUT -> IN[0] fmt_test_cmp_39(string/compare)
++_(constant/string:value="000005") OUT -> IN[1] fmt_test_cmp_39 EQUAL -> RESULT _(test/result)
++
++_(constant/int:value=5) OUT -> IN _(converter/int-to-string:format_prefix="prefix",format_suffix="suffix",format_field_width=5,format_precision=6,format_conversion_specifier="d") OUT -> IN[0] fmt_test_cmp_40(string/compare)
++_(constant/string:value="prefix000005suffix") OUT -> IN[1] fmt_test_cmp_40 EQUAL -> RESULT _(test/result)

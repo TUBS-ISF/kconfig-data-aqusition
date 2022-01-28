@@ -1,0 +1,1574 @@
+"2005-11-12 01:10:24 +0000"
+diff --git a/extra/Configs/Config.hppa b/extra/Configs/Config.hppa
+new file mode 100644
+index 000000000..c198e18d6
+--- /dev/null
++++ b/extra/Configs/Config.hppa
+@@ -0,0 +1,25 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++
++config TARGET_ARCH
++	default "hppa"
++
++config HAVE_ELF
++	bool
++	select ARCH_HAS_MMU
++	select HAS_NO_THREADS
++	select ARCH_HAS_NO_LDSO
++	select HAVE_NO_SSP
++	default y
++
++config ARCH_SUPPORTS_BIG_ENDIAN
++	bool
++	default y
++
++config ARCH_CFLAGS
++	string
++
++config LIBGCC_CFLAGS
++	string
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 0d5df50a3..891820e7f 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -32,6 +32,9 @@ config TARGET_frv
+ config TARGET_h8300
+ 	bool "h8300 (BROKEN)"
+ 
++config TARGET_hppa
++	bool "hppa"
++
+ config TARGET_i386
+ 	bool "i386"
+ 
+@@ -104,6 +107,10 @@ if TARGET_h8300
+ source "extra/Configs/Config.h8300"
+ endif
+ 
++if TARGET_hppa
++source "extra/Configs/Config.hppa"
++endif
++
+ if TARGET_i386
+ source "extra/Configs/Config.i386"
+ endif
+@@ -1133,8 +1140,13 @@ config UCLIBC_BUILD_PIE
+ 		libraries have to be built with -fPIC or -fpic, and all assembler
+ 		functions must be written as position independent code (PIC).
+ 
++config HAVE_NO_SSP
++	bool
++	default n
++
+ config UCLIBC_HAS_SSP
+ 	bool "Support for propolice smashing stack protector"
++	depends on !HAVE_NO_SSP
+ 	default n
+ 	help
+ 	  Add propolice smashing stack protector to the library.
+diff --git a/libc/sysdeps/linux/hppa/Makefile b/libc/sysdeps/linux/hppa/Makefile
+new file mode 100644
+index 000000000..b1bf1ef10
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/Makefile
+@@ -0,0 +1,15 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++TOPDIR=../../../../
++
++top_srcdir=$(TOPDIR)
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/hppa/Makefile.arch b/libc/sysdeps/linux/hppa/Makefile.arch
+new file mode 100644
+index 000000000..26aeb7f8c
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/Makefile.arch
+@@ -0,0 +1,12 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++CSRC := __syscall_error.c brk.c mmap.c syscall.c
++
++SSRC := __longjmp.S bsd-_setjmp.S bsd-setjmp.S clone.S setjmp.S
++
++include $(top_srcdir)libc/sysdeps/linux/Makefile.arch
+diff --git a/libc/sysdeps/linux/hppa/__longjmp.S b/libc/sysdeps/linux/hppa/__longjmp.S
+new file mode 100644
+index 000000000..62026635f
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/__longjmp.S
+@@ -0,0 +1,71 @@
++/* longjmp for PA-RISC.
++   Copyright (C) 1997, 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define _SETJMP_H
++#define _ASM
++#include <bits/setjmp.h>
++
++/* __longjmp(jmpbuf, val) */
++
++	.text
++	.align 4
++	.globl __longjmp
++	.export __longjmp, code
++	.proc
++	.callinfo
++__longjmp:	
++	/* set return value */
++	copy	%r25, %r28
++	
++	ldw	0(%r26), %r3
++	ldw	8(%r26), %r4
++	ldw	12(%r26), %r5
++	ldw	16(%r26), %r6
++	ldw	20(%r26), %r7
++	ldw	24(%r26), %r8
++	ldw	28(%r26), %r9
++	ldw	32(%r26), %r10
++	ldw	36(%r26), %r11
++	ldw	40(%r26), %r12
++	ldw	44(%r26), %r13
++	ldw	48(%r26), %r14
++	ldw	52(%r26), %r15
++	ldw	56(%r26), %r16
++	ldw	60(%r26), %r17
++	ldw	64(%r26), %r18
++	ldw	68(%r26), %r19
++	ldw	72(%r26), %r27
++	ldw	76(%r26), %r30
++	
++	ldw	80(%r26), %rp
++
++	ldo	88(%r26),%r20
++	fldds,ma 8(%r20), %fr12
++	fldds,ma 8(%r20), %fr13
++	fldds,ma 8(%r20), %fr14
++	fldds,ma 8(%r20), %fr15
++	fldds,ma 8(%r20), %fr16
++	fldds,ma 8(%r20), %fr17
++	fldds,ma 8(%r20), %fr18
++	fldds,ma 8(%r20), %fr19
++	fldds,ma 8(%r20), %fr20
++	fldds	 0(%r20), %fr21
++
++	bv,n	%r0(%r2)
++	.procend
+diff --git a/libc/sysdeps/linux/hppa/__syscall_error.c b/libc/sysdeps/linux/hppa/__syscall_error.c
+new file mode 100644
+index 000000000..de65a1f39
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/__syscall_error.c
+@@ -0,0 +1,29 @@
++/* Wrapper for setting errno.
++   Copyright (C) 1997, 1998, 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++int attribute_hidden __syscall_error(int err_no)
++{
++	__set_errno(err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/hppa/bits/endian.h b/libc/sysdeps/linux/hppa/bits/endian.h
+new file mode 100644
+index 000000000..585db0c0f
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/endian.h
+@@ -0,0 +1,7 @@
++/* hppa1.1 big-endian.  */
++
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++#define __BYTE_ORDER __BIG_ENDIAN
+diff --git a/libc/sysdeps/linux/hppa/bits/fcntl.h b/libc/sysdeps/linux/hppa/bits/fcntl.h
+new file mode 100644
+index 000000000..9d967c647
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/fcntl.h
+@@ -0,0 +1,181 @@
++/* O_*, F_*, FD_* bit values for Linux/HPPA.
++   Copyright (C) 1995,1996,1997,1998,1999,2000,2002,2004
++	Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++#include <sys/types.h>
++
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_RDONLY	00000000
++#define O_WRONLY	00000001
++#define O_RDWR		00000002
++#define O_ACCMODE	00000003
++#define O_APPEND	00000010
++#define O_BLKSEEK	00000100 /* HPUX only */
++#define O_CREAT		00000400 /* not fcntl */
++#define O_TRUNC		00001000 /* not fcntl */
++#define O_EXCL		00002000 /* not fcntl */
++#define O_ASYNC		00020000
++#define O_SYNC		00100000
++#define O_NONBLOCK	00200004 /* HPUX has separate NDELAY & NONBLOCK */
++#define O_NDELAY	O_NONBLOCK
++#define O_NOCTTY	00400000 /* not fcntl */
++
++
++#ifdef __USE_GNU
++# define O_DIRECT	00040000 /* direct disk access hint - currently ignored */
++# define O_DIRECTORY	00010000 /* must be a directory */
++# define O_NOFOLLOW	00000200 /* don't follow links */
++# define O_NOATIME	04000000 /* Do not set atime.  */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	00004000
++#endif
++
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC		01000000 /* HPUX only */
++# define O_RSYNC		02000000 /* HPUX only */
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6    	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).  */
++#else
++# define F_GETLK	F_GETLK64 /* Get record locking info.  */
++# define F_SETLK	F_SETLK64 /* Set record locking info (non-blocking). */
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++
++#define F_GETLK64	8	/* Get record locking info.  */
++#define F_SETLK64	9	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	10	/* Set record locking info (blocking).  */
++
++#if defined __USE_BSD || defined __USE_UNIX98
++# define F_GETOWN	11	/* Get owner of socket (receiver of SIGIO).  */
++# define F_SETOWN	12	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	13	/* Set number of signal to be sent.  */
++# define F_GETSIG	14	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE     1024    /* Set a lease.  */
++# define F_GETLEASE     1025    /* Enquire what lease is active.  */
++# define F_NOTIFY       1026    /* Request notfications on a directory.  */
++#endif
++
++/* for F_[GET|SET]FL */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		1	/* Read lock.  */
++#define F_WRLCK		2	/* Write lock.  */
++#define F_UNLCK		3	/* Remove lock.  */
++
++/* for old implementation of bsd flock () */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* operations for bsd flock(), also used by the kernel implementation */
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS      0x00000001      /* File accessed.  */
++# define DN_MODIFY      0x00000002      /* File modified.  */
++# define DN_CREATE      0x00000004      /* File created.  */
++# define DN_DELETE      0x00000008      /* File removed.  */
++# define DN_RENAME      0x00000010      /* File renamed.  */
++# define DN_ATTRIB      0x00000020      /* File changed attibutes.  */
++# define DN_MULTISHOT   0x80000000      /* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.  */
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.  */
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.  */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++__BEGIN_DECLS
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/hppa/bits/kernel_stat.h b/libc/sysdeps/linux/hppa/bits/kernel_stat.h
+new file mode 100644
+index 000000000..3d5be0352
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/kernel_stat.h
+@@ -0,0 +1,70 @@
++/* Ripped from linux/include/asm-parisc/stat.h 
++ * and renamed 'struct stat' to 'struct kernel_stat' */
++
++#ifndef _PARISC_STAT_H
++#define _PARISC_STAT_H
++
++#include <linux/types.h>
++
++struct kernel_stat {
++	unsigned int	st_dev;		/* dev_t is 32 bits on parisc */
++	ino_t		st_ino;		/* 32 bits */
++	mode_t		st_mode;	/* 16 bits */
++	nlink_t		st_nlink;	/* 16 bits */
++	unsigned short	st_reserved1;	/* old st_uid */
++	unsigned short	st_reserved2;	/* old st_gid */
++	unsigned int	st_rdev;
++	off_t		st_size;
++	time_t		st_atime;
++	unsigned int	st_atime_nsec;
++	time_t		st_mtime;
++	unsigned int	st_mtime_nsec;
++	time_t		st_ctime;
++	unsigned int	st_ctime_nsec;
++	int		st_blksize;
++	int		st_blocks;
++	unsigned int	__unused1;	/* ACL stuff */
++	unsigned int	__unused2;	/* network */
++	ino_t		__unused3;	/* network */
++	unsigned int	__unused4;	/* cnodes */
++	unsigned short	__unused5;	/* netsite */
++	short		st_fstype;
++	unsigned int	st_realdev;
++	unsigned short	st_basemode;
++	unsigned short	st_spareshort;
++	uid_t		st_uid;
++	gid_t		st_gid;
++	unsigned int	st_spare4[3];
++};
++
++#define STAT_HAVE_NSEC 1
++
++/* This is the struct that 32-bit userspace applications are expecting.
++ * How 64-bit apps are going to be compiled, I have no idea.  But at least
++ * this way, we don't have a wrapper in the kernel.
++ */
++struct kernel_stat64 {
++	unsigned long long	st_dev;
++	unsigned int		__pad1;
++
++	unsigned int		__st_ino;	/* Not actually filled in */
++	unsigned int		st_mode;
++	unsigned int		st_nlink;
++	unsigned int		st_uid;
++	unsigned int		st_gid;
++	unsigned long long	st_rdev;
++	unsigned int		__pad2;
++	signed long long	st_size;
++	signed int		st_blksize;
++
++	signed long long	st_blocks;
++	signed int		st_atime;
++	unsigned int		st_atime_nsec;
++	signed int		st_mtime;
++	unsigned int		st_mtime_nsec;
++	signed int		st_ctime;
++	unsigned int		st_ctime_nsec;
++	unsigned long long	st_ino;
++};
++
++#endif
+diff --git a/libc/sysdeps/linux/hppa/bits/kernel_types.h b/libc/sysdeps/linux/hppa/bits/kernel_types.h
+new file mode 100644
+index 000000000..cf219dce1
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/kernel_types.h
+@@ -0,0 +1,61 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts 
++ * with the posix_types.h kernel header, and will ensure that 
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#ifndef __ARCH_PARISC_POSIX_TYPES_H
++#define __ARCH_PARISC_POSIX_TYPES_H
++
++typedef unsigned long		__kernel_dev_t;
++typedef unsigned long		__kernel_ino_t;
++typedef unsigned short		__kernel_mode_t;
++typedef unsigned short		__kernel_nlink_t;
++typedef long			__kernel_off_t;
++typedef int			__kernel_pid_t;
++typedef unsigned short		__kernel_ipc_pid_t;
++typedef unsigned int		__kernel_uid_t;
++typedef unsigned int		__kernel_gid_t;
++typedef int			__kernel_suseconds_t;
++typedef long			__kernel_clock_t;
++typedef int			__kernel_timer_t;
++typedef int			__kernel_clockid_t;
++typedef int			__kernel_daddr_t;
++/* Note these change from narrow to wide kernels */
++#ifdef __LP64__
++typedef unsigned long		__kernel_size_t;
++typedef long			__kernel_ssize_t;
++typedef long			__kernel_ptrdiff_t;
++typedef long			__kernel_time_t;
++#else
++typedef unsigned int		__kernel_size_t;
++typedef int			__kernel_ssize_t;
++typedef int			__kernel_ptrdiff_t;
++typedef long			__kernel_time_t;
++#endif
++typedef char *			__kernel_caddr_t;
++
++typedef unsigned short		__kernel_uid16_t;
++typedef unsigned short		__kernel_gid16_t;
++typedef unsigned int		__kernel_uid32_t;
++typedef unsigned int		__kernel_gid32_t;
++
++typedef long long		__kernel_loff_t;
++typedef long long		__kernel_off64_t;
++typedef unsigned long long	__kernel_ino64_t;
++
++typedef unsigned int		__kernel_old_dev_t;
++
++typedef struct {
++#ifdef __USE_ALL
++	int	val[2];
++#else
++	int	__val[2];
++#endif
++} __kernel_fsid_t;
++
++/* compatibility stuff */
++typedef __kernel_uid_t __kernel_old_uid_t;
++typedef __kernel_gid_t __kernel_old_gid_t;
++
++#endif /* __ARCH_PARISC_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/hppa/bits/setjmp.h b/libc/sysdeps/linux/hppa/bits/setjmp.h
+new file mode 100644
+index 000000000..53ca4be87
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/setjmp.h
+@@ -0,0 +1,46 @@
++/* Copyright (C) 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Define the machine-dependent type `jmp_buf'.  HPPA version.  */
++#ifndef _BITS_SETJMP_H_
++#define _BITS_SETJMP_H_
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++/* The previous bits/setjmp.h had __jmp_buf defined as a structure.
++   We use an array of 'double' instead, to make writing the assembler
++   easier, and to ensure proper alignment. Naturally, user code should
++   not depend on either representation. */
++
++#if defined __USE_MISC || defined _ASM
++#define JB_SP (76/4)
++#endif
++
++#ifndef	_ASM
++typedef double __jmp_buf[21];
++#endif
++
++/* Test if longjmp to JMPBUF would unwind the frame containing a local
++   variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(_jmpbuf, _address)				\
++     ((void *)(_address) > (void *)(((unsigned long *) _jmpbuf)[JB_SP]))
++
++#endif
++
+diff --git a/libc/sysdeps/linux/hppa/bits/sigaction.h b/libc/sysdeps/linux/hppa/bits/sigaction.h
+new file mode 100644
+index 000000000..33f2b237b
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/sigaction.h
+@@ -0,0 +1,75 @@
++/* Definitions for Linux/HPPA sigaction.
++   Copyright (C) 1996, 1997, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SIGNAL_H
++# error "Never include <bits/sigaction.h> directly; use <signal.h> instead."
++#endif
++
++/* Structure describing the action to be taken when a signal arrives.  */
++struct sigaction
++  {
++    /* Signal handler.  */
++#ifdef __USE_POSIX199309
++    union
++      {
++	/* Used if SA_SIGINFO is not set.  */
++	__sighandler_t sa_handler;
++	/* Used if SA_SIGINFO is set.  */
++	void (*sa_sigaction) (int, siginfo_t *, void *);
++      }
++    __sigaction_handler;
++# define sa_handler	__sigaction_handler.sa_handler
++# define sa_sigaction	__sigaction_handler.sa_sigaction
++#else
++    __sighandler_t sa_handler;
++#endif
++
++    /* Special flags.  */
++    unsigned long int sa_flags;
++
++    /* Additional set of signals to be blocked.  */
++    __sigset_t sa_mask;
++  };
++
++/* Bits in `sa_flags'.  */
++
++#define SA_NOCLDSTOP  0x00000008  /* Don't send SIGCHLD when children stop.  */
++#define SA_NOCLDWAIT  0x00000080  /* Don't create zombie on child death.  */
++#define SA_SIGINFO    0x00000010  /* Invoke signal-catching function with
++				     three arguments instead of one.  */
++#if defined __USE_UNIX98 || defined __USE_MISC
++# define SA_ONSTACK   0x00000001 /* Use signal stack by using `sa_restorer'. */
++# define SA_RESETHAND 0x00000004 /* Reset to SIG_DFL on entry to handler.  */
++# define SA_NODEFER   0x00000020 /* Don't automatically block the signal
++				    when its handler is being executed.  */
++# define SA_RESTART   0x00000040 /* Restart syscall on signal return.  */
++#endif
++#ifdef __USE_MISC
++# define SA_INTERRUPT 0x20000000 /* Historic no-op.  */
++
++/* Some aliases for the SA_ constants.  */
++# define SA_NOMASK    SA_NODEFER
++# define SA_ONESHOT   SA_RESETHAND
++# define SA_STACK     SA_ONSTACK
++#endif
++
++/* Values for the HOW argument to `sigprocmask'.  */
++#define SIG_BLOCK          0	/* for blocking signals */
++#define SIG_UNBLOCK        1	/* for unblocking signals */
++#define SIG_SETMASK        2	/* for setting the signal mask */
+diff --git a/libc/sysdeps/linux/hppa/bits/signum.h b/libc/sysdeps/linux/hppa/bits/signum.h
+new file mode 100644
+index 000000000..bf46006c8
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/signum.h
+@@ -0,0 +1,82 @@
++/* Signal number definitions.  Linux/HPPA version.
++   Copyright (C) 1995,1996,1997,1998,1999,2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifdef	_SIGNAL_H
++
++/* Fake signal functions.  */
++#define SIG_ERR	((__sighandler_t) -1)		/* Error return.  */
++#define SIG_DFL	((__sighandler_t) 0)		/* Default action.  */
++#define SIG_IGN	((__sighandler_t) 1)		/* Ignore signal.  */
++
++#ifdef __USE_UNIX98
++# define SIG_HOLD	((__sighandler_t) 2)	/* Add signal to hold mask.  */
++#endif
++
++
++/* Signals.  */
++#define	SIGHUP		1	/* Hangup (POSIX).  */
++#define	SIGINT		2	/* Interrupt (ANSI).  */
++#define	SIGQUIT		3	/* Quit (POSIX).  */
++#define	SIGILL		4	/* Illegal instruction (ANSI).  */
++#define	SIGTRAP		5	/* Trace trap (POSIX).  */
++#define	SIGABRT		6	/* Abort (ANSI).  */
++#define	SIGIOT		6	/* IOT trap (4.2 BSD).  */
++#define	SIGEMT		7
++#define	SIGFPE		8	/* Floating-point exception (ANSI).  */
++#define	SIGKILL		9	/* Kill, unblockable (POSIX).  */
++#define	SIGBUS		10	/* BUS error (4.2 BSD).  */
++#define	SIGSEGV		11	/* Segmentation violation (ANSI).  */
++#define SIGSYS		12	/* Bad system call.  */
++#define	SIGPIPE		13	/* Broken pipe (POSIX).  */
++#define	SIGALRM		14	/* Alarm clock (POSIX).  */
++#define	SIGTERM		15	/* Termination (ANSI).  */
++#define	SIGUSR1		16	/* User-defined signal 1 (POSIX).  */
++#define SIGUSR2		17	/* User-defined signal 2 (POSIX).  */
++#define	SIGCLD		SIGCHLD	/* Same as SIGCHLD (System V).  */
++#define	SIGCHLD		18	/* Child status has changed (POSIX).  */
++#define	SIGPWR		19	/* Power failure restart (System V).  */
++#define	SIGVTALRM	20	/* Virtual alarm clock (4.2 BSD).  */
++#define	SIGPROF		21	/* Profiling alarm clock (4.2 BSD).  */
++#define	SIGPOLL		SIGIO	/* Pollable event occurred (System V).  */
++#define	SIGIO		22	/* I/O now possible (4.2 BSD).  */
++#define	SIGWINCH	23	/* Window size change (4.3 BSD, Sun).  */
++#define	SIGSTOP		24	/* Stop, unblockable (POSIX).  */
++#define	SIGTSTP		25	/* Keyboard stop (POSIX).  */
++#define	SIGCONT		26	/* Continue (POSIX).  */
++#define	SIGTTIN		27	/* Background read from tty (POSIX).  */
++#define	SIGTTOU		28	/* Background write to tty (POSIX).  */
++#define	SIGURG		29	/* Urgent condition on socket (4.2 BSD).  */
++#define SIGLOST		30	/* Operating System Has Lost (HP/UX). */
++#define SIGUNUSED	31
++#define	SIGXCPU		33	/* CPU limit exceeded (4.2 BSD).  */
++#define	SIGXFSZ		34	/* File size limit exceeded (4.2 BSD).  */
++#define	SIGSTKFLT	36	/* Stack fault.  */
++
++#define	_NSIG		65	/* Biggest signal number + 1
++				   (including real-time signals).  */
++
++#define SIGRTMIN        (__libc_current_sigrtmin ())
++#define SIGRTMAX        (__libc_current_sigrtmax ())
++
++/* These are the hard limits of the kernel.  These values should not be
++   used directly at user level.  */
++#define __SIGRTMIN	37
++#define __SIGRTMAX	(_NSIG - 1)
++
++#endif	/* <signal.h> included.  */
+diff --git a/libc/sysdeps/linux/hppa/bits/syscalls.h b/libc/sysdeps/linux/hppa/bits/syscalls.h
+new file mode 100644
+index 000000000..013c24095
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/syscalls.h
+@@ -0,0 +1,166 @@
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++/* This includes the `__NR_<name>' syscall numbers taken from the Linux kernel
++ * header files.  It also defines the traditional `SYS_<name>' macros for older
++ * programs.  */
++#include <bits/sysnum.h>
++
++#ifndef __set_errno
++# define __set_errno(val) (*__errno_location ()) = (val)
++#endif
++
++#ifndef __ASSEMBLER__
++
++#define SYS_ify(syscall_name)   __NR_##syscall_name
++
++/* Assume all syscalls are done from PIC code just to be
++ * safe. The worst case scenario is that you lose a register
++ * and save/restore r19 across the syscall. */
++#define PIC
++
++#ifndef ASM_LINE_SEP
++# define ASM_LINE_SEP ;
++#endif
++
++/* Definition taken from glibc 2.3.3
++ * sysdeps/unix/sysv/linux/hppa/sysdep.h
++ */
++
++#ifdef PIC
++/* WARNING: CANNOT BE USED IN A NOP! */
++# define K_STW_ASM_PIC	"       copy %%r19, %%r4\n"
++# define K_LDW_ASM_PIC	"       copy %%r4, %%r19\n"
++# define K_USING_GR4	"%r4",
++#else
++# define K_STW_ASM_PIC	" \n"
++# define K_LDW_ASM_PIC	" \n"
++# define K_USING_GR4
++#endif
++
++/* GCC has to be warned that a syscall may clobber all the ABI
++   registers listed as "caller-saves", see page 8, Table 2
++   in section 2.2.6 of the PA-RISC RUN-TIME architecture
++   document. However! r28 is the result and will conflict with
++   the clobber list so it is left out. Also the input arguments
++   registers r20 -> r26 will conflict with the list so they
++   are treated specially. Although r19 is clobbered by the syscall
++   we cannot say this because it would violate ABI, thus we say
++   r4 is clobbered and use that register to save/restore r19
++   across the syscall. */
++
++#define K_CALL_CLOB_REGS "%r1", "%r2", K_USING_GR4 \
++	        	 "%r20", "%r29", "%r31"
++
++#undef K_INLINE_SYSCALL
++#define K_INLINE_SYSCALL(name, nr, args...)	({			\
++	long __sys_res;							\
++	{								\
++		register unsigned long __res asm("r28");		\
++		K_LOAD_ARGS_##nr(args)					\
++		/* FIXME: HACK stw/ldw r19 around syscall */		\
++		asm volatile(						\
++			K_STW_ASM_PIC					\
++			"	ble  0x100(%%sr2, %%r0)\n"		\
++			"	ldi %1, %%r20\n"			\
++			K_LDW_ASM_PIC					\
++			: "=r" (__res)					\
++			: "i" (SYS_ify(name)) K_ASM_ARGS_##nr   	\
++			: "memory", K_CALL_CLOB_REGS K_CLOB_ARGS_##nr	\
++		);							\
++		__sys_res = (long)__res;				\
++	}								\
++	if ( (unsigned long)__sys_res >= (unsigned long)-4095 ){	\
++		errno = -__sys_res;		        		\
++		__sys_res = -1;						\
++	}								\
++	__sys_res;							\
++})
++
++#define K_LOAD_ARGS_0()
++#define K_LOAD_ARGS_1(r26)					\
++	register unsigned long __r26 __asm__("r26") = (unsigned long)(r26);   \
++	K_LOAD_ARGS_0()
++#define K_LOAD_ARGS_2(r26,r25)					\
++	register unsigned long __r25 __asm__("r25") = (unsigned long)(r25);   \
++	K_LOAD_ARGS_1(r26)
++#define K_LOAD_ARGS_3(r26,r25,r24)				\
++	register unsigned long __r24 __asm__("r24") = (unsigned long)(r24);   \
++	K_LOAD_ARGS_2(r26,r25)
++#define K_LOAD_ARGS_4(r26,r25,r24,r23)				\
++	register unsigned long __r23 __asm__("r23") = (unsigned long)(r23);   \
++	K_LOAD_ARGS_3(r26,r25,r24)
++#define K_LOAD_ARGS_5(r26,r25,r24,r23,r22)			\
++	register unsigned long __r22 __asm__("r22") = (unsigned long)(r22);   \
++	K_LOAD_ARGS_4(r26,r25,r24,r23)
++#define K_LOAD_ARGS_6(r26,r25,r24,r23,r22,r21)			\
++	register unsigned long __r21 __asm__("r21") = (unsigned long)(r21);   \
++	K_LOAD_ARGS_5(r26,r25,r24,r23,r22)
++
++/* Even with zero args we use r20 for the syscall number */
++#define K_ASM_ARGS_0
++#define K_ASM_ARGS_1 K_ASM_ARGS_0, "r" (__r26)
++#define K_ASM_ARGS_2 K_ASM_ARGS_1, "r" (__r25)
++#define K_ASM_ARGS_3 K_ASM_ARGS_2, "r" (__r24)
++#define K_ASM_ARGS_4 K_ASM_ARGS_3, "r" (__r23)
++#define K_ASM_ARGS_5 K_ASM_ARGS_4, "r" (__r22)
++#define K_ASM_ARGS_6 K_ASM_ARGS_5, "r" (__r21)
++
++/* The registers not listed as inputs but clobbered */
++#define K_CLOB_ARGS_6
++#define K_CLOB_ARGS_5 K_CLOB_ARGS_6, "%r21"
++#define K_CLOB_ARGS_4 K_CLOB_ARGS_5, "%r22"
++#define K_CLOB_ARGS_3 K_CLOB_ARGS_4, "%r23"
++#define K_CLOB_ARGS_2 K_CLOB_ARGS_3, "%r24"
++#define K_CLOB_ARGS_1 K_CLOB_ARGS_2, "%r25"
++#define K_CLOB_ARGS_0 K_CLOB_ARGS_1, "%r26"
++
++#define _syscall0(type,name)						\
++type name(void)								\
++{									\
++    return (type) K_INLINE_SYSCALL(name, 0);	                                \
++}
++
++#define _syscall1(type,name,type1,arg1)					\
++type name(type1 arg1)							\
++{									\
++    return (type) K_INLINE_SYSCALL(name, 1, arg1);	                        \
++}
++
++#define _syscall2(type,name,type1,arg1,type2,arg2)			\
++type name(type1 arg1, type2 arg2)					\
++{									\
++    return (type) K_INLINE_SYSCALL(name, 2, arg1, arg2);	                \
++}
++
++#define _syscall3(type,name,type1,arg1,type2,arg2,type3,arg3)		\
++type name(type1 arg1, type2 arg2, type3 arg3)				\
++{									\
++    return (type) K_INLINE_SYSCALL(name, 3, arg1, arg2, arg3);	                \
++}
++
++#define _syscall4(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
++type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4)		\
++{									\
++    return (type) K_INLINE_SYSCALL(name, 4, arg1, arg2, arg3, arg4);	        \
++}
++
++/* select takes 5 arguments */
++#define _syscall5(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5) \
++type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5)	\
++{									\
++    return (type) K_INLINE_SYSCALL(name, 5, arg1, arg2, arg3, arg4, arg5);	\
++}
++
++/* mmap & mmap2 take 6 arguments */
++#define _syscall6(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
++type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5, type6 arg6) \
++{									        \
++    return (type) K_INLINE_SYSCALL(name, 6, arg1, arg2, arg3, arg4, arg5, arg6);	\
++}
++
++#endif /* __ASSEMBLER__ */
++#endif /* _ASM_PARISC_UNISTD_H_ */
+diff --git a/libc/sysdeps/linux/hppa/bits/wordsize.h b/libc/sysdeps/linux/hppa/bits/wordsize.h
+new file mode 100644
+index 000000000..951e83893
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bits/wordsize.h
+@@ -0,0 +1,7 @@
++/* Determine the wordsize from the preprocessor defines.  */
++
++#ifdef __LP64__
++# define __WORDSIZE	64
++#else
++# define __WORDSIZE	32
++#endif
+diff --git a/libc/sysdeps/linux/hppa/brk.c b/libc/sysdeps/linux/hppa/brk.c
+new file mode 100644
+index 000000000..68bc3ffc8
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/brk.c
+@@ -0,0 +1,40 @@
++/* brk system call for Linux/HPPA.
++   Copyright (C) 1995, 1996, 2000, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <errno.h>
++#include <sys/syscall.h>
++
++/* This must be initialized data because commons can't have aliases.  */
++void *__curbrk = 0;
++
++int
++brk (void *addr)
++{
++  void *newbrk;
++
++  __curbrk = newbrk = (void *) K_INLINE_SYSCALL (brk, 1, addr);
++
++  if (newbrk < addr)
++    {
++      __set_errno (ENOMEM);
++      return -1;
++    }
++
++  return 0;
++}
+diff --git a/libc/sysdeps/linux/hppa/bsd-_setjmp.S b/libc/sysdeps/linux/hppa/bsd-_setjmp.S
+new file mode 100644
+index 000000000..30e53f562
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bsd-_setjmp.S
+@@ -0,0 +1,36 @@
++/* BSD `_setjmp' entry point to `sigsetjmp (..., 0)'.  HPPA version.
++   Copyright (C) 2001, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This just does a tail-call to `__sigsetjmp (ARG, 1)'.
++   We cannot do it in C because it must be a tail-call, so frame-unwinding
++   in setjmp doesn't clobber the state restored by longjmp.  */
++
++	.text
++	.align 4
++	.globl _setjmp
++	.export _setjmp, code
++	.level 2.0
++	.proc
++	.callinfo
++	.import __sigsetjmp
++_setjmp:
++	b	__sigsetjmp
++	ldi	0, %r25
++
++	.procend
+diff --git a/libc/sysdeps/linux/hppa/bsd-setjmp.S b/libc/sysdeps/linux/hppa/bsd-setjmp.S
+new file mode 100644
+index 000000000..04ddba465
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/bsd-setjmp.S
+@@ -0,0 +1,36 @@
++/* BSD `setjmp' entry point to `sigsetjmp (..., 1)'.  HPPA version.
++   Copyright (C) 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This just does a tail-call to `__sigsetjmp (ARG, 1)'.
++   We cannot do it in C because it must be a tail-call, so frame-unwinding
++   in setjmp doesn't clobber the state restored by longjmp.  */
++
++	.text
++	.align 4
++	.globl setjmp
++	.export setjmp, code
++	.level 2.0
++	.proc
++	.callinfo
++	.import __sigsetjmp
++setjmp:
++	b	__sigsetjmp
++	ldi	1, %r25
++
++	.procend
+diff --git a/libc/sysdeps/linux/hppa/clone.S b/libc/sysdeps/linux/hppa/clone.S
+new file mode 100644
+index 000000000..56a40eadc
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/clone.S
+@@ -0,0 +1,102 @@
++/* Copyright (C) 1996, 1997, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by David Huggins-Daines <dhd@debian.org>, 2000.
++   Based on the Alpha version by Richard Henderson <rth@tamu.edu>, 1996.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* clone() is even more special than fork() as it mucks with stacks
++   and invokes a function in the right context after its all over.  */
++
++#include <asm/unistd.h>
++#define _ERRNO_H	1
++#include <bits/errno.h>
++#include <sys/syscall.h>
++
++/* int clone(int (*fn)(void *arg), void *child_stack, int flags, void *arg) */
++
++.text
++.global __clone
++.type   __clone,%function
++__clone:
++	/* FIXME: I have no idea how profiling works on hppa. */
++
++	/* Sanity check arguments.  */
++	comib,=  0,%arg0,.Lerror        /* no NULL function pointers */
++	ldi     -EINVAL,%ret0
++	comib,=  0,%arg1,.Lerror        /* no NULL stack pointers */
++	nop
++
++	/* Save the fn ptr and arg on the new stack.  */
++	stwm    %arg0,64(%arg1)
++	stw	%arg3,-60(%arg1)
++
++	/* Save the PIC register. */
++#ifdef __PIC__
++	stw	%r19,-32(%sr0, %sp)	/* parent */
++#endif
++
++	/* Do the system call */
++	copy	%arg2,%arg0
++	ble     0x100(%sr2,%r0)
++	ldi	__NR_clone,%r20
++
++	ldi	-4096,%r1
++	comclr,>>= %r1,%ret0,%r0	/* Note: unsigned compare. */
++	b,n	.Lerror
++
++	comib,=,n 0,%ret0,thread_start
++
++	/* Successful return from the parent
++	   No need to restore the PIC register, 
++	   since we return immediately. */
++
++	bv	%r0(%rp)
++	nop
++
++	/* Something bad happened -- no child created */
++.Lerror:
++
++	/* Restore the PIC register on error */
++#ifdef __PIC__
++	ldw	-32(%sr0, %sp), %r19	/* parent */
++#endif
++
++	b	__syscall_error
++	sub     %r0,%ret0,%arg0
++
++thread_start:
++
++	/* Load up the arguments.  */
++	ldw	-60(%sr0, %sp),%arg0
++	ldw     -64(%sr0, %sp),%r22
++
++	/* $$dyncall fixes childs PIC register */
++
++	/* Call the user's function */
++	bl	$$dyncall,%r31
++	copy	%r31,%rp
++
++	bl	_exit,%rp
++	copy	%ret0,%arg0
++
++	/* Die horribly.  */
++	iitlbp	%r0,(%r0)
++
++.size __clone,.-__clone
++
++.weak clone
++	clone = __clone
+diff --git a/libc/sysdeps/linux/hppa/crt1.S b/libc/sysdeps/linux/hppa/crt1.S
+new file mode 100644
+index 000000000..413f875a1
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/crt1.S
+@@ -0,0 +1,97 @@
++/* ELF startup code for HPPA.
++   Copyright (C) 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   In addition to the permissions in the GNU Lesser General Public
++   License, the Free Software Foundation gives you unlimited
++   permission to link the compiled version of this file with other
++   programs, and to distribute those programs without any restriction
++   coming from the use of this file. (The GNU Lesser General Public
++   License restrictions do apply in other respects; for example, they
++   cover modification of the file, and distribution when not linked
++   into another program.)
++
++   Note that people who make modified versions of this file are not
++   obligated to grant this special exception for their modified
++   versions; it is their choice whether to do so. The GNU Lesser
++   General Public License gives permission to release a modified
++   version without this exception; this exception also makes it
++   possible to release a modified version which carries forward this
++   exception.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++	.text
++
++	.align 4
++
++	.import main, code
++	.import $global$, data
++	.import __uClibc_main, code
++	.import _fini, code
++	.import _init, code
++
++	.globl _start
++	.export _start, ENTRY
++	.type _start,@function
++_start:
++
++	.proc
++	.callinfo
++
++	/* load main */
++	ldil	LP%main, %r26
++	ldo	RP%main(%r26), %r26
++
++	/* argc and argv should be in 25 and 24 */
++
++	/* Expand the stack to store the 5th through 7th args */
++	ldo	64(%sp), %sp
++
++	/* void (*rtld_fini) (void) (actually the 6th arg) */
++	stw	%r23, -56(%sp)
++
++	/* void (*init) (void) */
++	ldil	LP%_init, %r23
++	ldo	RP%_init(%r23), %r23
++
++	/* void (*fini) (void) */
++	ldil	LP%_fini, %r22
++	ldo	RP%_fini(%r22), %r22
++	stw	%r22, -52(%sp)
++
++	/* void *stack_end */
++	stw	%sp, -60(%sp)
++
++	/* load global */
++	ldil	L%$global$, %dp
++	ldo	R%$global$(%dp), %dp
++
++	bl	__uClibc_main,%r2
++	nop
++	/* die horribly if it returned (it shouldn't) */
++	iitlbp %r0,(%r0)
++	nop
++
++	.procend
++
++/* Define a symbol for the first piece of initialized data.  */
++	.data
++	.globl __data_start
++__data_start:
++	.long 0
++	.weak data_start
++	data_start = __data_start
+diff --git a/libc/sysdeps/linux/hppa/crti.S b/libc/sysdeps/linux/hppa/crti.S
+new file mode 100644
+index 000000000..9a37c7184
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/crti.S
+@@ -0,0 +1,24 @@
++/* glibc's sysdeps/hppa/elf/initfini.c used for reference [PROLOG] */
++
++	.section .init
++	.align 4
++	.globl _init
++	.type _init,@function
++_init:
++	stw	%rp,-20(%sp)
++	stwm	%r4,64(%sp)
++	stw	%r19,-32(%sp)
++	copy	%r19,%r4	/* delay slot */
++	copy	%r4,%r19
++
++
++
++	.section .fini
++	.align 4
++	.globl _fini
++	.type _fini,@function
++_fini:
++	stw	%rp,-20(%sp)
++	stwm	%r4,64(%sp)
++	stw	%r19,-32(%sp)
++	copy	%r19,%r4
+diff --git a/libc/sysdeps/linux/hppa/crtn.S b/libc/sysdeps/linux/hppa/crtn.S
+new file mode 100644
+index 000000000..6602eced3
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/crtn.S
+@@ -0,0 +1,34 @@
++/* glibc's sysdeps/hppa/elf/initfini.c used for reference [EPILOG] */
++
++        .text
++        .align 4
++/* Here is the tail end of _init.  We put __gmon_start before this so
++   that the assembler creates the .PARISC.unwind section for us, ie.
++   with the right attributes.  */
++	.section .init
++	ldw	-84(%sp),%rp
++	copy	%r4,%r19
++	bv	%r0(%rp)
++_end_init:
++	ldwm	-64(%sp),%r4
++
++/* Our very own unwind info, because the assembler can't handle
++   functions split into two or more pieces.  */
++	.section .PARISC.unwind
++	.extern _init
++	.word	_init, _end_init
++	.byte	0x08, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08
++
++
++
++	.section .fini
++	ldw	-84(%sp),%rp
++	copy	%r4,%r19
++	bv	%r0(%rp)
++_end_fini:
++	ldwm	-64(%sp),%r4
++
++	.section .PARISC.unwind
++	.extern _fini
++	.word	_fini, _end_fini
++	.byte	0x08, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08
+diff --git a/libc/sysdeps/linux/hppa/mmap.c b/libc/sysdeps/linux/hppa/mmap.c
+new file mode 100644
+index 000000000..117d93ddc
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/mmap.c
+@@ -0,0 +1,17 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * mmap() for uClibc/x86_64
++ *
++ * Copyright (C) 2005 by Erik Andersen <andersen@codepoet.org>
++ * Copyright (C) 2005 by Mike Frysinger <vapier@gentoo.org>
++ *
++ * GNU Library General Public License (LGPL) version 2 or later.
++ */
++
++#include <errno.h>
++#include <unistd.h>
++#include <sys/mman.h>
++#include <sys/syscall.h>
++
++_syscall6(void *, mmap, void *, start, size_t, length, int, prot,
++          int, flags, int, fd, off_t, offset);
+diff --git a/libc/sysdeps/linux/hppa/setjmp.S b/libc/sysdeps/linux/hppa/setjmp.S
+new file mode 100644
+index 000000000..c2ba4fb1b
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/setjmp.S
+@@ -0,0 +1,68 @@
++/* setjmp for HPPA.
++   Copyright (C) 1995, 1996, 1997, 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define _ASM
++#define _SETJMP_H
++#include <bits/setjmp.h>
++
++
++	.text
++	.align 4
++	.import __sigjmp_save, code
++	.globl __sigsetjmp
++	.export __sigsetjmp, code
++	.proc
++	.callinfo
++__sigsetjmp:
++	stw	%r3, 0(%r26)
++	stw	%r4, 8(%r26)
++	stw	%r5, 12(%r26)
++	stw	%r6, 16(%r26)
++	stw	%r7, 20(%r26)
++	stw	%r8, 24(%r26)
++	stw	%r9, 28(%r26)
++	stw	%r10, 32(%r26)
++	stw	%r11, 36(%r26)
++	stw	%r12, 40(%r26)
++	stw	%r13, 44(%r26)
++	stw	%r14, 48(%r26)
++	stw	%r15, 52(%r26)
++	stw	%r16, 56(%r26)
++	stw	%r17, 60(%r26)
++	stw	%r18, 64(%r26)
++	stw	%r19, 68(%r26)
++	stw	%r27, 72(%r26)
++	stw	%r30, 76(%r26)
++
++	stw	%rp, 80(%r26)
++
++	ldo	88(%r26),%r1
++	fstds,ma %fr12, 8(%r1) /* 88 */
++	fstds,ma %fr13, 8(%r1) /* 96 */
++	fstds,ma %fr14, 8(%r1) /* 104 */
++	fstds,ma %fr15, 8(%r1) /* 112 */
++	fstds,ma %fr16, 8(%r1) /* 120 */
++	fstds,ma %fr17, 8(%r1) /* 128 */
++	fstds,ma %fr18, 8(%r1) /* 136 */
++	fstds,ma %fr19, 8(%r1) /* 144 */
++	fstds,ma %fr20, 8(%r1) /* 152 */
++	fstds	 %fr21, 0(%r1) /* 160 */
++	b __sigjmp_save
++	nop
++	.procend
+diff --git a/libc/sysdeps/linux/hppa/syscall.S b/libc/sysdeps/linux/hppa/syscall.S
+new file mode 100644
+index 000000000..b333487c9
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/syscall.S
+@@ -0,0 +1,19 @@
++/* Copyright (C) 1995, 1996, 1998, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* HPPA implements syscall() in 'C'; see sysdep.c.  */
+diff --git a/libc/sysdeps/linux/hppa/syscall.c b/libc/sysdeps/linux/hppa/syscall.c
+new file mode 100644
+index 000000000..87dff0f34
+--- /dev/null
++++ b/libc/sysdeps/linux/hppa/syscall.c
+@@ -0,0 +1,64 @@
++/* Copyright (C) 1997, 1998, 2001, 2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <stdarg.h>
++#include <errno.h>
++#include <sys/syscall.h>
++
++/* HPPA implements syscall() in 'C'; the assembler version would
++   typically be in syscall.S. Also note that we have INLINE_SYSCALL,
++   INTERNAL_SYSCALL, and all the generated pure assembly syscall wrappers.
++   How often the function is used is unknown. */
++
++long int 
++syscall (long int __sysno, ...) 
++{
++  /* FIXME: Keep this matching INLINE_SYSCALL for hppa */
++  va_list args;
++  long int arg0, arg1, arg2, arg3, arg4, arg5;
++  long int __sys_res;
++
++  /* Load varargs */
++  va_start (args, __sysno);
++  arg0 = va_arg (args, long int);
++  arg1 = va_arg (args, long int);
++  arg2 = va_arg (args, long int);
++  arg3 = va_arg (args, long int);
++  arg4 = va_arg (args, long int);
++  arg5 = va_arg (args, long int);
++  va_end (args);
++  
++  {
++    register unsigned long int __res asm("r28");
++    K_LOAD_ARGS_6 (arg0, arg1, arg2, arg3, arg4, arg5)
++    asm volatile (K_STW_ASM_PIC
++		  "	ble  0x100(%%sr2, %%r0)	\n"
++		  "	copy %1, %%r20		\n"
++		  K_LDW_ASM_PIC
++		  : "=r" (__res)
++		  : "r" (__sysno) K_ASM_ARGS_6
++		  : "memory", K_CALL_CLOB_REGS K_CLOB_ARGS_6);
++    __sys_res = __res;
++  }
++  if ((unsigned long int) __sys_res >= (unsigned long int) -4095)
++    {
++      __set_errno (-__sys_res);
++      __sys_res = -1;
++    }
++  return __sys_res;
++}

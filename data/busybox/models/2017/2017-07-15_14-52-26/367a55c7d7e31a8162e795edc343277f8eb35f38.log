@@ -1,0 +1,122 @@
+"2017-07-15 14:52:26 +0200"
+diff --git a/Config.in b/Config.in
+index cfb3aa0ee..82baed50a 100644
+--- a/Config.in
++++ b/Config.in
+@@ -386,29 +386,26 @@ config BUILD_LIBBUSYBOX
+ 	  Build a shared library libbusybox.so.N.N.N which contains all
+ 	  busybox code.
+ 
+-	  This feature allows every applet to be built as a tiny
+-	  separate executable. Enabling it for "one big busybox binary"
+-	  approach serves no purpose and increases code size.
+-	  You should almost certainly say "no" to this.
+-
+-### config FEATURE_FULL_LIBBUSYBOX
+-###	bool "Feature-complete libbusybox"
+-###	default n if !FEATURE_SHARED_BUSYBOX
+-###	depends on BUILD_LIBBUSYBOX
+-###	help
+-###	  Build a libbusybox with the complete feature-set, disregarding
+-###	  the actually selected config.
+-###
+-###	  Normally, libbusybox will only contain the features which are
+-###	  used by busybox itself. If you plan to write a separate
+-###	  standalone application which uses libbusybox say 'Y'.
+-###
+-###	  Note: libbusybox is GPL, not LGPL, and exports no stable API that
+-###	  might act as a copyright barrier. We can and will modify the
+-###	  exported function set between releases (even minor version number
+-###	  changes), and happily break out-of-tree features.
+-###
+-###	  Say 'N' if in doubt.
++	  This feature allows every applet to be built as a really tiny
++	  separate executable linked against the library:
++
++	  $ size 0_lib/l*
++	    text  data	 bss     dec    hex filename
++	     939   212	  28    1179    49b 0_lib/last
++	     939   212	  28    1179    49b 0_lib/less
++	  919138  8328  1556  929022  e2cfe 0_lib/libbusybox.so.1.N.M
++
++	  This is useful on NOMMU systems which are not capable
++	  of sharing executables, but are capable of sharing code
++	  in dynamic libraries.
++
++config FEATURE_LIBBUSYBOX_STATIC
++	bool "Pull in all external references into libbusybox"
++	default n
++	depends on BUILD_LIBBUSYBOX
++	help
++	  Make libbusybox library independent, not using or requiring
++	  any other shared libraries.
+ 
+ config FEATURE_INDIVIDUAL
+ 	bool "Produce a binary for each applet, linked against libbusybox"
+diff --git a/scripts/trylink b/scripts/trylink
+index 9f288c141..ba2d265bc 100755
+--- a/scripts/trylink
++++ b/scripts/trylink
+@@ -91,7 +91,9 @@ fi
+ 
+ START_GROUP="-Wl,--start-group"
+ END_GROUP="-Wl,--end-group"
+-INFO_OPTS="-Wl,--warn-common -Wl,-Map,$EXE.map -Wl,--verbose"
++INFO_OPTS() {
++	echo "-Wl,--warn-common -Wl,-Map,$EXE.map -Wl,--verbose"
++}
+ 
+ # gold may not support --sort-common (yet)
+ SORT_COMMON="-Wl,--sort-common"
+@@ -194,7 +196,7 @@ if ! test -f busybox_ldscript; then
+ 	    $GC_SECTIONS \
+ 	    $START_GROUP $O_FILES $A_FILES $END_GROUP \
+ 	    $l_list \
+-	    $INFO_OPTS \
++	    `INFO_OPTS` \
+     || {
+ 	cat $EXE.out
+ 	exit 1
+@@ -225,7 +227,7 @@ else
+ 	    -Wl,-T,busybox_ldscript \
+ 	    $START_GROUP $O_FILES $A_FILES $END_GROUP \
+ 	    $l_list \
+-	    $INFO_OPTS \
++	    `INFO_OPTS` \
+     || {
+ 	cat $EXE.out
+ 	exit 1
+@@ -244,10 +246,14 @@ if test "$CONFIG_BUILD_LIBBUSYBOX" = y; then
+     }
+     ln -s "libbusybox.so.$BB_VER" "$sharedlib_dir"/libbusybox.so 2>/dev/null
+ 
++    # Yes, "ld -shared -static" is a thing. It's a shared library which is itself static.
++    LBB_STATIC=""
++    test "$CONFIG_FEATURE_LIBBUSYBOX_STATIC" = y && LBB_STATIC="-Wl,-static"
++
+     EXE="$sharedlib_dir/libbusybox.so.${BB_VER}_unstripped"
+     try $CC $CFLAGS $LDFLAGS \
+ 	    -o $EXE \
+-	    -shared -fPIC \
++	    -shared -fPIC $LBB_STATIC \
+ 	    -Wl,--enable-new-dtags \
+ 	    -Wl,-z,combreloc \
+ 	    -Wl,-soname="libbusybox.so.$BB_VER" \
+@@ -256,7 +262,7 @@ if test "$CONFIG_BUILD_LIBBUSYBOX" = y; then
+ 	    $SORT_SECTION \
+ 	    $START_GROUP $A_FILES $END_GROUP \
+ 	    $l_list \
+-	    $INFO_OPTS \
++	    `INFO_OPTS` \
+     || {
+ 	echo "Linking $EXE failed"
+ 	cat $EXE.out
+@@ -277,7 +283,7 @@ if test "$CONFIG_FEATURE_SHARED_BUSYBOX" = y; then
+ 	    $START_GROUP $O_FILES $END_GROUP \
+ 	    -L"$sharedlib_dir" -lbusybox \
+ 	    $l_list \
+-	    $INFO_OPTS \
++	    `INFO_OPTS` \
+     || {
+ 	echo "Linking $EXE failed"
+ 	cat $EXE.out

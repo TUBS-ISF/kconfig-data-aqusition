@@ -1,0 +1,95 @@
+"2006-05-09 22:08:56 +0000"
+diff --git a/Config.in b/Config.in
+index 6dd4c58e7..bdc4b0a4f 100644
+--- a/Config.in
++++ b/Config.in
+@@ -288,17 +288,27 @@ endmenu
+ menu 'Debugging Options'
+ 
+ config CONFIG_DEBUG
+-	bool "Build BusyBox with Debugging symbols"
++	bool "Build BusyBox with extra Debugging symbols"
+ 	default n
+ 	help
+-	  Say Y here if you wish to compile BusyBox with debugging symbols.
+-	  This will allow you to use a debugger to examine BusyBox internals
+-	  while applets are running.  This increases the size of the binary
+-	  considerably and should only be used when doing development.
+-	  If you are doing development and want to debug BusyBox, answer Y.
++	  Say Y here if you wish to examine BusyBox internals while applets are
++	  running.  This increases the size of the binary considerably, and
++	  should only be used when doing development.  If you are doing
++	  development and want to debug BusyBox, answer Y.
+ 
+ 	  Most people should answer N.
+ 
++config CONFIG_DEBUG_PESSIMIZE
++	bool "Disable compiler optimizations."
++	default n
++	depends on CONFIG_DEBUG
++	help
++	  The compiler's optimization of source code can eliminate and reorder
++	  code, resulting in an executable that's hard to understand when
++	  stepping through it with a debugger.  This switches it off, resulting
++	  in a much bigger executable that more closely matches the source
++	  code.
++
+ choice
+ 	prompt "Additional debugging library"
+ 	default CONFIG_NO_DEBUG_LIB
+diff --git a/Rules.mak b/Rules.mak
+index 605cce3c2..53dd6a857 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -75,13 +75,14 @@ CFLAGS_EXTRA=$(subst ",, $(strip $(EXTRA_CFLAGS_OPTIONS)))
+ 
+ # This must bind late because srcdir is reset for every source subdirectory.
+ INCS:=-I$(top_builddir)/include -I$(top_srcdir)/include
+-CFLAGS=$(INCS) -I$(srcdir)
++CFLAGS=$(INCS) -I$(srcdir) -D_GNU_SOURCE
+ CFLAGS+=$(CHECKED_CFLAGS)
+ ARFLAGS=cru
+ 
+ # Warnings
+ 
+-CFLAGS+=-Wall -Wstrict-prototypes -Wshadow
++CFLAGS += -Wall -Wstrict-prototypes -Wshadow
++LDFLAGS += $(call check_ld,--warn-common,)
+ 
+ # gcc centric. Perhaps fiddle with findstring gcc,$(CC) for the rest
+ # get the CC MAJOR/MINOR version
+@@ -183,7 +184,7 @@ ifeq ($(strip $(shell [ $(CC_MAJOR) -ge 4 -a $(CC_MINOR) -ge 1 ] ; echo $$?)),0)
+ 	OPTIMIZATION+=$(call check_gcc,-fno-branch-count-reg,)
+ endif # gcc-4.1 and beyond
+ endif
+-OPTIMIZATIONS:=$(OPTIMIZATION) $(call check_gcc,-fomit-frame-pointer,)
++OPTIMIZATION+=$(call check_gcc,-fomit-frame-pointer,)
+ 
+ #
+ #--------------------------------------------------------
+@@ -207,14 +208,21 @@ else
+ 	LIBRARIES:=-lefence
+     endif
+ endif
++
++# Debugging info
++
+ ifeq ($(strip $(CONFIG_DEBUG)),y)
+-    CFLAGS  +=-g -D_GNU_SOURCE
+-    LDFLAGS += $(call check_ld,--warn-common,)
++    CFLAGS +=-g
+ else
+-    CFLAGS+=$(OPTIMIZATIONS) -D_GNU_SOURCE -DNDEBUG
+-    LDFLAGS += $(call check_ld,--warn-common,)
++    CFLAGS +=-DNDEBUG
+     LDFLAGS += $(call check_ld,--sort-common,)
+ endif
++
++ifneq ($(strip $(CONFIG_DEBUG_PESSIMIZE)),y)
++else
++    CFLAGS += $(OPTIMIZATION)
++endif
++
+ # warn a bit more verbosely for non-release versions
+ ifneq ($(EXTRAVERSION),)
+     CHECKED_CFLAGS+=$(call check_gcc,-Wstrict-prototypes,)

@@ -1,0 +1,202 @@
+"2010-10-12 04:18:05 +0200"
+diff --git a/Config.in b/Config.in
+index 828b30471..d9c823199 100644
+--- a/Config.in
++++ b/Config.in
+@@ -123,6 +123,14 @@ config FEATURE_INSTALLER
+ 	  busybox at runtime to create hard links or symlinks for all the
+ 	  applets that are compiled into busybox.
+ 
++config INSTALL_NO_USR
++	bool "Don't use /usr"
++	default n
++	depends on FEATURE_INSTALLER
++	help
++	  Disable use of /usr. busybox --install will install applets
++	  only to /bin and /sbin, never to /usr/bin or /usr/sbin.
++
+ config LOCALE_SUPPORT
+ 	bool "Enable locale support (system needs locale for this to work)"
+ 	default n
+@@ -275,15 +283,6 @@ config FEATURE_CLEAN_UP
+ 	  Don't enable this unless you have a really good reason to clean
+ 	  things up manually.
+ 
+-config FEATURE_UTMP
+-	bool "Support utmp file"
+-	default y
+-	help
+-	  The file /var/run/utmp is used to track who is currently logged in.
+-	  With this option on, certain applets (getty, login, telnetd etc)
+-	  will create and delete entries there.
+-	  "who" applet requires this option.
+-
+ config FEATURE_WTMP
+ 	bool "Support wtmp file"
+ 	default y
+@@ -295,6 +294,15 @@ config FEATURE_WTMP
+ 	  will append new entries there.
+ 	  "last" applet requires this option.
+ 
++config FEATURE_UTMP
++	bool "Support utmp file"
++	default y
++	help
++	  The file /var/run/utmp is used to track who is currently logged in.
++	  With this option on, certain applets (getty, login, telnetd etc)
++	  will create and delete entries there.
++	  "who" applet requires this option.
++
+ config FEATURE_PIDFILE
+ 	bool "Support writing pidfiles"
+ 	default y
+@@ -307,14 +315,19 @@ config FEATURE_SUID
+ 	default y
+ 	help
+ 	  With this option you can install the busybox binary belonging
+-	  to root with the suid bit set, and it will automatically drop
+-	  priviledges for applets that don't need root access.
++	  to root with the suid bit set, enabling some applets to perform
++	  root-level operations even when run by ordinary users
++	  (for example, mounting of user mounts in fstab needs this).
++
++	  Busybox will automatically drop priviledges for applets
++	  that don't need root access.
+ 
+ 	  If you are really paranoid and don't want to do this, build two
+ 	  busybox binaries with different applets in them (and the appropriate
+ 	  symlinks pointing to each binary), and only set the suid bit on the
+-	  one that needs it. The applets currently marked to need the suid bit
+-	  are:
++	  one that needs it.
++
++	  The applets currently marked to need the suid bit are:
+ 
+ 	  crontab, dnsd, findfs, ipcrm, ipcs, login, passwd, ping, su,
+ 	  traceroute, vlock.
+@@ -651,20 +664,13 @@ endchoice
+ 
+ endmenu
+ 
+-menu 'Installation Options'
+-
+-config INSTALL_NO_USR
+-	bool "Don't use /usr"
+-	default n
+-	help
+-	  Disable use of /usr. Don't activate this option if you don't know
+-	  that you really want this behaviour.
++menu 'Installation Options ("make install" behavior)'
+ 
+ choice
+-	prompt "Applets links"
++	prompt "What kind of applet links to install"
+ 	default INSTALL_APPLET_SYMLINKS
+ 	help
+-	  Choose how you install applets links.
++	  Choose what kind of links to applets are created by "make install".
+ 
+ config INSTALL_APPLET_SYMLINKS
+ 	bool "as soft-links"
+@@ -688,8 +694,9 @@ config INSTALL_APPLET_DONT
+ 	bool "not installed"
+ 	depends on FEATURE_INSTALLER || FEATURE_SH_STANDALONE || FEATURE_PREFER_APPLETS
+ 	help
+-	  Do not install applet links. Useful when using the -install feature
+-	  or a standalone shell for rescue purposes.
++	  Do not install applet links. Useful when you plan to use
++	  busybox --install for installing links, or plan to use
++	  a standalone shell and thus don't need applet links.
+ 
+ endchoice
+ 
+@@ -713,8 +720,8 @@ config INSTALL_SH_APPLET_HARDLINK
+ config INSTALL_SH_APPLET_SCRIPT_WRAPPER
+ 	bool "as script wrapper"
+ 	help
+-	  Install /bin/sh applet as script wrapper that call the busybox
+-	  binary.
++	  Install /bin/sh applet as script wrapper that calls
++	  the busybox binary.
+ 
+ endchoice
+ 
+diff --git a/include/applets.src.h b/include/applets.src.h
+index d2b1d198f..6a14a6588 100644
+--- a/include/applets.src.h
++++ b/include/applets.src.h
+@@ -56,11 +56,6 @@ s     - suid type:
+ # define APPLET_NOFORK(name,main,l,s,name2)  { #name, #main, l, s, 1, 1 },
+ #endif
+ 
+-#if ENABLE_INSTALL_NO_USR
+-# define _BB_DIR_USR_BIN _BB_DIR_BIN
+-# define _BB_DIR_USR_SBIN _BB_DIR_SBIN
+-#endif
+-
+ 
+ INSERT
+ IF_TEST(APPLET_NOFORK([,  test, _BB_DIR_USR_BIN, _BB_SUID_DROP, test))
+diff --git a/include/busybox.h b/include/busybox.h
+index 76415dd72..757317fc7 100644
+--- a/include/busybox.h
++++ b/include/busybox.h
+@@ -16,8 +16,13 @@ typedef enum bb_install_loc_t {
+ 	_BB_DIR_ROOT = 0,
+ 	_BB_DIR_BIN,
+ 	_BB_DIR_SBIN,
++#if ENABLE_INSTALL_NO_USR
++	_BB_DIR_USR_BIN  = _BB_DIR_BIN,
++	_BB_DIR_USR_SBIN = _BB_DIR_SBIN,
++#else
+ 	_BB_DIR_USR_BIN,
+-	_BB_DIR_USR_SBIN
++	_BB_DIR_USR_SBIN,
++#endif
+ } bb_install_loc_t;
+ 
+ typedef enum bb_suid_t {
+diff --git a/libbb/appletlib.c b/libbb/appletlib.c
+index 7326f4fa5..b32ff8808 100644
+--- a/libbb/appletlib.c
++++ b/libbb/appletlib.c
+@@ -592,9 +592,11 @@ static const char usr_sbin[] ALIGN1 = "/usr/sbin/";
+ static const char *const install_dir[] = {
+ 	&usr_bin [8], /* "/" */
+ 	&usr_bin [4], /* "/bin/" */
+-	&usr_sbin[4], /* "/sbin/" */
+-	usr_bin,
+-	usr_sbin
++	&usr_sbin[4]  /* "/sbin/" */
++# if !ENABLE_INSTALL_NO_USR
++	,usr_bin
++	,usr_sbin
++# endif
+ };
+ 
+ 
+diff --git a/miscutils/Config.src b/miscutils/Config.src
+index 151f61bcc..4912daf88 100644
+--- a/miscutils/Config.src
++++ b/miscutils/Config.src
+@@ -136,7 +136,6 @@ config CHRT
+ config CROND
+ 	bool "crond"
+ 	default y
+-	select FEATURE_SUID
+ 	select FEATURE_SYSLOG
+ 	help
+ 	  Crond is a background daemon that parses individual crontab
+diff --git a/networking/Config.src b/networking/Config.src
+index 9fc122bf3..6dd7df754 100644
+--- a/networking/Config.src
++++ b/networking/Config.src
+@@ -804,7 +804,7 @@ config TELNETD
+ 
+ 		  mount -t devpts devpts /dev/pts
+ 
+-	  You need to be sure that Busybox has LOGIN and
++	  You need to be sure that busybox has LOGIN and
+ 	  FEATURE_SUID enabled. And finally, you should make
+ 	  certain that Busybox has been installed setuid root:
+ 

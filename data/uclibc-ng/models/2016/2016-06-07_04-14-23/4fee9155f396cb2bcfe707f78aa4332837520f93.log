@@ -1,0 +1,135 @@
+"2016-06-07 04:14:23 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index f3494db99..a21bdac2f 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -2151,22 +2151,6 @@ config UCLIBC_HAS_SSP
+ 
+ 	  Most people will answer N.
+ 
+-config UCLIBC_HAS_SSP_COMPAT
+-	bool "Support for gcc-3.x propolice smashing stack protector"
+-	depends on UCLIBC_HAS_SSP
+-	help
+-	  Add gcc-3.x propolice smashing stack protector to the library.
+-
+-	  This requires a patched version of GCC, supporting the
+-	  -fstack-protector[-all] options, with the __guard and
+-	  __stack_smash_handler functions removed from libgcc.
+-	  These functions are added to ldso/libc instead.
+-
+-	  More information at:
+-	  <http://www.research.ibm.com/trl/projects/security/ssp/>
+-
+-	  Most people will answer N.
+-
+ config SSP_QUICK_CANARY
+ 	bool "Use simple guard values without accessing /dev/urandom"
+ 	depends on UCLIBC_HAS_SSP
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index 9f4e84130..7bb6a349b 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -120,9 +120,6 @@ static uintptr_t stack_chk_guard;
+  * in local thread area.  */
+ uintptr_t __stack_chk_guard attribute_relro;
+ # endif
+-# ifdef __UCLIBC_HAS_SSP_COMPAT__
+-uintptr_t __guard attribute_relro;
+-# endif
+ #endif
+ 
+ #ifdef __LDSO_SEARCH_INTERP_PATH__
+@@ -1217,9 +1214,6 @@ of this helper program; chances are you did not intend to run this program.\n\
+ # else
+ 	__stack_chk_guard = stack_chk_guard;
+ # endif
+-# ifdef __UCLIBC_HAS_SSP_COMPAT__
+-	__guard = stack_chk_guard;
+-# endif
+ #endif
+ 
+ #ifdef __LDSO_PRELINK_SUPPORT__
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 632a2528e..9bb81fc83 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -61,10 +61,6 @@ static uintptr_t stack_chk_guard;
+ /* for gcc-4.1 non-TLS */
+ uintptr_t __stack_chk_guard attribute_relro;
+ #  endif
+-/* for gcc-3.x + Etoh ssp */
+-#  ifdef __UCLIBC_HAS_SSP_COMPAT__
+-uintptr_t __guard attribute_relro;
+-#  endif
+ # endif
+ 
+ /*
+@@ -274,9 +270,6 @@ void __uClibc_init(void)
+ #  else
+     __stack_chk_guard = stack_chk_guard;
+ #  endif
+-#  ifdef __UCLIBC_HAS_SSP_COMPAT__
+-    __guard = stack_chk_guard;
+-#  endif
+ # endif
+ #endif
+ 
+diff --git a/libc/sysdeps/linux/common/ssp.c b/libc/sysdeps/linux/common/ssp.c
+index 8dcc3dc59..87e10c2da 100644
+--- a/libc/sysdeps/linux/common/ssp.c
++++ b/libc/sysdeps/linux/common/ssp.c
+@@ -51,18 +51,11 @@ static void __cold do_msg(const char *msg1, const char *msg2, const char *msg3)
+ }
+ 
+ static void __cold attribute_noreturn
+-#ifdef __UCLIBC_HAS_SSP_COMPAT__
+-ssp_handler(char func[])
+-#else
+ ssp_handler(void)
+-#endif
+ {
+ 	pid_t pid;
+ 	static const char msg_ssd[] = "*** stack smashing detected ***: ";
+ 	static const char msg_terminated[] = " terminated";
+-#ifdef __UCLIBC_HAS_SSP_COMPAT__
+-	static const char msg_ssa[] = ": stack smashing attack in function ";
+-#endif
+ 
+ #ifdef __DODEBUG__
+ 	struct sigaction sa;
+@@ -73,12 +66,7 @@ ssp_handler(void)
+ 	sigprocmask(SIG_BLOCK, &mask, NULL);	/* except SSP_SIGTYPE */
+ #endif
+ 
+-#ifdef __UCLIBC_HAS_SSP_COMPAT__
+-	if (func != NULL)
+-		do_msg(__uclibc_progname, msg_ssa, func);
+-	else
+-#endif
+-		do_msg(msg_ssd, __uclibc_progname, msg_terminated);
++	do_msg(msg_ssd, __uclibc_progname, msg_terminated);
+ 
+ 	pid = getpid();
+ #ifdef __DODEBUG__
+@@ -96,20 +84,7 @@ ssp_handler(void)
+ 		_exit(127);
+ }
+ 
+-#ifdef __UCLIBC_HAS_SSP_COMPAT__
+-void __stack_smash_handler(char func[], int damaged) attribute_noreturn __cold;
+-void __stack_smash_handler(char func[], int damaged attribute_unused)
+-{
+-	ssp_handler(func);
+-}
+-
+-void __stack_chk_fail(void)
+-{
+-	ssp_handler(NULL);
+-}
+-#else
+ strong_alias(ssp_handler,__stack_chk_fail)
+-#endif
+ 
+ #ifdef __UCLIBC_HAS_FORTIFY__
+ /* should be redone when activated to use common code above.

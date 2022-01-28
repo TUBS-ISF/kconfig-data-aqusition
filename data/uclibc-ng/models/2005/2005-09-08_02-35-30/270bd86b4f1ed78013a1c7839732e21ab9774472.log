@@ -1,0 +1,145 @@
+"2005-09-08 02:35:30 +0000"
+diff --git a/Rules.mak b/Rules.mak
+index 68d411ebc..c79b36c97 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -111,7 +111,8 @@ endif
+ TARGET_ARCH:=$(shell grep -s ^TARGET_ARCH $(TOPDIR)/.config | sed -e 's/^TARGET_ARCH=//' -e 's/"//g')
+ RUNTIME_PREFIX:=$(strip $(subst //,/, $(subst ,/, $(subst ",, $(strip $(RUNTIME_PREFIX))))))
+ DEVEL_PREFIX:=$(strip $(subst //,/, $(subst ,/, $(subst ",, $(strip $(DEVEL_PREFIX))))))
+-export RUNTIME_PREFIX DEVEL_PREFIX
++KERNEL_SOURCE:=$(strip $(subst //,/, $(subst ,/, $(subst ",, $(strip $(KERNEL_SOURCE))))))
++export RUNTIME_PREFIX DEVEL_PREFIX KERNEL_SOURCE
+ 
+ ARFLAGS:=cr
+ 
+@@ -326,10 +327,6 @@ ifeq ($(DOPIC),y)
+     CFLAGS += $(PICFLAG)
+ endif
+ 
+-ifeq ($(DL_FINI_CRT_COMPAT),y)
+-CFLAGS += -D_DL_FINI_CRT_COMPAT
+-endif
+-
+ # Keep the check_as from being needlessly executed
+ ASFLAGS = $(CFLAGS)
+ ifndef ASFLAGS_NOEXEC
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 847fc4661..c6a364942 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -277,13 +277,6 @@ config LDSO_RUNPATH
+ 	  Usage of RUNPATH tags is not too common, so disabling this feature 
+ 	  should be safe for most people.
+ 
+-config DL_FINI_CRT_COMPAT
+-	bool "uClibc 0.9.27 compatibility"
+-	default n
+-	help
+-	  Allows to update a 0.9.27 based system to new crt/fini handling.
+-	  After rebuilding all apps, this option can be disabled.
+-
+ config UCLIBC_CTOR_DTOR
+ 	bool "Support global constructors and destructors"
+ 	default y
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index cb105af2d..f06c1d32a 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -28,9 +28,6 @@ ASFLAGS+=$(call check_as,--noexecstack)
+ endif
+ 
+ XXFLAGS=$(XWARNINGS) $(SSP_DISABLE_FLAGS)
+-ifeq ($(DL_FINI_CRT_COMPAT),y)
+-XXFLAGS+=-D_DL_FINI_CRT_COMPAT
+-endif
+ 
+ ifeq ($(DODEBUG),y)
+ # Not really much point in including debugging info, since gdb
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index f6ac50905..196828ec1 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -763,18 +763,6 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, unsigned long load_addr,
+ 			(*dl_elf_func) ();
+ 		}
+ 	}
+-#ifdef _DL_FINI_CRT_COMPAT
+-	/* arches that have moved their ldso FINI handling should skip this part */
+-	{
+-		void (*__set__dl_fini) (void *) = (void (*)(void *)) (intptr_t) _dl_find_hash("_set__dl_fini",
+-				_dl_symbol_tables, NULL, ELF_RTYPE_CLASS_PLT);
+-
+-		if (__set__dl_fini)
+-			(*__set__dl_fini)(_dl_fini);
+-		else
+-			_dl_if_debug_dprint("_set__dl_fini not found\n");
+-	}
+-#endif
+ 
+ 	/* Find the real malloc function and make ldso functions use that from now on */
+ 	 _dl_malloc_function = (void* (*)(size_t)) (intptr_t) _dl_find_hash("malloc",
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 53bb02820..fe6a37349 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -161,16 +161,6 @@ void attribute_hidden (*__app_fini)(void) = NULL;
+ 
+ void attribute_hidden (*__rtld_fini)(void) = NULL;
+ 
+-#ifdef _DL_FINI_CRT_COMPAT
+-void attribute_hidden (*__dl_fini)(void) = NULL;
+-
+-void _set__dl_fini(void *fini_func)
+-{
+-	if (fini_func != NULL)
+-		__dl_fini = fini_func;
+-}
+-#endif
+-
+ /* __uClibc_start_main is the new main stub for uClibc. This function is
+  * called from crt0 (version 0.9.16 or newer), after ALL shared libraries
+  * are initialized, just before we call the application's main function.
+@@ -265,13 +255,3 @@ __uClibc_main(int (*main)(int, char **, char **), int argc,
+      */
+     exit(main(argc, argv, __environ));
+ }
+-
+-#ifdef _DL_FINI_CRT_COMPAT
+-extern int weak_function main(int argc, char **argv, char **envp);
+-void __attribute__ ((__noreturn__))
+-__uClibc_start_main(int argc, char **argv, char **envp,
+-		    void (*app_fini)(void), void (*app_init)(void))
+-{
+-	__uClibc_main(main, argc, argv, app_init, app_fini, NULL, NULL);
+-}
+-#endif
+diff --git a/libc/stdlib/atexit.c b/libc/stdlib/atexit.c
+index c70318148..1962c1b63 100644
+--- a/libc/stdlib/atexit.c
++++ b/libc/stdlib/atexit.c
+@@ -224,10 +224,6 @@ extern void (*__app_fini)(void);
+ 
+ extern void (*__rtld_fini)(void);
+ 
+-#ifdef _DL_FINI_CRT_COMPAT
+-extern void (*__dl_fini)(void);
+-#endif
+-
+ /*
+  * Normal program termination
+  */
+@@ -244,13 +240,8 @@ void exit(int rv)
+ 	if (__app_fini != NULL)
+ 		(__app_fini)();
+ #endif
+-#ifndef _DL_FINI_CRT_COMPAT
+ 	if (__rtld_fini != NULL)
+ 		(__rtld_fini)();
+-#else
+-	if (__dl_fini != NULL)
+-		(__dl_fini)();
+-#endif
+ 
+     /* If we are using stdio, try to shut it down.  At the very least,
+ 	 * this will attempt to commit all buffered writes.  It may also

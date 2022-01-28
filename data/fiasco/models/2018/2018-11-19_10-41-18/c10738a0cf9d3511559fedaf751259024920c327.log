@@ -1,0 +1,654 @@
+"2018-11-19 10:41:18 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index 5014694..3ce15a9 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -6,6 +6,9 @@ mainmenu "Fiasco configuration"
+ config HAS_FPU_OPTION
+ 	bool
+ 
++config HAS_LAZY_FPU
++	bool
++
+ config HAS_VIRT_OBJ_SPACE_OPTION
+ 	bool
+ 
+@@ -42,6 +45,8 @@ config IA32
+ 	select HAS_VIRT_OBJ_SPACE_OPTION
+ 	select HAS_JDB_DISASM_OPTION
+ 	select HAS_JDB_GZIP_OPTION
++	select FPU
++	select HAS_LAZY_FPU
+ 
+ config AMD64
+ 	bool "AMD64 processor family"
+@@ -49,6 +54,8 @@ config AMD64
+ 	select HAS_JDB_DISASM_OPTION
+ 	select HAS_JDB_GZIP_OPTION
+ 	select BIT64
++	select FPU
++	select HAS_LAZY_FPU
+ 
+ #  ARCH_CHOICE
+ endchoice
+@@ -166,11 +173,22 @@ config REGPARM3
+ 
+ config FPU
+ 	bool "Enable FPU co-processor" if HAS_FPU_OPTION
+-	depends on HAS_FPU_OPTION
+-	default y
++	default y if HAS_FPU_OPTION
+ 	help
+ 	  Enable this if your platform has hardware floating point support.
+ 
++config LAZY_FPU
++	bool "Enable lazy FPU switching" if HAS_LAZY_FPU && FPU
++	depends on FPU && HAS_LAZY_FPU
++	default y if !AMD64
++	help
++	  Enable this option to allow lazy context switching of FPU / SIMD
++          processor state. This removes the overhead incurred by eagerly
++          switching the FPU / SIMD state which is needed to mitigate the lazy
++          FPU restore side-channel attack found on Intel processors.
++
++          It is save to enable this option on AMD CPUs.
++
+ # PF_SECTION: TARGET
+ 
+ endmenu # target
+diff --git a/src/kern/arm/Kconfig b/src/kern/arm/Kconfig
+index ca7623f..8a4c5b6 100644
+--- a/src/kern/arm/Kconfig
++++ b/src/kern/arm/Kconfig
+@@ -9,6 +9,7 @@
+ # ARCHSELECT:     HAS_JDB_DISASM_OPTION
+ # ARCHSELECT:     HAS_JDB_GZIP_OPTION
+ # ARCHSELECT:     HAS_VIRT_OBJ_SPACE_OPTION if ARM_V6PLUS && !CPU_VIRT && !ARM_1176_CACHE_ALIAS_FIX
++# ARCHSELECT:     HAS_LAZY_FPU
+ #
+ # ARCHDEFAULTPF: PF_INTEGRATOR
+ 
+diff --git a/src/kern/context-vcpu.cpp b/src/kern/context-vcpu.cpp
+index ed31a7e..176f9d4 100644
+--- a/src/kern/context-vcpu.cpp
++++ b/src/kern/context-vcpu.cpp
+@@ -12,7 +12,38 @@ protected:
+   Ku_mem_ptr<Vcpu_state> _vcpu_state;
+ };
+ 
++// ---------------------------------------------------------------------
++IMPLEMENTATION [!fpu]:
+ 
++PROTECTED inline
++void
++Context::vcpu_enable_fpu_if_disabled(Mword)
++{}
++
++// ---------------------------------------------------------------------
++IMPLEMENTATION [fpu && lazy_fpu]:
++
++PROTECTED inline
++void
++Context::vcpu_enable_fpu_if_disabled(Mword thread_state)
++{
++  if ((thread_state & (Thread_fpu_owner | Thread_vcpu_fpu_disabled))
++      == (Thread_fpu_owner | Thread_vcpu_fpu_disabled))
++    Fpu::fpu.current().enable();
++}
++
++// ---------------------------------------------------------------------
++IMPLEMENTATION [fpu && !lazy_fpu]:
++
++PROTECTED inline
++void
++Context::vcpu_enable_fpu_if_disabled(Mword thread_state)
++{
++  if (thread_state & Thread_vcpu_fpu_disabled)
++    Fpu::fpu.current().enable();
++}
++
++// ---------------------------------------------------------------------
+ IMPLEMENTATION:
+ 
+ IMPLEMENT_DEFAULT inline
+@@ -58,7 +89,9 @@ Context::vcpu_save_state_and_upcall()
+   _exc_cont.activate(regs(), upcall);
+ }
+ 
+-PUBLIC inline NEEDS["fpu.h", "space.h", Context::arch_load_vcpu_kern_state,
++PUBLIC inline NEEDS["fpu.h", "space.h",
++                    Context::vcpu_enable_fpu_if_disabled,
++                    Context::arch_load_vcpu_kern_state,
+                     Context::vcpu_pv_switch_to_kernel]
+ bool
+ Context::vcpu_enter_kernel_mode(Vcpu_state *vcpu)
+@@ -87,16 +120,14 @@ Context::vcpu_enter_kernel_mode(Vcpu_state *vcpu)
+           arch_load_vcpu_kern_state(vcpu, load_cpu_state);
+           vcpu_pv_switch_to_kernel(vcpu, load_cpu_state);
+ 
+-	  if (load_cpu_state)
+-	    {
+-	      if ((s & (Thread_fpu_owner | Thread_vcpu_fpu_disabled))
+-                  == (Thread_fpu_owner | Thread_vcpu_fpu_disabled))
+-                Fpu::fpu.current().enable();
++          if (load_cpu_state)
++            {
++              vcpu_enable_fpu_if_disabled(s);
+ 
+-	      space()->switchin_context(vcpu_user_space());
+-	      return true;
+-	    }
+-	}
++              space()->switchin_context(vcpu_user_space());
++              return true;
++            }
++        }
+     }
+   return false;
+ }
+diff --git a/src/kern/context.cpp b/src/kern/context.cpp
+index c826cbb..b919e23 100644
+--- a/src/kern/context.cpp
++++ b/src/kern/context.cpp
+@@ -497,52 +497,6 @@ Context::reset_kernel_sp()
+   _kernel_sp = reinterpret_cast<Mword*>(regs());
+ }
+ 
+-PUBLIC inline
+-void
+-Context::spill_fpu_if_owner()
+-{
+-  // spill FPU state into memory before migration
+-  if (state() & Thread_fpu_owner)
+-    {
+-      Fpu &f = Fpu::fpu.current();
+-      if (current() != this)
+-        f.enable();
+-
+-      spill_fpu();
+-      f.set_owner(0);
+-      f.disable();
+-    }
+-}
+-
+-PUBLIC static
+-void
+-Context::spill_current_fpu(Cpu_number cpu)
+-{
+-  (void)cpu;
+-  assert (cpu == current_cpu());
+-  Fpu &f = Fpu::fpu.current();
+-  if (f.owner())
+-    {
+-      f.enable();
+-      f.owner()->spill_fpu();
+-      f.set_owner(0);
+-      f.disable();
+-    }
+-}
+-
+-
+-PUBLIC inline
+-void
+-Context::release_fpu_if_owner()
+-{
+-  // If this context owned the FPU, noone owns it now
+-  Fpu &f = Fpu::fpu.current();
+-  if (f.is_owner(this))
+-    {
+-      f.set_owner(0);
+-      f.disable();
+-    }
+-}
+ 
+ /** Destroy context.
+  */
+@@ -2311,10 +2265,8 @@ Context::rcu_wait()
+     }
+ }
+ 
+-
+-
+ //----------------------------------------------------------------------------
+-IMPLEMENTATION [fpu && !ux]:
++IMPLEMENTATION [fpu && !ux && lazy_fpu]:
+ 
+ #include "fpu.h"
+ 
+@@ -2332,7 +2284,6 @@ Context::spill_fpu()
+   state_del_dirty(Thread_fpu_owner);
+ }
+ 
+-
+ /**
+  * When switching away from the FPU owner, disable the FPU to cause
+  * the next FPU access to trap.
+@@ -2350,14 +2301,140 @@ Context::switch_fpu(Context *t)
+     f.enable();
+ }
+ 
++//----------------------------------------------------------------------------
++IMPLEMENTATION [fpu && lazy_fpu]:
++
++#include "fpu.h"
++
++PUBLIC inline
++void
++Context::spill_fpu_if_owner()
++{
++  // spill FPU state into memory before migration
++  if (!(state() & Thread_fpu_owner))
++    return;
++
++  Fpu &f = Fpu::fpu.current();
++
++  if (current() != this)
++    f.enable();
++
++  spill_fpu();
++  f.set_owner(0);
++  f.disable();
++}
++
++PUBLIC static
++void
++Context::spill_current_fpu(Cpu_number cpu)
++{
++  (void)cpu;
++  assert (cpu == current_cpu());
++
++  Fpu &f = Fpu::fpu.current();
++  if (f.owner())
++    {
++      f.enable();
++      f.owner()->spill_fpu();
++      f.set_owner(0);
++      f.disable();
++    }
++}
++
++
++PUBLIC inline
++void
++Context::release_fpu_if_owner()
++{
++  // If this context owns the FPU, no one owns it now
++  Fpu &f = Fpu::fpu.current();
++  if (f.is_owner(this))
++    {
++      f.set_owner(0);
++      f.disable();
++    }
++}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [fpu && !ux && !lazy_fpu]:
++
++#include "fpu.h"
++
++PUBLIC inline NEEDS ["fpu.h"]
++void
++Context::spill_fpu()
++{
++  assert (fpu_state());
++
++  // Save the FPU state of the previous FPU owner
++  Fpu::save_state(fpu_state());
++}
++
++IMPLEMENT inline NEEDS ["fpu.h"]
++void
++Context::switch_fpu(Context *t)
++{
++  Fpu &f = Fpu::fpu.current();
++
++  if (state() & Thread_vcpu_fpu_disabled)
++    f.enable();
++
++  spill_fpu();
++  f.restore_state(t->fpu_state());
++
++  if (t->state() & Thread_vcpu_fpu_disabled)
++    f.disable();
++}
++
++PUBLIC inline
++void
++Context::spill_fpu_if_owner()
++{
++  if (current() != this)
++    return;
++
++  spill_fpu();
++}
++
++PUBLIC static
++void
++Context::spill_current_fpu(Cpu_number cpu)
++{
++  (void)cpu;
++  assert (cpu == current_cpu());
++
++  current()->spill_fpu();
++}
++
++
++PUBLIC inline
++void
++Context::release_fpu_if_owner()
++{}
++
+ //----------------------------------------------------------------------------
+ IMPLEMENTATION [!fpu]:
+ 
++PUBLIC inline
++void
++Context::spill_fpu_if_owner()
++{}
++
++PUBLIC static
++void
++Context::spill_current_fpu(Cpu_number)
++{}
++
+ PUBLIC inline
+ void
+ Context::spill_fpu()
+ {}
+ 
++PUBLIC inline
++void
++Context::release_fpu_if_owner()
++{}
++
+ IMPLEMENT inline
+ void
+ Context::switch_fpu(Context *)
+diff --git a/src/kern/fpu.cpp b/src/kern/fpu.cpp
+index f97081b..45a0df3 100644
+--- a/src/kern/fpu.cpp
++++ b/src/kern/fpu.cpp
+@@ -27,7 +27,14 @@ public:
+   static void save_state(Fpu_state *);
+ 
+   static Per_cpu<Fpu> fpu;
++};
++
++// ----------------------------------------------------------------------
++INTERFACE [fpu && lazy_fpu]:
+ 
++EXTENSION class Fpu
++{
++public:
+   Context *owner() const { return _owner; }
+   void set_owner(Context *owner) { _owner = owner; }
+   bool is_owner(Context *owner) const { return _owner == owner; }
+@@ -36,6 +43,7 @@ private:
+   Context *_owner;
+ };
+ 
++//---------------------------------------------------------------------------
+ IMPLEMENTATION:
+ 
+ #include "fpu_state.h"
+diff --git a/src/kern/ia32/fpu-ia32-ux.cpp b/src/kern/ia32/fpu-ia32-ux.cpp
+index 3c2387f..7934d79 100644
+--- a/src/kern/ia32/fpu-ia32-ux.cpp
++++ b/src/kern/ia32/fpu-ia32-ux.cpp
+@@ -57,6 +57,28 @@ private:
+   static unsigned _state_align;
+ };
+ 
++//----------------------------------------------------------------
++IMPLEMENTATION [fpu && lazy_fpu]:
++
++PRIVATE inline
++void
++Fpu::finish_init()
++{
++  set_owner(0);
++  disable();
++}
++
++//----------------------------------------------------------------
++IMPLEMENTATION [fpu && !lazy_fpu]:
++
++PRIVATE inline
++void
++Fpu::finish_init()
++{
++  enable();
++}
++
++
+ IMPLEMENTATION[ia32,amd64,ux]:
+ 
+ #include <cstring>
+@@ -79,7 +101,7 @@ IMPLEMENT inline NEEDS ["cpu.h", "fpu_state.h", "globals.h", "regdefs.h",
+ void
+ Fpu::init_state(Fpu_state *s)
+ {
+-  Cpu const &_cpu = Cpu::cpus.cpu(current_cpu());
++  Cpu const &_cpu = *Cpu::boot_cpu();
+   if (_cpu.features() & FEAT_FXSR)
+     {
+       assert (_state_size >= sizeof (sse_regs));
+@@ -114,14 +136,9 @@ IMPLEMENT
+ void
+ Fpu::init(Cpu_number cpu, bool resume)
+ {
+-  // Mark FPU busy, so that first FPU operation will yield an exception
+-  disable();
+-
+   // At first, noone owns the FPU
+   Fpu &f = Fpu::fpu.cpu(cpu);
+ 
+-  f.set_owner(0);
+-
+   init_disable();
+ 
+   if (cpu == Cpu_number::boot_cpu() && !resume)
+@@ -159,6 +176,8 @@ Fpu::init(Cpu_number cpu, bool resume)
+     _state_size = cpu_size;
+   if (cpu_align > _state_align)
+     _state_align = cpu_align;
++
++  f.finish_init();
+ }
+ 
+ 
+diff --git a/src/kern/ia32/fpu-ia32.cpp b/src/kern/ia32/fpu-ia32.cpp
+index 9deb49f..d50bfb0 100644
+--- a/src/kern/ia32/fpu-ia32.cpp
++++ b/src/kern/ia32/fpu-ia32.cpp
+@@ -120,6 +120,9 @@ Fpu::restore_state(Fpu_state *s)
+         }
+       break;
+     case Variant_fpu:
++#ifdef CONFIG_LAZY_FPU
++      // this should be handled in the cases where we release the FPU and it has no owner anymore...
++
+       // frstor is a waiting instruction and we must make sure no
+       // FPU exceptions are pending here. We distinguish two cases:
+       // 1) If we had a previous FPU owner, we called save_state before and
+@@ -128,6 +131,7 @@ Fpu::restore_state(Fpu_state *s)
+ 
+       if (!f.owner())
+         asm volatile ("fnclex");
++#endif
+ 
+       asm volatile ("frstor (%0)" : : "r" (s->state_buffer()));
+       break;
+diff --git a/src/kern/ia32/thread-ia32.cpp b/src/kern/ia32/thread-ia32.cpp
+index c867553..4a8da85 100644
+--- a/src/kern/ia32/thread-ia32.cpp
++++ b/src/kern/ia32/thread-ia32.cpp
+@@ -67,6 +67,8 @@ Thread::Thread(Ram_quota *q)
+ 
+   arch_init();
+ 
++  alloc_eager_fpu_state();
++
+   state_add_dirty(Thread_dead, false);
+ 
+   // ok, we're ready to go!
+diff --git a/src/kern/ia32/vm_svm.cpp b/src/kern/ia32/vm_svm.cpp
+index 9960a83..541618d 100644
+--- a/src/kern/ia32/vm_svm.cpp
++++ b/src/kern/ia32/vm_svm.cpp
+@@ -382,7 +382,7 @@ Vm_svm::do_resume_vcpu(Context *ctxt, Vcpu_state *vcpu, Vmcb *vmcb_s)
+   if(vmcb_s->state_save_area.cr4 & 0x20)
+     return -L4_err::EInval;
+ #endif
+-
++#ifdef CONFIG_LAZY_FPU
+   // XXX:
+   // This generates a circular dep between thread<->task, this cries for a
+   // new abstraction...
+@@ -394,6 +394,7 @@ Vm_svm::do_resume_vcpu(Context *ctxt, Vcpu_state *vcpu, Vmcb *vmcb_s)
+           return -L4_err::EInval;
+         }
+     }
++#endif
+ 
+ #if 0  //should never happen
+   host_cr0 = Cpu::get_cr0();
+diff --git a/src/kern/ia32/vm_vmx.cpp b/src/kern/ia32/vm_vmx.cpp
+index c3f91d5..7041a3f 100644
+--- a/src/kern/ia32/vm_vmx.cpp
++++ b/src/kern/ia32/vm_vmx.cpp
+@@ -425,7 +425,7 @@ Vm_vmx_t<X>::do_resume_vcpu(Context *ctxt, Vcpu_state *vcpu, void *vmcs_s)
+       WARNX(Info, "VMX: not supported/enabled\n");
+       return -L4_err::ENodev;
+     }
+-
++#ifdef CONFIG_LAZY_FPU
+   // XXX:
+   // This generates a circular dep between thread<->task, this cries for a
+   // new abstraction...
+@@ -437,7 +437,7 @@ Vm_vmx_t<X>::do_resume_vcpu(Context *ctxt, Vcpu_state *vcpu, void *vmcs_s)
+           return -L4_err::EInval;
+         }
+     }
+-
++#endif
+ #if 0
+   if (EXPECT_FALSE(read<Unsigned32>(vmcs_s, 0x201a) != 0)) // EPT POINTER
+     {
+diff --git a/src/kern/mips/Kconfig b/src/kern/mips/Kconfig
+index 110b5a2..a74077b 100644
+--- a/src/kern/mips/Kconfig
++++ b/src/kern/mips/Kconfig
+@@ -4,6 +4,7 @@
+ # ARCHSELECT:     HAS_FPU_OPTION
+ # ARCHSELECT:     HAS_SERIAL_OPTION
+ # ARCHSELECT:     HAS_CPU_VIRT
++# ARCHSELECT:     HAS_LAZY_FPU
+ #
+ # ARCHDEFAULTPF:  PF_MALTA
+ 
+diff --git a/src/kern/thread.cpp b/src/kern/thread.cpp
+index 69a0487..4ab1b41 100644
+--- a/src/kern/thread.cpp
++++ b/src/kern/thread.cpp
+@@ -280,6 +280,8 @@ Thread::Thread(Ram_quota *q, Context_mode_kernel)
+   if (Config::Stack_depth)
+     std::memset((char*)this + sizeof(Thread), '5',
+                 Thread::Size-sizeof(Thread) - 64);
++
++  alloc_eager_fpu_state();
+ }
+ 
+ 
+@@ -784,7 +786,7 @@ Thread::finish_migration() override
+ { enqueue_timeout_again(); }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [fpu && !ux]:
++IMPLEMENTATION [fpu && !ux && lazy_fpu]:
+ 
+ #include "fpu.h"
+ #include "fpu_alloc.h"
+@@ -800,6 +802,8 @@ Thread::switchin_fpu(bool alloc_new_fpu = true)
+   if (state() & Thread_vcpu_fpu_disabled)
+     return 0;
+ 
++  (void)alloc_new_fpu;
++
+   Fpu &f = Fpu::fpu.current();
+   // If we own the FPU, we should never be getting an "FPU unavailable" trap
+   assert (f.owner() != this);
+@@ -826,6 +830,11 @@ Thread::switchin_fpu(bool alloc_new_fpu = true)
+   return 1;
+ }
+ 
++PUBLIC inline
++bool
++Thread::alloc_eager_fpu_state()
++{ return true; }
++
+ PUBLIC inline NEEDS["fpu.h", "fpu_alloc.h"]
+ void
+ Thread::transfer_fpu(Thread *to) //, Trap_state *trap_state, Utcb *to_utcb)
+@@ -869,6 +878,47 @@ Thread::transfer_fpu(Thread *to) //, Trap_state *trap_state, Utcb *to_utcb)
+     }
+ }
+ 
++//---------------------------------------------------------------------------
++IMPLEMENTATION [fpu && !ux && !lazy_fpu]:
++
++#include "fpu.h"
++#include "fpu_alloc.h"
++#include "fpu_state.h"
++
++/*
++ * Handle FPU trap for this context. Assumes disabled interrupts
++ */
++PUBLIC inline
++int
++Thread::switchin_fpu(bool alloc_new_fpu = true)
++{
++  if (state() & Thread_vcpu_fpu_disabled)
++    return 0;
++
++  (void)alloc_new_fpu;
++  panic("must not see any FPU trap with eager FPU\n");
++}
++
++PUBLIC inline NEEDS["fpu.h", "fpu_alloc.h"]
++bool
++Thread::alloc_eager_fpu_state()
++{
++  return Fpu_alloc::alloc_state(_quota, fpu_state());
++}
++
++PUBLIC inline NEEDS["fpu.h", "fpu_state.h"]
++void
++Thread::transfer_fpu(Thread *to) //, Trap_state *trap_state, Utcb *to_utcb)
++{
++  auto *curr = current();
++  if (this == curr)
++    Fpu::save_state(to->fpu_state());
++  else if (curr == to)
++    Fpu::fpu.current().restore_state(fpu_state());
++  else
++    memcpy(to->fpu_state()->state_buffer(), fpu_state()->state_buffer(), Fpu::state_size());
++}
++
+ //---------------------------------------------------------------------------
+ IMPLEMENTATION [!fpu]:
+ 
+@@ -883,6 +933,13 @@ Thread::switchin_fpu(bool alloc_new_fpu = true)
+ //---------------------------------------------------------------------------
+ IMPLEMENTATION [!fpu || ux]:
+ 
++PUBLIC inline
++bool
++Thread::alloc_eager_fpu_state()
++{
++  return true;
++}
++
+ PUBLIC inline
+ void
+ Thread::transfer_fpu(Thread *)

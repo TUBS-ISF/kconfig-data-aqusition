@@ -1,0 +1,260 @@
+"2015-02-20 11:30:20 +0100"
+diff --git a/Rules.mak b/Rules.mak
+index 9f5fe8564..ea254f1a2 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -543,6 +543,7 @@ endif
+ ifeq ($(TARGET_ARCH),arc)
+ 	CPU_CFLAGS-y += -mlock -mswape
+ 	CPU_CFLAGS-$(CONFIG_ARC_CPU_700) += -mA7
++	CPU_CFLAGS-$(CONFIG_ARC_CPU_HS) += -mcpu=archs
+ 	CPU_LDFLAGS-y += $(CPU_CFLAGS) -marclinux
+ endif
+ 
+diff --git a/extra/Configs/Config.arc b/extra/Configs/Config.arc
+index dc32ba4fb..0c0bc71ce 100644
+--- a/extra/Configs/Config.arc
++++ b/extra/Configs/Config.arc
+@@ -20,6 +20,12 @@ config CONFIG_ARC_CPU_700
+ 	help
+ 	  ARCompact ISA based ARC CPU
+ 
++config CONFIG_ARC_CPU_HS
++	bool "ARC-HS"
++	select ARCH_HAS_MMU
++	help
++	  Next Generation ARCv2 ISA based Processors
++
+ endchoice
+ 
+ choice
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 8e603b2ad..84659650b 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -255,6 +255,7 @@ config TARGET_SUBARCH
+ 	default "i486" if CONFIG_486
+ 	default "i586" if CONFIG_586
+ 	default "i686" if CONFIG_686
++	default "arcv2" if CONFIG_ARC_CPU_HS
+ 	default ""
+ 
+ source "extra/Configs/Config.in.arch"
+diff --git a/extra/Configs/defconfigs/arc/arcv2_defconfig b/extra/Configs/defconfigs/arc/arcv2_defconfig
+new file mode 100644
+index 000000000..d3a7dc7b2
+--- /dev/null
++++ b/extra/Configs/defconfigs/arc/arcv2_defconfig
+@@ -0,0 +1,33 @@
++CONFIG_ARC_CPU_HS=y
++ARCH_WANTS_LITTLE_ENDIAN=y
++# UCLIBC_HAS_FPU is not set
++DO_C99_MATH=y
++KERNEL_HEADERS="%KERNEL_HEADERS%"
++# DOPIC is not set
++# LDSO_CACHE_SUPPORT is not set
++LDSO_RUNPATH=y
++# LDSO_SAFE_RUNPATH is not set
++LINUXTHREADS_OLD=y
++PTHREADS_DEBUG_SUPPORT=y
++UCLIBC_HAS_OBSTACK=y
++UCLIBC_SUSV2_LEGACY=y
++UCLIBC_SUSV3_LEGACY=y
++UCLIBC_SUSV4_LEGACY=y
++UCLIBC_HAS_PROGRAM_INVOCATION_NAME=y
++UCLIBC_HAS_OBSOLETE_BSD_SIGNAL=y
++UCLIBC_SV4_DEPRECATED=y
++UCLIBC_HAS_RPC=y
++UCLIBC_HAS_FULL_RPC=y
++UCLIBC_HAS_RESOLVER_SUPPORT=y
++UCLIBC_HAS_LIBRESOLV_STUB=y
++UCLIBC_HAS_LOCALE=y
++UCLIBC_HAS_GLIBC_CUSTOM_STREAMS=y
++UCLIBC_HAS_NFTW=y
++UCLIBC_HAS_FTW=y
++UCLIBC_HAS_GNU_GLOB=y
++RUNTIME_PREFIX="%RUNTIME_PREFIX%"
++DEVEL_PREFIX="%DEVEL_PREFIX%"
++CROSS_COMPILER_PREFIX="arc-linux-uclibc-"
++# DOSTRIP is not set
++SUPPORT_LD_DEBUG=y
++UCLIBC_HAS_BACKTRACE=y
+diff --git a/include/elf.h b/include/elf.h
+index 1979209cd..facf09cd5 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -378,6 +378,7 @@ typedef struct
+ 
+ /* Xilinx Microblaze (official) */
+ #define EM_MICROBLAZE   189
++#define EM_ARCV2	195		/* ARCv2 Cores */
+ 
+ /* Legal values for e_version (version).  */
+ 
+diff --git a/ldso/ldso/arc/dl-sysdep.h b/ldso/ldso/arc/dl-sysdep.h
+index 08b3bade8..ca62a2c04 100644
+--- a/ldso/ldso/arc/dl-sysdep.h
++++ b/ldso/ldso/arc/dl-sysdep.h
+@@ -69,11 +69,16 @@ do {									\
+ } while(0)
+ 
+ /* Here we define the magic numbers that this dynamic loader should accept */
++#ifdef __A7__
+ #define MAGIC1 EM_ARCOMPACT
++#define ELF_TARGET "ARCompact"	/* For error messages */
++#elif defined(__HS__)
++#define MAGIC1 EM_ARCV2
++#define ELF_TARGET "ARCv2"	/* For error messages */
++#endif
++
+ #undef  MAGIC2
+ 
+-/* Used for error messages */
+-#define ELF_TARGET "ARC"
+ 
+ struct elf_resolve;
+ extern unsigned long _dl_linux_resolver(struct elf_resolve * tpnt,
+@@ -81,6 +86,8 @@ extern unsigned long _dl_linux_resolver(struct elf_resolve * tpnt,
+ 
+ extern unsigned __udivmodsi4(unsigned, unsigned) attribute_hidden;
+ 
++#ifdef __A7__
++/* using "C" causes an indirection via __umodsi3 -> __udivmodsi4 */
+ #define do_rem(result, n, base)  ((result) =				\
+ 									\
+ 	__builtin_constant_p (base) ? (n) % (unsigned) (base) :		\
+@@ -95,6 +102,10 @@ extern unsigned __udivmodsi4(unsigned, unsigned) attribute_hidden;
+ 		r1;							\
+ 	})								\
+ )
++#elif defined(__HS__)
++/* ARCv2 has hardware assisted divide/mod */
++#define do_rem(result, n, base)  ((result) = (n) % (unsigned) (base))
++#endif
+ 
+ /* ELF_RTYPE_CLASS_PLT iff TYPE describes relocation of a PLT entry or
+    TLS variable so PLT entries should not be allowed to define the value.
+diff --git a/ldso/ldso/arc/elfinterp.c b/ldso/ldso/arc/elfinterp.c
+index d26c94705..7c31d3ac7 100644
+--- a/ldso/ldso/arc/elfinterp.c
++++ b/ldso/ldso/arc/elfinterp.c
+@@ -11,7 +11,11 @@
+  */
+ #include "ldso.h"
+ 
++#ifdef __A7__
+ #define ARC_PLT_SIZE	12
++#else
++#define ARC_PLT_SIZE	16
++#endif
+ 
+ unsigned long
+ _dl_linux_resolver(struct elf_resolve *tpnt, unsigned int plt_pc)
+diff --git a/libc/string/arc/memcmp.S b/libc/string/arc/memcmp.S
+index 4c0e39143..a60757e7a 100644
+--- a/libc/string/arc/memcmp.S
++++ b/libc/string/arc/memcmp.S
+@@ -24,14 +24,32 @@ ENTRY(memcmp)
+ 	ld	r4,[r0,0]
+ 	ld	r5,[r1,0]
+ 	lsr.f	lp_count,r3,3
++#ifdef __HS__
++	/* In ARCv2 a branch can't be the last instruction in a zero overhead
++	 * loop.
++	 * So we move the branch to the start of the loop, duplicate it
++	 * after the end, and set up r12 so that the branch isn't taken
++	 *  initially.
++	 */
++	mov_s	r12,WORD2
++	lpne	.Loop_end
++	brne	WORD2,r12,.Lodd
++	ld	WORD2,[r0,4]
++#else
+ 	lpne	.Loop_end
+ 	ld_s	WORD2,[r0,4]
++#endif
+ 	ld_s	r12,[r1,4]
+ 	brne	r4,r5,.Leven
+ 	ld.a	r4,[r0,8]
+ 	ld.a	r5,[r1,8]
++#ifdef __HS__
++.Loop_end:
++	brne	WORD2,r12,.Lodd
++#else
+ 	brne	WORD2,r12,.Lodd
+ .Loop_end:
++#endif
+ 	asl_s	SHIFT,SHIFT,3
+ 	bhs_s	.Last_cmp
+ 	brne	r4,r5,.Leven
+@@ -99,14 +117,25 @@ ENTRY(memcmp)
+ 	ldb	r4,[r0,0]
+ 	ldb	r5,[r1,0]
+ 	lsr.f	lp_count,r3
++#ifdef __HS__
++	mov	r12,r3
+ 	lpne	.Lbyte_end
++	brne	r3,r12,.Lbyte_odd
++#else
++	lpne	.Lbyte_end
++#endif
+ 	ldb_s	r3,[r0,1]
+ 	ldb	r12,[r1,1]
+ 	brne	r4,r5,.Lbyte_even
+ 	ldb.a	r4,[r0,2]
+ 	ldb.a	r5,[r1,2]
++#ifdef __HS__
++.Lbyte_end:
++	brne	r3,r12,.Lbyte_odd
++#else
+ 	brne	r3,r12,.Lbyte_odd
+ .Lbyte_end:
++#endif
+ 	bcc	.Lbyte_even
+ 	brne	r4,r5,.Lbyte_even
+ 	ldb_s	r3,[r0,1]
+diff --git a/libc/sysdeps/linux/arc/bits/syscalls.h b/libc/sysdeps/linux/arc/bits/syscalls.h
+index 5da6aadb3..248ef7844 100644
+--- a/libc/sysdeps/linux/arc/bits/syscalls.h
++++ b/libc/sysdeps/linux/arc/bits/syscalls.h
+@@ -98,7 +98,11 @@ extern int __syscall_error (int);
+  * for syscall itself.
+  *-------------------------------------------------------------------------*/
+ 
+-#define ARC_TRAP_INSN  "trap0	\n\t"
++#ifdef __A7__
++#define ARC_TRAP_INSN	"trap0		\n\t"
++#elif defined(__HS__)
++#define ARC_TRAP_INSN	"trap_s 0	\n\t"
++#endif
+ 
+ #define INTERNAL_SYSCALL_NCS(nm, err, nr_args, args...)	\
+ ({							\
+@@ -176,7 +180,11 @@ extern int __syscall_error (int);
+ 
+ #else
+ 
++#ifdef __A7__
+ #define ARC_TRAP_INSN	trap0
++#elif defined(__HS__)
++#define ARC_TRAP_INSN	trap_s 0
++#endif
+ 
+ #endif /* __ASSEMBLER__ */
+ 
+diff --git a/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h b/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h
+index 8af6eca4c..451575586 100755
+--- a/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h
++++ b/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h
+@@ -47,4 +47,11 @@
+ /* The default ';' is a comment on ARC. */
+ #define __UCLIBC_ASM_LINE_SEP__ `
+ 
++/* does your target align 64bit values in register pairs ? (32bit arches only) */
++#if defined(__A7__)
++#undef __UCLIBC_SYSCALL_ALIGN_64BIT__
++#else
++#define __UCLIBC_SYSCALL_ALIGN_64BIT__
++#endif
++
+ #endif /* _BITS_UCLIBC_ARCH_FEATURES_H */

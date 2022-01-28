@@ -1,0 +1,100 @@
+"2018-01-02 03:07:47 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 181d459fb..bf2defbae 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -651,12 +651,6 @@ config UCLIBC_DYNAMIC_ATEXIT
+ 
+ 	  Unless you use uClibc with C++, you should probably answer N.
+ 
+-config COMPAT_ATEXIT
+-	bool "Old (visible) atexit Support"
+-	help
+-	  Enable this option if you want to update from 0.9.28 to git/0.9.29,
+-	  else you will be missing atexit() until you rebuild all apps.
+-
+ config UCLIBC_HAS_UTMPX
+ 	bool "utmpx based support for tracking login/logouts to/from the system"
+ 	help
+diff --git a/libc/Makefile.in b/libc/Makefile.in
+index 31d067328..b9f6b59eb 100644
+--- a/libc/Makefile.in
++++ b/libc/Makefile.in
+@@ -80,11 +80,7 @@ $(libc.depend): $(libc_OUT)/libc_so.a $(LIBS-libc.so)
+ 	$(Q)$(RM) $@
+ 	$(Q)cat $(top_srcdir)extra/scripts/format.lds > $@.tmp
+ 	$(Q)$(OUTPUT_FORMAT) >> $@.tmp
+-ifeq ($(COMPAT_ATEXIT),y)
+-	$(Q)echo "GROUP ( $(NONSHARED_LIBNAME) $(NONSHARED_LIBPTHREAD) $(SHARED_LIBNAME) $(ASNEEDED) )" >> $@.tmp
+-else
+ 	$(Q)echo "GROUP ( $(SHARED_LIBNAME) $(NONSHARED_LIBNAME) $(NONSHARED_LIBPTHREAD) $(ASNEEDED) )" >> $@.tmp
+-endif
+ 	$(Q)mv $@.tmp $@
+ 
+ $(libc_OUT)/libc_so.a: $(libc-so-y) | $(top_builddir)lib/libc.a $(top_builddir)lib/$(NONSHARED_LIBNAME)
+diff --git a/libc/stdlib/Makefile.in b/libc/stdlib/Makefile.in
+index 938f74448..7b6eda34e 100644
+--- a/libc/stdlib/Makefile.in
++++ b/libc/stdlib/Makefile.in
+@@ -70,12 +70,10 @@ STDLIB_OBJ := $(patsubst %.c,$(STDLIB_OUT)/%.o,$(CSRC-y))
+ 
+ libc-y += $(STDLIB_OBJ)
+ libc-static-y += $(STDLIB_OUT)/atexit.o $(STDLIB_OUT)/system.o
+-libc-static-$(COMPAT_ATEXIT) += $(STDLIB_OUT)/old_atexit.o
+ libc-shared-y += $(STDLIB_OUT)/system.oS
+ 
+ # this should always be the PIC version, because it could be used in shared libs
+ libc-nonshared-y += $(STDLIB_OUT)/atexit.os
+-libc-nonshared-$(COMPAT_ATEXIT) += $(STDLIB_OUT)/old_atexit.os
+ libc-nomulti-y += $(STDLIB_OUT)/labs.o $(STDLIB_OUT)/atol.o $(STDLIB_OUT)/_stdlib_strto_l.o $(STDLIB_OUT)/_stdlib_strto_ll.o
+ libc-nomulti-$(UCLIBC_HAS_XLOCALE) += $(STDLIB_OUT)/_stdlib_strto_l_l.o $(STDLIB_OUT)/_stdlib_strto_ll_l.o
+ 
+diff --git a/libc/stdlib/_atexit.c b/libc/stdlib/_atexit.c
+index 8a3196781..ffc659ca2 100644
+--- a/libc/stdlib/_atexit.c
++++ b/libc/stdlib/_atexit.c
+@@ -97,9 +97,7 @@ extern struct exit_function *__new_exitfn(void) attribute_hidden;
+ /* this is in the L___cxa_atexit object */
+ extern int __cxa_atexit(cxaefuncp, void *arg, void *dso_handle);
+ 
+-
+-/* remove old_atexit after 0.9.29 */
+-#if defined(L_atexit) || defined(L_old_atexit)
++#if defined(L_atexit)
+ extern void *__dso_handle __attribute__ ((__weak__));
+ 
+ /*
+@@ -108,9 +106,6 @@ extern void *__dso_handle __attribute__ ((__weak__));
+  */
+ #ifdef L_atexit
+ int attribute_hidden atexit(aefuncp func)
+-#else
+-int old_atexit(aefuncp func);
+-int old_atexit(aefuncp func)
+ #endif
+ {
+     /*
+@@ -121,9 +116,6 @@ int old_atexit(aefuncp func)
+     return __cxa_atexit((cxaefuncp)func, NULL,
+                         &__dso_handle == NULL ? NULL : __dso_handle);
+ }
+-#ifndef L_atexit
+-weak_alias(old_atexit,atexit)
+-#endif
+ #endif
+ 
+ #ifdef L_on_exit
+diff --git a/libc/stdlib/old_atexit.c b/libc/stdlib/old_atexit.c
+deleted file mode 100644
+index b15fd0aa2..000000000
+--- a/libc/stdlib/old_atexit.c
++++ /dev/null
+@@ -1,8 +0,0 @@
+-/*
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-#define L_old_atexit
+-#include "_atexit.c"

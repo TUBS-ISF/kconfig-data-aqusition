@@ -1,0 +1,96 @@
+"2006-03-27 23:23:43 +0000"
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index bcc7c9b8d..34e83e194 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -72,4 +72,10 @@ config CONFIG_SETKEYCODES
+ 	  This program loads entries into the kernel's scancode-to-keycode
+ 	  map, allowing unusual keyboards to generate usable keycodes.
+ 
++config CONFIG_SETLOGCONS
++	bool "setlogcons"
++	default n
++	help
++	  This program redirects the output console of kernel messages.
++
+ endmenu
+diff --git a/console-tools/Makefile.in b/console-tools/Makefile.in
+index f14e338e1..437bcd0ec 100644
+--- a/console-tools/Makefile.in
++++ b/console-tools/Makefile.in
+@@ -21,6 +21,7 @@ CONSOLETOOLS-$(CONFIG_LOADKMAP)	+= loadkmap.o
+ CONSOLETOOLS-$(CONFIG_OPENVT)	+= openvt.o
+ CONSOLETOOLS-$(CONFIG_RESET)	+= reset.o
+ CONSOLETOOLS-$(CONFIG_SETKEYCODES)	+= setkeycodes.o
++CONSOLETOOLS-$(CONFIG_SETLOGCONS)	+= setlogcons.o
+ 
+ ifneq ($(strip $(CONSOLETOOLS-y)),)
+ libraries-y+=$(CONSOLETOOLS_DIR)$(CONSOLETOOLS_AR)
+diff --git a/console-tools/setlogcons.c b/console-tools/setlogcons.c
+new file mode 100644
+index 000000000..1f0ac524e
+--- /dev/null
++++ b/console-tools/setlogcons.c
+@@ -0,0 +1,34 @@
++/*
++ * setlogcons: Send kernel messages to the current console or to console N 
++ *
++ * Copyright (C) 2006 by Jan Kiszka <jan.kiszka@web.de>
++ *
++ * Based on setlogcons (kbd-1.12) by Andries E. Brouwer
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include "busybox.h"
++
++extern int setlogcons_main(int argc, char **argv)
++{
++	struct {
++		char fn;
++		char subarg;
++	} arg;
++
++	arg.fn = 11;    /* redirect kernel messages */
++	arg.subarg = 0; /* to specified console (current as default) */
++
++	if (argc == 2)
++		arg.subarg = atoi(argv[1]);
++
++	if (ioctl(bb_xopen("/dev/tty1", O_RDONLY), TIOCLINUX, &arg))
++		bb_perror_msg_and_die("TIOCLINUX");;
++
++	return 0;
++}
+diff --git a/include/applets.h b/include/applets.h
+index 95278d93e..0f239822c 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -235,6 +235,7 @@ USE_SEQ(APPLET(seq, seq_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SETARCH(APPLET(setarch, setarch_main, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SETCONSOLE(APPLET(setconsole, setconsole_main, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_SETKEYCODES(APPLET(setkeycodes, setkeycodes_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_SETLOGCONS(APPLET(setlogcons, setlogcons_main, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_SETSID(APPLET(setsid, setsid_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_ASH(APPLET_NOUSAGE(sh, ash_main, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_HUSH(APPLET_NOUSAGE(sh, hush_main, _BB_DIR_BIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 660c9e702..21f305fe2 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2648,6 +2648,11 @@
+ #define setkeycodes_example_usage \
+ 	"$ setkeycodes e030 127\n"
+ 
++#define setlogcons_trivial_usage \
++	"N"
++#define setlogcons_full_usage \
++	"Redirects the kernel output to console N (0 for current)."
++
+ #define setsid_trivial_usage \
+ 	"program [arg ...]"
+ #define setsid_full_usage \

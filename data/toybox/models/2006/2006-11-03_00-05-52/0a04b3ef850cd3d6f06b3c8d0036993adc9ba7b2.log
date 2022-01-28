@@ -1,0 +1,318 @@
+"2006-11-03 00:05:52 -0500"
+diff --git a/lib/functions.c b/lib/functions.c
+index 0b003fd6..bcdaa0e0 100644
+--- a/lib/functions.c
++++ b/lib/functions.c
+@@ -241,69 +241,45 @@ char *xabspath(char *path)
+ 	return path;
+ }
+ 
+-// Check whether a file exists, or is executable, or...
+-int is_file_type(char *path, int type)
+-{
+-	// Is there a file here we can execute?
+-	if (!access(path, type)) {
+-		struct stat st;
+-		// Confirm it's not a directory.
+-		if (!stat(path, &st) && S_ISREG(st.st_mode)) return 1;
+-	}
+-
+-	return 0;
+-}
+-
+-
+-// Find an exectuable file either at a path with a slash in it (absolute or
+-// relative to current directory), or in $PATH.  Returns absolute path to file,
+-// or NULL if not found.
+-
++// Find all file in a colon-separated path with access type "type" (generally
++// X_OK or R_OK).  Returns a list of absolute paths to each file found, in
++// order.
+ 
+-char *which_in_path(char *filename)
++struct string_list *find_in_path(char *path, char *filename)
+ {
+-	char *res;
+-
+-	if (index(filename, '/')) {
+-		res = xabspath(filename);
+-		if (is_file_type(filename, X_OK)) return res;
+-		free(res);
+-		return NULL;
+-	}
+-	return find_in_path(getenv("PATH"), filename, X_OK);
+-}
+-
+-// Find file in a colon-separated path with access type "type" (generally
+-// X_OK or R_OK).  Returns absolute path to file, or NULL if not found.
+-
+-char *find_in_path(char *path, char *filename, int type)
+-{
+-	char *res = NULL, *cwd = xgetcwd();
++	struct string_list *rlist = NULL;
++	char *cwd = xgetcwd();
+ 
+ 	for (;;) {
+ 		char *next = path ? index(path, ':') : NULL;
+ 		int len = next ? next-path : strlen(path);
++		struct string_list *rnext;
++		struct stat st;
+ 
+-		if (!len) res = xmsprintf("%s/%s", cwd, filename);
++		rnext = xmalloc(sizeof(void *) + strlen(filename)
++			+ (len ? len : strlen(cwd)) + 2);
++		if (!len) sprintf(rnext->str, "%s/%s", cwd, filename);
+ 		else {
+-			res = xmalloc(len+strlen(filename)+2);
++			char *res = rnext->str;
+ 			strncpy(res, path, len);
+-			res[len] = '/';
+-			strcpy(res+len+1, filename);
++			res += len;
++			*(res++) = '/';
++			strcpy(res, filename);
+ 		}
+ 
+-		// Is there a file here we can execute?
+-		if (is_file_type(res, type)) break;
++		// Confirm it's not a directory.
++		if (!stat(rnext->str, &st) && S_ISREG(st.st_mode)) {
++			rnext->next = rlist;
++			rlist = rnext;
++		} else free(rnext);
+ 
+-		free(res);
+-		res = NULL;
+ 		if (!next) break;
+ 		path += len;
+ 		path++;
+ 	}
+ 	free(cwd);
+ 
+-	return res;
++	return rlist;
+ 
+ }
+ 
+diff --git a/lib/lib.h b/lib/lib.h
+index 10d33bde..d013af9d 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -4,6 +4,15 @@
+  * Copyright 2006 Rob Landley <rob@landley.net>
+  */
+ 
++// llist.c
++void llist_free(void *list, void (*freeit)(void *data));
++void *llist_pop(void *list);  // actually void **list, but the compiler's dumb
++
++struct string_list {
++	struct string_list *next;
++	char str[0];
++};
++
+ // functions.c
+ void verror_msg(char *msg, int err, va_list va);
+ void error_msg(char *msg, ...);
+@@ -25,22 +34,12 @@ ssize_t readall(int fd, void *buf, size_t count);
+ void xread(int fd, char *buf, size_t count);
+ char *xgetcwd(void);
+ char *xabspath(char *path);
+-int is_file_type(char *path, int type);
+-char *which_in_path(char *filename);
+-char *find_in_path(char *path, char *filename, int type);
++struct string_list *find_in_path(char *path, char *filename);
+ void utoa_to_buf(unsigned n, char *buf, unsigned buflen);
+ void itoa_to_buf(int n, char *buf, unsigned buflen);
+ char *utoa(unsigned n);
+ char *itoa(int n);
+ 
+-// llist.c
+-void llist_free(void *list, void (*freeit)(void *data));
+-
+-struct string_list {
+-	struct string_list *next;
+-	char *str;
+-};
+-
+ // getmountlist.c
+ struct mtab_list {
+ 	struct mtab_list *next;
+diff --git a/lib/llist.c b/lib/llist.c
+index 9047e8b5..8d6fd265 100644
+--- a/lib/llist.c
++++ b/lib/llist.c
+@@ -12,10 +12,21 @@
+ void llist_free(void *list, void (*freeit)(void *data))
+ {
+ 	while (list) {
+-		void **next = (void **)list;
+-		void *list_next = *next;
+-		if (freeit) freeit(list);
+-		free(list);
+-		list = list_next;
++		void *pop = llist_pop(&list);
++		if (freeit) freeit(pop);
+ 	}
+ }
++
++// Return the first item from the list, advancing the list (which must be called
++// as &list)
++void *llist_pop(void *list)
++{
++	// I'd use a void ** for the argument, and even accept the typecast in all
++	// callers as documentation you need the &, except the stupid compiler
++	// would then scream about type-punned pointers.  Screw it.
++	void **llist = (void **)list;
++	void **next = (void **)*llist;
++	*llist = *next;
++
++	return (void *)next;
++}
+diff --git a/main.c b/main.c
+index de349ec6..00d76312 100644
+--- a/main.c
++++ b/main.c
+@@ -14,12 +14,13 @@ struct toy_list toy_list[] = {
+ 	// This one is out of order on purpose.
+ 	{"toybox", toybox_main, 0},
+ 	// The rest of these are alphabetical, for binary search.
+-	{"cd", cd_main, TOYFLAG_NOFORK},
+-	{"df", df_main, TOYFLAG_USR|TOYFLAG_SBIN},
+-	{"exit", exit_main, TOYFLAG_NOFORK},
+-	{"hello", hello_main, TOYFLAG_NOFORK|TOYFLAG_USR},
+-	{"sh", toysh_main, TOYFLAG_BIN},
+-	{"toysh", toysh_main, TOYFLAG_BIN}
++	USE_TOYSH({"cd", cd_main, TOYFLAG_NOFORK},)
++	USE_DF({"df", df_main, TOYFLAG_USR|TOYFLAG_SBIN},)
++	USE_TOYSH({"exit", exit_main, TOYFLAG_NOFORK},)
++	USE_HELLO({"hello", hello_main, TOYFLAG_NOFORK|TOYFLAG_USR},)
++	USE_TOYSH({"sh", toysh_main, TOYFLAG_BIN},)
++	USE_TOYSH({"toysh", toysh_main, TOYFLAG_BIN},)
++	USE_WHICH({"which", which_main, TOYFLAG_USR|TOYFLAG_BIN},)
+ };
+ 
+ #define TOY_LIST_LEN (sizeof(toy_list)/sizeof(struct toy_list))
+diff --git a/toys.h b/toys.h
+index 810af89c..c07e565b 100644
+--- a/toys.h
++++ b/toys.h
+@@ -31,6 +31,7 @@ int exit_main(void);
+ int hello_main(void);
+ int toybox_main(void);
+ int toysh_main(void);
++int which_main(void);
+ 
+ #define TOYFLAG_USR      (1<<0)
+ #define TOYFLAG_BIN      (1<<1)
+diff --git a/toys/Config.in b/toys/Config.in
+index d9b1da10..89481bde 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -28,6 +28,12 @@ config DF_PEDANTIC
+ 
+ 	  -k	Sets units back to 1024 bytes (the default without -P)
+ 
++config HELLO
++	bool "hello"
++	default n
++	help
++	  A hello world program.  You don't need this.
++
+ config TOYSH
+ 	bool "sh (toysh)"
+ 	default n
+@@ -146,5 +152,15 @@ config TOYSH_BUILTINS
+ 	  Adds the commands exec, fg, bg, help, jobs, pwd, export, source, set,
+ 	  unset, read, alias.
+ 
++config WHICH
++	bool "Which"
++	default n
++	help
++	  usage: which [-a] filename ...
++
++	  Search $PATH for executable files matching filename(s).
++
++	  -a	Show all matches
++
+ endmenu
+ 
+diff --git a/toys/which.c b/toys/which.c
+new file mode 100644
+index 00000000..6d00bc82
+--- /dev/null
++++ b/toys/which.c
+@@ -0,0 +1,72 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * which.c - 
++ *
++ * Copyright 2006 Rob landley <rob@landley.net>
++ */
++
++#include "toys.h"
++
++#define OPTIONS "a"
++#define OPT_a   1
++
++// Find an exectuable file either at a path with a slash in it (absolute or
++// relative to current directory), or in $PATH.  Returns absolute path to file,
++// or NULL if not found.
++
++static int which_in_path(char *filename)
++{
++	struct string_list *list;
++
++	// If they gave us a path, don't worry about $PATH or -a
++
++	if (index(filename, '/')) {
++		// Confirm it has the executable bit set, and it's not a directory.
++		if (!access(filename, X_OK)) {
++			struct stat st;
++
++			if (!stat(filename, &st) && S_ISREG(st.st_mode)) {
++				puts(filename);
++				return 0;
++			}
++			return 1;
++		}
++	}
++
++	// Search $PATH for matches.
++	list = find_in_path(getenv("PATH"), filename);
++	if (!list) return 1;
++
++	// Print out matches
++	while (list) {
++		if (!access(list->str, X_OK)) {
++			puts(list->str);
++			// If we should stop at one match, do so
++			if (toys.optflags & OPT_a) {
++				llist_free(list, NULL);
++				break;
++			}
++		}
++		free(llist_pop(&list));
++	}
++
++	return 0;
++}
++
++int which_main(void)
++{
++	char **argv;
++	int rc = 0;
++
++	// get_optflags(OPTIONS);
++	argv = toys.argv+1;
++
++	if (!*argv) rc++;
++	else {
++		int i;
++		for (i=0; argv[i]; i++)	rc |= which_in_path(argv[i]);
++	}
++	// if (CFG_TOYS_FREE) free(argv);
++
++	return rc;
++}

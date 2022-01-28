@@ -1,0 +1,219 @@
+"2007-08-29 08:10:01 -0500"
+diff --git a/Makefile b/Makefile
+index bc8e091e..d3436fee 100644
+--- a/Makefile
++++ b/Makefile
+@@ -52,6 +52,11 @@ toybox_unstripped: gen_config.h $(toyfiles) toys/toylist.h lib/*.h toys.h
+ toybox: toybox_unstripped
+ 	$(STRIP) toybox_unstripped -o toybox
+ 
++toys/help.c: toys/help.h
++
++toys/help.h: Config.in toys/Config.in scripts/config2help.py
++	scripts/config2help.py Config.in > toys/help.h
++
+ instlist: toybox
+ 	$(HOSTCC) $(CCFLAGS) -I . scripts/install.c -o instlist
+ 
+diff --git a/scripts/config2help.py b/scripts/config2help.py
+new file mode 100755
+index 00000000..2573d08a
+--- /dev/null
++++ b/scripts/config2help.py
+@@ -0,0 +1,54 @@
++#!/usr/bin/python
++
++import os,sys
++
++def zapquotes(str):
++  if str[0]=='"': str = str[1:str.rfind('"')]
++  return str
++
++def escapequotes(str):
++  return str.strip().replace("\\","\\\\").replace('"','\\"')
++
++helplen = morelines = 0
++out = sys.stdout
++
++def readfile(filename):
++  global helplen, morelines
++  #sys.stderr.write("Reading %s\n" % filename)
++  try:
++    lines = open(filename).read().split("\n")
++  except IOError:
++    sys.stderr.write("File %s missing\n" % filename)
++    return
++  config = None
++  description = None
++  for i in lines:
++    if helplen:
++      i = i.expandtabs()
++      if not len(i) or i[:helplen].isspace():
++        if morelines: out.write('\\n')
++        morelines = 1
++        out.write(escapequotes(i))
++        continue
++      else:
++        helplen = morelines = 0
++        out.write('"\n')
++
++    words = i.strip().split(None,1)
++    if not len(words): continue
++
++    if words[0] in ("config", "menuconfig"):
++      config = words[1]
++      description = ""
++    elif words[0] in ("bool", "boolean", "tristate", "string", "hex", "int"):
++       if len(words)>1: description = zapquotes(words[1])
++    elif words[0]=="prompt":
++      description = htmlescape(zapquotes(words[1]))
++    elif words[0] in ("help", "---help---"):
++      out.write('#define help_%s "' % config.lower())
++      helplen = len(i[:i.find(words[0])].expandtabs())
++    elif words[0] == "source": readfile(zapquotes(words[1]))
++    elif words[0] in ("default","depends", "select", "if", "endif", "#", "comment", "menu", "endmenu"): pass
++
++readfile(sys.argv[1])
++if helplen: out.write('"\n')
+diff --git a/toys/Config.in b/toys/Config.in
+index 2e9127dc..e6f9636c 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -1,5 +1,16 @@
+ menu "Toys"
+ 
++# Fake config symbol to attach help entry to.
++
++config TOYBOX
++	bool
++	default n
++	help
++	  usage: toybox [command] [arguments...]
++
++	  With no arguments, shows available commands.  First argument is
++	  name of a command to run, followed by any arguments to that command.
++
+ config BZCAT
+ 	bool "bzcat"
+ 	default n
+@@ -90,6 +101,22 @@ config HELLO
+ 	help
+ 	  A hello world program.  You don't need this.
+ 
++config HELP
++	bool "help"
++	default y
++	help
++	  usage: help [command]
++
++	  Show usage information for toybox commands.
++
++config HELP_LONG
++	bool "Verbose help text"
++	default y
++	depends on HELP
++	help
++	  Show more than one line of help information per command.
++
++
+ config MDEV
+ 	bool "mdev"
+ 	default n
+@@ -216,7 +243,7 @@ config READLINK_F
+ 	help
+ 	  usage: readlink [-f]
+ 
+-	  -f         Show final location, including normal files and multiple symlinks.
++	  -f	Show final location, including normal files and multiple symlinks.
+ 
+ config SLEEP
+ 	bool "sleep"
+@@ -366,6 +393,35 @@ config TOYSH_BUILTINS
+ 	  Adds the commands exec, fg, bg, help, jobs, pwd, export, source, set,
+ 	  unset, read, alias.
+ 
++config EXIT
++	bool
++	default n
++	depends on TOYSH
++	help
++	  usage: exit [status]
++
++	  Exit shell.  If no return value supplied on command line, use value
++	  of most recent command, or 0 if none.
++
++config CD
++	bool
++	default n
++	depends on TOYSH
++	help
++	  usage: cd [path]
++
++	  Change current directory.  With no arguments, go to $HOME.
++
++config CD_P
++	bool # "-P support for cd"
++	default n
++	depends on TOYSH
++	help
++	  usage: cd [-PL]
++
++	  -P	Physical path: resolve symlinks in path.
++	  -L	Cancel previous -P and restore default behavior.
++
+ config TRUE
+ 	bool "true"
+ 	default y
+diff --git a/toys/help.c b/toys/help.c
+new file mode 100644
+index 00000000..6af743fc
+--- /dev/null
++++ b/toys/help.c
+@@ -0,0 +1,33 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * help.c - Show help for toybox
++ */
++
++#include "toys.h"
++#include "toys/help.h"
++
++#undef NEWTOY
++#undef OLDTOY
++#define NEWTOY(name,opt,flags) help_##name "\0"
++#define OLDTOY(name,oldname,opts,flags) "\xff" #oldname "\0"
++static char *help_data =
++#include "toys/toylist.h"
++;
++
++int help_main(void)
++{
++	struct toy_list *t = toy_find(*toys.optargs);
++	int i = t-toy_list;
++	char *s = help_data;
++
++	if (!t) error_exit("Unknown command '%s'\n", *toys.optargs);
++	for (;;) {
++		while (i--) s += strlen(s) + 1;
++		if (*s != 255) break;
++		i = toy_find(++s)-toy_list;
++		s = help_data;
++	}
++
++	printf("%s", s);
++	return 0;
++}
+diff --git a/toys/toylist.h b/toys/toylist.h
+index 0b3845d9..deeb6204 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -95,7 +95,8 @@ USE_DF(NEWTOY(df, "Pkt*a", TOYFLAG_USR|TOYFLAG_SBIN))
+ USE_ECHO(NEWTOY(echo, "+en", TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(exit, NULL, TOYFLAG_NOFORK))
+ USE_FALSE(NEWTOY(false, NULL, TOYFLAG_BIN))
+-USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_USR))
++USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_USR|TOYFLAG_BIN))
++USE_HELP(NEWTOY(help, "<1", TOYFLAG_BIN))
+ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))
+ USE_ONEIT(NEWTOY(oneit, "+<1p", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))

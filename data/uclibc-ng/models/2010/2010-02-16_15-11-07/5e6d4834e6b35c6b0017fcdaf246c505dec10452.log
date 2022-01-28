@@ -1,0 +1,152 @@
+"2010-02-16 15:11:07 -0800"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 22d67bc42..be2035e45 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -435,6 +435,7 @@ config LINUXTHREADS_NEW
+ config UCLIBC_HAS_THREADS_NATIVE
+ 	bool "Native POSIX Threading (NPTL)"
+ 	select UCLIBC_HAS_TLS
++	select UCLIBC_HAS_STDIO_FUTEXES
+ 	help
+ 	  If you want to compile uClibc with NPTL support, then answer Y.
+ 
+@@ -1748,8 +1749,8 @@ config UCLIBC_HAS_GNU_GETOPT
+ 
+ config UCLIBC_HAS_STDIO_FUTEXES
+ 	bool "Use futexes for multithreaded I/O locking"
+-	default n
+ 	depends on UCLIBC_HAS_THREADS_NATIVE
++	default n
+ 	help
+ 	  If you want to compile uClibc to use futexes for low-level
+ 	  I/O locking, answer Y.  Otherwise, answer N.
+diff --git a/libpthread/nptl/forward.c b/libpthread/nptl/forward.c
+index 4c5ada349..8f528d0a8 100644
+--- a/libpthread/nptl/forward.c
++++ b/libpthread/nptl/forward.c
+@@ -144,8 +144,7 @@ FORWARD (pthread_setcanceltype, (int type, int *oldtype), (type, oldtype), 0)
+ 
+ #define return /* value is void */
+ FORWARD2(__pthread_unwind,
+-	 void attribute_hidden __attribute ((noreturn)) __cleanup_fct_attribute
+-	 attribute_compat_text_section,
++	 void attribute_hidden __attribute ((noreturn)) __cleanup_fct_attribute,
+ 	 (__pthread_unwind_buf_t *buf), (buf), {
+ 		       /* We cannot call abort() here.  */
+ 		       INTERNAL_SYSCALL_DECL (err);
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/libc_pthread_init.c b/libpthread/nptl/sysdeps/unix/sysv/linux/libc_pthread_init.c
+index 016437768..136b44595 100644
+--- a/libpthread/nptl/sysdeps/unix/sysv/linux/libc_pthread_init.c
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/libc_pthread_init.c
+@@ -48,28 +48,12 @@ __libc_pthread_init (
+   __register_atfork (NULL, NULL, reclaim, NULL);
+ 
+ #ifdef SHARED
+-  /* Copy the function pointers into an array in libc.  This enables
+-     access with just one memory reference but moreso, it prevents
+-     hijacking the function pointers with just one pointer change.  We
+-     "encrypt" the function pointers since we cannot write-protect the
+-     array easily enough.  */
+-  union ptrhack
+-  {
+-    struct pthread_functions pf;
+-# define NPTRS (sizeof (struct pthread_functions) / sizeof (void *))
+-    void *parr[NPTRS];
+-  } __attribute__ ((may_alias)) const *src;
+-  union ptrhack *dest;
+-
+-  src = (const void *) functions;
+-  dest = (void *) &__libc_pthread_functions;
+-
+-  for (size_t cnt = 0; cnt < NPTRS; ++cnt)
+-    {
+-      void *p = src->parr[cnt];
+-      PTR_MANGLE (p);
+-      dest->parr[cnt] = p;
+-    }
++  /* We copy the content of the variable pointed to by the FUNCTIONS
++     parameter to one in libc.so since this means access to the array
++     can be done with one memory access instead of two.
++   */
++   memcpy (&__libc_pthread_functions, functions,
++           sizeof (__libc_pthread_functions));
+   __libc_pthread_functions_init = 1;
+ #endif
+ 
+@@ -79,9 +63,12 @@ __libc_pthread_init (
+ }
+ 
+ #ifdef SHARED
++#if 0
++void
+ libc_freeres_fn (freeres_libptread)
+ {
+   if (__libc_pthread_functions_init)
+     PTHFCT_CALL (ptr_freeres, ());
+ }
+ #endif
++#endif
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/register-atfork.c b/libpthread/nptl/sysdeps/unix/sysv/linux/register-atfork.c
+index 9e36858fc..f956ad565 100644
+--- a/libpthread/nptl/sysdeps/unix/sysv/linux/register-atfork.c
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/register-atfork.c
+@@ -22,6 +22,7 @@
+ #include <string.h>
+ #include <fork.h>
+ #include <atomic.h>
++#include <tls.h>
+ 
+ 
+ /* Lock to protect allocation and deallocation of fork handlers.  */
+@@ -119,7 +120,7 @@ __linkin_atfork (struct fork_handler *newp)
+ 						newp, newp->next) != 0);
+ }
+ 
+-
++#if 0
+ libc_freeres_fn (free_mem)
+ {
+   /* Get the lock to not conflict with running forks.  */
+@@ -144,3 +145,5 @@ libc_freeres_fn (free_mem)
+       free (oldp);
+     }
+ }
++#endif
++
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.c b/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.c
+index 80b0e7663..0471d1f79 100644
+--- a/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.c
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.c
+@@ -22,6 +22,7 @@
+ #include <sysdep.h>
+ #include <lowlevellock.h>
+ #include <sys/time.h>
++#include <tls.h>
+ 
+ 
+ void
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.h b/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.h
+index a43f6b668..d8fe9be35 100644
+--- a/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.h
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/sparc/lowlevellock.h
+@@ -25,6 +25,7 @@
+ #include <sys/param.h>
+ #include <bits/pthreadtypes.h>
+ #include <atomic.h>
++#include <sysdep.h>
+ #include <bits/kernel-features.h>
+ 
+ 
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/unregister-atfork.c b/libpthread/nptl/sysdeps/unix/sysv/linux/unregister-atfork.c
+index 94c78fce5..7eb095fd3 100644
+--- a/libpthread/nptl/sysdeps/unix/sysv/linux/unregister-atfork.c
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/unregister-atfork.c
+@@ -21,6 +21,7 @@
+ #include <stdlib.h>
+ #include <fork.h>
+ #include <atomic.h>
++#include <tls.h>
+ 
+ 
+ void

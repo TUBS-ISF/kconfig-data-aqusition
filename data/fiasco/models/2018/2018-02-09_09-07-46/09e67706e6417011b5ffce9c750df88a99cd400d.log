@@ -1,0 +1,421 @@
+"2018-02-09 09:07:46 +0100"
+diff --git a/src/kern/arm/bsp/imx/Kconfig b/src/kern/arm/bsp/imx/Kconfig
+index 6b1eddd..a79837f 100644
+--- a/src/kern/arm/bsp/imx/Kconfig
++++ b/src/kern/arm/bsp/imx/Kconfig
+@@ -58,13 +58,21 @@ config PF_IMX_6UL
+         help
+           Choose for i.MX6UL platform.
+ 
++config PF_IMX_7
++        bool "i.MX7"
++        depends on PF_IMX
++        select CAN_ARM_CPU_CORTEX_A7
++        select HAS_CPU_VIRT
++        help
++          Choose for i.MX7 platform.
++
+ endchoice
+ 
+ config PF_IMX_RAM_PHYS_BASE
+ 	hex
+ 	default 0xc0000000 if PF_IMX_21
+ 	default 0x40000000 if PF_IMX_28
+-	default 0x80000000 if PF_IMX_35 || PF_IMX_6UL
++	default 0x80000000 if PF_IMX_35 || PF_IMX_6UL || PF_IMX_7
+ 	default 0x90000000 if PF_IMX_51
+         default 0x10000000 if PF_IMX_6
+ 
+diff --git a/src/kern/arm/bsp/imx/Modules b/src/kern/arm/bsp/imx/Modules
+index fea5034..b691f4d 100644
+--- a/src/kern/arm/bsp/imx/Modules
++++ b/src/kern/arm/bsp/imx/Modules
+@@ -15,11 +15,14 @@ PREPROCESS_PARTS        += $(if $(CONFIG_PF_IMX_6_TIMER_MPTIMER),mptimer)
+ PREPROCESS_PARTS        += $(if $(CONFIG_PF_IMX_6_TIMER_EPIT),imx_epit)
+ PREPROCESS_PARTS        += $(if $(CONFIG_PF_IMX_6UL),imx6ul pic_gic \
+                                                      arm_generic_timer)
++PREPROCESS_PARTS        += $(if $(CONFIG_PF_IMX_7),imx7 pic_gic \
++                                                   arm_generic_timer)
+ RAM_PHYS_BASE           := $(CONFIG_PF_IMX_RAM_PHYS_BASE)
+ 
+ INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_51),gic)
+ INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_6),gic)
+ INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_6UL),gic generic_timer)
++INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_7),gic generic_timer)
+ INTERFACES_KERNEL-$(CONFIG_PF_IMX_35) += timer_imx_epit
+ INTERFACES_KERNEL-$(CONFIG_PF_IMX_51) += timer_imx_epit
+ INTERFACES_KERNEL-$(CONFIG_PF_IMX_53) += timer_imx_epit
+@@ -33,10 +36,11 @@ mem_layout_IMPL       += mem_layout-arm-imx
+ pic_IMPL              += $(if $(CONFIG_PF_IMX_21),pic-arm-imx)
+ pic_IMPL              += $(if $(CONFIG_PF_IMX_28),pic-arm-imx-icoll)
+ pic_IMPL              += $(if $(CONFIG_PF_IMX_35),pic-arm-imx)
+-pic_IMPL              += $(if $(CONFIG_PF_IMX_51),pic-gic pic-arm-imx51)
+-pic_IMPL              += $(if $(CONFIG_PF_IMX_53),pic-gic pic-arm-imx51)
+-pic_IMPL              += $(if $(CONFIG_PF_IMX_6),pic-gic pic-arm-imx51)
+-pic_IMPL              += $(if $(CONFIG_PF_IMX_6UL),pic-gic pic-arm-imx6ul)
++pic_IMPL              += $(if $(CONFIG_PF_IMX_51),pic-gic pic-arm-imx-gic)
++pic_IMPL              += $(if $(CONFIG_PF_IMX_53),pic-gic pic-arm-imx-gic)
++pic_IMPL              += $(if $(CONFIG_PF_IMX_6),pic-gic pic-arm-imx-gic)
++pic_IMPL              += $(if $(CONFIG_PF_IMX_6UL),pic-gic pic-arm-imx-gic)
++pic_IMPL              += $(if $(CONFIG_PF_IMX_7),pic-gic pic-arm-imx-gic)
+ bootstrap_IMPL        += bootstrap-arm-imx
+ timer_IMPL            += $(if $(CONFIG_PF_IMX_21),timer-arm-imx21)
+ timer_IMPL            += $(if $(CONFIG_PF_IMX_28),timer-arm-timrot)
+@@ -45,10 +49,11 @@ timer_IMPL            += $(if $(CONFIG_PF_IMX_51),timer-arm-imx_epit)
+ timer_IMPL            += $(if $(CONFIG_PF_IMX_53),timer-arm-imx_epit)
+ timer_IMPL            += $(if $(CONFIG_PF_IMX_6_TIMER_MPTIMER),timer-arm-mptimer timer-arm-mptimer-imx6)
+ timer_IMPL            += $(if $(CONFIG_PF_IMX_6_TIMER_EPIT),timer-arm-imx_epit)
+-timer_IMPL            += $(if $(CONFIG_PF_IMX_6UL),timer-arm-generic timer-arm-generic-imx6ul)
++timer_IMPL            += $(if $(CONFIG_PF_IMX_6UL),timer-arm-generic timer-arm-generic-imx)
++timer_IMPL            += $(if $(CONFIG_PF_IMX_7),timer-arm-generic timer-arm-generic-imx)
+ timer_tick_IMPL       += $(if $(CONFIG_PF_IMX_6_TIMER_EPIT),timer_tick-broadcast,timer_tick-single-vector)
+ kernel_uart_IMPL      += kernel_uart-arm-imx
+ reset_IMPL            += reset-arm-imx
+ outer_cache_IMPL      += outer_cache-arm-imx6
+ clock_IMPL            += clock-generic
+-platform_control_IMPL += platform_control-arm-imx6
++platform_control_IMPL += platform_control-arm-imx
+diff --git a/src/kern/arm/bsp/imx/mem_layout-arm-imx.cpp b/src/kern/arm/bsp/imx/mem_layout-arm-imx.cpp
+index 72b9285..a1f13d4 100644
+--- a/src/kern/arm/bsp/imx/mem_layout-arm-imx.cpp
++++ b/src/kern/arm/bsp/imx/mem_layout-arm-imx.cpp
+@@ -94,7 +94,7 @@ INTERFACE [arm && imx && imx6ul]: // ---------------------------------------
+ EXTENSION class Mem_layout
+ {
+ public:
+-  enum Phys_layout_imx6 : Address {
++  enum Phys_layout_imx6ul : Address {
+     Gic_dist_phys_base   = 0x00a01000,
+     Gic_cpu_phys_base    = 0x00a02000,
+     Gic_h_phys_base      = 0x00a04000,
+@@ -103,3 +103,20 @@ public:
+     Watchdog_phys_base   = 0x020bc000, // wdog1
+   };
+ };
++
++INTERFACE [arm && imx && imx7]: // -----------------------------------------
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Phys_layout_imx7 : Address {
++    Gic_dist_phys_base   = 0x31001000,
++    Gic_cpu_phys_base    = 0x31002000,
++    Gic_h_phys_base      = 0x31004000,
++    Gic_v_phys_base      = 0x31006000,
++
++    Watchdog_phys_base   = 0x30280000, // wdog2
++    Src_phys_base        = 0x30390000,
++    Gpc_phys_base        = 0x303a0000,
++  };
++};
+diff --git a/src/kern/arm/bsp/imx/pic-arm-imx51.cpp b/src/kern/arm/bsp/imx/pic-arm-imx-gic.cpp
+similarity index 75%
+rename from src/kern/arm/bsp/imx/pic-arm-imx51.cpp
+rename to src/kern/arm/bsp/imx/pic-arm-imx-gic.cpp
+index 68930ab..2109599 100644
+--- a/src/kern/arm/bsp/imx/pic-arm-imx51.cpp
++++ b/src/kern/arm/bsp/imx/pic-arm-imx-gic.cpp
+@@ -1,16 +1,16 @@
+-INTERFACE [arm && pic_gic && (imx51 || imx53 || imx6)]:
++INTERFACE [arm && pic_gic && imx]:
+ 
+ #include "initcalls.h"
+ #include "gic.h"
+ 
+-INTERFACE [arm && pic_gic && (imx51 | imx53)]:
++INTERFACE [arm && pic_gic && (imx51 || imx53)]:
+ 
+ EXTENSION class Pic
+ {
+   enum { Gic_sz = 7 };
+ };
+ 
+-INTERFACE [arm && pic_gic && imx6]:
++INTERFACE [arm && pic_gic && (imx6 || imx6ul || imx7)]:
+ 
+ EXTENSION class Pic
+ {
+@@ -18,7 +18,7 @@ EXTENSION class Pic
+ };
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pic_gic && (imx51 || imx53 || imx6)]:
++IMPLEMENTATION [arm && pic_gic && imx]:
+ 
+ #include "irq_mgr_multi_chip.h"
+ #include "kmem.h"
+@@ -39,7 +39,7 @@ Pic::init()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pic_gic && mp && imx6]:
++IMPLEMENTATION [arm && pic_gic && mp && (imx6 || imx7)]:
+ 
+ PUBLIC static
+ void Pic::init_ap(Cpu_number, bool resume)
+diff --git a/src/kern/arm/bsp/imx/pic-arm-imx6ul.cpp b/src/kern/arm/bsp/imx/pic-arm-imx6ul.cpp
+deleted file mode 100644
+index c7647f8..0000000
+--- a/src/kern/arm/bsp/imx/pic-arm-imx6ul.cpp
++++ /dev/null
+@@ -1,25 +0,0 @@
+-INTERFACE [arm && pic_gic && imx6ul]:
+-
+-#include "gic.h"
+-#include "initcalls.h"
+-
+-// ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pic_gic && imx6ul]:
+-
+-#include "irq_mgr_multi_chip.h"
+-#include "kmem.h"
+-
+-PUBLIC static FIASCO_INIT
+-void
+-Pic::init()
+-{
+-  typedef Irq_mgr_multi_chip<8> M;
+-
+-  M *m = new Boot_object<M>(1);
+-
+-  gic.construct(Kmem::mmio_remap(Mem_layout::Gic_cpu_phys_base),
+-                Kmem::mmio_remap(Mem_layout::Gic_dist_phys_base));
+-  m->add_chip(0, gic, gic->nr_irqs());
+-
+-  Irq_mgr::mgr = m;
+-}
+diff --git a/src/kern/arm/bsp/imx/platform_control-arm-imx.cpp b/src/kern/arm/bsp/imx/platform_control-arm-imx.cpp
+new file mode 100644
+index 0000000..c6d76c3
+--- /dev/null
++++ b/src/kern/arm/bsp/imx/platform_control-arm-imx.cpp
+@@ -0,0 +1,74 @@
++INTERFACE [arm && mp && imx6]:
++
++#include "types.h"
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && mp && imx6]:
++
++#include "ipi.h"
++#include "mem_layout.h"
++#include "mmio_register_block.h"
++#include "kmem.h"
++
++PUBLIC static
++void
++Platform_control::boot_ap_cpus(Address phys_tramp_mp_addr)
++{
++  Register_block<32> src(Kmem::mmio_remap(Mem_layout::Src_phys_base));
++  enum
++  {
++    SRC_SCR  = 0,
++    SRC_GPR3 = 0x28,
++    SRC_GPR5 = 0x30,
++    SRC_GPR7 = 0x38,
++
++    SRC_SCR_CORE1_3_ENABLE = 7 << 22,
++    SRC_SCR_CORE1_3_RESET  = 7 << 14,
++  };
++
++  src[SRC_GPR3] = phys_tramp_mp_addr;
++  src[SRC_GPR5] = phys_tramp_mp_addr;
++  src[SRC_GPR7] = phys_tramp_mp_addr;
++
++  src[SRC_SCR].set(SRC_SCR_CORE1_3_ENABLE | SRC_SCR_CORE1_3_RESET);
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && mp && imx7]:
++
++#include "ipi.h"
++#include "mem_layout.h"
++#include "mmio_register_block.h"
++#include "kmem.h"
++
++PUBLIC static
++void
++Platform_control::boot_ap_cpus(Address phys_tramp_mp_addr)
++{
++  enum
++  {
++    GPC_CPU_PGC_SW_PUP_REQ             = 0x0f0,
++    GPC_PGC_A7CORE1_CTRL               = 0x840,
++
++    GPC_CPU_PGC_SW_PUP_REQ_CORE1_A7    = 1 << 1,
++    GPC_PGC_A7CORE1_CTRL_PCR           = 1 << 0,
++
++    SRC_A7RCR1                         = 0x08,
++    SRC_GPR3                           = 0x7C,
++
++    SRC_A7RCR_A7_CORE1_ENABLE          = 1 << 1,
++  };
++
++  Register_block<32> gpc(Kmem::mmio_remap(Mem_layout::Gpc_phys_base));
++  Register_block<32> src(Kmem::mmio_remap(Mem_layout::Src_phys_base));
++
++  src[SRC_GPR3] = phys_tramp_mp_addr;
++
++  gpc[GPC_PGC_A7CORE1_CTRL].set(GPC_PGC_A7CORE1_CTRL_PCR); // power off
++  gpc[GPC_CPU_PGC_SW_PUP_REQ].set(GPC_CPU_PGC_SW_PUP_REQ_CORE1_A7); // power up 2nd core
++  while (gpc[GPC_CPU_PGC_SW_PUP_REQ] & GPC_CPU_PGC_SW_PUP_REQ_CORE1_A7)
++    ;
++  gpc[GPC_PGC_A7CORE1_CTRL].clear(GPC_PGC_A7CORE1_CTRL_PCR); // enable again
++
++  src[SRC_A7RCR1].set(SRC_A7RCR_A7_CORE1_ENABLE);
++}
+diff --git a/src/kern/arm/bsp/imx/platform_control-arm-imx6.cpp b/src/kern/arm/bsp/imx/platform_control-arm-imx6.cpp
+deleted file mode 100644
+index bfe40b4..0000000
+--- a/src/kern/arm/bsp/imx/platform_control-arm-imx6.cpp
++++ /dev/null
+@@ -1,33 +0,0 @@
+-INTERFACE [arm && mp && imx6]:
+-
+-#include "types.h"
+-
+-IMPLEMENTATION [arm && mp && imx6]:
+-
+-#include "ipi.h"
+-#include "mem_layout.h"
+-#include "mmio_register_block.h"
+-#include "kmem.h"
+-
+-PUBLIC static
+-void
+-Platform_control::boot_ap_cpus(Address phys_tramp_mp_addr)
+-{
+-  Register_block<32> src(Kmem::mmio_remap(Mem_layout::Src_phys_base));
+-  enum
+-  {
+-    SRC_SCR  = 0,
+-    SRC_GPR3 = 0x28,
+-    SRC_GPR5 = 0x30,
+-    SRC_GPR7 = 0x38,
+-
+-    SRC_SCR_CORE1_3_ENABLE = 7 << 22,
+-    SRC_SCR_CORE1_3_RESET  = 7 << 14,
+-  };
+-
+-  src[SRC_GPR3] = phys_tramp_mp_addr;
+-  src[SRC_GPR5] = phys_tramp_mp_addr;
+-  src[SRC_GPR7] = phys_tramp_mp_addr;
+-
+-  src[SRC_SCR].set(SRC_SCR_CORE1_3_ENABLE | SRC_SCR_CORE1_3_RESET);
+-}
+diff --git a/src/kern/arm/bsp/imx/reset-arm-imx.cpp b/src/kern/arm/bsp/imx/reset-arm-imx.cpp
+index 692a46e..bfb334e 100644
+--- a/src/kern/arm/bsp/imx/reset-arm-imx.cpp
++++ b/src/kern/arm/bsp/imx/reset-arm-imx.cpp
+@@ -57,7 +57,16 @@ void platform_imx_cpus_off()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (imx35 || imx51 || imx53 || imx6 || imx6ul)]:
++IMPLEMENTATION [arm && imx7]:
++
++void platform_imx_cpus_off()
++{
++  // switch off core1
++  Io::clear<Mword>(1 << 1, Kmem::mmio_remap(Mem_layout::Src_phys_base) + 8);
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && (imx35 || imx51 || imx53 || imx6 || imx6ul || imx7)]:
+ 
+ #include "io.h"
+ #include "kmem.h"
+diff --git a/src/kern/arm/bsp/imx/timer-arm-generic-imx6ul.cpp b/src/kern/arm/bsp/imx/timer-arm-generic-imx.cpp
+similarity index 83%
+rename from src/kern/arm/bsp/imx/timer-arm-generic-imx6ul.cpp
+rename to src/kern/arm/bsp/imx/timer-arm-generic-imx.cpp
+index 7b01f81..0328bd0 100644
+--- a/src/kern/arm/bsp/imx/timer-arm-generic-imx6ul.cpp
++++ b/src/kern/arm/bsp/imx/timer-arm-generic-imx.cpp
+@@ -1,5 +1,5 @@
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && imx6ul && arm_generic_timer]:
++IMPLEMENTATION [arm && arm_generic_timer && (imx6ul || imx7)]:
+ 
+ PUBLIC static
+ unsigned Timer::irq()
+diff --git a/src/kern/arm/bsp/imx/uart-imx.cpp b/src/kern/arm/bsp/imx/uart-imx.cpp
+index cd2193f..b53a179 100644
+--- a/src/kern/arm/bsp/imx/uart-imx.cpp
++++ b/src/kern/arm/bsp/imx/uart-imx.cpp
+@@ -49,6 +49,16 @@ IMPLEMENT L4::Uart *Uart::uart()
+   return &uart;
+ }
+ 
++IMPLEMENTATION [imx7]:
++
++#include "uart_imx.h"
++
++IMPLEMENT L4::Uart *Uart::uart()
++{
++  static L4::Uart_imx7 uart;
++  return &uart;
++}
++
+ IMPLEMENTATION:
+ 
+ #include "koptions.h"
+diff --git a/src/lib/uart/uart_imx.cc b/src/lib/uart/uart_imx.cc
+index 77ec3e4..0b4159c 100644
+--- a/src/lib/uart/uart_imx.cc
++++ b/src/lib/uart/uart_imx.cc
+@@ -98,6 +98,10 @@ namespace L4
+         _regs->write<unsigned int>(UBIR, 0xf);
+         _regs->write<unsigned int>(UBMR, 0x15b);
+         break;
++      case Type_imx7:
++        _regs->write<unsigned int>(UBIR, 0xf);
++        _regs->write<unsigned int>(UBMR, 0x68);
++        break;
+       }
+ 
+     _regs->write<unsigned int>(UCR1, UCR1_EN);
+diff --git a/src/lib/uart/uart_imx.h b/src/lib/uart/uart_imx.h
+index b2b910c..f844dcc 100644
+--- a/src/lib/uart/uart_imx.h
++++ b/src/lib/uart/uart_imx.h
+@@ -8,7 +8,14 @@ namespace L4
+   class Uart_imx : public Uart
+   {
+   public:
+-    enum platform_type { Type_imx21, Type_imx35, Type_imx51, Type_imx6 };
++    enum platform_type
++    {
++      Type_imx21,
++      Type_imx35,
++      Type_imx51,
++      Type_imx6,
++      Type_imx7,
++    };
+     explicit Uart_imx(enum platform_type type)
+        : _type(type) {}
+     bool startup(Io_register_block const *);
+@@ -47,6 +54,12 @@ namespace L4
+   public:
+     Uart_imx6() : Uart_imx(Type_imx6) {}
+   };
++
++  class Uart_imx7 : public Uart_imx
++  {
++  public:
++    Uart_imx7() : Uart_imx(Type_imx7) {}
++  };
+ };
+ 
+ #endif
+diff --git a/src/templates/globalconfig.out.arm-imx7 b/src/templates/globalconfig.out.arm-imx7
+new file mode 100644
+index 0000000..bfe200e
+--- /dev/null
++++ b/src/templates/globalconfig.out.arm-imx7
+@@ -0,0 +1,4 @@
++CONFIG_ARM=y
++CONFIG_PF_IMX=y
++CONFIG_PF_IMX_7=y
++CONFIG_MP=y

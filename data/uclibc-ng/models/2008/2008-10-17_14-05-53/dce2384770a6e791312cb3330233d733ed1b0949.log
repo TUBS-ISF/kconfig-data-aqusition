@@ -1,0 +1,170 @@
+"2008-10-17 14:05:53 +0000"
+diff --git a/Makefile.in b/Makefile.in
+index 5b666b891..a1dc54ca4 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -61,6 +61,11 @@ include/bits/uClibc_config.h: extra/config/conf .config $(top_srcdir)extra/scrip
+ 	$(Q)$(top_srcdir)extra/scripts/conf-header.sh .config > $@
+ 	$(Q)$(MAKE) headers-y
+ 
++# The above doesn't work for threads, though. Just using check-symlinks for now.
++# XXX: FIXME: this is ugly
++MAKEFLAGS += -L
++include/config/linuxthreads/old.h include/config/linuxthreads/new.h:
++
+ # For the moment, we have to keep re-running this target
+ # because the fix includes scripts rely on pre-processers
+ # in order to generate the headers correctly :(.  That
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 8ea6eeb01..858e05bd6 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -403,6 +403,10 @@ config LINUXTHREADS_OLD
+ 	  the latest code from glibc, so it may be the only choice for the
+ 	  newer ports (like alpha/amd64/64bit arches and hppa).
+ 
++config LINUXTHREADS_NEW
++	def_bool y
++	depends on !LINUXTHREADS_OLD
++
+ config UCLIBC_HAS_SYSLOG
+ 	bool "Syslog support"
+ 	default y
+diff --git a/libpthread/linuxthreads.old/Makefile.in b/libpthread/linuxthreads.old/Makefile.in
+index fe29f2cd1..cae839360 100644
+--- a/libpthread/linuxthreads.old/Makefile.in
++++ b/libpthread/linuxthreads.old/Makefile.in
+@@ -71,9 +71,6 @@ libpthread-so-y += $(libpthread_OBJ:.o=.os) $(libpthread-shared-y)
+ 
+ lib-a-$(UCLIBC_HAS_THREADS) += $(top_builddir)lib/libpthread.a
+ lib-so-$(UCLIBC_HAS_THREADS) += $(top_builddir)lib/libpthread.so
+-objclean-y += libpthread_clean
+-headers-$(UCLIBC_HAS_THREADS) += linuxthreads_headers
+-headers_clean-y += linuxthreads_headers_clean
+ 
+ #ifeq ($(DOMULTI),n)
+ $(top_builddir)lib/libpthread.so: $(libpthread_OUT)/libpthread_so.a $(libc.depend)
+@@ -111,13 +108,17 @@ include/semaphore.h:
+ 	$(do_ln) ../$(PTDIR)/$(@F) $(top_builddir)$@
+ include/bits/pthreadtypes.h: | include/bits
+ 	$(do_ln) ../../$(PTDIR)/sysdeps/pthread/bits/$(@F) $(top_builddir)$@
+-linuxthreads_headers: include/pthread.h include/semaphore.h \
++
++linuxthreads_headers := include/pthread.h include/semaphore.h \
+ 			include/bits/pthreadtypes.h
++$(linuxthreads_headers): include/config/linuxthreads/old.h \
++	    include/config/linuxthreads/new.h
++headers-$(UCLIBC_HAS_THREADS) += $(linuxthreads_headers)
+ 
++objclean-y += libpthread_clean
++headers_clean-y += linuxthreads_headers_clean
+ linuxthreads_headers_clean:
+-	$(RM) $(top_builddir)include/pthread.h \
+-		$(top_builddir)include/semaphore.h \
+-		$(top_builddir)include/bits/pthreadtypes.h
++	$(RM) $(addprefix $(top_builddir),$(linuxthreads_headers))
+ 
+ libpthread_clean:
+ 	$(RM) $(libpthread_OUT)/*.{o,os,oS,a}
+diff --git a/libpthread/linuxthreads.old_db/Makefile.in b/libpthread/linuxthreads.old_db/Makefile.in
+index e99d4ddfc..fb2054f48 100644
+--- a/libpthread/linuxthreads.old_db/Makefile.in
++++ b/libpthread/linuxthreads.old_db/Makefile.in
+@@ -33,9 +33,6 @@ endif
+ 
+ lib-a-$(PTHREADS_DEBUG_SUPPORT) += $(top_builddir)lib/libthread_db.a
+ lib-so-$(PTHREADS_DEBUG_SUPPORT) += $(top_builddir)lib/libthread_db.so
+-objclean-y += libthread_db_clean
+-headers-$(PTHREADS_DEBUG_SUPPORT) += linuxthreads_db_headers
+-headers_clean-y += linuxthreads_db_headers_clean
+ 
+ #ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+@@ -62,8 +59,16 @@ $(top_builddir)lib/libthread_db.a: $(libthread_db-a-y)
+ 	$(Q)$(RM) $@
+ 	$(do_ar)
+ 
+-linuxthreads_db_headers:
+-	$(Q)$(LN) -sf ../$(PTDIR)_db/thread_db.h $(top_builddir)include/
++include/thread_db.h:
++	$(do_ln) ../$(PTDIR)_db/$(@F) $(top_builddir)$@
++
++linuxthreads_db_headers := include/thread_db.h
++$(linuxthreads_db_headers): include/config/linuxthreads/old.h \
++	    include/config/linuxthreads/new.h
++headers-$(PTHREADS_DEBUG_SUPPORT) += $(linuxthreads_db_headers)
++
++objclean-y += libthread_db_clean
++headers_clean-y += linuxthreads_db_headers_clean
+ 
+ linuxthreads_db_headers_clean:
+ 	$(RM) $(top_builddir)include/thread_db.h
+diff --git a/libpthread/linuxthreads/Makefile.in b/libpthread/linuxthreads/Makefile.in
+index b7c8914f5..f44677372 100644
+--- a/libpthread/linuxthreads/Makefile.in
++++ b/libpthread/linuxthreads/Makefile.in
+@@ -81,9 +81,6 @@ libpthread-so-y += $(libpthread_OBJ:.o=.oS)
+ 
+ lib-a-$(UCLIBC_HAS_THREADS) += $(top_builddir)lib/libpthread.a
+ lib-so-$(UCLIBC_HAS_THREADS) += $(top_builddir)lib/libpthread.so
+-objclean-y += libpthread_clean
+-headers-$(UCLIBC_HAS_THREADS) += linuxthreads_headers
+-headers_clean-y += linuxthreads_headers_clean
+ 
+ #ifeq ($(DOMULTI),n)
+ $(top_builddir)lib/libpthread.so: $(libpthread_OUT)/libpthread_so.a $(libc.depend) $(top_builddir)lib/libpthread_nonshared.a
+@@ -124,13 +121,17 @@ include/semaphore.h:
+ 	$(do_ln) ../$(PTDIR)/$(@F) $(top_builddir)$@
+ include/bits/pthreadtypes.h: | include/bits
+ 	$(do_ln) ../../$(PTDIR)/sysdeps/pthread/bits/$(@F) $(top_builddir)$@
+-linuxthreads_headers: include/pthread.h include/semaphore.h \
++
++linuxthreads_headers := include/pthread.h include/semaphore.h \
+ 			include/bits/pthreadtypes.h
++$(linuxthreads_headers): include/config/linuxthreads/old.h \
++	    include/config/linuxthreads/new.h
++headers-$(UCLIBC_HAS_THREADS) += $(linuxthreads_headers)
+ 
++objclean-y += libpthread_clean
++headers_clean-y += linuxthreads_headers_clean
+ linuxthreads_headers_clean:
+-	$(RM) $(top_builddir)include/pthread.h \
+-		$(top_builddir)include/semaphore.h \
+-		$(top_builddir)include/bits/pthreadtypes.h
++	$(RM) $(addprefix $(top_builddir),$(linuxthreads_headers))
+ 
+ libpthread_clean:
+ 	$(RM) $(libpthread_OUT)/{,*/,*/*/,*/*/*/,*/*/*/*/}*.{o,os,oS,a}
+diff --git a/libpthread/linuxthreads_db/Makefile.in b/libpthread/linuxthreads_db/Makefile.in
+index a611c6ee0..19d854714 100644
+--- a/libpthread/linuxthreads_db/Makefile.in
++++ b/libpthread/linuxthreads_db/Makefile.in
+@@ -33,9 +33,6 @@ endif
+ 
+ lib-a-$(PTHREADS_DEBUG_SUPPORT) += $(top_builddir)lib/libthread_db.a
+ lib-so-$(PTHREADS_DEBUG_SUPPORT) += $(top_builddir)lib/libthread_db.so
+-objclean-y += libthread_db_clean
+-headers-$(PTHREADS_DEBUG_SUPPORT) += linuxthreads_db_headers
+-headers_clean-y += linuxthreads_db_headers_clean
+ 
+ #ifeq ($(DOMULTI),n)
+ ifeq ($(DOPIC),y)
+@@ -62,8 +59,16 @@ $(top_builddir)lib/libthread_db.a: $(libthread_db-a-y)
+ 	$(Q)$(RM) $@
+ 	$(do_ar)
+ 
+-linuxthreads_db_headers:
+-	$(Q)$(LN) -sf ../$(PTDIR)_db/thread_db.h $(top_builddir)include/
++include/thread_db.h:
++	$(do_ln) ../$(PTDIR)_db/$(@F) $(top_builddir)$@
++
++linuxthreads_db_headers := include/thread_db.h
++$(linuxthreads_db_headers): include/config/linuxthreads/old.h \
++	    include/config/linuxthreads/new.h
++headers-$(PTHREADS_DEBUG_SUPPORT) += $(linuxthreads_db_headers)
++
++objclean-y += libthread_db_clean
++headers_clean-y += linuxthreads_db_headers_clean
+ 
+ linuxthreads_db_headers_clean:
+ 	$(RM) $(top_builddir)include/thread_db.h

@@ -1,0 +1,170 @@
+"2020-12-06 00:02:46 -0600"
+diff --git a/Config.in b/Config.in
+index f7407d85..27948ad3 100644
+--- a/Config.in
++++ b/Config.in
+@@ -106,12 +106,6 @@ config TOYBOX_HELP_DASHDASH
+ 	  optstring. (Use TOYFLAG_NOHELP to disable.) Produces the same output
+ 	  as "help command". --version shows toybox version.
+ 
+-config TOYBOX_I18N
+-	bool "Internationalization support"
+-	default y
+-	help
+-	  Support for UTF-8 character sets, and some locale support.
+-
+ config TOYBOX_FREE
+ 	bool "Free memory unnecessarily"
+ 	default n
+diff --git a/lib/lib.c b/lib/lib.c
+index 413d0f73..7786fcc1 100644
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -395,37 +395,41 @@ int utf8towc(wchar_t *wc, char *str, unsigned len)
+   return str-s;
+ }
+ 
++// Convert string to lower case, utf8 aware.
+ char *strlower(char *s)
+ {
+   char *try, *new;
++  int len, mlen = (strlen(s)|7)+9;
++  wchar_t c;
+ 
+-  if (!CFG_TOYBOX_I18N) {
+-    try = new = xstrdup(s);
+-    for (; *s; s++) *(new++) = tolower(*s);
+-  } else {
+-    // I can't guarantee the string _won't_ expand during reencoding, so...?
+-    try = new = xmalloc(strlen(s)*2+1);
+-
+-    while (*s) {
+-      wchar_t c;
+-      int len = utf8towc(&c, s, MB_CUR_MAX);
+-
+-      if (len < 1) *(new++) = *(s++);
+-      else {
+-        s += len;
+-        // squash title case too
+-        c = towlower(c);
+-
+-        // if we had a valid utf8 sequence, convert it to lower case, and can't
+-        // encode back to utf8, something is wrong with your libc. But just
+-        // in case somebody finds an exploit...
+-        len = wcrtomb(new, c, 0);
+-        if (len < 1) error_exit("bad utf8 %x", (int)c);
+-        new += len;
+-      }
++  try = new = xmalloc(mlen);
++
++  while (*s) {
++
++    if (1>(len = utf8towc(&c, s, MB_CUR_MAX))) {
++      *(new++) = *(s++);
++
++      continue;
+     }
+-    *new = 0;
++
++    s += len;
++    // squash title case too
++    c = towlower(c);
++
++    // if we had a valid utf8 sequence, convert it to lower case, and can't
++    // encode back to utf8, something is wrong with your libc. But just
++    // in case somebody finds an exploit...
++    len = wcrtomb(new, c, 0);
++    if (len < 1) error_exit("bad utf8 %x", (int)c);
++    new += len;
++
++    // Case conversion can expand utf8 representation, but with extra mlen
++    // space above we should basically never need to realloc
++    if (mlen+4 > (len = new-try)) continue;
++    try = xrealloc(try, mlen = len+16);
++    new = try+len;
+   }
++  *new = 0;
+ 
+   return try;
+ }
+diff --git a/main.c b/main.c
+index 7c60bdf4..25e4c472 100644
+--- a/main.c
++++ b/main.c
+@@ -98,11 +98,10 @@ void toy_singleinit(struct toy_list *which, char *argv[])
+   if (!(which->flags & TOYFLAG_NOFORK)) {
+     toys.old_umask = umask(0);
+     if (!(which->flags & TOYFLAG_UMASK)) umask(toys.old_umask);
+-    if (CFG_TOYBOX_I18N) {
+-      // Deliberately try C.UTF-8 before the user's locale to work around users
+-      // that choose non-UTF-8 locales. macOS doesn't support C.UTF-8 though.
+-      if (!setlocale(LC_CTYPE, "C.UTF-8")) setlocale(LC_CTYPE, "");
+-    }
++
++    // Try user's locale, falling back to C.UTF-8
++    setlocale(LC_CTYPE, "");
++    if (!strcmp("UTF-8", nl_langinfo(CODESET))) setlocale(LC_CTYPE, "C.UTF-8");
+     setlinebuf(stdout);
+   }
+ }
+diff --git a/toys.h b/toys.h
+index b2e4721c..ead39b50 100644
+--- a/toys.h
++++ b/toys.h
+@@ -58,6 +58,7 @@
+ 
+ // Internationalization support (also in POSIX and LSB)
+ 
++#include <langinfo.h>
+ #include <locale.h>
+ #include <wchar.h>
+ #include <wctype.h>
+diff --git a/toys/example/demo_utf8towc.c b/toys/example/demo_utf8towc.c
+index 25737856..c0522543 100644
+--- a/toys/example/demo_utf8towc.c
++++ b/toys/example/demo_utf8towc.c
+@@ -6,7 +6,6 @@ USE_DEMO_UTF8TOWC(NEWTOY(demo_utf8towc, 0, TOYFLAG_USR|TOYFLAG_BIN))
+ 
+ config DEMO_UTF8TOWC
+   bool "demo_utf8towc"
+-  depends on TOYBOX_I18N
+   default n
+   help
+     usage: demo_utf8towc
+diff --git a/toys/posix/expand.c b/toys/posix/expand.c
+index f1fd8d33..f3cd44d0 100644
+--- a/toys/posix/expand.c
++++ b/toys/posix/expand.c
+@@ -43,22 +43,18 @@ static void do_expand(int fd, char *name)
+     }
+     if (!len) break;
+     for (i=0; i<len; i++) {
+-      int width = 1;
++      wchar_t blah;
++      int width = utf8towc(&blah, toybuf+i, len-i);
+       char c;
+ 
+-      if (CFG_TOYBOX_I18N) {
+-        wchar_t blah;
+-
+-        width = utf8towc(&blah, toybuf+i, len-i);
+-        if (width > 1) {
+-          if (width != fwrite(toybuf+i, width, 1, stdout))
+-            perror_exit("stdout");
+-          i += width-1;
+-          x++;
+-          continue;
+-        } else if (width == -2) break;
+-        else if (width == -1) continue;
+-      }
++      if (width > 1) {
++        if (width != fwrite(toybuf+i, width, 1, stdout))
++          perror_exit("stdout");
++        i += width-1;
++        x++;
++        continue;
++      } else if (width == -2) break;
++      else if (width == -1) continue;
+       c = toybuf[i];
+ 
+       if (c != '\t') {

@@ -1,0 +1,514 @@
+"2015-09-14 11:45:27 -0300"
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index fb84ae61..54f8d8eb 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -51,9 +51,14 @@ config OIC
+ 
+             Both client and server sides are covered by this library.
+ 
++config HTTP
++	bool
++	default n
++
+ config HTTP_CLIENT
+ 	bool "HTTP Client"
+ 	default y
++	select HTTP
+ 	depends on NETWORK && FEATURE_HTTP_CLIENT
+ 	help
+             Client API for both HTTP and HTTPS.
+diff --git a/src/lib/comms/Makefile b/src/lib/comms/Makefile
+index f5a70fc4..d8c32650 100644
+--- a/src/lib/comms/Makefile
++++ b/src/lib/comms/Makefile
+@@ -19,6 +19,9 @@ obj-networking-$(OIC) += \
+     sol-oic-client.o \
+     sol-oic-server.o
+ 
++obj-networking-$(HTTP) += \
++    sol-http-common.o
++
+ obj-networking-$(HTTP_CLIENT) += \
+     sol-http-client-impl-curl.o
+ 
+@@ -38,5 +41,8 @@ headers-networking-$(OIC) += \
+     include/sol-oic-client.h \
+     include/sol-oic-server.h
+ 
++headers-networking-$(HTTP) += \
++    include/sol-http.h
++
+ headers-networking-$(HTTP_CLIENT) += \
+     include/sol-http-client.h
+diff --git a/src/lib/comms/include/sol-http-client.h b/src/lib/comms/include/sol-http-client.h
+index 5dd149df..67190902 100644
+--- a/src/lib/comms/include/sol-http-client.h
++++ b/src/lib/comms/include/sol-http-client.h
+@@ -32,8 +32,7 @@
+ 
+ #pragma once
+ 
+-#include <sol-buffer.h>
+-#include <sol-vector.h>
++#include <sol-http.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -53,136 +52,6 @@ extern "C" {
+  * @{
+  */
+ 
+-enum sol_http_method {
+-    SOL_HTTP_METHOD_GET,
+-    SOL_HTTP_METHOD_POST,
+-    SOL_HTTP_METHOD_HEAD,
+-};
+-
+-enum sol_http_param_type {
+-    SOL_HTTP_PARAM_QUERY_PARAM,
+-    SOL_HTTP_PARAM_COOKIE,
+-    SOL_HTTP_PARAM_POST_FIELD,
+-    SOL_HTTP_PARAM_HEADER,
+-    SOL_HTTP_PARAM_AUTH_BASIC,
+-    SOL_HTTP_PARAM_ALLOW_REDIR,
+-    SOL_HTTP_PARAM_TIMEOUT,
+-    SOL_HTTP_PARAM_VERBOSE
+-};
+-
+-struct sol_http_param {
+-#define SOL_HTTP_PARAM_API_VERSION (1)
+-    uint16_t api_version;
+-    uint16_t reserved;
+-
+-    struct sol_vector params;
+-};
+-
+-struct sol_http_param_value {
+-    enum sol_http_param_type type;
+-    union {
+-        struct {
+-            const char *key;
+-            const char *value;
+-        } key_value;
+-        struct {
+-            const char *user;
+-            const char *password;
+-        } auth;
+-        struct {
+-            bool value;
+-        } boolean;
+-        struct {
+-            int value;
+-        } integer;
+-    } value;
+-};
+-
+-struct sol_http_response {
+-#define SOL_HTTP_RESPONSE_API_VERSION (1)
+-    uint16_t api_version;
+-    uint16_t reserved;
+-
+-    const char *content_type;
+-    const char *url;
+-    struct sol_buffer content;
+-    int response_code;
+-};
+-
+-#define SOL_HTTP_RESPONSE_CHECK_API(response_) \
+-    do { \
+-        if (unlikely(!response_)) { \
+-            SOL_WRN("Error while reaching service."); \
+-            return; \
+-        } \
+-        if (unlikely(response_->api_version != \
+-            SOL_HTTP_RESPONSE_API_VERSION)) { \
+-            SOL_ERR("Unexpected API version (response is %u, expected %u)", \
+-                response->api_version, SOL_HTTP_RESPONSE_API_VERSION); \
+-            return; \
+-        } \
+-    } while (0)
+-
+-#define SOL_HTTP_REQUEST_PARAM_KEY_VALUE(type_, key_, value_) \
+-    (struct sol_http_param_value) { \
+-        .type = type_, \
+-        .value.key_value = { \
+-            .key = (key_), \
+-            .value = (value_) \
+-        } \
+-    }
+-
+-#define SOL_HTTP_REQUEST_PARAM_BOOLEAN(type_, setting_) \
+-    (struct sol_http_param_value) { \
+-        .type = type_, \
+-        .value.boolean.value = (setting_) \
+-    }
+-
+-#define SOL_HTTP_REQUEST_PARAM_COOKIE(key_, value_) \
+-    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_COOKIE, key_, value_)
+-
+-#define SOL_HTTP_REQUEST_PARAM_HEADER(header_, content_) \
+-    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_HEADER, header_, content_)
+-
+-#define SOL_HTTP_REQUEST_PARAM_AUTH_BASIC(username_, password_) \
+-    (struct sol_http_param_value) { \
+-        .type = SOL_HTTP_PARAM_AUTH_BASIC, \
+-        .value.auth = { \
+-            .user = (username_), \
+-            .password = (password_) \
+-        } \
+-    }
+-
+-#define SOL_HTTP_REQUEST_PARAM_QUERY(key_, value_) \
+-    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_QUERY_PARAM, key_, value_)
+-
+-#define SOL_HTTP_REQUEST_PARAM_POST_FIELD(key_, value_) \
+-    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_POST_FIELD, key_, value_)
+-
+-#define SOL_HTTP_REQUEST_PARAM_ALLOW_REDIR(setting_) \
+-    SOL_HTTP_REQUEST_PARAM_BOOLEAN(SOL_HTTP_PARAM_ALLOW_REDIR, setting_)
+-
+-#define SOL_HTTP_REQUEST_PARAM_VERBOSE(setting_) \
+-    SOL_HTTP_REQUEST_PARAM_BOOLEAN(SOL_HTTP_PARAM_VERBOSE, setting_)
+-
+-#define SOL_HTTP_REQUEST_PARAM_TIMEOUT(setting_) \
+-    (struct sol_http_param_value) { \
+-        .type = SOL_HTTP_PARAM_TIMEOUT, \
+-        .value.integer.value = (setting_) \
+-    }
+-
+-static inline void
+-sol_http_param_init(struct sol_http_param *params)
+-{
+-    *params = (struct sol_http_param) {
+-        .api_version = SOL_HTTP_PARAM_API_VERSION,
+-        .params = SOL_VECTOR_INIT(struct sol_http_param_value)
+-    };
+-}
+-
+-bool sol_http_param_add(struct sol_http_param *params,
+-    struct sol_http_param_value value) SOL_ATTR_WARN_UNUSED_RESULT;
+-void sol_http_param_free(struct sol_http_param *params);
+ 
+ struct sol_http_client_connection;
+ 
+diff --git a/src/lib/comms/include/sol-http.h b/src/lib/comms/include/sol-http.h
+new file mode 100644
+index 00000000..b50e4759
+--- /dev/null
++++ b/src/lib/comms/include/sol-http.h
+@@ -0,0 +1,187 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <sol-buffer.h>
++#include <sol-vector.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @defgroup HTTP
++ * @ingroup Comms
++ *
++ * @{
++ */
++
++enum sol_http_method {
++    SOL_HTTP_METHOD_GET,
++    SOL_HTTP_METHOD_POST,
++    SOL_HTTP_METHOD_HEAD,
++};
++
++enum sol_http_param_type {
++    SOL_HTTP_PARAM_QUERY_PARAM,
++    SOL_HTTP_PARAM_COOKIE,
++    SOL_HTTP_PARAM_POST_FIELD,
++    SOL_HTTP_PARAM_HEADER,
++    SOL_HTTP_PARAM_AUTH_BASIC,
++    SOL_HTTP_PARAM_ALLOW_REDIR,
++    SOL_HTTP_PARAM_TIMEOUT,
++    SOL_HTTP_PARAM_VERBOSE
++};
++
++struct sol_http_param {
++#define SOL_HTTP_PARAM_API_VERSION (1)
++    uint16_t api_version;
++    uint16_t reserved;
++
++    struct sol_vector params;
++};
++
++struct sol_http_param_value {
++    enum sol_http_param_type type;
++    union {
++        struct {
++            const char *key;
++            const char *value;
++        } key_value;
++        struct {
++            const char *user;
++            const char *password;
++        } auth;
++        struct {
++            bool value;
++        } boolean;
++        struct {
++            int value;
++        } integer;
++    } value;
++};
++
++struct sol_http_response {
++#define SOL_HTTP_RESPONSE_API_VERSION (1)
++    uint16_t api_version;
++    uint16_t reserved;
++
++    const char *content_type;
++    const char *url;
++    struct sol_buffer content;
++    int response_code;
++};
++
++#define SOL_HTTP_RESPONSE_CHECK_API(response_) \
++    do { \
++        if (unlikely(!response_)) { \
++            SOL_WRN("Error while reaching service."); \
++            return; \
++        } \
++        if (unlikely(response_->api_version != \
++            SOL_HTTP_RESPONSE_API_VERSION)) { \
++            SOL_ERR("Unexpected API version (response is %u, expected %u)", \
++                response->api_version, SOL_HTTP_RESPONSE_API_VERSION); \
++            return; \
++        } \
++    } while (0)
++
++#define SOL_HTTP_REQUEST_PARAM_KEY_VALUE(type_, key_, value_) \
++    (struct sol_http_param_value) { \
++        .type = type_, \
++        .value.key_value = { \
++            .key = (key_), \
++            .value = (value_) \
++        } \
++    }
++
++#define SOL_HTTP_REQUEST_PARAM_BOOLEAN(type_, setting_) \
++    (struct sol_http_param_value) { \
++        .type = type_, \
++        .value.boolean.value = (setting_) \
++    }
++
++#define SOL_HTTP_REQUEST_PARAM_COOKIE(key_, value_) \
++    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_COOKIE, key_, value_)
++
++#define SOL_HTTP_REQUEST_PARAM_HEADER(header_, content_) \
++    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_HEADER, header_, content_)
++
++#define SOL_HTTP_REQUEST_PARAM_AUTH_BASIC(username_, password_) \
++    (struct sol_http_param_value) { \
++        .type = SOL_HTTP_PARAM_AUTH_BASIC, \
++        .value.auth = { \
++            .user = (username_), \
++            .password = (password_) \
++        } \
++    }
++
++#define SOL_HTTP_REQUEST_PARAM_QUERY(key_, value_) \
++    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_QUERY_PARAM, key_, value_)
++
++#define SOL_HTTP_REQUEST_PARAM_POST_FIELD(key_, value_) \
++    SOL_HTTP_REQUEST_PARAM_KEY_VALUE(SOL_HTTP_PARAM_POST_FIELD, key_, value_)
++
++#define SOL_HTTP_REQUEST_PARAM_ALLOW_REDIR(setting_) \
++    SOL_HTTP_REQUEST_PARAM_BOOLEAN(SOL_HTTP_PARAM_ALLOW_REDIR, setting_)
++
++#define SOL_HTTP_REQUEST_PARAM_VERBOSE(setting_) \
++    SOL_HTTP_REQUEST_PARAM_BOOLEAN(SOL_HTTP_PARAM_VERBOSE, setting_)
++
++#define SOL_HTTP_REQUEST_PARAM_TIMEOUT(setting_) \
++    (struct sol_http_param_value) { \
++        .type = SOL_HTTP_PARAM_TIMEOUT, \
++        .value.integer.value = (setting_) \
++    }
++
++static inline void
++sol_http_param_init(struct sol_http_param *params)
++{
++    *params = (struct sol_http_param) {
++        .api_version = SOL_HTTP_PARAM_API_VERSION,
++        .params = SOL_VECTOR_INIT(struct sol_http_param_value)
++    };
++}
++
++bool sol_http_param_add(struct sol_http_param *params,
++    struct sol_http_param_value value) SOL_ATTR_WARN_UNUSED_RESULT;
++void sol_http_param_free(struct sol_http_param *params);
++
++
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/comms/sol-http-client-impl-curl.c b/src/lib/comms/sol-http-client-impl-curl.c
+index 82298783..f8e8e56d 100644
+--- a/src/lib/comms/sol-http-client-impl-curl.c
++++ b/src/lib/comms/sol-http-client-impl-curl.c
+@@ -845,41 +845,3 @@ sol_http_client_connection_cancel(struct sol_http_client_connection *pending)
+     SOL_INT_CHECK(sol_ptr_vector_remove(&global.connections, pending), < 0);
+     destroy_connection(pending);
+ }
+-
+-
+-SOL_API bool
+-sol_http_param_add(struct sol_http_param *params,
+-    struct sol_http_param_value value)
+-{
+-    struct sol_http_param_value *ptr;
+-
+-    SOL_NULL_CHECK(params, -EINVAL);
+-
+-    if (params->api_version != SOL_HTTP_PARAM_API_VERSION) {
+-        SOL_ERR("API version mistmatch; expected %u, got %u",
+-            SOL_HTTP_PARAM_API_VERSION, params->api_version);
+-        return false;
+-    }
+-
+-    ptr = sol_vector_append(&params->params);
+-    if (!ptr) {
+-        SOL_WRN("Could not append option to parameter vector");
+-        return false;
+-    }
+-
+-    memcpy(ptr, &value, sizeof(value));
+-    return true;
+-}
+-
+-SOL_API void
+-sol_http_param_free(struct sol_http_param *params)
+-{
+-    SOL_NULL_CHECK(params);
+-
+-    if (params->api_version != SOL_HTTP_PARAM_API_VERSION) {
+-        SOL_ERR("API version mistmatch; expected %u, got %u",
+-            SOL_HTTP_PARAM_API_VERSION, params->api_version);
+-        return;
+-    }
+-    sol_vector_clear(&params->params);
+-}
+diff --git a/src/lib/comms/sol-http-common.c b/src/lib/comms/sol-http-common.c
+new file mode 100644
+index 00000000..4a046c72
+--- /dev/null
++++ b/src/lib/comms/sol-http-common.c
+@@ -0,0 +1,75 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++
++#include "sol-http.h"
++#include "sol-log.h"
++#include "sol-util.h"
++#include "sol-vector.h"
++
++SOL_API bool
++sol_http_param_add(struct sol_http_param *params,
++    struct sol_http_param_value value)
++{
++    struct sol_http_param_value *ptr;
++
++    SOL_NULL_CHECK(params, -EINVAL);
++
++    if (params->api_version != SOL_HTTP_PARAM_API_VERSION) {
++        SOL_ERR("API version mistmatch; expected %u, got %u",
++            SOL_HTTP_PARAM_API_VERSION, params->api_version);
++        return false;
++    }
++
++    ptr = sol_vector_append(&params->params);
++    if (!ptr) {
++        SOL_WRN("Could not append option to parameter vector");
++        return false;
++    }
++
++    memcpy(ptr, &value, sizeof(value));
++    return true;
++}
++
++SOL_API void
++sol_http_param_free(struct sol_http_param *params)
++{
++    SOL_NULL_CHECK(params);
++
++    if (params->api_version != SOL_HTTP_PARAM_API_VERSION) {
++        SOL_ERR("API version mistmatch; expected %u, got %u",
++            SOL_HTTP_PARAM_API_VERSION, params->api_version);
++        return;
++    }
++    sol_vector_clear(&params->params);
++}

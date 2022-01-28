@@ -1,0 +1,2310 @@
+"2015-10-29 11:22:17 -0200"
+diff --git a/src/modules/flow/app/app.c b/src/modules/flow/app/app.c
+index 55c85f9c..802c0a6a 100644
+--- a/src/modules/flow/app/app.c
++++ b/src/modules/flow/app/app.c
+@@ -70,11 +70,11 @@ argv_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_opt
+         -EINVAL);
+     opts = (const struct sol_flow_node_type_app_argv_options *)options;
+ 
+-    r = check_index(node, opts->index.val);
++    r = check_index(node, opts->index);
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     return sol_flow_send_string_packet(node,
+-        SOL_FLOW_NODE_TYPE_APP_ARGV__OUT__OUT, sol_argv()[opts->index.val]);
++        SOL_FLOW_NODE_TYPE_APP_ARGV__OUT__OUT, sol_argv()[opts->index]);
+ }
+ 
+ static int
+diff --git a/src/modules/flow/app/app.json b/src/modules/flow/app/app.json
+index 8bb0de13..d13a7a85 100644
+--- a/src/modules/flow/app/app.json
++++ b/src/modules/flow/app/app.json
+@@ -48,7 +48,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Argument position.",
+             "name": "index"
+           }
+diff --git a/src/modules/flow/constant/constant.c b/src/modules/flow/constant/constant.c
+index 9e8847ef..af66a0c8 100644
+--- a/src/modules/flow/constant/constant.c
++++ b/src/modules/flow/constant/constant.c
+@@ -40,26 +40,36 @@ static int
+ constant_irange_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
+ {
+     const struct sol_flow_node_type_constant_int_options *opts;
++    struct sol_irange value;
++    int r;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
+         SOL_FLOW_NODE_TYPE_CONSTANT_INT_OPTIONS_API_VERSION, -EINVAL);
+     opts = (const struct sol_flow_node_type_constant_int_options *)options;
+ 
++    r = sol_irange_compose(&opts->value_spec, opts->value, &value);
++    SOL_INT_CHECK(r, < 0, r);
++
+     return sol_flow_send_irange_packet(node,
+-        SOL_FLOW_NODE_TYPE_CONSTANT_INT__OUT__OUT, &opts->value);
++        SOL_FLOW_NODE_TYPE_CONSTANT_INT__OUT__OUT, &value);
+ }
+ 
+ static int
+ constant_drange_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
+ {
+     const struct sol_flow_node_type_constant_float_options *opts;
++    struct sol_drange value;
++    int r;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
+         SOL_FLOW_NODE_TYPE_CONSTANT_FLOAT_OPTIONS_API_VERSION, -EINVAL);
+     opts = (const struct sol_flow_node_type_constant_float_options *)options;
+ 
++    r = sol_drange_compose(&opts->value_spec, opts->value, &value);
++    SOL_INT_CHECK(r, < 0, r);
++
+     return sol_flow_send_drange_packet(node,
+-        SOL_FLOW_NODE_TYPE_CONSTANT_FLOAT__OUT__OUT, &opts->value);
++        SOL_FLOW_NODE_TYPE_CONSTANT_FLOAT__OUT__OUT, &value);
+ }
+ 
+ static int
+diff --git a/src/modules/flow/constant/constant.json b/src/modules/flow/constant/constant.json
+index 36e06d6e..9e344998 100644
+--- a/src/modules/flow/constant/constant.json
++++ b/src/modules/flow/constant/constant.json
+@@ -69,9 +69,20 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "drange",
++            "data_type": "float",
++            "default": 0,
+             "description": "Value of constant.",
+             "name": "value"
++          },
++          {
++            "data_type": "drange-spec",
++            "default": {
++                "min": "-DBL_MAX",
++                "max": "DBL_MAX",
++                "step": "DBL_MIN"
++            },
++            "description": "Range (min / max) and step of constant.",
++            "name": "value_spec"
+           }
+         ],
+         "version": 1
+@@ -111,9 +122,20 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
++            "default": 0,
+             "description": "Value of constant.",
+             "name": "value"
++          },
++          {
++            "data_type": "irange-spec",
++            "default": {
++                "min": "INT32_MIN",
++                "max": "INT32_MAX",
++                "step": 1
++            },
++            "description": "Range (min / max) and step of constant.",
++            "name": "value_spec"
+           }
+         ],
+         "version": 1
+diff --git a/src/modules/flow/evdev/evdev.c b/src/modules/flow/evdev/evdev.c
+index e6685435..a9124e49 100644
+--- a/src/modules/flow/evdev/evdev.c
++++ b/src/modules/flow/evdev/evdev.c
+@@ -304,10 +304,10 @@ evdev_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_op
+     const struct sol_flow_node_type_evdev_boolean_options *opts =
+         (const struct sol_flow_node_type_evdev_boolean_options *)options;
+ 
+-    if (opts->ev_code.val >= KEY_MAX)
++    if (opts->ev_code >= KEY_MAX)
+         return -EINVAL;
+ 
+-    mdata->handler = handler_evdev_open(node, opts->path, EV_KEY, opts->ev_code.val);
++    mdata->handler = handler_evdev_open(node, opts->path, EV_KEY, opts->ev_code);
+     SOL_NULL_CHECK(mdata->handler, -EINVAL);
+ 
+     if (!sol_monitors_append(&mdata->handler->monitors,
+@@ -319,7 +319,7 @@ evdev_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_op
+     mdata->value = 0;
+ 
+     mdata->ev_type = EV_KEY;
+-    mdata->ev_code = opts->ev_code.val;
++    mdata->ev_code = opts->ev_code;
+     mdata->on_press = opts->on_press;
+     mdata->on_release = opts->on_release;
+ 
+diff --git a/src/modules/flow/evdev/evdev.json b/src/modules/flow/evdev/evdev.json
+index b4669373..65026e7f 100644
+--- a/src/modules/flow/evdev/evdev.json
++++ b/src/modules/flow/evdev/evdev.json
+@@ -18,7 +18,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "The event code to be monitored",
+             "name": "ev_code"
+           },
+diff --git a/src/modules/flow/float/float.c b/src/modules/flow/float/float.c
+index 3f53f8ee..fcd9f33d 100644
+--- a/src/modules/flow/float/float.c
++++ b/src/modules/flow/float/float.c
+@@ -715,15 +715,15 @@ wave_generator_trapezoidal_open(struct sol_flow_node *node,
+         return -EDOM;
+     }
+ 
+-    wave_generator_set_option(opts->ticks_inc.val, &mdata->ticks_inc, 1,
++    wave_generator_set_option(opts->ticks_inc, &mdata->ticks_inc, 1,
+         "ticks_inc");
+-    wave_generator_set_option(opts->ticks_dec.val, &mdata->ticks_dec, 1,
++    wave_generator_set_option(opts->ticks_dec, &mdata->ticks_dec, 1,
+         "ticks_dec");
+-    wave_generator_set_option(opts->tick_start.val, &tick_start, 0,
++    wave_generator_set_option(opts->tick_start, &tick_start, 0,
+         "tick_start");
+-    wave_generator_set_option(opts->ticks_at_max.val, &mdata->ticks_at_max, 0,
++    wave_generator_set_option(opts->ticks_at_max, &mdata->ticks_at_max, 0,
+         "ticks_at_max");
+-    wave_generator_set_option(opts->ticks_at_min.val, &mdata->ticks_at_min, 0,
++    wave_generator_set_option(opts->ticks_at_min, &mdata->ticks_at_min, 0,
+         "ticks_at_min");
+ 
+     t_state = &mdata->t_state;
+@@ -836,9 +836,9 @@ wave_generator_sinusoidal_open(struct sol_flow_node *node,
+         return -EDOM;
+     }
+ 
+-    wave_generator_set_option(opts->ticks_per_period.val, &ticks_per_period, 1,
++    wave_generator_set_option(opts->ticks_per_period, &ticks_per_period, 1,
+         "ticks_per_period");
+-    wave_generator_set_option(opts->tick_start.val, &tick_start, 0,
++    wave_generator_set_option(opts->tick_start, &tick_start, 0,
+         "tick_start");
+ 
+     mdata->amplitude = opts->amplitude;
+diff --git a/src/modules/flow/float/float.json b/src/modules/flow/float/float.json
+index 5b7e695e..3676b4c4 100644
+--- a/src/modules/flow/float/float.json
++++ b/src/modules/flow/float/float.json
+@@ -734,10 +734,8 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
+-            "default": {
+-              "val": 1
+-            },
++            "data_type": "int",
++            "default": 1,
+             "description": "In how many function iterations (ticks) it should go from max to min values. The value must be greater than or equal to 1 (which means go from max to min instantly). With this value, the node will calculate the 'increasing step' of the function for you.",
+             "name": "ticks_inc"
+           },
+@@ -747,10 +745,8 @@
+             "name": "max"
+           },
+           {
+-            "data_type": "irange",
+-            "default": {
+-              "val": 1
+-            },
++            "data_type": "int",
++            "default": 1,
+             "description": "In how many function iterations (ticks) it should go from min to max values. The value must be greater than or equal to 1 (which means go from min to max instantly). With this value, the node will calculate the 'increasing step' of the function for you.",
+             "name": "ticks_dec"
+           },
+@@ -760,26 +756,20 @@
+             "name": "min"
+           },
+           {
+-            "data_type": "irange",
+-            "default": {
+-              "val": 0
+-            },
++            "data_type": "int",
++            "default": 0,
+             "description": "The starting point of the wave, in ticks (must be greater or equal to 0). Zero means to start at min value, when no ticks have happened yet. Use this to shift the starting point and overwrite the default behavior.",
+             "name": "tick_start"
+           },
+           {
+-            "data_type": "irange",
+-            "default": {
+-              "val": 0
+-            },
++            "data_type": "int",
++            "default": 0,
+             "description": "The number of (extra) input ticks the wave will hold its output at max value when it reaches it. The value must be greater than or equal to 0.",
+             "name": "ticks_at_max"
+           },
+           {
+-            "data_type": "irange",
+-            "default": {
+-              "val": 0
+-            },
++            "data_type": "int",
++            "default": 0,
+             "description": "The number of (extra) input ticks the wave will hold its output at min value when it reaches it. The value must be greater than or equal to 0.",
+             "name": "ticks_at_min"
+           }
+@@ -816,7 +806,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "In how many function iterations (ticks) it should go from the starting to the ending value of each function period (AKA function's resolution). The value must be greater than or equal to 1 (which means go from start to end in one step only), but note that waves very small values for this option tend to be useless.",
+             "name": "ticks_per_period"
+           },
+@@ -827,10 +817,8 @@
+             "name": "amplitude"
+           },
+           {
+-            "data_type": "irange",
+-            "default": {
+-              "val": 0
+-            },
++            "data_type": "int",
++            "default": 0,
+             "description": "The starting point of the wave, in ticks (must be greater or equal to 0). Zero means to start at the beginning of the sive wave, when no ticks have happened yet. Use this to shift the starting point and overwrite the default behavior.",
+             "name": "tick_start"
+           }
+diff --git a/src/modules/flow/form/form.c b/src/modules/flow/form/form.c
+index cf828414..872439f2 100644
+--- a/src/modules/flow/form/form.c
++++ b/src/modules/flow/form/form.c
+@@ -85,6 +85,7 @@ buffer_re_init(struct sol_buffer *buf,
+     size_t size;
+ 
+     int r = get_buf_size(rows, columns, &size);
++
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     /* We choose to do the ending nul byte ourselves, since we're
+@@ -599,9 +600,9 @@ selector_open(struct sol_flow_node *node,
+     sol_ptr_vector_init(&mdata->items);
+     mdata->enabled = true;
+ 
+-    r = common_form_init(opts->rows.val,
++    r = common_form_init(opts->rows,
+         &mdata->rows,
+-        opts->columns.val,
++        opts->columns,
+         &mdata->columns,
+         opts->format,
+         &mdata->format,
+@@ -962,9 +963,9 @@ boolean_open(struct sol_flow_node *node,
+         return -ENOMEM;
+     }
+ 
+-    r = common_form_init(opts->rows.val,
++    r = common_form_init(opts->rows,
+         &mdata->rows,
+-        opts->columns.val,
++        opts->columns,
+         &mdata->columns,
+         opts->format,
+         &mdata->format,
+diff --git a/src/modules/flow/form/form.json b/src/modules/flow/form/form.json
+index 656d1080..b59294a5 100644
+--- a/src/modules/flow/form/form.json
++++ b/src/modules/flow/form/form.json
+@@ -76,12 +76,12 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "The number of available columns to lay out the output string with. It must be a positive integer.",
+             "name": "columns"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "The number of available rows to lay out the output string with. It must be a positive integer.",
+             "name": "rows"
+           },
+@@ -178,12 +178,12 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "The number of available columns to lay out the output string with. It must be a positive integer.",
+             "name": "columns"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "The number of available rows to lay out the output string with. It must be a positive integer.",
+             "name": "rows"
+           },
+diff --git a/src/modules/flow/gtk/gtk.json b/src/modules/flow/gtk/gtk.json
+index 02c6304f..a1064947 100644
+--- a/src/modules/flow/gtk/gtk.json
++++ b/src/modules/flow/gtk/gtk.json
+@@ -81,49 +81,49 @@
+             "name": "common_cathode"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'A' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_a"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'B' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_b"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'C' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_c"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'D' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_d"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'E' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_e"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'F' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_f"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'G' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_g"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin used to set segment 'DP' state. It's a dummy option used for compatibility with 'led-7seg/led'.",
+             "name": "pin_dp"
+@@ -165,7 +165,7 @@
+             }
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin number. It's a dummy option used for compatibility with 'gpio/writer'.",
+             "name": "pin"
+@@ -187,7 +187,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin number. It's a dummy option used for compatibility with 'gpio/reader'.",
+             "name": "pin"
+@@ -226,7 +226,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+               "max": 100,
+               "min": 0
+@@ -294,13 +294,13 @@
+       "options": {
+        "members": [
+         {
+-         "data_type": "irange",
++         "data_type": "int",
+          "default": 0,
+          "description": "PWM chip. It's a dummy option used for compatibility with 'pwm'.",
+          "name": "chip"
+         },
+         {
+-         "data_type": "irange",
++         "data_type": "int",
+          "default": 0,
+          "description": "PWM pin channel. It's a dummy option used for compatibility with 'pwm'.",
+          "name": "pin"
+@@ -318,13 +318,13 @@
+          "name": "enabled"
+         },
+         {
+-         "data_type": "irange",
++         "data_type": "int",
+          "default": 0,
+          "description": "Initial period",
+          "name": "period"
+         },
+         {
+-         "data_type": "irange",
++         "data_type": "int",
+          "default": 0,
+          "description": "Initial duty cycle",
+          "name": "duty_cycle"
+@@ -364,7 +364,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+               "max": 100,
+               "min": 0
+@@ -373,13 +373,13 @@
+             "name": "range"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Device number on platform. It's a dummy option used for compatibility with 'aio/reader'.",
+             "name": "device"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin number. It's a dummy option used for compatibility with 'aio/reader'.",
+             "name": "pin"
+@@ -408,24 +408,29 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+-              "val": 0,
+               "max": "INT32_MAX",
+               "min": "INT32_MIN",
+               "step": 1
+             },
+-            "description": "Spinbutton's range",
++            "description": "Spinbutton's range (min / max / step).",
+             "name": "range"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
++            "default": 0,
++            "description": "Spinbutton's initial value.",
++            "name": "value"
++          },
++          {
++            "data_type": "int",
+             "default": 0,
+             "description": "Device number on platform. It's a dummy option used for compatibility with 'aio/reader'.",
+             "name": "device"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin number. It's a dummy option used for compatibility with 'aio/reader'.",
+             "name": "pin"
+@@ -454,7 +459,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Pin number. It's a dummy option used for compatibility with 'gpio/reader'.",
+             "name": "pin"
+diff --git a/src/modules/flow/gtk/pwm-viewer.c b/src/modules/flow/gtk/pwm-viewer.c
+index 0545dbaa..9d782aa0 100644
+--- a/src/modules/flow/gtk/pwm-viewer.c
++++ b/src/modules/flow/gtk/pwm-viewer.c
+@@ -102,8 +102,8 @@ pwm_viewer_setup(struct gtk_common_data *data, const struct sol_flow_node_option
+     opts = (const struct sol_flow_node_type_gtk_pwm_viewer_options *)options;
+ 
+     mdata->enabled = opts->enabled;
+-    mdata->duty_cycle = opts->duty_cycle.val;
+-    mdata->period = opts->period.val;
++    mdata->duty_cycle = opts->duty_cycle;
++    mdata->period = opts->period;
+ 
+     mdata->base.widget = gtk_drawing_area_new();
+     gtk_widget_set_size_request(mdata->base.widget, 400, 50);
+diff --git a/src/modules/flow/gtk/spinbutton.c b/src/modules/flow/gtk/spinbutton.c
+index 704d7031..26128d49 100644
+--- a/src/modules/flow/gtk/spinbutton.c
++++ b/src/modules/flow/gtk/spinbutton.c
+@@ -53,7 +53,8 @@ on_spinbutton_changed(GtkSpinButton *spin, gpointer data)
+ static int
+ spinbutton_setup(struct gtk_common_data *data, const struct sol_flow_node_options *options)
+ {
+-    struct sol_irange range;
++    struct sol_irange_spec range;
++    int32_t value;
+ 
+     struct gtk_common_data *mdata = (struct gtk_common_data *)data;
+     const struct sol_flow_node_type_gtk_spinbutton_options *opts =
+@@ -63,6 +64,7 @@ spinbutton_setup(struct gtk_common_data *data, const struct sol_flow_node_option
+         return -EINVAL;
+ 
+     range = opts->range;
++    value = opts->value;
+ 
+     if (range.min > range.max) {
+         SOL_WRN("invalid range min=%d max=%d for spinbutton id=%s\n",
+@@ -70,9 +72,9 @@ spinbutton_setup(struct gtk_common_data *data, const struct sol_flow_node_option
+         return -EINVAL;
+     }
+ 
+-    if (range.val < range.min || range.val > range.max) {
++    if (value < range.min || value > range.max) {
+         SOL_WRN("invalid value min=%d max=%d val=%d for spinbutton id=%s\n",
+-            range.min, range.max, range.val, sol_flow_node_get_id(mdata->node));
++            range.min, range.max, value, sol_flow_node_get_id(mdata->node));
+         return -EINVAL;
+     }
+ 
+@@ -86,7 +88,7 @@ spinbutton_setup(struct gtk_common_data *data, const struct sol_flow_node_option
+     g_signal_connect(mdata->widget, "value-changed", G_CALLBACK(on_spinbutton_changed), mdata);
+     g_object_set(mdata->widget, "hexpand", true, NULL);
+ 
+-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(mdata->widget), range.val);
++    gtk_spin_button_set_value(GTK_SPIN_BUTTON(mdata->widget), value);
+ 
+     return 0;
+ }
+diff --git a/src/modules/flow/gyroscope/gyroscope.c b/src/modules/flow/gyroscope/gyroscope.c
+index 6c9487f3..2656faca 100644
+--- a/src/modules/flow/gyroscope/gyroscope.c
++++ b/src/modules/flow/gyroscope/gyroscope.c
+@@ -462,7 +462,7 @@ gyroscope_l3g4200d_open(struct sol_flow_node *node,
+ 
+     SOL_NULL_CHECK(options, -EINVAL);
+ 
+-    mdata->i2c = sol_i2c_open(opts->i2c_bus.val, I2C_SPEED);
++    mdata->i2c = sol_i2c_open(opts->i2c_bus, I2C_SPEED);
+     if (!mdata->i2c) {
+         SOL_WRN("Failed to open i2c bus");
+         return -EIO;
+diff --git a/src/modules/flow/gyroscope/gyroscope.json b/src/modules/flow/gyroscope/gyroscope.json
+index c62f1b4d..7766a16a 100644
+--- a/src/modules/flow/gyroscope/gyroscope.json
++++ b/src/modules/flow/gyroscope/gyroscope.json
+@@ -28,7 +28,7 @@
+       "options": {
+        "members": [
+          {
+-           "data_type": "irange",
++           "data_type": "int",
+            "description": "I2C bus number",
+            "name": "i2c_bus"
+          },
+diff --git a/src/modules/flow/http-client/http-client.c b/src/modules/flow/http-client/http-client.c
+index 809552e4..07625d64 100644
+--- a/src/modules/flow/http-client/http-client.c
++++ b/src/modules/flow/http-client/http-client.c
+@@ -987,20 +987,20 @@ translate_http_method(const char *method)
+ }
+ 
+ static int
+-request_node_get_timeout_as_int(struct sol_irange timeout, int *out_timeout)
++request_node_get_timeout(int32_t timeout, int *out_timeout)
+ {
+-    if (timeout.val > INT_MAX) {
++    if (timeout > INT_MAX) {
+         SOL_WRN("The timeout is bigger than %d", INT_MAX);
+         *out_timeout = INT_MAX;
+         return 0;
+     }
+ 
+-    if (timeout.val < 0) {
++    if (timeout < 0) {
+         SOL_ERR("Timeout can not be a negative number!");
+         return -EINVAL;
+     }
+ 
+-    *out_timeout = timeout.val;
++    *out_timeout = timeout;
+     return 0;
+ }
+ 
+@@ -1013,7 +1013,7 @@ request_node_open(struct sol_flow_node *node, void *data,
+     struct sol_flow_node_type_http_client_request_options *opts =
+         (struct sol_flow_node_type_http_client_request_options *)options;
+ 
+-    r = request_node_get_timeout_as_int(opts->timeout, &mdata->timeout);
++    r = request_node_get_timeout(opts->timeout, &mdata->timeout);
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     if (opts->url) {
+@@ -1096,7 +1096,7 @@ request_node_timeout_process(struct sol_flow_node *node, void *data,
+ 
+     r = sol_flow_packet_get_irange(packet, &irange);
+     SOL_INT_CHECK(r, < 0, r);
+-    r = request_node_get_timeout_as_int(irange, &mdata->timeout);
++    r = request_node_get_timeout(irange.val, &mdata->timeout);
+     SOL_INT_CHECK(r, < 0, r);
+     return 0;
+ }
+diff --git a/src/modules/flow/http-client/http-client.json b/src/modules/flow/http-client/http-client.json
+index 5b9f8814..69a57004 100644
+--- a/src/modules/flow/http-client/http-client.json
++++ b/src/modules/flow/http-client/http-client.json
+@@ -550,7 +550,7 @@
+             "name": "method"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "The number of milliseconds to wait for the request to be completed",
+             "name": "timeout"
+diff --git a/src/modules/flow/http-server/http-server.c b/src/modules/flow/http-server/http-server.c
+index d4343fbe..0b4d5b23 100644
+--- a/src/modules/flow/http-server/http-server.c
++++ b/src/modules/flow/http-server/http-server.c
+@@ -228,6 +228,40 @@ common_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_o
+     return 0;
+ }
+ 
++static int
++int_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    int r;
++    struct http_data *mdata = data;
++    struct sol_flow_node_type_http_server_int_options *opts =
++        (struct sol_flow_node_type_http_server_int_options *)options;
++
++    r = start_server(mdata, node, opts->path);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_irange_compose(&opts->value_spec, opts->value, &mdata->value.i);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++static int
++float_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    int r;
++    struct http_data *mdata = data;
++    struct sol_flow_node_type_http_server_float_options *opts =
++        (struct sol_flow_node_type_http_server_float_options *)options;
++
++    r = start_server(mdata, node, opts->path);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_drange_compose(&opts->value_spec, opts->value, &mdata->value.d);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
+ static int
+ common_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id,
+     const struct sol_flow_packet *packet)
+diff --git a/src/modules/flow/http-server/http-server.json b/src/modules/flow/http-server/http-server.json
+index 77b9a868..410dc4a3 100644
+--- a/src/modules/flow/http-server/http-server.json
++++ b/src/modules/flow/http-server/http-server.json
+@@ -124,7 +124,7 @@
+       "description": "HTTP Server for integer",
+       "methods": {
+         "close": "common_close",
+-        "open": "common_open"
++        "open": "int_open"
+       },
+       "node_type": {
+         "access": [
+@@ -147,12 +147,22 @@
+             "description": "The http path where it will be served",
+             "name": "path"
+           },
+-	  {
+-            "data_type": "irange",
+-	    "default": 0,
++        {
++            "data_type": "int",
++            "default": 0,
+             "description": "The initial node's value",
+             "name": "value"
+-          }
++        },
++        {
++            "data_type": "irange-spec",
++            "default": {
++                "min": "INT32_MIN",
++                "max": "INT32_MAX",
++                "step": 1
++            },
++            "description": "The initial node's range",
++            "name": "value_spec"
++        }
+         ],
+         "version": 1
+       },
+@@ -181,7 +191,7 @@
+       "description": "HTTP Server for float",
+       "methods": {
+         "close": "common_close",
+-        "open": "common_open"
++        "open": "float_open"
+       },
+       "node_type": {
+         "access": [
+@@ -204,12 +214,22 @@
+             "description": "The http path where it will be served",
+             "name": "path"
+           },
+-	  {
+-            "data_type": "drange",
+-	    "default": 0,
++        {
++            "data_type": "float",
++            "default": 0,
+             "description": "The initial node's value",
+             "name": "value"
+-          }
++        },
++        {
++            "data_type": "drange-spec",
++            "default": {
++                "min": "-DBL_MAX",
++                "max": "DBL_MAX",
++                "step": "DBL_MIN"
++            },
++            "description": "The initial node's range",
++            "name": "value_spec"
++        }
+         ],
+         "version": 1
+       },
+diff --git a/src/modules/flow/int/int.c b/src/modules/flow/int/int.c
+index df0a2bc4..4a7dd4a1 100644
+--- a/src/modules/flow/int/int.c
++++ b/src/modules/flow/int/int.c
+@@ -128,10 +128,15 @@ accumulator_open(struct sol_flow_node *node, void *data, const struct sol_flow_n
+     struct accumulator_data *mdata = data;
+     const struct sol_flow_node_type_int_accumulator_options *opts =
+         (const struct sol_flow_node_type_int_accumulator_options *)options;
++    int r;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK
+-        (options, SOL_FLOW_NODE_TYPE_INT_ACCUMULATOR_OPTIONS_API_VERSION, -EINVAL);
+-    mdata->val = opts->setup_value;
++        (options, SOL_FLOW_NODE_TYPE_INT_ACCUMULATOR_OPTIONS_API_VERSION,
++        -EINVAL);
++
++    r = sol_irange_compose(&opts->setup_value, opts->initial_value,
++        &mdata->val);
++    SOL_INT_CHECK(r, < 0, r);
+ 
+     // Sanitizing options input
+     if (mdata->val.max < mdata->val.min) {
+@@ -158,7 +163,7 @@ accumulator_open(struct sol_flow_node *node, void *data, const struct sol_flow_n
+             mdata->val.step, mdata->val.step);
+     }
+ 
+-    mdata->init_val = opts->setup_value.val;
++    mdata->init_val = opts->initial_value;
+ 
+     if (opts->send_initial_packet)
+         return sol_flow_send_irange_packet(node,
+@@ -348,14 +353,14 @@ int_filter_open(struct sol_flow_node *node, void *data, const struct sol_flow_no
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options, SOL_FLOW_NODE_TYPE_INT_FILTER_OPTIONS_API_VERSION, -EINVAL);
+ 
+     opts = (const struct sol_flow_node_type_int_filter_options *)options;
+-    if (opts->max.val >= opts->min.val) {
+-        mdata->min = opts->min.val;
+-        mdata->max = opts->max.val;
++    if (opts->max >= opts->min) {
++        mdata->min = opts->min;
++        mdata->max = opts->max;
+     } else {
+         SOL_DBG("min (%" PRId32 ") should be smaller than max (%" PRId32 ").",
+-            opts->min.val, opts->max.val);
+-        mdata->min = opts->max.val;
+-        mdata->max = opts->min.val;
++            opts->min, opts->max);
++        mdata->min = opts->max;
++        mdata->max = opts->min;
+     }
+     mdata->range_override = opts->range_override;
+ 
+@@ -502,7 +507,7 @@ multiple_operator_process(struct sol_flow_node *node, void *data, uint16_t port,
+ // =============================================================================
+ 
+ struct irange_constrain_data {
+-    struct sol_irange val;
++    struct sol_irange_spec range;
+     bool use_input_range : 1;
+ };
+ 
+@@ -513,7 +518,7 @@ irange_constrain_open(struct sol_flow_node *node, void *data, const struct sol_f
+     const struct sol_flow_node_type_int_constrain_options *opts;
+ 
+     opts = (const struct sol_flow_node_type_int_constrain_options *)options;
+-    mdata->val = opts->range;
++    mdata->range = opts->range;
+     mdata->use_input_range = opts->use_input_range;
+ 
+     return 0;
+@@ -539,17 +544,16 @@ irange_constrain_process(struct sol_flow_node *node, void *data, uint16_t port,
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     if (!mdata->use_input_range) {
+-        value.min = mdata->val.min;
+-        value.max = mdata->val.max;
+-        value.step = mdata->val.step;
++        value.min = mdata->range.min;
++        value.max = mdata->range.max;
++        value.step = mdata->range.step;
+     }
+ 
+     irange_constrain(&value);
+-    mdata->val = value;
+ 
+     return sol_flow_send_irange_packet(node,
+         SOL_FLOW_NODE_TYPE_INT_CONSTRAIN__OUT__OUT,
+-        &mdata->val);
++        &value);
+ }
+ 
+ // =============================================================================
+@@ -764,17 +768,17 @@ irange_buffer_open(struct sol_flow_node *node, void *data,
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK
+         (options, SOL_FLOW_NODE_TYPE_INT_BUFFER_OPTIONS_API_VERSION, -EINVAL);
+ 
+-    mdata->n_samples = opts->samples.val;
+-    if (opts->samples.val <= 0) {
++    mdata->n_samples = opts->samples;
++    if (opts->samples <= 0) {
+         SOL_WRN("Invalid samples (%" PRId32 "). Must be positive. "
+-            "Set to %" PRId32 ".", opts->samples.val, def_opts->samples.val);
+-        mdata->n_samples = def_opts->samples.val;
++            "Set to %" PRId32 ".", opts->samples, def_opts->samples);
++        mdata->n_samples = def_opts->samples;
+     }
+ 
+-    mdata->timeout = opts->timeout.val;
+-    if (opts->timeout.val < 0) {
++    mdata->timeout = opts->timeout;
++    if (opts->timeout < 0) {
+         SOL_WRN("Invalid timeout (%" PRId32 "). Must be non negative."
+-            "Set to 0.", opts->timeout.val);
++            "Set to 0.", opts->timeout);
+         mdata->timeout = 0;
+     }
+ 
+@@ -981,8 +985,8 @@ comparison_process(struct sol_flow_node *node, void *data, uint16_t port, uint16
+ 
+ 
+ struct irange_map_data {
+-    struct sol_irange input;
+-    struct sol_irange output;
++    struct sol_irange_spec input;
++    struct sol_irange_spec output;
+     struct sol_irange output_value;
+     bool use_input_range : 1;
+ };
+diff --git a/src/modules/flow/int/int.json b/src/modules/flow/int/int.json
+index e1175a98..db47f82b 100644
+--- a/src/modules/flow/int/int.json
++++ b/src/modules/flow/int/int.json
+@@ -140,16 +140,21 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+               "max": "INT32_MAX",
+               "min": "INT32_MIN",
+-              "step": 1,
+-              "val": 0
++              "step": 1
+             },
+-            "description": "The initial value, range and step to be used in operations. Only positive step values are allowed.",
++            "description": "Range and step to be used in operations. Only positive step values are allowed.",
+             "name": "setup_value"
+           },
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "The initial value. An initial packet will be sent with this value.",
++            "name": "initial_value"
++          },
+           {
+             "data_type": "boolean",
+             "default": true,
+@@ -567,13 +572,13 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 4,
+             "description": "Number of samples that the buffer should hold.",
+             "name": "samples"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Timeout time in milliseconds. Default is zero which means that timeout is disabled.",
+             "name": "timeout"
+@@ -821,7 +826,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+               "max": 1023,
+               "min": 0
+@@ -875,20 +880,16 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Minimum value (inclusive)",
+             "name": "min",
+-            "default" : {
+-              "val" : "INT32_MIN"
+-            }
++            "default" : "INT32_MIN"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Maximum value (inclusive)",
+             "name": "max",
+-            "default" : {
+-              "val" : "INT32_MAX"
+-            }
++            "default" : "INT32_MAX"
+           },
+           {
+             "data_type": "boolean",
+@@ -923,12 +924,12 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+               "max": 255,
+               "min": -255
+             },
+-            "description": "maximum range value.",
++            "description": "Range values.",
+             "name": "range"
+           }
+         ],
+@@ -964,7 +965,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "default": {
+               "max": "INT32_MAX",
+               "min": "INT32_MIN"
+@@ -973,7 +974,7 @@
+             "name": "input_range"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "irange-spec",
+             "description": "Output's range.",
+             "name": "output_range"
+           },
+diff --git a/src/modules/flow/keyboard/keyboard.c b/src/modules/flow/keyboard/keyboard.c
+index f79c795a..4eb8e250 100644
+--- a/src/modules/flow/keyboard/keyboard.c
++++ b/src/modules/flow/keyboard/keyboard.c
+@@ -319,7 +319,7 @@ keyboard_boolean_open(struct sol_flow_node *node,
+ 
+     SOL_NULL_CHECK(options, -EINVAL);
+ 
+-    mdata->binary_code = opts->binary_code.val;
++    mdata->binary_code = opts->binary_code;
+     mdata->toggle = opts->toggle;
+     mdata->common.on_code = keyboard_boolean_on_code;
+ 
+diff --git a/src/modules/flow/keyboard/keyboard.json b/src/modules/flow/keyboard/keyboard.json
+index 15ab201e..60614fd7 100644
+--- a/src/modules/flow/keyboard/keyboard.json
++++ b/src/modules/flow/keyboard/keyboard.json
+@@ -18,7 +18,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "A key's actual ASCII code to capture.",
+             "name": "binary_code"
+           },
+diff --git a/src/modules/flow/led-7seg/led-7seg.c b/src/modules/flow/led-7seg/led-7seg.c
+index 67366ada..4c807df7 100644
+--- a/src/modules/flow/led-7seg/led-7seg.c
++++ b/src/modules/flow/led-7seg/led-7seg.c
+@@ -121,11 +121,11 @@ value_set(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_i
+ 
+ #define OPEN_GPIO(_pin, _option) \
+     do { \
+-        mdata->gpio[_pin] = sol_gpio_open(opts->pin_ ## _option.val, \
++        mdata->gpio[_pin] = sol_gpio_open(opts->pin_ ## _option, \
+             &gpio_conf); \
+         if (!mdata->gpio[_pin]) { \
+             SOL_WRN("could not open gpio #%" PRId32, \
+-                opts->pin_ ## _option.val); \
++                opts->pin_ ## _option); \
+             goto port_error; \
+         } \
+     } while (0)
+diff --git a/src/modules/flow/led-7seg/led-7seg.json b/src/modules/flow/led-7seg/led-7seg.json
+index d3eed932..33e21dc1 100644
+--- a/src/modules/flow/led-7seg/led-7seg.json
++++ b/src/modules/flow/led-7seg/led-7seg.json
+@@ -42,42 +42,42 @@
+             "name": "common_cathode"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'A' state.",
+             "name": "pin_a"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'B' state.",
+             "name": "pin_b"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'C' state.",
+             "name": "pin_c"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'D' state.",
+             "name": "pin_d"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'E' state.",
+             "name": "pin_e"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'F' state.",
+             "name": "pin_f"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'G' state.",
+             "name": "pin_g"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Pin used to set segment 'DP' state.",
+             "name": "pin_dp"
+           }
+diff --git a/src/modules/flow/max31855/max31855.c b/src/modules/flow/max31855/max31855.c
+index 76b439ba..250af30a 100644
+--- a/src/modules/flow/max31855/max31855.c
++++ b/src/modules/flow/max31855/max31855.c
+@@ -69,12 +69,12 @@ max31855_open(struct sol_flow_node *node, void *data, const struct sol_flow_node
+         -EINVAL);
+     opts = (struct sol_flow_node_type_max31855_temperature_options *)options;
+ 
+-    config.chip_select = opts->chip_select.val;
++    config.chip_select = opts->chip_select;
+     config.frequency = 2000000;
+     config.bits_per_word = 8;
+     config.mode = 0;
+ 
+-    mdata->device = sol_spi_open(opts->bus.val, &config);
++    mdata->device = sol_spi_open(opts->bus, &config);
+     mdata->node = node;
+     mdata->pending_packets = 0;
+ 
+diff --git a/src/modules/flow/max31855/max31855.json b/src/modules/flow/max31855/max31855.json
+index 9317df0c..ad65a10f 100644
+--- a/src/modules/flow/max31855/max31855.json
++++ b/src/modules/flow/max31855/max31855.json
+@@ -18,12 +18,12 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Bus",
+             "name": "bus"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Chip Select",
+             "name": "chip_select"
+           }
+diff --git a/src/modules/flow/persistence/persistence.c b/src/modules/flow/persistence/persistence.c
+index 29e23ae2..9a9290b8 100644
+--- a/src/modules/flow/persistence/persistence.c
++++ b/src/modules/flow/persistence/persistence.c
+@@ -464,6 +464,7 @@ persist_irange_open(struct sol_flow_node *node,
+     struct persist_irange_data *mdata = data;
+     const struct sol_flow_node_type_persistence_int_options *opts =
+         (const struct sol_flow_node_type_persistence_int_options *)options;
++    int r;
+ 
+     if (opts->store_only_val)
+         mdata->base.packet_data_size = sizeof(int32_t);
+@@ -474,9 +475,12 @@ persist_irange_open(struct sol_flow_node *node,
+     mdata->base.packet_data_get_fn = persist_irange_packet_data_get;
+     mdata->base.packet_send_fn = persist_irange_packet_send;
+     mdata->base.node_get_default_fn = persist_irange_node_get_default;
+-    mdata->default_value = opts->default_value;
+     mdata->store_only_val = opts->store_only_val;
+ 
++    r = sol_irange_compose(&opts->default_value_spec, opts->default_value,
++        &mdata->default_value);
++    SOL_INT_CHECK(r, < 0, r);
++
+     return persist_open(node, data, opts->storage, opts->name);
+ }
+ 
+@@ -555,6 +559,7 @@ persist_drange_open(struct sol_flow_node *node,
+     struct persist_drange_data *mdata = data;
+     const struct sol_flow_node_type_persistence_float_options *opts =
+         (const struct sol_flow_node_type_persistence_float_options *)options;
++    int r;
+ 
+     if (opts->store_only_val)
+         mdata->base.packet_data_size = sizeof(double);
+@@ -565,9 +570,12 @@ persist_drange_open(struct sol_flow_node *node,
+     mdata->base.packet_data_get_fn = persist_drange_packet_data_get;
+     mdata->base.packet_send_fn = persist_drange_packet_send;
+     mdata->base.node_get_default_fn = persist_drange_node_get_default;
+-    mdata->default_value = opts->default_value;
+     mdata->store_only_val = opts->store_only_val;
+ 
++    r = sol_drange_compose(&opts->default_value_spec, opts->default_value,
++        &mdata->default_value);
++    SOL_INT_CHECK(r, < 0, r);
++
+     return persist_open(node, data, opts->storage, opts->name);
+ }
+ 
+diff --git a/src/modules/flow/persistence/persistence.json b/src/modules/flow/persistence/persistence.json
+index 279d44b6..996552b5 100644
+--- a/src/modules/flow/persistence/persistence.json
++++ b/src/modules/flow/persistence/persistence.json
+@@ -142,11 +142,21 @@
+             "name": "storage"
+           },
+           {
+-            "data_type": "drange",
++            "data_type": "float",
+             "default": 0.0,
+             "description": "Default value for this node, when there's no previous value persisted",
+             "name": "default_value"
+           },
++          {
++            "data_type": "drange-spec",
++            "default": {
++              "min": "-DBL_MAX",
++              "max": "DBL_MAX",
++              "step": "DBL_MIN"
++            },
++            "description": "Default range for this node, when there's no previous value persisted",
++            "name": "default_value_spec"
++          },
+           {
+             "data_type": "boolean",
+             "default": false,
+@@ -205,11 +215,21 @@
+             "name": "storage"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 0,
+             "description": "Default value for this node, when there's no previous value persisted",
+             "name": "default_value"
+           },
++          {
++            "data_type": "irange-spec",
++            "default": {
++              "min": "INT32_MIN",
++              "max": "INT32_MAX",
++              "step": 1
++            },
++            "description": "Default range for this node, when there's no previous value persisted",
++            "name": "default_value_spec"
++          },
+           {
+             "data_type": "boolean",
+             "default": false,
+diff --git a/src/modules/flow/piezo-speaker/piezo-speaker.c b/src/modules/flow/piezo-speaker/piezo-speaker.c
+index 4bb3afc0..8df4cb36 100644
+--- a/src/modules/flow/piezo-speaker/piezo-speaker.c
++++ b/src/modules/flow/piezo-speaker/piezo-speaker.c
+@@ -397,10 +397,10 @@ piezo_speaker_open(struct sol_flow_node *node,
+     pwm_config.period_ns = -1;
+     pwm_config.duty_cycle_ns = 0;
+ 
+-    mdata->pwm = sol_pwm_open(opts->chip.val, opts->pin.val, &pwm_config);
++    mdata->pwm = sol_pwm_open(opts->chip, opts->pin, &pwm_config);
+     if (!mdata->pwm) {
+         SOL_WRN("could not open pwm (chip=%" PRId32 ", pin=%" PRId32 ")\n",
+-            opts->chip.val, opts->pin.val);
++            opts->chip, opts->pin);
+         goto _error;
+     }
+ 
+@@ -413,7 +413,7 @@ piezo_speaker_open(struct sol_flow_node *node,
+         SOL_WRN("No tune in opts, awaiting string package\n");
+ 
+     SOL_DBG("Piezo open ok (chip=%" PRId32 ", pin=%" PRId32 ")\n",
+-        opts->chip.val, opts->pin.val);
++        opts->chip, opts->pin);
+ 
+     return 0;
+ 
+diff --git a/src/modules/flow/piezo-speaker/piezo-speaker.json b/src/modules/flow/piezo-speaker/piezo-speaker.json
+index cb5e1f28..38d54e1e 100644
+--- a/src/modules/flow/piezo-speaker/piezo-speaker.json
++++ b/src/modules/flow/piezo-speaker/piezo-speaker.json
+@@ -42,12 +42,12 @@
+             "name": "tune"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "PWM pin number",
+             "name": "pin"
+           },
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "PWM chip number",
+             "name": "chip"
+           },
+diff --git a/src/modules/flow/random/random.c b/src/modules/flow/random/random.c
+index b1e9e1d0..d44c5a6b 100644
+--- a/src/modules/flow/random/random.c
++++ b/src/modules/flow/random/random.c
+@@ -54,7 +54,7 @@ random_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_o
+        multiple node types */
+     opts = (const struct sol_flow_node_type_random_int_options *)options;
+ 
+-    mdata->engine = sol_random_new(SOL_RANDOM_DEFAULT, opts->seed.val);
++    mdata->engine = sol_random_new(SOL_RANDOM_DEFAULT, opts->seed);
+     SOL_NULL_CHECK(mdata->engine, -EINVAL);
+ 
+     return 0;
+diff --git a/src/modules/flow/random/random.json b/src/modules/flow/random/random.json
+index bfa55518..75fc7183 100644
+--- a/src/modules/flow/random/random.json
++++ b/src/modules/flow/random/random.json
+@@ -36,7 +36,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 1,
+             "description": "Seed value. Sequences are repeatable by using the same seed.",
+             "name": "seed"
+@@ -83,7 +83,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 1,
+             "description": "Seed value. Sequences are repeatable by using the same seed.",
+             "name": "seed"
+@@ -130,7 +130,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 1,
+             "description": "Seed value. Sequences are repeatable by using the same seed.",
+             "name": "seed"
+@@ -177,7 +177,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "default": 1,
+             "description": "Seed value. Sequences are repeatable by using the same seed.",
+             "name": "seed"
+diff --git a/src/modules/flow/timer/timer.c b/src/modules/flow/timer/timer.c
+index 5ec58c07..4d562abd 100644
+--- a/src/modules/flow/timer/timer.c
++++ b/src/modules/flow/timer/timer.c
+@@ -134,10 +134,10 @@ timer_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_op
+         return 0;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options, SOL_FLOW_NODE_TYPE_TIMER_OPTIONS_API_VERSION, -EINVAL);
+-    if (opts->interval.val < 1)
++    if (opts->interval < 1)
+         return 0;
+ 
+-    mdata->interval = opts->interval.val;
++    mdata->interval = opts->interval;
+     return start_timer(mdata);
+ }
+ 
+diff --git a/src/modules/flow/timer/timer.json b/src/modules/flow/timer/timer.json
+index 2584f64a..a03a112e 100644
+--- a/src/modules/flow/timer/timer.json
++++ b/src/modules/flow/timer/timer.json
+@@ -41,7 +41,7 @@
+  "options": {
+   "members": [
+    {
+-    "data_type": "irange",
++    "data_type": "int",
+     "default": 1000,
+     "description": "Tick interval the timer will start with, in milliseconds.",
+     "name": "interval"
+diff --git a/src/modules/flow/wallclock/wallclock.c b/src/modules/flow/wallclock/wallclock.c
+index 24f09d79..551109a0 100644
+--- a/src/modules/flow/wallclock/wallclock.c
++++ b/src/modules/flow/wallclock/wallclock.c
+@@ -522,17 +522,17 @@ wallclock_timeblock_open(struct sol_flow_node *node,
+     opts = (const struct sol_flow_node_type_wallclock_timeblock_options *)
+         options;
+ 
+-    if (opts->interval.val < 1) {
++    if (opts->interval < 1) {
+         SOL_WRN("Invalid interval %" PRId32 ". Setting interval to 1",
+-            opts->interval.val);
++            opts->interval);
+         mdata->interval = 1;
+-    } else if (opts->interval.val > MINUTES_IN_DAY) {
++    } else if (opts->interval > MINUTES_IN_DAY) {
+         SOL_WRN("Invalid interval %" PRId32 ". Setting interval to %d",
+-            opts->interval.val,
++            opts->interval,
+             MINUTES_IN_DAY);
+         mdata->interval = MINUTES_IN_DAY;
+     } else {
+-        mdata->interval = opts->interval.val;
++        mdata->interval = opts->interval;
+     }
+ 
+     mdata->node = node;
+diff --git a/src/modules/flow/wallclock/wallclock.json b/src/modules/flow/wallclock/wallclock.json
+index 787a1497..b0119acc 100644
+--- a/src/modules/flow/wallclock/wallclock.json
++++ b/src/modules/flow/wallclock/wallclock.json
+@@ -192,7 +192,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Time block interval. Defines the length of a frame in minutes. Last block may be smaller than others. For example, if interval is set to 50 minutes, it would tick 29 times a day, but interval for last one is just 48 minutes.",
+             "name": "interval"
+           },
+diff --git a/src/samples/flow/c-api/custom-node-types.c b/src/samples/flow/c-api/custom-node-types.c
+index 8c5f983d..248218ac 100644
+--- a/src/samples/flow/c-api/custom-node-types.c
++++ b/src/samples/flow/c-api/custom-node-types.c
+@@ -172,7 +172,7 @@ reader_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_o
+     mdata->timer = sol_timeout_add(1000, reader_on_timeout, node);
+ 
+     /* the initial value comes from options. */
+-    mdata->val = opts->intopt.val;
++    mdata->val = opts->intopt;
+ 
+     /* Note that an 'int' port is actually an integer range or a
+      * 'struct sol_irange', as it carries not only the value, but how
+diff --git a/src/samples/flow/c-api/custom-node-types.json b/src/samples/flow/c-api/custom-node-types.json
+index 5c8f2962..65eb8260 100644
+--- a/src/samples/flow/c-api/custom-node-types.json
++++ b/src/samples/flow/c-api/custom-node-types.json
+@@ -18,7 +18,7 @@
+       "options": {
+         "members": [
+           {
+-            "data_type": "irange",
++            "data_type": "int",
+             "description": "Example option integer value",
+             "name": "intopt"
+           }
+diff --git a/src/samples/flow/c-api/highlevel.c b/src/samples/flow/c-api/highlevel.c
+index 3b2122be..7c6bcba3 100644
+--- a/src/samples/flow/c-api/highlevel.c
++++ b/src/samples/flow/c-api/highlevel.c
+@@ -64,7 +64,7 @@ startup(void)
+     struct sol_flow_builder *builder;
+     struct sol_flow_node_type_custom_node_types_reader_options reader_opts =
+         SOL_FLOW_NODE_TYPE_CUSTOM_NODE_TYPES_READER_OPTIONS_DEFAULTS(
+-        .intopt.val = 1
++        .intopt = 1
+         );
+     struct sol_flow_node_type_custom_node_types_writer_options writer_opts =
+         SOL_FLOW_NODE_TYPE_CUSTOM_NODE_TYPES_WRITER_OPTIONS_DEFAULTS(
+diff --git a/src/samples/flow/c-api/lowlevel.c b/src/samples/flow/c-api/lowlevel.c
+index 31052ffd..2797389b 100644
+--- a/src/samples/flow/c-api/lowlevel.c
++++ b/src/samples/flow/c-api/lowlevel.c
+@@ -61,7 +61,7 @@
+ 
+ static const struct sol_flow_node_type_custom_node_types_reader_options reader_opts =
+     SOL_FLOW_NODE_TYPE_CUSTOM_NODE_TYPES_READER_OPTIONS_DEFAULTS(
+-    .intopt.val = 1
++    .intopt = 1
+     );
+ static const struct sol_flow_node_type_custom_node_types_writer_options writer_opts =
+     SOL_FLOW_NODE_TYPE_CUSTOM_NODE_TYPES_WRITER_OPTIONS_DEFAULTS(
+diff --git a/src/samples/flow/grove-kit/lcd/grove-lcd-autoscroll.fbp b/src/samples/flow/grove-kit/lcd/grove-lcd-autoscroll.fbp
+index 2ce3953a..c1f17627 100755
+--- a/src/samples/flow/grove-kit/lcd/grove-lcd-autoscroll.fbp
++++ b/src/samples/flow/grove-kit/lcd/grove-lcd-autoscroll.fbp
+@@ -44,7 +44,7 @@ initial_color(constant/rgb:value=255|255|255|255|255|255)
+ initial_color OUT -> COLOR lcd(LCDChar)
+ 
+ # 48 is decimal value for char '0', 57 is for '9'
+-acc(int/accumulator:setup_value=val:48|min:48|max:57|step:1)
++acc(int/accumulator:setup_value=min:48|max:57|step:1,initial_value=48)
+ timer_scroll(timer:interval=500) OUT -> INC acc
+ 
+ acc OUT -> IN accumulator_to_char(converter/int-to-byte)
+diff --git a/src/samples/flow/grove-kit/lcd/grove-lcd-set-cursor.fbp b/src/samples/flow/grove-kit/lcd/grove-lcd-set-cursor.fbp
+index ee39f1d0..7506eb6f 100755
+--- a/src/samples/flow/grove-kit/lcd/grove-lcd-set-cursor.fbp
++++ b/src/samples/flow/grove-kit/lcd/grove-lcd-set-cursor.fbp
+@@ -52,7 +52,7 @@ cols(int/accumulator:setup_value=min:0|max:15|step:1)
+ rows(int/accumulator:setup_value=min:0|max:1|step:1)
+ 
+ # 'a' to 'z'
+-chars(int/accumulator:setup_value=val:97|min:97|max:122|step:1)
++chars(int/accumulator:setup_value=min:97|max:122|step:1,initial_value=97)
+ chars OUT -> IN to_byte(converter/int-to-byte)
+ 
+ # trick to keep a 'current char' state
+diff --git a/src/samples/flow/grove-kit/lcd/grove-lcd-text-direction.fbp b/src/samples/flow/grove-kit/lcd/grove-lcd-text-direction.fbp
+index 349303ea..5d6b7f18 100755
+--- a/src/samples/flow/grove-kit/lcd/grove-lcd-text-direction.fbp
++++ b/src/samples/flow/grove-kit/lcd/grove-lcd-text-direction.fbp
+@@ -43,7 +43,7 @@ timer(timer:interval=1000)
+ lcd(LCDChar:underline_cursor=true)
+ 
+ # 'a' to 'z'
+-chars(int/accumulator:setup_value=val:97|min:97|max:122|step:1)
++chars(int/accumulator:initial_value=97,setup_value=min:97|max:122|step:1)
+ chars OUT -> IN to_byte(converter/int-to-byte)
+ 
+ chars OUT -> IN[0] comp_m(int/equal)
+diff --git a/src/samples/flow/gtk-gallery/gtk-gallery.fbp b/src/samples/flow/gtk-gallery/gtk-gallery.fbp
+index 39795162..18757c88 100755
+--- a/src/samples/flow/gtk-gallery/gtk-gallery.fbp
++++ b/src/samples/flow/gtk-gallery/gtk-gallery.fbp
+@@ -38,7 +38,7 @@ toggle OUT -> IN toggle_output2(gtk/led:rgb=255|0|0)
+ 
+ slider(gtk/slider) OUT -> IN slider_output(gtk/label)
+ 
+-spinbutton(gtk/spinbutton:range=step:1|max:INT32_MAX|val:42|min:30) OUT -> IN spinbutton_output(gtk/label)
++spinbutton(gtk/spinbutton:range=step:1|max:INT32_MAX|min:30,value=42) OUT -> IN spinbutton_output(gtk/label)
+ 
+ pwm_editor(gtk/pwm-editor) ENABLED -> ENABLED pwm_viewer(gtk/pwm-viewer:duty_cycle=20,period=50,enabled=true)
+ pwm_editor DUTY_CYCLE -> DUTY_CYCLE pwm_viewer
+diff --git a/src/samples/flow/http-server/drange.fbp b/src/samples/flow/http-server/drange.fbp
+index d8b676bf..935a8d5a 100644
+--- a/src/samples/flow/http-server/drange.fbp
++++ b/src/samples/flow/http-server/drange.fbp
+@@ -37,5 +37,5 @@
+ #
+ # To get only if the value has changed since Mon, 17 Aug 2015 15:05:38 GMT
+ # curl  -H "If-Since-Modified:Mon, 17 Aug 2015 15:05:38 GMT"  http://localhost:80/drange -v
+-drange(http-server/float:path=/drange,value=val:1.0|min:0|max:100.2|step:1.2)
++drange(http-server/float:path=/drange,value=1.0,value_spec=min:0|max:100.2|step:1.2)
+ drange OUT -> IN console(console)
+diff --git a/src/samples/flow/http-server/irange.fbp b/src/samples/flow/http-server/irange.fbp
+index 778f8688..435726a9 100644
+--- a/src/samples/flow/http-server/irange.fbp
++++ b/src/samples/flow/http-server/irange.fbp
+@@ -37,5 +37,5 @@
+ #
+ # To get only if the value has changed since Mon, 17 Aug 2015 15:05:38 GMT
+ # curl  -H "If-Since-Modified:Mon, 17 Aug 2018 15:05:38 GMT"  http://localhost:80/irange -v
+-irange(http-server/int:path=/irange,value=val:1|min:0|max:100|step:1)
++irange(http-server/int:path=/irange,value=1,value_spec=min:0|max:100|step:1)
+ irange OUT -> IN console(console)
+diff --git a/src/samples/flow/io/pwm.fbp b/src/samples/flow/io/pwm.fbp
+index 02df9cd8..59379212 100755
+--- a/src/samples/flow/io/pwm.fbp
++++ b/src/samples/flow/io/pwm.fbp
+@@ -42,7 +42,7 @@
+ t1(timer:interval=1000)
+ t2(timer:interval=250)
+ toggle(boolean/toggle)
+-acc(int/accumulator:setup_value=val:0|min:0|max:2032605|step:7971)
++acc(int/accumulator:setup_value=min:0|max:2032605|step:7971)
+ 
+ t1 OUT -> IN toggle OUT -> ENABLED led1(Led1)
+ toggle OUT -> IN c1(console:prefix="Led1 ")
+diff --git a/src/samples/flow/io/servo-motor.fbp b/src/samples/flow/io/servo-motor.fbp
+index 190e32ac..05da246a 100755
+--- a/src/samples/flow/io/servo-motor.fbp
++++ b/src/samples/flow/io/servo-motor.fbp
+@@ -39,7 +39,7 @@
+ #
+ # or save it as sol-flow.json
+ 
+-inc(int/accumulator:setup_value=min:0|max:170|step:10|val:0)
++inc(int/accumulator:setup_value=min:0|max:170|step:10)
+ 
+ timer(timer:interval=2000) OUT -> INC inc OUT -> IN converter(converter/int-to-float)
+ converter OUT -> ANGLE servo(Servo)
+diff --git a/src/samples/flow/js/attendee.fbp b/src/samples/flow/js/attendee.fbp
+index aaca1b42..4c22d3ca 100755
+--- a/src/samples/flow/js/attendee.fbp
++++ b/src/samples/flow/js/attendee.fbp
+@@ -43,11 +43,11 @@ DECLARE=MyAttendee:js:attendee.js
+ _(constant/int:value=999) OUT -> IN[0] common_eq(int/equal)
+ _(constant/int:value=99) OUT -> IN[0] preferential_eq(int/equal)
+ 
+-common_btn(gtk/pushbutton) OUT -> IN _(boolean/filter) TRUE -> INC common_acc(int/accumulator:setup_value=val:100|min:100|max:999|step:1)
++common_btn(gtk/pushbutton) OUT -> IN _(boolean/filter) TRUE -> INC common_acc(int/accumulator:initial_value=100,setup_value=min:100|max:999|step:1)
+ common_acc OUT -> IN[1] common_eq OUT -> IN _(boolean/filter) TRUE -> INC common_acc
+ common_acc OUT -> IN _(int/filter:min=101) OUT -> IN_COMMON attendee(MyAttendee) OUT_COMMON -> IN common_out(gtk/label)
+ 
+-preferential_btn(gtk/pushbutton) OUT -> IN _(boolean/filter) TRUE -> INC preferential_acc(int/accumulator:setup_value=val:0|min:0|max:99|step:1)
++preferential_btn(gtk/pushbutton) OUT -> IN _(boolean/filter) TRUE -> INC preferential_acc(int/accumulator:setup_value=min:0|max:99|step:1)
+ preferential_acc OUT -> IN[1] preferential_eq OUT -> IN _(boolean/filter) TRUE -> INC preferential_acc
+ preferential_acc OUT -> IN _(int/filter:min=1) OUT -> IN_PREFERENTIAL attendee OUT_PREFERENTIAL -> IN preferential_out(gtk/label)
+ 
+diff --git a/src/samples/flow/minnow-calamari/calamari-7seg-segments.fbp b/src/samples/flow/minnow-calamari/calamari-7seg-segments.fbp
+index 46c2e1a1..29cc24d7 100755
+--- a/src/samples/flow/minnow-calamari/calamari-7seg-segments.fbp
++++ b/src/samples/flow/minnow-calamari/calamari-7seg-segments.fbp
+@@ -34,7 +34,7 @@
+ Led(SevenSegments)
+ Timer(timer:interval=2000)
+ Switcher(switcher/byte)
+-Index(int/accumulator:setup_value=val:0|min:0|max:4)
++Index(int/accumulator:setup_value=min:0|max:4)
+ 
+ True(converter/empty-to-boolean:output_value=true)
+ False(converter/empty-to-boolean:output_value=false)
+diff --git a/src/samples/flow/minnow-calamari/calamari-7seg-value.fbp b/src/samples/flow/minnow-calamari/calamari-7seg-value.fbp
+index 157d7b5b..40d4bd2c 100755
+--- a/src/samples/flow/minnow-calamari/calamari-7seg-value.fbp
++++ b/src/samples/flow/minnow-calamari/calamari-7seg-value.fbp
+@@ -32,7 +32,7 @@
+ # Uses a timer to loop an accumulator from 0 to 15 and display using
+ # Intel MinnowBoard's Calamari Lure 7-segment display.
+ 
+-accumulator(int/accumulator:setup_value=val:0|min:0|max:15|step:1)
++accumulator(int/accumulator:setup_value=min:0|max:15|step:1)
+ 
+ timer(wallclock/second) OUT -> INC accumulator
+ accumulator OUT -> VALUE seg(SevenSegments)
+diff --git a/src/samples/flow/minnow-calamari/calamari-button-accumulator-persistence.fbp b/src/samples/flow/minnow-calamari/calamari-button-accumulator-persistence.fbp
+index 1ec9cdc0..2af0a02e 100644
+--- a/src/samples/flow/minnow-calamari/calamari-button-accumulator-persistence.fbp
++++ b/src/samples/flow/minnow-calamari/calamari-button-accumulator-persistence.fbp
+@@ -43,7 +43,7 @@
+ 
+ btn1(Button1)
+ btn2(Button2)
+-accumulator(int/accumulator:send_initial_packet=false,setup_value=val:0|min:0|max:15|step:1)
++accumulator(int/accumulator:send_initial_packet=false,setup_value=min:0|max:15|step:1)
+ seg(SevenSegments)
+ persistence(persistence/int:storage="memmap",name="accumulated",default_value=0)
+ 
+diff --git a/src/samples/flow/minnow-calamari/calamari-rgb-led.fbp b/src/samples/flow/minnow-calamari/calamari-rgb-led.fbp
+index 4c121f44..29d829ff 100755
+--- a/src/samples/flow/minnow-calamari/calamari-rgb-led.fbp
++++ b/src/samples/flow/minnow-calamari/calamari-rgb-led.fbp
+@@ -34,7 +34,7 @@
+ # second, then converting the accumulator integer value to bits, the
+ # first bit goes to Red, the second to Green and the third to Blue.
+ 
+-accumulator(int/accumulator:setup_value=val:0|min:0|max:255|step:1)
++accumulator(int/accumulator:setup_value=min:0|max:255|step:1)
+ 
+ timer(wallclock/second) OUT -> INC accumulator
+ accumulator OUT -> IN int_to_byte(converter/int-to-byte)
+diff --git a/src/samples/flow/unix-socket/byte-writer.fbp b/src/samples/flow/unix-socket/byte-writer.fbp
+index ffeb76d7..007e1c39 100755
+--- a/src/samples/flow/unix-socket/byte-writer.fbp
++++ b/src/samples/flow/unix-socket/byte-writer.fbp
+@@ -32,6 +32,6 @@
+ # On a timeout (every second) create a byte and send to the socket.
+ # See byte-reader.fbp
+ 
+-Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=val:0|min:0|max:254|step:1)
++Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=min:0|max:254|step:1)
+ Acc OUT -> IN Byte(converter/int-to-byte)
+ Byte OUT -> IN socket_byte(unix-socket/byte-writer:path=/tmp/byte_socket)
+diff --git a/src/samples/flow/unix-socket/direction-vector-writer.fbp b/src/samples/flow/unix-socket/direction-vector-writer.fbp
+index 3d34c36e..bc4bf01c 100755
+--- a/src/samples/flow/unix-socket/direction-vector-writer.fbp
++++ b/src/samples/flow/unix-socket/direction-vector-writer.fbp
+@@ -34,6 +34,6 @@
+ 
+ x_float(constant/float:value=255) OUT -> X float_to_direction_vector(converter/float-to-direction-vector)
+ y_float(constant/float:value=100) OUT -> Y float_to_direction_vector
+-Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=val:0|min:0|max:254|step:5)
++Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=min:0|max:254|step:5)
+ Acc OUT -> IN int_to_float(converter/int-to-float) OUT -> Z float_to_direction_vector
+ float_to_direction_vector OUT -> IN socket_direction_vector(unix-socket/direction-vector-writer:path=/tmp/direction_vector_socket)
+diff --git a/src/samples/flow/unix-socket/float-writer.fbp b/src/samples/flow/unix-socket/float-writer.fbp
+index c5434f7d..79029dce 100755
+--- a/src/samples/flow/unix-socket/float-writer.fbp
++++ b/src/samples/flow/unix-socket/float-writer.fbp
+@@ -33,6 +33,6 @@
+ # the socket.
+ # See float-reader.fbp
+ 
+-Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=val:0|min:0|max:254|step:1)
++Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=min:0|max:254|step:1)
+ Acc OUT -> IN Float(converter/int-to-float)
+ Float OUT -> IN socket_float(unix-socket/float-writer:path=/tmp/float_socket)
+diff --git a/src/samples/flow/unix-socket/int-writer.fbp b/src/samples/flow/unix-socket/int-writer.fbp
+index 87a22700..5874794d 100755
+--- a/src/samples/flow/unix-socket/int-writer.fbp
++++ b/src/samples/flow/unix-socket/int-writer.fbp
+@@ -33,5 +33,5 @@
+ # the socket.
+ # See int-reader.fbp
+ 
+-Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=val:0|min:0|max:254|step:1)
++Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=min:0|max:254|step:1)
+ Acc OUT -> IN socket_int(unix-socket/int-writer:path=/tmp/int_socket)
+diff --git a/src/samples/flow/unix-socket/rgb-writer.fbp b/src/samples/flow/unix-socket/rgb-writer.fbp
+index 319fa7fc..a52ba1b0 100755
+--- a/src/samples/flow/unix-socket/rgb-writer.fbp
++++ b/src/samples/flow/unix-socket/rgb-writer.fbp
+@@ -35,6 +35,6 @@
+ 
+ RedByte(constant/byte:value=255) OUT -> RED ColorByte(converter/byte-to-rgb)
+ GreenByte(constant/byte:value=100) OUT -> GREEN ColorByte
+-Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=val:0|min:0|max:254|step:5)
++Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=min:0|max:254|step:5)
+ Acc OUT -> IN int_to_str(converter/int-to-byte) OUT -> BLUE ColorByte
+ ColorByte OUT -> IN socket_rgb(unix-socket/rgb-writer:path=/tmp/rgb_socket)
+diff --git a/src/samples/flow/unix-socket/string-writer.fbp b/src/samples/flow/unix-socket/string-writer.fbp
+index e71753b8..2bb5db1b 100755
+--- a/src/samples/flow/unix-socket/string-writer.fbp
++++ b/src/samples/flow/unix-socket/string-writer.fbp
+@@ -32,6 +32,6 @@
+ # On a timeout (every second) create a string and send to the socket.
+ # See string-reader.fbp
+ 
+-Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=val:0|min:0|max:100|step:10)
++Timer(timer:interval=1000) OUT -> INC Acc(int/accumulator:setup_value=min:0|max:100|step:10)
+ Acc OUT -> IN String(converter/int-to-string)
+ String OUT -> IN socket_string(unix-socket/string-writer:path=/tmp/string_socket)
+diff --git a/src/test-fbp/converter-float-boolean.fbp b/src/test-fbp/converter-float-boolean.fbp
+index 0ad8eba7..f764f6db 100644
+--- a/src/test-fbp/converter-float-boolean.fbp
++++ b/src/test-fbp/converter-float-boolean.fbp
+@@ -34,7 +34,7 @@ within_range(constant/float:value=15.38)
+ float_to_boolean_below(converter/float-to-boolean:true_range=min:10|max:20)
+ float_to_boolean_above(converter/float-to-boolean:true_range=min:10|max:20)
+ float_to_boolean_within(converter/float-to-boolean)
+-true_range(constant/float:value=min:10|max:20) OUT -> TRUE_RANGE float_to_boolean_within
++true_range(constant/float:value_spec=min:10|max:20) OUT -> TRUE_RANGE float_to_boolean_within
+ 
+ boolean_to_float_false(converter/boolean-to-float)
+ const_true_value(constant/float:value=117.83) OUT -> TRUE_VALUE boolean_to_float_false
+diff --git a/src/test-fbp/converter-float-direction-vector.fbp b/src/test-fbp/converter-float-direction-vector.fbp
+index ce9d09ff..a69da673 100644
+--- a/src/test-fbp/converter-float-direction-vector.fbp
++++ b/src/test-fbp/converter-float-direction-vector.fbp
+@@ -28,9 +28,9 @@
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-XFloat(constant/float:value=20|0|100|1)
+-YFloat(constant/float:value=40|0|100|1)
+-ZFloat(constant/float:value=70|0|100|1)
++XFloat(constant/float:value=20,value_spec=0|100|1)
++YFloat(constant/float:value=40,value_spec=0|100|1)
++ZFloat(constant/float:value=70,value_spec=0|100|1)
+ float_to_direction_vector(converter/float-to-direction-vector:out_range=0|200|1)
+ 
+ XFloat OUT -> X float_to_direction_vector
+diff --git a/src/test-fbp/converter-float-rgb.fbp b/src/test-fbp/converter-float-rgb.fbp
+index 0cce81d3..556ede2d 100644
+--- a/src/test-fbp/converter-float-rgb.fbp
++++ b/src/test-fbp/converter-float-rgb.fbp
+@@ -28,9 +28,9 @@
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-RedFloat(constant/float:value=20|0|100|1)
+-GreenFloat(constant/float:value=40|0|100|1)
+-BlueFloat(constant/float:value=70|0|100|1)
++RedFloat(constant/float:value=20,value_spec=0|100|1)
++GreenFloat(constant/float:value=40,value_spec=0|100|1)
++BlueFloat(constant/float:value=70,value_spec=0|100|1)
+ float_to_rgb(converter/float-to-rgb:red_max=100,green_max=200,blue_max=50)
+ 
+ RedFloat OUT -> RED float_to_rgb
+diff --git a/src/test-fbp/converter-int-boolean.fbp b/src/test-fbp/converter-int-boolean.fbp
+index 547827f3..76a8a0da 100644
+--- a/src/test-fbp/converter-int-boolean.fbp
++++ b/src/test-fbp/converter-int-boolean.fbp
+@@ -34,7 +34,7 @@ within_range(constant/int:value=15)
+ int_to_boolean_below(converter/int-to-boolean:true_range=min:10|max:20)
+ int_to_boolean_above(converter/int-to-boolean:true_range=min:10|max:20)
+ int_to_boolean_within(converter/int-to-boolean)
+-true_range(constant/int:value=min:10|max:20) OUT -> TRUE_RANGE int_to_boolean_within
++true_range(constant/int:value_spec=min:10|max:20) OUT -> TRUE_RANGE int_to_boolean_within
+ 
+ boolean_to_int_false(converter/boolean-to-int)
+ const_true_value(constant/int:value=117) OUT -> TRUE_VALUE boolean_to_int_false
+diff --git a/src/test-fbp/converter-int-direction-vector.fbp b/src/test-fbp/converter-int-direction-vector.fbp
+index 63460257..b85fbfd9 100644
+--- a/src/test-fbp/converter-int-direction-vector.fbp
++++ b/src/test-fbp/converter-int-direction-vector.fbp
+@@ -28,9 +28,9 @@
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-XInt(constant/int:value=20|0|100|1)
+-YInt(constant/int:value=40|0|100|1)
+-ZInt(constant/int:value=70|0|100|1)
++XInt(constant/int:value=20,value_spec=0|100|1)
++YInt(constant/int:value=40,value_spec=0|100|1)
++ZInt(constant/int:value=70,value_spec=0|100|1)
+ int_to_direction_vector(converter/int-to-direction-vector:out_range=0|200|1)
+ 
+ XInt OUT -> X int_to_direction_vector
+diff --git a/src/test-fbp/converter-int-rgb.fbp b/src/test-fbp/converter-int-rgb.fbp
+index b06b7b0f..d5249ca2 100644
+--- a/src/test-fbp/converter-int-rgb.fbp
++++ b/src/test-fbp/converter-int-rgb.fbp
+@@ -28,9 +28,9 @@
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-RedInt(constant/int:value=20|0|100|1)
+-GreenInt(constant/int:value=40|0|100|1)
+-BlueInt(constant/int:value=70|0|100|1)
++RedInt(constant/int:value=20,value_spec=0|100|1)
++GreenInt(constant/int:value=40,value_spec=0|100|1)
++BlueInt(constant/int:value=70,value_spec=0|100|1)
+ int_to_rgb(converter/int-to-rgb:red_max=100,green_max=200,blue_max=50)
+ 
+ RedInt OUT -> RED int_to_rgb
+diff --git a/src/test-fbp/drange-math.fbp b/src/test-fbp/drange-math.fbp
+index d12e4897..6e7a1ce3 100644
+--- a/src/test-fbp/drange-math.fbp
++++ b/src/test-fbp/drange-math.fbp
+@@ -60,14 +60,14 @@ cmp_pow OUT -> RESULT pow_result(test/result)
+ 
+ radicand(constant/float:value=16.00)
+ sqrt_expected(constant/float:value=4.00)
+-radicand OUT -> IN sqrt(float/sqrt) 
++radicand OUT -> IN sqrt(float/sqrt)
+ sqrt OUT -> IN[0] cmp_sqrt(float/equal)
+ sqrt_expected OUT -> IN[1] cmp_sqrt
+ cmp_sqrt OUT -> RESULT sqrt_result(test/result)
+ 
+-over(constant/float:value=566|0|565|1)
+-within_range(constant/float:value=128|0|256|1)
+-under(constant/float:value=-10|50|100|1)
++over(constant/float:value=566,value_spec=0|565|1)
++within_range(constant/float:value=128,value_spec=0|256|1)
++under(constant/float:value=-10,value_spec=50|100|1)
+ 
+ c1(constant/float:value=565)
+ c2(constant/float:value=128)
+@@ -82,7 +82,7 @@ c2 OUT -> IN[1] cmp_within_range OUT -> RESULT r_within_range(test/result)
+ under OUT -> IN _(float/constrain) OUT -> IN[0] cmp_under(float/equal)
+ c3 OUT -> IN[1] cmp_under OUT -> RESULT r_under(test/result)
+ 
+-sixty_percent(constant/float:value=60|0|100|1)
++sixty_percent(constant/float:value=60,value_spec=0|100|1)
+ sixty_percent_of_sixty(constant/float:value=36)
+ sixty_percent OUT -> IN map(float/map:use_input_range=true,output_range=min:0|max:60|step:1)
+ map OUT -> IN[0] cmp(float/equal)
+diff --git a/src/test-fbp/irange-accumulator.fbp b/src/test-fbp/irange-accumulator.fbp
+index d43b7d03..4b48b568 100644
+--- a/src/test-fbp/irange-accumulator.fbp
++++ b/src/test-fbp/irange-accumulator.fbp
+@@ -30,14 +30,14 @@
+ 
+ generator(test/boolean-generator:sequence="TTTTTTTTTTTTTTTTTTTTT")
+ 
+-dec_acc(int/accumulator:setup_value=val:0|min:-20|max:0|step:1)
++dec_acc(int/accumulator:setup_value=min:-20|max:0|step:1,initial_value=0)
+ validator_dec(test/int-validator:sequence="0 -1 -2 -3 -4 -5 -6 -7 -8 -9 -10 -11 -12 -13 -14 -15 -16 -17 -18 -19 -20 0")
+ 
+ generator OUT -> DEC dec_acc
+ dec_acc OUT -> IN validator_dec
+ validator_dec OUT -> RESULT t1(test/result)
+ 
+-inc_acc(int/accumulator:setup_value=val:0|min:0|max:20|step:1)
++inc_acc(int/accumulator:setup_value=min:0|max:20|step:1,initial_value=0)
+ validator_inc(test/int-validator:sequence="0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 0")
+ 
+ generator OUT -> INC inc_acc
+@@ -46,10 +46,10 @@ validator_inc OUT -> RESULT t2(test/result)
+ 
+ generator_(test/boolean-generator:sequence="TTTTTT")
+ 
+-underflow_acc(int/accumulator:setup_value=val:0|min:-25|max:25|step:5)
++underflow_acc(int/accumulator:setup_value=min:-25|max:25|step:5,initial_value=0)
+ generator_ OUT -> DEC underflow_acc
+ underflow_acc UNDERFLOW -> IN _(converter/empty-to-boolean) OUT -> RESULT t3(test/result)
+ 
+-overflow_acc(int/accumulator:setup_value=val:0|min:-25|max:25|step:5)
++overflow_acc(int/accumulator:setup_value=min:-25|max:25|step:5,initial_value=0)
+ generator_ OUT -> INC overflow_acc
+-overflow_acc OVERFLOW -> IN _(converter/empty-to-boolean) OUT -> RESULT t4(test/result)
+\ No newline at end of file
++overflow_acc OVERFLOW -> IN _(converter/empty-to-boolean) OUT -> RESULT t4(test/result)
+diff --git a/src/test-fbp/parser-errors/node-with-many-subfields.fbp b/src/test-fbp/parser-errors/node-with-many-subfields.fbp
+index 688a81c2..43dc68c1 100644
+--- a/src/test-fbp/parser-errors/node-with-many-subfields.fbp
++++ b/src/test-fbp/parser-errors/node-with-many-subfields.fbp
+@@ -29,10 +29,10 @@
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ # it has a subfield more than expected
+-foo(int/accumulator:setup_value=0|10|25|1|10)
++foo(int/accumulator:setup_value=0|10|25|1)
+ 
+ ## TEST-EXPECTS-ERROR
+ 
+ ## TEST-OUTPUT
+-# node-with-many-subfields.fbp:32:21 Couldn't parse value '0|10|25|1|10' for option 'setup_value' (irange) of node 'foo'
++# node-with-many-subfields.fbp:32:21 Couldn't parse value '0|10|25|1' for option 'setup_value' (irange-spec) of node 'foo'
+ ## TEST-SKIP-COMPILE This test should not be generated + compiled, test parser errors is its sole purpose
+diff --git a/src/test-fbp/persistence-fs-1.fbp b/src/test-fbp/persistence-fs-1.fbp
+index 73897e16..98554738 100644
+--- a/src/test-fbp/persistence-fs-1.fbp
++++ b/src/test-fbp/persistence-fs-1.fbp
+@@ -38,12 +38,12 @@
+ ## TEST-SKIP-COMPILE This test uses some files, but path resolution is not decided yet
+ 
+ int(constant/int:value=-12)
+-irange(constant/int:value=-13|-50|50|3)
++irange(constant/int:value=-13,value_spec=-50|50|3)
+ byte(constant/byte:value=73)
+ boolean(constant/boolean:value=true)
+ string(constant/string:value="string")
+ double(constant/float:value=2.568)
+-drange(constant/float:value=5.5|-40.0|40.0|0.4)
++drange(constant/float:value=5.5,value_spec=-40.0|40.0|0.4)
+ 
+ validator_int(test/int-validator:sequence="0 -12")
+ validator_int_def(test/int-validator:sequence="400000000 -12")
+@@ -88,7 +88,7 @@ persist_int(persistence/int:storage="fs",name="int")
+ int OUT -> IN persist_int OUT -> IN validator_int OUT -> RESULT _(test/result)
+ persist_int OUT -> IN int_map OUT -> IN validator_int_map OUT -> RESULT _(test/result)
+ 
+-persist_int_only_val(persistence/int:storage="fs",name="int_only_val",store_only_val=true,default_value=30|-12|30|1)
++persist_int_only_val(persistence/int:storage="fs",name="int_only_val",store_only_val=true,default_value=30,default_value_spec=-12|30|1)
+ int OUT -> IN persist_int_only_val OUT -> IN int_only_val_map OUT -> IN validator_int_val_only_map OUT -> RESULT _(test/result)
+ 
+ persist_irange(persistence/int:storage="fs",name="irange")
+@@ -108,7 +108,7 @@ persist_double(persistence/float:storage="fs",name="double")
+ double OUT -> IN persist_double OUT -> IN validator_double OUT -> RESULT _(test/result)
+ persist_double OUT -> IN double_map OUT -> IN validator_float_map OUT -> RESULT _(test/result)
+ 
+-persist_double_only_val(persistence/float:storage="fs",name="double_only_val",store_only_val=true,default_value=1023.22|1|1024|0.5)
++persist_double_only_val(persistence/float:storage="fs",name="double_only_val",store_only_val=true,default_value=1023.22,default_value_spec=1|1024|0.5)
+ double OUT -> IN persist_double_only_val OUT -> IN double_only_val_map OUT -> IN validator_float_val_only_map OUT -> RESULT _(test/result)
+ 
+ persist_drange(persistence/float:storage="fs",name="drange")
+@@ -121,7 +121,7 @@ persist_int_def(persistence/int:storage="fs",name="int_def",default_value=400000
+ int OUT -> IN persist_int_def OUT -> IN validator_int_def OUT -> RESULT _(test/result)
+ persist_int_def OUT -> IN int_def_map OUT -> IN validator_int_map_def OUT -> RESULT _(test/result)
+ 
+-persist_irange_def(persistence/int:storage="fs",name="irange_def",default_value=-50|-50|-40|1)
++persist_irange_def(persistence/int:storage="fs",name="irange_def",default_value=-50,default_value_spec=-50|-40|1)
+ irange OUT -> IN persist_irange_def OUT -> IN validator_irange_def OUT -> RESULT _(test/result)
+ persist_irange_def OUT -> IN irange_def_map OUT -> IN validator_irange_map_def OUT -> RESULT _(test/result)
+ 
+@@ -138,6 +138,6 @@ persist_double_def(persistence/float:storage="fs",name="double_def",default_valu
+ double OUT -> IN persist_double_def OUT -> IN validator_double_def OUT -> RESULT _(test/result)
+ persist_double_def OUT -> IN double_def_map OUT -> IN validator_float_def_map OUT -> RESULT _(test/result)
+ 
+-persist_drange_def(persistence/float:storage="fs",name="drange_def",default_value=-4.5|-5.0|5.0|0.5)
++persist_drange_def(persistence/float:storage="fs",name="drange_def",default_value=-4.5,default_value_spec=-5.0|5.0|0.5)
+ drange OUT -> IN persist_drange_def OUT -> IN validator_drange_def OUT -> RESULT _(test/result)
+ persist_drange_def OUT -> IN drange_def_map OUT -> IN validator_drange_def_map OUT -> RESULT _(test/result)
+diff --git a/src/test-fbp/persistence-fs-2.fbp b/src/test-fbp/persistence-fs-2.fbp
+index 4dca1aae..36b969c1 100644
+--- a/src/test-fbp/persistence-fs-2.fbp
++++ b/src/test-fbp/persistence-fs-2.fbp
+@@ -75,21 +75,21 @@ drange_map(float/map:output_range=min:0|max:100|step:1)
+ drange_def_map(float/map:output_range=min:0|max:100|step:1)
+ 
+ persist_int(persistence/int:storage="fs",name="int")
+-persist_int_only_val(persistence/int:storage="fs",name="int_only_val",store_only_val=true,default_value=30|-12|30|1)
++persist_int_only_val(persistence/int:storage="fs",name="int_only_val",store_only_val=true,default_value=30,default_value_spec=-12|30|1)
+ persist_irange(persistence/int:storage="fs",name="irange")
+ persist_byte(persistence/byte:storage="fs",name="byte")
+ persist_boolean(persistence/boolean:storage="fs",name="boolean")
+ persist_string(persistence/string:storage="fs",name="string")
+ persist_double(persistence/float:storage="fs",name="double")
+-persist_double_only_val(persistence/float:storage="fs",name="double_only_val",store_only_val=true,default_value=1023.22|1|1024|0.5)
++persist_double_only_val(persistence/float:storage="fs",name="double_only_val",store_only_val=true,default_value=1023.22,default_value_spec=1|1024|0.5)
+ persist_drange(persistence/float:storage="fs",name="drange")
+ persist_int_def(persistence/int:storage="fs",name="int_def",default_value=400000000)
+-persist_irange_def(persistence/int:storage="fs",name="irange_def",default_value=-50|-50|-40|1)
++persist_irange_def(persistence/int:storage="fs",name="irange_def",default_value=-50,default_value_spec=-50|-40|1)
+ persist_byte_def(persistence/byte:storage="fs",name="byte_def",default_value=7)
+ persist_boolean_def(persistence/boolean:storage="fs",name="boolean_def",default_value=true)
+ persist_string_def(persistence/string:storage="fs",name="string_def",default_value="default")
+ persist_double_def(persistence/float:storage="fs",name="double_def",default_value=-DBL_MAX)
+-persist_drange_def(persistence/float:storage="fs",name="drange_def",default_value=-4.5|-5.0|5.0|0.5)
++persist_drange_def(persistence/float:storage="fs",name="drange_def",default_value=-4.5,default_value_spec=-5.0|5.0|0.5)
+ 
+ persist_int OUT -> IN validator_int OUT -> RESULT _(test/result)
+ persist_irange OUT -> IN validator_irange OUT -> RESULT _(test/result)
+diff --git a/src/test-fbp/persistence-memmap-1.fbp b/src/test-fbp/persistence-memmap-1.fbp
+index 7d623e9c..2035dc16 100644
+--- a/src/test-fbp/persistence-memmap-1.fbp
++++ b/src/test-fbp/persistence-memmap-1.fbp
+@@ -43,12 +43,12 @@
+ 
+ int(constant/int:value=-12)
+ int_only(constant/int:value=30)
+-irange(constant/int:value=-13|-50|50|3)
++irange(constant/int:value=-13,value_spec=-50|50|3)
+ byte(constant/byte:value=73)
+ boolean(constant/boolean:value=true)
+ string(constant/string:value="string")
+ double(constant/float:value=2.568)
+-drange(constant/float:value=5.5|-40.0|40.0|0.4)
++drange(constant/float:value=5.5,value_spec=-40.0|40.0|0.4)
+ 
+ validator_int(test/int-validator:sequence="0 -12")
+ validator_irange(test/int-validator:sequence="0 -13")
+@@ -78,7 +78,7 @@ persist_int(persistence/int:storage="memmap",name="int")
+ int OUT -> IN persist_int OUT -> IN validator_int OUT -> RESULT _(test/result)
+ persist_int OUT -> IN int_map OUT -> IN validator_int_map OUT -> RESULT _(test/result)
+ 
+-persist_int_only_val(persistence/int:storage="memmap",name="int_only_val",store_only_val=true,default_value=30|-12|30|1)
++persist_int_only_val(persistence/int:storage="memmap",name="int_only_val",store_only_val=true,default_value=30,default_value_spec=-12|30|1)
+ int_only OUT -> IN persist_int_only_val OUT -> IN int_only_val_map OUT -> IN validator_int_val_only_map OUT -> RESULT _(test/result)
+ 
+ persist_irange(persistence/int:storage="memmap",name="irange")
+@@ -98,7 +98,7 @@ persist_double(persistence/float:storage="memmap",name="double")
+ double OUT -> IN persist_double OUT -> IN validator_double OUT -> RESULT _(test/result)
+ persist_double OUT -> IN double_map OUT -> IN validator_float_map OUT -> RESULT _(test/result)
+ 
+-persist_double_only_val(persistence/float:storage="memmap",name="double_only_val",store_only_val=true,default_value=1023.22|1|1024|0.5)
++persist_double_only_val(persistence/float:storage="memmap",name="double_only_val",store_only_val=true,default_value=1023.22,default_value_spec=1|1024|0.5)
+ double OUT -> IN persist_double_only_val OUT -> IN double_only_val_map OUT -> IN validator_float_val_only_map OUT -> RESULT _(test/result)
+ 
+ persist_drange(persistence/float:storage="memmap",name="drange")
+diff --git a/src/test-fbp/persistence-memmap-2.fbp b/src/test-fbp/persistence-memmap-2.fbp
+index f815f019..fcf3cbca 100644
+--- a/src/test-fbp/persistence-memmap-2.fbp
++++ b/src/test-fbp/persistence-memmap-2.fbp
+@@ -64,13 +64,13 @@ double_only_val_map(float/map:output_range=min:0|max:100|step:1)
+ drange_map(float/map:output_range=min:0|max:100|step:1)
+ 
+ persist_int(persistence/int:storage="memmap",name="int")
+-persist_int_only_val(persistence/int:storage="memmap",name="int_only_val",store_only_val=true,default_value=30|-12|30|1)
++persist_int_only_val(persistence/int:storage="memmap",name="int_only_val",store_only_val=true,default_value=30,default_value_spec=-12|30|1)
+ persist_irange(persistence/int:storage="memmap",name="irange")
+ persist_byte(persistence/byte:storage="memmap",name="byte")
+ persist_boolean(persistence/boolean:storage="memmap",name="boolean")
+ persist_string(persistence/string:storage="memmap",name="string")
+ persist_double(persistence/float:storage="memmap",name="double")
+-persist_double_only_val(persistence/float:storage="memmap",name="double_only_val",store_only_val=true,default_value=1023.22|1|1024|0.5)
++persist_double_only_val(persistence/float:storage="memmap",name="double_only_val",store_only_val=true,default_value=1023.22,default_value_spec=1|1024|0.5)
+ persist_drange(persistence/float:storage="memmap",name="drange")
+ 
+ persist_int OUT -> IN validator_int OUT -> RESULT _(test/result)
+diff --git a/src/test-fbp/rgb.fbp b/src/test-fbp/rgb.fbp
+index 297d8467..2eb49700 100644
+--- a/src/test-fbp/rgb.fbp
++++ b/src/test-fbp/rgb.fbp
+@@ -29,7 +29,7 @@
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ Color(color/luminance-rgb:color=255|100|0|255|255|255)
+-Luminance(constant/int:value=50|0|100|1) OUT -> IN Color
++Luminance(constant/int:value=50,value_spec=0|100|1) OUT -> IN Color
+ 
+ RedByte(constant/byte:value=255) OUT -> RED ColorByte(converter/byte-to-rgb)
+ GreenByte(constant/byte:value=100) OUT -> GREEN ColorByte
+@@ -44,9 +44,9 @@ _(constant/int:value=255) OUT -> IN[1] cmpRedBytes
+ _(constant/int:value=0) OUT -> IN[1] cmpBlueBytes
+ _(constant/int:value=100) OUT -> IN[1] cmpGreenBytes
+ 
+-RedFloat(constant/float:value=1|0|1|1) OUT -> RED ColorFloat(converter/float-to-rgb:blue_max=64)
+-GreenFloat(constant/float:value=0.5|0|1|1) OUT -> GREEN ColorFloat
+-BlueFloat(constant/float:value=100|0|100|1) OUT -> BLUE ColorFloat
++RedFloat(constant/float:value=1,value_spec=0|1|1) OUT -> RED ColorFloat(converter/float-to-rgb:blue_max=64)
++GreenFloat(constant/float:value=0.5,value_spec=0|1|1) OUT -> GREEN ColorFloat
++BlueFloat(constant/float:value=100,value_spec=0|100|1) OUT -> BLUE ColorFloat
+ ColorFloat OUT -> IN Floats(converter/rgb-to-int)
+ 
+ Floats RED -> IN[0] cmpRedFloats(int/equal) OUT -> RESULT test_compare_red_float(test/result)
+@@ -57,9 +57,9 @@ _(constant/int:value=255) OUT -> IN[1] cmpRedFloats
+ _(constant/int:value=64) OUT -> IN[1] cmpBlueFloats
+ _(constant/int:value=127) OUT -> IN[1] cmpGreenFloats
+ 
+-RedInt(constant/int:value=20|0|100|1) OUT -> RED ColorInt(converter/int-to-rgb:red_max=32,green_max=64,blue_max=32)
+-GreenInt(constant/int:value=50|0|100|1) OUT -> GREEN ColorInt
+-BlueInt(constant/int:value=100|0|100|1) OUT -> BLUE ColorInt
++RedInt(constant/int:value=20,value_spec=0|100|1) OUT -> RED ColorInt(converter/int-to-rgb:red_max=32,green_max=64,blue_max=32)
++GreenInt(constant/int:value=50,value_spec=0|100|1) OUT -> GREEN ColorInt
++BlueInt(constant/int:value=100,value_spec=0|100|1) OUT -> BLUE ColorInt
+ ColorInt OUT -> IN Ints(converter/rgb-to-int)
+ 
+ Ints RED -> IN[0] cmpRedInts(int/equal) OUT -> RESULT test_compare_red_int(test/result)
+@@ -70,7 +70,7 @@ _(constant/int:value=6) OUT -> IN[1] cmpRedInts
+ _(constant/int:value=32) OUT -> IN[1] cmpBlueInts
+ _(constant/int:value=32) OUT -> IN[1] cmpGreenInts
+ 
+-invalid_min_max(constant/int:value=min:10|max:5|val:10) OUT -> IN _(color/luminance-rgb:color=255|100|0|255|255|255) ERROR -> IN _(converter/empty-to-boolean) OUT -> PASS invalid_test_result(test/result)
++invalid_min_max(constant/int:value_spec=min:10|max:5,value=10) OUT -> IN _(color/luminance-rgb:color=255|100|0|255|255|255) ERROR -> IN _(converter/empty-to-boolean) OUT -> PASS invalid_test_result(test/result)
+ 
+-invalid_value(constant/int:value=min:5|max:10|val:11) OUT -> IN _(color/luminance-rgb:color=255|100|0|255|255|255) ERROR -> IN _(converter/empty-to-boolean) OUT -> PASS invalid_test_result2(test/result)
++invalid_value(constant/int:value_spec=min:5|max:10,value=11) OUT -> IN _(color/luminance-rgb:color=255|100|0|255|255|255) ERROR -> IN _(converter/empty-to-boolean) OUT -> PASS invalid_test_result2(test/result)
+ 
+diff --git a/src/test-stub-gen/dummy.json b/src/test-stub-gen/dummy.json
+index 1470a300..934656a8 100644
+--- a/src/test-stub-gen/dummy.json
++++ b/src/test-stub-gen/dummy.json
+@@ -181,17 +181,6 @@
+          "description": "Dummy byte option.",
+          "name": "opt_byte"
+         },
+-        {
+-         "data_type": "drange",
+-         "default": {
+-             "val": 20.5,
+-             "min": -10,
+-             "max": 33,
+-             "step": 0.5
+-         },
+-         "description": "Dummy drange option.",
+-         "name": "opt_drange"
+-        },
+         {
+          "data_type": "drange-spec",
+          "default": {
+@@ -226,17 +215,6 @@
+          "description": "Dummy int option.",
+          "name": "opt_int"
+         },
+-        {
+-         "data_type": "irange",
+-         "default": {
+-             "val": 20,
+-             "min": -10,
+-             "max": 33,
+-             "step": 1
+-         },
+-         "description": "Dummy irange option.",
+-         "name": "opt_irange"
+-        },
+         {
+          "data_type": "irange-spec",
+          "default": {
+diff --git a/src/test/Kconfig b/src/test/Kconfig
+index 05f25423..903bb2c0 100644
+--- a/src/test/Kconfig
++++ b/src/test/Kconfig
+@@ -23,7 +23,7 @@ config TEST_FBP_SCANNER
+ 
+ config TEST_FLOW
+ 	bool "flow"
+-	depends on FLOW_SUPPORT
++	depends on FLOW_SUPPORT && FLOW_NODE_TYPE_INT && FLOW_NODE_TYPE_TIMER
+ 	default y
+ 
+ config TEST_FLOW_BUILDER
+diff --git a/src/test/Makefile b/src/test/Makefile
+index 128f7f35..b4ef7e00 100644
+--- a/src/test/Makefile
++++ b/src/test/Makefile
+@@ -13,6 +13,9 @@ test-test-fbp-scanner-$(TEST_FBP_SCANNER) := test.c test-fbp-scanner.c
+ 
+ test-$(TEST_FLOW) += test-flow
+ test-test-flow-$(TEST_FLOW) := test.c test-flow.c
++test-test-flow-$(TEST_FLOW)-deps := \
++	int.mod \
++	timer.mod
+ 
+ test-$(TEST_FLOW_BUILDER) += test-flow-builder
+ test-test-flow-builder-$(TEST_FLOW_BUILDER) := test.c test-flow-builder.c
+diff --git a/src/test/test-flow.c b/src/test/test-flow.c
+index f27e1cdc..96ada766 100644
+--- a/src/test/test-flow.c
++++ b/src/test/test-flow.c
+@@ -41,6 +41,7 @@
+ #include "sol-flow/pwm.h"
+ #endif
+ #include "sol-flow/timer.h"
++#include "sol-flow/int.h"
+ 
+ #include "test.h"
+ 
+@@ -1155,54 +1156,55 @@ named_options_init_from_strv(void)
+     const struct sol_flow_node_type *node_type;
+     int r;
+ 
+-    ASSERT(sol_flow_get_node_type("timer", SOL_FLOW_NODE_TYPE_TIMER, &node_type) == 0);
++    ASSERT(sol_flow_get_node_type("int", SOL_FLOW_NODE_TYPE_INT_ACCUMULATOR, &node_type) == 0);
+     {
+-        const char *strv[] = { "interval=1000", NULL };
++        const char *strv[] = { "initial_value=1000", NULL };
+ 
+-        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type, strv);
++        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type,
++            strv);
+         ASSERT(r >= 0);
+         ASSERT_INT_EQ(named_opts.count, ARRAY_SIZE(strv) - 1);
+ 
+         m = named_opts.members;
+-        ASSERT_STR_EQ(m->name, "interval");
+-        ASSERT(m->type == SOL_FLOW_NODE_OPTIONS_MEMBER_IRANGE);
+-        ASSERT_INT_EQ(m->irange.val, 1000);
++        ASSERT_STR_EQ(m->name, "initial_value");
++        ASSERT(m->type == SOL_FLOW_NODE_OPTIONS_MEMBER_INT);
++        ASSERT_INT_EQ(m->i, 1000);
+ 
+         sol_flow_node_named_options_fini(&named_opts);
+     }
+ 
+     {
+-        const char *strv[] = { "interval=50|20|60|2", NULL };
++        const char *strv[] = { "setup_value=20|60|2", NULL };
+ 
+-        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type, strv);
++        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type,
++            strv);
+         ASSERT(r >= 0);
+         ASSERT_INT_EQ(named_opts.count, ARRAY_SIZE(strv) - 1);
+ 
+         m = named_opts.members;
+-        ASSERT_STR_EQ(m->name, "interval");
+-        ASSERT(m->type == SOL_FLOW_NODE_OPTIONS_MEMBER_IRANGE);
+-        ASSERT_INT_EQ(m->irange.val, 50);
+-        ASSERT_INT_EQ(m->irange.min, 20);
+-        ASSERT_INT_EQ(m->irange.max, 60);
+-        ASSERT_INT_EQ(m->irange.step, 2);
++        ASSERT_STR_EQ(m->name, "setup_value");
++        ASSERT(m->type == SOL_FLOW_NODE_OPTIONS_MEMBER_IRANGE_SPEC);
++        ASSERT_INT_EQ(m->irange_spec.min, 20);
++        ASSERT_INT_EQ(m->irange_spec.max, 60);
++        ASSERT_INT_EQ(m->irange_spec.step, 2);
+ 
+         sol_flow_node_named_options_fini(&named_opts);
+     }
+ 
+     {
+-        const char *strv[2] = { "interval=val:100|min:10|max:200|step:5", NULL };
++        const char *strv[] = { "setup_value=min:10|max:200|step:5", NULL };
+ 
+-        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type, strv);
++        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type,
++            strv);
+         ASSERT(r >= 0);
+         ASSERT_INT_EQ(named_opts.count, ARRAY_SIZE(strv) - 1);
+ 
+         m = named_opts.members;
+-        ASSERT_STR_EQ(m->name, "interval");
+-        ASSERT(m->type == SOL_FLOW_NODE_OPTIONS_MEMBER_IRANGE);
+-        ASSERT_INT_EQ(m->irange.val, 100);
+-        ASSERT_INT_EQ(m->irange.min, 10);
+-        ASSERT_INT_EQ(m->irange.max, 200);
+-        ASSERT_INT_EQ(m->irange.step, 5);
++        ASSERT_STR_EQ(m->name, "setup_value");
++        ASSERT(m->type == SOL_FLOW_NODE_OPTIONS_MEMBER_IRANGE_SPEC);
++        ASSERT_INT_EQ(m->irange_spec.min, 10);
++        ASSERT_INT_EQ(m->irange_spec.max, 200);
++        ASSERT_INT_EQ(m->irange_spec.step, 5);
+ 
+         sol_flow_node_named_options_fini(&named_opts);
+     }
+@@ -1210,14 +1212,16 @@ named_options_init_from_strv(void)
+     {
+         const char *strv[] = { "this_is_not_a_valid_field=100", NULL };
+ 
+-        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type, strv);
++        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type,
++            strv);
+         ASSERT(r < 0);
+     }
+ 
+     {
+-        const char *wrong_formatting_strv[] = { "interval = 1000", NULL };
++        const char *wrong_formatting_strv[] = { "initial_value = 1000", NULL };
+ 
+-        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type, wrong_formatting_strv);
++        r = sol_flow_node_named_options_init_from_strv(&named_opts, node_type,
++            wrong_formatting_strv);
+         ASSERT(r < 0);
+     }
+ 
+@@ -1295,7 +1299,7 @@ static void
+ node_options_new(void)
+ {
+     struct sol_flow_node_named_options_member one_option[] = {
+-        { .name = "interval", .type = SOL_FLOW_NODE_OPTIONS_MEMBER_IRANGE, .irange = { .val = 1000 } },
++        { .name = "interval", .type = SOL_FLOW_NODE_OPTIONS_MEMBER_INT, .i = 1000 },
+     };
+ 
+     struct sol_flow_node_named_options_member multiple_options[] = {
+@@ -1338,7 +1342,7 @@ node_options_new(void)
+     r = sol_flow_node_options_new(node_type, &named_opts, &opts);
+     ASSERT(r >= 0);
+     timer_opts = (struct sol_flow_node_type_timer_options *)opts;
+-    ASSERT_INT_EQ(timer_opts->interval.val, 1000);
++    ASSERT_INT_EQ(timer_opts->interval, 1000);
+     sol_flow_node_options_del(node_type, opts);
+ 
+     /* Unknown option */

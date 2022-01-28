@@ -1,0 +1,145 @@
+"2005-08-20 05:07:08 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index e2fe25167..a4e78af57 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -435,6 +435,9 @@
+ #ifdef CONFIG_MOUNT
+ 	APPLET(mount, mount_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_MOUNTPOINT
++	APPLET(mountpoint, mountpoint_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_MSH
+ 	APPLET_NOUSAGE("msh", msh_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index dc8058a20..662227818 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1922,6 +1922,20 @@
+ 	"$ mount /dev/fd0 /mnt -t msdos -o ro\n" \
+ 	"$ mount /tmp/diskimage /opt -t ext2 -o loop\n"
+ 
++#define mountpoint_trivial_usage \
++	"[-q] <[-d] DIR | -x DEVICE>"
++#define mountpoint_full_usage \
++	"mountpoint checks if the directory is a mountpoint\n\n" \
++	"Options:\n"  \
++	"\t-q:\t\tBe more quiet\n" \
++	"\t-d:\t\tPrint major/minor device number of the filesystem\n" \
++	"\t-x:\t\tPrint major/minor device number of the blockdevice"
++#define mountpoint_example_usage \
++	"$ mountpoint /proc\n" \
++	"/proc is not a mountpoint\n" \
++	"$ mountpoint /sys\n" \
++	"/sys is a mountpoint\n"
++
+ #define mt_trivial_usage \
+ 	"[-f device] opcode value"
+ #define mt_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 6c68cd08e..1f14d212f 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -194,6 +194,12 @@ config CONFIG_FEATURE_MAKEDEVS_TABLE
+ 
+ endchoice
+ 
++config CONFIG_MOUNTPOINT
++	bool "mountpoint"
++	default n
++	help
++	  mountpoint checks if the directory is a mountpoint.
++
+ config CONFIG_MT
+ 	bool "mt"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index 8c53104ed..ee1cc7519 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -34,6 +34,7 @@ MISCUTILS-$(CONFIG_EJECT)       += eject.o
+ MISCUTILS-$(CONFIG_HDPARM)      += hdparm.o
+ MISCUTILS-$(CONFIG_LAST)        += last.o
+ MISCUTILS-$(CONFIG_MAKEDEVS)    += makedevs.o
++MISCUTILS-$(CONFIG_MOUNTPOINT)	+= mountpoint.o
+ MISCUTILS-$(CONFIG_MT)          += mt.o
+ MISCUTILS-$(CONFIG_RX)          += rx.o
+ MISCUTILS-$(CONFIG_SETSID)      += setsid.o
+diff --git a/miscutils/mountpoint.c b/miscutils/mountpoint.c
+new file mode 100644
+index 000000000..46b2d4e26
+--- /dev/null
++++ b/miscutils/mountpoint.c
+@@ -0,0 +1,70 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * mountpoint implementation for busybox
++ *
++ * Copyright (C) 2005 Bernhard Fischer
++ *
++ * Licensed under the GPL v2, see the file LICENSE in this tarball.
++ *
++ * Based on sysvinit's mountpoint
++ */
++
++#include <sys/stat.h>
++#include <errno.h> /* errno */
++#include <string.h> /* strerror */
++#include <getopt.h> /* optind */
++#include "busybox.h"
++
++int mountpoint_main(int argc, char **argv)
++{
++	int opt = bb_getopt_ulflags(argc, argv, "qdx");
++#define OPT_q (1)
++#define OPT_d (2)
++#define OPT_x (4)
++
++	if (optind != argc - 1)
++		bb_show_usage();
++	{
++		char *arg = argv[optind];
++		struct stat st;
++
++		if ( (opt & OPT_x && stat(arg, &st) == 0) || (lstat(arg, &st) == 0) ) {
++			if (opt & OPT_x) {
++				if (S_ISBLK(st.st_mode))
++				{
++					bb_printf("%u:%u\n", major(st.st_rdev),
++								minor(st.st_rdev));
++					return EXIT_SUCCESS;
++				} else {
++					if (opt & OPT_q)
++						putchar('\n');
++					else
++						bb_error_msg("%s: not a block device", arg);
++				}
++				return EXIT_FAILURE;
++			} else
++			if (S_ISDIR(st.st_mode)) {
++				dev_t st_dev = st.st_dev;
++				ino_t st_ino = st.st_ino;
++				char *p;
++				bb_xasprintf(&p, "%s/..", arg);
++				if (stat(p, &st) == 0) {
++					short ret = (st_dev != st.st_dev) ||
++						(st_dev == st.st_dev && st_ino == st.st_ino);
++					if (opt & OPT_d)
++						bb_printf("%u:%u\n", major(st_dev), minor(st_dev));
++					else if (!(opt & OPT_q))
++						bb_printf("%s is %sa mountpoint\n", arg, ret?"":"not ");
++					return !ret;
++				}
++			} else {
++				if (!(opt & OPT_q))
++					bb_error_msg("%s: not a directory", arg);
++				return EXIT_FAILURE;
++			}
++		}
++		if (!(opt & OPT_q))
++			bb_perror_msg(arg);
++		return EXIT_FAILURE;
++	}
++}

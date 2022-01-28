@@ -1,0 +1,163 @@
+"2016-09-30 18:43:55 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index c5e54e19d..c8a7497c9 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1005,16 +1005,6 @@ config UCLIBC_LINUX_MODULE_26
+ 
+ 	  Say N if you do not use kernel modules.
+ 
+-config UCLIBC_LINUX_MODULE_24
+-	bool "Linux kernel module functions (<2.6)"
+-	depends on !TARGET_bfin && !TARGET_c6x
+-	help
+-	  create_module, query_module
+-	  are used in linux (prior to 2.6) for loadable kernel modules.
+-
+-	  Say N if you do not use kernel modules, or you only support
+-	  Linux 2.6+.
+-
+ config UCLIBC_LINUX_SPECIFIC
+ 	bool "Linux specific functions"
+ 	default y
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 6c35bff0b..3855e8505 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -16,8 +16,6 @@ CSRC-y := $(filter-out llseek.c $(CSRC_LFS),$(CSRC-y))
+ CSRC-$(UCLIBC_HAS_LFS) += llseek.c $(CSRC_LFS)
+ CSRC-$(findstring y,$(UCLIBC_HAS_SSP)$(UCLIBC_HAS_FORTIFY)) += ssp.c
+ CSRC-$(UCLIBC_LINUX_MODULE_26) += delete_module.c init_module.c
+-CSRC-$(UCLIBC_LINUX_MODULE_24) += create_module.c query_module.c \
+-	get_kernel_syms.c
+ # we need these internally: fstatfs.c statfs.c
+ CSRC-$(UCLIBC_LINUX_SPECIFIC) += \
+ 	bdflush.c \
+diff --git a/libc/sysdeps/linux/common/create_module.c b/libc/sysdeps/linux/common/create_module.c
+deleted file mode 100644
+index 5bded5636..000000000
+--- a/libc/sysdeps/linux/common/create_module.c
++++ /dev/null
+@@ -1,52 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * create_module syscall for uClibc
+- *
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-#include <features.h>
+-#define __need_size_t
+-#include <stddef.h>
+-#include <errno.h>
+-#include <sys/syscall.h>
+-
+-#ifdef __NR_create_module
+-
+-unsigned long create_module(const char *name, size_t size);
+-
+-#if defined(__UCLIBC_BROKEN_CREATE_MODULE__)
+-# define __NR___create_module  __NR_create_module
+-static __inline__ _syscall2(long, __create_module, const char *, name, size_t, size)
+-/* By checking the value of errno, we know if we have been fooled
+- * by the syscall2 macro making a very high address look like a
+- * negative, so we fix it up here.  */
+-unsigned long create_module(const char *name, size_t size)
+-{
+-	long ret = __create_module(name, size);
+-
+-	/* Jump through hoops to fixup error return codes */
+-	if (ret == -1 && errno > 125) {
+-		ret = -errno;
+-		__set_errno(0);
+-	}
+-	return ret;
+-}
+-#elif defined(__UCLIBC_SLIGHTLY_BROKEN_CREATE_MODULE__)
+-# define __NR___create_module  __NR_create_module
+-/* Alpha doesn't have the same problem, exactly, but a bug in older
+-   kernels fails to clear the error flag.  Clear it here explicitly.  */
+-static __inline__ _syscall4(unsigned long, __create_module, const char *, name,
+-			size_t, size, size_t, dummy, size_t, err)
+-unsigned long create_module(const char *name, size_t size)
+-{
+-	return __create_module(name, size, 0, 0);
+-}
+-#else
+-/* Sparc, MIPS, etc don't mistake return values for errors. */
+-_syscall2(unsigned long, create_module, const char *, name, size_t, size)
+-#endif
+-
+-#endif
+diff --git a/libc/sysdeps/linux/common/get_kernel_syms.c b/libc/sysdeps/linux/common/get_kernel_syms.c
+deleted file mode 100644
+index 740b8d3aa..000000000
+--- a/libc/sysdeps/linux/common/get_kernel_syms.c
++++ /dev/null
+@@ -1,16 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * get_kernel_syms() for uClibc
+- *
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-#include <sys/syscall.h>
+-
+-#ifdef __NR_get_kernel_syms
+-struct kernel_sym;
+-int get_kernel_syms(struct kernel_sym *table);
+-_syscall1(int, get_kernel_syms, struct kernel_sym *, table)
+-#endif
+diff --git a/libc/sysdeps/linux/common/query_module.c b/libc/sysdeps/linux/common/query_module.c
+deleted file mode 100644
+index 7c168df45..000000000
+--- a/libc/sysdeps/linux/common/query_module.c
++++ /dev/null
+@@ -1,16 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * query_module() for uClibc
+- *
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-#include <sys/syscall.h>
+-int query_module(const char *name attribute_unused, int which attribute_unused,
+-				 void *buf attribute_unused, size_t bufsize attribute_unused, size_t * ret attribute_unused);
+-#ifdef __NR_query_module
+-_syscall5(int, query_module, const char *, name, int, which,
+-		  void *, buf, size_t, bufsize, size_t *, ret)
+-#endif
+diff --git a/libc/sysdeps/linux/common/stubs.c b/libc/sysdeps/linux/common/stubs.c
+index 19a33714a..b80b54b2c 100644
+--- a/libc/sysdeps/linux/common/stubs.c
++++ b/libc/sysdeps/linux/common/stubs.c
+@@ -86,10 +86,6 @@ make_stub(capset)
+ make_stub(connect)
+ #endif
+ 
+-#if !defined __NR_create_module && defined __UCLIBC_LINUX_MODULE_24__
+-make_stub(create_module)
+-#endif
+-
+ #if !defined __NR_delete_module && defined __UCLIBC_LINUX_MODULE_26__
+ make_stub(delete_module)
+ #endif
+@@ -273,10 +269,6 @@ make_stub(ppoll)
+ make_stub(prctl)
+ #endif
+ 
+-#if !defined __NR_query_module && defined __UCLIBC_LINUX_MODULE_24__
+-make_stub(query_module)
+-#endif
+-
+ #if !defined __NR_readahead && defined __UCLIBC_LINUX_SPECIFIC__
+ make_stub(readahead)
+ #endif

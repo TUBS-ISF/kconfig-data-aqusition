@@ -1,0 +1,59 @@
+"2006-12-19 00:29:22 +0000"
+diff --git a/editors/Config.in b/editors/Config.in
+index 4ba009019..fd840ae9a 100644
+--- a/editors/Config.in
++++ b/editors/Config.in
+@@ -127,5 +127,12 @@ config FEATURE_VI_OPTIMIZE_CURSOR
+ 	  This will make the cursor movement faster, but requires more memory
+ 	  and it makes the applet a tiny bit larger.
+ 
+-endmenu
++config FEATURE_ALLOW_EXEC
++	bool "Allow vi and awk to execute shell commands"
++	default y
++	depends on VI || AWK
++	help
++	  Enables vi and awk features which allows user to execute
++	  shell commands (using system() C call).
+ 
++endmenu
+diff --git a/editors/awk.c b/editors/awk.c
+index 9386f4ec0..147c621ab 100644
+--- a/editors/awk.c
++++ b/editors/awk.c
+@@ -2378,7 +2378,8 @@ re_cont:
+ 
+ 			  case F_sy:
+ 				fflush(NULL);
+-				R.d = (L.s && *L.s) ? (system(L.s) >> 8) : 0;
++				R.d = (ENABLE_FEATURE_ALLOW_EXEC && L.s && *L.s)
++						? (system(L.s) >> 8) : 0;
+ 				break;
+ 
+ 			  case F_ff:
+diff --git a/editors/vi.c b/editors/vi.c
+index eef895c53..0bb2b23ef 100644
+--- a/editors/vi.c
++++ b/editors/vi.c
+@@ -660,7 +660,9 @@ static void colon(Byte * buf)
+ 			dot = find_line(b);	// what line is #b
+ 			dot_skip_over_ws();
+ 		}
+-	} else if (strncmp((char *) cmd, "!", 1) == 0) {	// run a cmd
++	}
++#if ENABLE_FEATURE_ALLOW_EXEC
++	else if (strncmp((char *) cmd, "!", 1) == 0) {	// run a cmd
+ 		// :!ls   run the <cmd>
+ 		(void) alarm(0);		// wait for input- no alarms
+ 		place_cursor(rows - 1, 0, FALSE);	// go to Status line
+@@ -670,7 +672,9 @@ static void colon(Byte * buf)
+ 		rawmode();
+ 		Hit_Return();			// let user see results
+ 		(void) alarm(3);		// done waiting for input
+-	} else if (strncmp((char *) cmd, "=", i) == 0) {	// where is the address
++	}
++#endif
++	else if (strncmp((char *) cmd, "=", i) == 0) {	// where is the address
+ 		if (b < 0) {	// no addr given- use defaults
+ 			b = e = count_lines(text, dot);
+ 		}

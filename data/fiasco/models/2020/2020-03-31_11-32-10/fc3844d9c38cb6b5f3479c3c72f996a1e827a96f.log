@@ -1,0 +1,575 @@
+"2020-03-31 11:32:10 +0200"
+diff --git a/src/Modules.arm b/src/Modules.arm
+index 372c4d6..743a76a 100644
+--- a/src/Modules.arm
++++ b/src/Modules.arm
+@@ -132,6 +132,7 @@ INTERFACES_KERNEL-$(CONFIG_SERIAL) += uart_console
+ INTERFACES_KERNEL-$(CONFIG_ARM_EM_TZ) += vm
+ INTERFACES_KERNEL-$(CONFIG_CPU_VIRT) += vgic
+ INTERFACES_KERNEL-$(CONFIG_ARM_SMC_USER) += smc_user
++INTERFACES_KERNEL-$(CONFIG_ARM_GIC) += gic_cpu gic
+ INTERFACES_KERNEL += boot_infos
+ 
+ 
+diff --git a/src/kern/arm/Kconfig b/src/kern/arm/Kconfig
+index 30fc07b..62df7c1 100644
+--- a/src/kern/arm/Kconfig
++++ b/src/kern/arm/Kconfig
+@@ -91,6 +91,9 @@ config ARM_V7PLUS
+ config ARM_V8
+ 	bool
+ 
++config ARM_GIC
++	bool
++
+ # SECTION: CPU
+ 
+ choice
+diff --git a/src/kern/arm/bsp/armada38x/Kconfig b/src/kern/arm/bsp/armada38x/Kconfig
+index 27c3016..1b85b53 100644
+--- a/src/kern/arm/bsp/armada38x/Kconfig
++++ b/src/kern/arm/bsp/armada38x/Kconfig
+@@ -1,4 +1,4 @@
+ # PF: ARMADA38X
+ # PFDESCR: Marvell Armada 38x
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0
++# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/armada38x/Modules b/src/kern/arm/bsp/armada38x/Modules
+index 2656772..2a52517 100644
+--- a/src/kern/arm/bsp/armada38x/Modules
++++ b/src/kern/arm/bsp/armada38x/Modules
+@@ -2,7 +2,6 @@
+ 
+ PREPROCESS_PARTS      += generic_tickless_idle mptimer pic_gic
+ PREPROCESS_PARTS      += libuart
+-INTERFACES_KERNEL     += gic
+ SUBSYSTEMS            += LIBUART
+ OBJECTS_LIBUART       += uart_16550.o uart_16550_dw.o
+ RAM_PHYS_BASE         := 0x0
+diff --git a/src/kern/arm/bsp/exynos/Kconfig b/src/kern/arm/bsp/exynos/Kconfig
+index 59cd47c..03034e8 100644
+--- a/src/kern/arm/bsp/exynos/Kconfig
++++ b/src/kern/arm/bsp/exynos/Kconfig
+@@ -2,6 +2,7 @@
+ # PFDESCR: Samsung Exynos
+ # PFDEPENDS: ARM
+ # PFSELECT: HAVE_ARM_SECMONIF_NONE HAVE_ARM_SECMONIF_MC
++# PFSELECT: ARM_GIC
+ 
+ config PF_EXYNOS4
+         bool
+diff --git a/src/kern/arm/bsp/exynos/Modules b/src/kern/arm/bsp/exynos/Modules
+index 891f900..fae0fca 100644
+--- a/src/kern/arm/bsp/exynos/Modules
++++ b/src/kern/arm/bsp/exynos/Modules
+@@ -12,7 +12,7 @@ PREPROCESS_PARTS-$(CONFIG_PF_EXYNOS_EXTGIC) += exynos_extgic irregular_gic
+ PREPROCESS_PARTS-$(CONFIG_PF_EXYNOS_UART_NATIVE) += exynos_uart_native
+ PREPROCESS_PARTS += $(if $(filter-out "",$(CONFIG_PF_EXYNOS_PKG_IDS)),pkg_id_file)
+ 
+-INTERFACES_KERNEL       += gic platform smc timer_mct
++INTERFACES_KERNEL       += platform smc timer_mct
+ VPATH                   += kern/arm/bsp/s3c
+ RAM_PHYS_BASE           := $(if $(CONFIG_ARM_EM_TZ),0xb0000000,0x40000000)
+ MPCORE_PHYS_BASE        := 0x10500000
+diff --git a/src/kern/arm/bsp/imx/Kconfig b/src/kern/arm/bsp/imx/Kconfig
+index b7356b0..41db26a 100644
+--- a/src/kern/arm/bsp/imx/Kconfig
++++ b/src/kern/arm/bsp/imx/Kconfig
+@@ -31,6 +31,7 @@ config PF_IMX_51
+ 	bool "i.MX51"
+ 	depends on PF_IMX
+ 	select CAN_ARM_CPU_CORTEX_A8
++	select ARM_GIC
+ 	help
+ 	  Choose for i.MX51.
+ 
+@@ -47,6 +48,7 @@ config PF_IMX_6
+         depends on PF_IMX
+         select CAN_ARM_CPU_CORTEX_A9
+ 	select CAN_ARM_CACHE_L2CXX0
++	select ARM_GIC
+         help
+           Choose for i.MX6 platform.
+ 
+@@ -55,6 +57,7 @@ config PF_IMX_6UL
+         depends on PF_IMX
+         select CAN_ARM_CPU_CORTEX_A7
+         select HAS_CPU_VIRT
++	select ARM_GIC
+         help
+           Choose for i.MX6UL platform.
+ 
+@@ -64,6 +67,7 @@ config PF_IMX_7
+         select CAN_ARM_CPU_CORTEX_A7
+         select HAS_CPU_VIRT
+         select HAS_ARM_PSCI
++	select ARM_GIC
+         help
+           Choose for i.MX7 platform.
+ 
+diff --git a/src/kern/arm/bsp/imx/Modules b/src/kern/arm/bsp/imx/Modules
+index c4ce395..1dddf16 100644
+--- a/src/kern/arm/bsp/imx/Modules
++++ b/src/kern/arm/bsp/imx/Modules
+@@ -18,10 +18,8 @@ PREPROCESS_PARTS        += $(if $(CONFIG_PF_IMX_7),pic_gic \
+                                                    arm_generic_timer)
+ RAM_PHYS_BASE           := $(CONFIG_PF_IMX_RAM_PHYS_BASE)
+ 
+-INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_51),gic)
+-INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_6),gic)
+-INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_6UL),gic generic_timer)
+-INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_7),gic generic_timer)
++INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_6UL),generic_timer)
++INTERFACES_KERNEL     += $(if $(CONFIG_PF_IMX_7),generic_timer)
+ INTERFACES_KERNEL-$(CONFIG_PF_IMX_35) += timer_imx_epit
+ INTERFACES_KERNEL-$(CONFIG_PF_IMX_51) += timer_imx_epit
+ INTERFACES_KERNEL-$(CONFIG_PF_IMX_53) += timer_imx_epit
+diff --git a/src/kern/arm/bsp/layerscape/Kconfig b/src/kern/arm/bsp/layerscape/Kconfig
+index d3a9273..b99f7c9 100644
+--- a/src/kern/arm/bsp/layerscape/Kconfig
++++ b/src/kern/arm/bsp/layerscape/Kconfig
+@@ -1,6 +1,6 @@
+ # PF: LAYERSCAPE
+ # PFDESCR: NXP/Freescale Layerscape
+-# PFSELECT: HAS_CPU_VIRT HAS_ARM_PSCI
++# PFSELECT: HAS_CPU_VIRT HAS_ARM_PSCI ARM_GIC
+ # PFDEPENDS: ARM
+ 
+ choice
+diff --git a/src/kern/arm/bsp/layerscape/Modules b/src/kern/arm/bsp/layerscape/Modules
+index 0a4c04d..1332458 100644
+--- a/src/kern/arm/bsp/layerscape/Modules
++++ b/src/kern/arm/bsp/layerscape/Modules
+@@ -2,7 +2,6 @@
+ 
+ PREPROCESS_PARTS        += generic_tickless_idle pic_gic libuart
+ PREPROCESS_PARTS        += arm_generic_timer 16550
+-INTERFACES_KERNEL       += gic
+ INTERFACES_KERNEL       += generic_timer
+ RAM_PHYS_BASE           := 0x80000000
+ OBJECTS_LIBUART         += uart_16550.o
+diff --git a/src/kern/arm/bsp/omap/Kconfig b/src/kern/arm/bsp/omap/Kconfig
+index 7201f18..9f7f2f7 100644
+--- a/src/kern/arm/bsp/omap/Kconfig
++++ b/src/kern/arm/bsp/omap/Kconfig
+@@ -30,6 +30,7 @@ config PF_OMAP4_PANDABOARD
+ 	depends on PF_OMAP
+ 	select CAN_ARM_CPU_CORTEX_A9
+ 	select CAN_ARM_CACHE_L2CXX0
++	select ARM_GIC
+ 	help
+ 	  Choose for Pandaboard.
+ 
+@@ -38,6 +39,7 @@ config PF_OMAP5_5432EVM
+ 	select CAN_ARM_CPU_CORTEX_A15
+ 	select HAS_CPU_VIRT
+ 	select DEFAULT_ARM_EM_NS if CPU_VIRT
++	select ARM_GIC
+         help
+           Choose for OMAP5432EVM.
+ 
+diff --git a/src/kern/arm/bsp/omap/Modules b/src/kern/arm/bsp/omap/Modules
+index ec34b42..3d2bb63 100644
+--- a/src/kern/arm/bsp/omap/Modules
++++ b/src/kern/arm/bsp/omap/Modules
+@@ -12,7 +12,6 @@ RAM_PHYS_BASE           := 0x80000000
+ MPCORE_PHYS_BASE        := 0x48240000
+ TRAMP_MP_ASM_INCLUDE    := $(BSP_SRC_DIR)/tramp-mp-asm.h
+ 
+-INTERFACES_KERNEL     += $(if $(CONFIG_PF_OMAP4_PANDABOARD)$(CONFIG_PF_OMAP5_5432EVM),gic)
+ INTERFACES_KERNEL-pf_omap3 += timer_omap_1mstimer
+ INTERFACES_KERNEL     += $(foreach i,$(PREPROCESS_PARTS),$(INTERFACES_KERNEL-$(i)))
+ INTERFACES_KERNEL-$(CONFIG_PF_OMAP3_AM33XX)  += timer_omap_gentimer
+diff --git a/src/kern/arm/bsp/rcar3/Kconfig b/src/kern/arm/bsp/rcar3/Kconfig
+index a3b83fd..ca0b080 100644
+--- a/src/kern/arm/bsp/rcar3/Kconfig
++++ b/src/kern/arm/bsp/rcar3/Kconfig
+@@ -1,5 +1,5 @@
+ # PF: RCAR3
+ # PFDESCR: Renesas R-Car Gen3
+ # PFSELECT: CAN_ARM_CPU_CORTEX_A57 CAN_ARM_CPU_CORTEX_A53 HAS_ARM_PSCI
+-# PFSELECT: ARM_PSCI
++# PFSELECT: ARM_PSCI ARM_GIC
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/rcar3/Modules b/src/kern/arm/bsp/rcar3/Modules
+index e380e2e..bd0ae93 100644
+--- a/src/kern/arm/bsp/rcar3/Modules
++++ b/src/kern/arm/bsp/rcar3/Modules
+@@ -4,7 +4,7 @@ SUBSYSTEMS            += LIBUART
+ OBJECTS_LIBUART       += uart_sh.o
+ PREPROCESS_PARTS      += libuart generic_tickless_idle \
+                          arm_generic_timer pic_gic psci
+-INTERFACES_KERNEL     += gic generic_timer
++INTERFACES_KERNEL     += generic_timer
+ RAM_PHYS_BASE         := 0x48000000
+ 
+ uart_IMPL             += uart-arm-rcar3
+diff --git a/src/kern/arm/bsp/realview/Kconfig b/src/kern/arm/bsp/realview/Kconfig
+index cd1b361..2af25e7 100644
+--- a/src/kern/arm/bsp/realview/Kconfig
++++ b/src/kern/arm/bsp/realview/Kconfig
+@@ -1,6 +1,7 @@
+ # PF: REALVIEW
+ # PFDESCR: ARM RealView Platform
+ # PFDEPENDS: ARM
++# PFSELECT: ARM_GIC
+ 
+ choice
+ 	prompt "Realview Platform"
+diff --git a/src/kern/arm/bsp/realview/Modules b/src/kern/arm/bsp/realview/Modules
+index 3457227..db0d7b2 100644
+--- a/src/kern/arm/bsp/realview/Modules
++++ b/src/kern/arm/bsp/realview/Modules
+@@ -27,7 +27,7 @@ else
+   endif
+ endif
+ 
+-INTERFACES_KERNEL     += gic platform board_check-arm-realview
++INTERFACES_KERNEL     += platform board_check-arm-realview
+ 
+ timer_tick_IMPL       += timer_tick-single-vector
+ uart_IMPL             += uart-arm-realview
+diff --git a/src/kern/arm/bsp/sunxi/Kconfig b/src/kern/arm/bsp/sunxi/Kconfig
+index b7e4d7b..05cd0a9 100644
+--- a/src/kern/arm/bsp/sunxi/Kconfig
++++ b/src/kern/arm/bsp/sunxi/Kconfig
+@@ -1,4 +1,4 @@
+ # PF: SUNXI
+ # PFDESCR: Allwinner (sunxi)
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A7
++# PFSELECT: CAN_ARM_CPU_CORTEX_A7 ARM_GIC
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/sunxi/Modules b/src/kern/arm/bsp/sunxi/Modules
+index 844c975..5fa1001 100644
+--- a/src/kern/arm/bsp/sunxi/Modules
++++ b/src/kern/arm/bsp/sunxi/Modules
+@@ -2,7 +2,6 @@
+ 
+ PREPROCESS_PARTS        += generic_tickless_idle pic_gic libuart
+ PREPROCESS_PARTS        += arm_generic_timer
+-INTERFACES_KERNEL       += gic
+ INTERFACES_KERNEL       += generic_timer
+ RAM_PHYS_BASE           := 0x40000000
+ MPCORE_PHYS_BASE        := 0x01c80000
+diff --git a/src/kern/arm/bsp/tegra/Kconfig b/src/kern/arm/bsp/tegra/Kconfig
+index 9f47294..a97506b 100644
+--- a/src/kern/arm/bsp/tegra/Kconfig
++++ b/src/kern/arm/bsp/tegra/Kconfig
+@@ -1,6 +1,6 @@
+ # PF: TEGRA
+ # PFDESCR: NVIDIA Tegra platform
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0
++# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC
+ # PFDEPENDS: ARM
+ 
+ choice
+diff --git a/src/kern/arm/bsp/tegra/Modules b/src/kern/arm/bsp/tegra/Modules
+index 9031ca0..39d92a8 100644
+--- a/src/kern/arm/bsp/tegra/Modules
++++ b/src/kern/arm/bsp/tegra/Modules
+@@ -6,7 +6,6 @@ PREPROCESS_PARTS-$(CONFIG_PF_TEGRA_TIMER_TMR) += tegra_timer_tmr
+ RAM_PHYS_BASE-$(CONFIG_PF_TEGRA2) := $(if $(CONFIG_ARM_EM_TZ),0x30000000,0x0)
+ RAM_PHYS_BASE-$(CONFIG_PF_TEGRA3) := $(if $(CONFIG_ARM_EM_TZ),0xa0000000,0x80000000)
+ RAM_PHYS_BASE                     := $(RAM_PHYS_BASE-y)
+-INTERFACES_KERNEL       += gic
+ MPCORE_PHYS_BASE        := 0x50040000
+ OBJECTS_LIBUART         += uart_16550.o
+ SUBSYSTEMS              += LIBUART
+diff --git a/src/kern/arm/bsp/virt/Kconfig b/src/kern/arm/bsp/virt/Kconfig
+index c110b39..7097a10 100644
+--- a/src/kern/arm/bsp/virt/Kconfig
++++ b/src/kern/arm/bsp/virt/Kconfig
+@@ -1,5 +1,5 @@
+ # PF: ARM_VIRT
+ # PFDESCR: QEMU ARM Virtual Platform
+ # PFSELECT: CAN_ARM_CPU_CORTEX_A15 CAN_ARM_CPU_CORTEX_A57 HAS_ARM_PSCI
+-# PFSELECT: ARM_PSCI FORCE_ARM_PSCI_HVC
++# PFSELECT: ARM_PSCI FORCE_ARM_PSCI_HVC ARM_GIC
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/virt/Modules b/src/kern/arm/bsp/virt/Modules
+index 4f9c498..d46c4e5 100644
+--- a/src/kern/arm/bsp/virt/Modules
++++ b/src/kern/arm/bsp/virt/Modules
+@@ -4,7 +4,7 @@ SUBSYSTEMS              += LIBUART
+ OBJECTS_LIBUART         += uart_pl011.o
+ PREPROCESS_PARTS        += generic_tickless_idle libuart pic_gic \
+                            arm_generic_timer psci
+-INTERFACES_KERNEL       += generic_timer gic
++INTERFACES_KERNEL       += generic_timer
+ RAM_PHYS_BASE           := 0x40000000
+ 
+ 
+diff --git a/src/kern/arm/bsp/zynq/Kconfig b/src/kern/arm/bsp/zynq/Kconfig
+index 744bb20..fda8f53 100644
+--- a/src/kern/arm/bsp/zynq/Kconfig
++++ b/src/kern/arm/bsp/zynq/Kconfig
+@@ -1,4 +1,4 @@
+ # PF: ZYNQ
+ # PFDESCR: Xilinx Zynq
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0
++# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/zynq/Modules b/src/kern/arm/bsp/zynq/Modules
+index 5fb1161..0c87ee3 100644
+--- a/src/kern/arm/bsp/zynq/Modules
++++ b/src/kern/arm/bsp/zynq/Modules
+@@ -3,7 +3,6 @@
+ SUBSYSTEMS              += LIBUART
+ OBJECTS_LIBUART         += uart_cadence.o
+ PREPROCESS_PARTS        += libuart generic_tickless_idle mptimer pic_gic
+-INTERFACES_KERNEL       += gic
+ RAM_PHYS_BASE           := 0x0
+ MPCORE_PHYS_BASE        := 0xf8f00000
+ 
+diff --git a/src/kern/arm/bsp/zynqmp/Kconfig b/src/kern/arm/bsp/zynqmp/Kconfig
+index 246222a..8c9b914 100644
+--- a/src/kern/arm/bsp/zynqmp/Kconfig
++++ b/src/kern/arm/bsp/zynqmp/Kconfig
+@@ -1,5 +1,5 @@
+ # PF: ZYNQMP
+ # PFDESCR: Xilinx Zynq UltraSCALE+ MPSoC
+ # PFSELECT: CAN_ARM_CPU_CORTEX_A53 HAS_ARM_PSCI
+-# PFSELECT: ARM_PSCI
++# PFSELECT: ARM_PSCI ARM_GIC
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/zynqmp/Modules b/src/kern/arm/bsp/zynqmp/Modules
+index 076d401..c356f09 100644
+--- a/src/kern/arm/bsp/zynqmp/Modules
++++ b/src/kern/arm/bsp/zynqmp/Modules
+@@ -4,7 +4,7 @@ SUBSYSTEMS            += LIBUART
+ OBJECTS_LIBUART       += uart_cadence.o
+ PREPROCESS_PARTS      += libuart generic_tickless_idle \
+                          arm_generic_timer pic_gic psci
+-INTERFACES_KERNEL     += gic generic_timer
++INTERFACES_KERNEL     += generic_timer
+ RAM_PHYS_BASE         := 0x0
+ 
+ uart_IMPL             += uart-arm-zynqmp
+diff --git a/src/kern/arm/gic.cpp b/src/kern/arm/gic.cpp
+index 94ce26d..ee68394 100644
+--- a/src/kern/arm/gic.cpp
++++ b/src/kern/arm/gic.cpp
+@@ -4,12 +4,13 @@ INTERFACE [arm && pic_gic]:
+ #include "irq_chip_generic.h"
+ #include "mmio_register_block.h"
+ #include "spin_lock.h"
++#include "gic_cpu.h"
+ 
+ 
+ class Gic : public Irq_chip_gen
+ {
+ private:
+-  Mmio_register_block _cpu;
++  Gic_cpu _cpu;
+   Mmio_register_block _dist;
+ 
+   Spin_lock<> _lock;
+@@ -34,25 +35,12 @@ public:
+     MXC_TZIC_SYNCCTRL = 0x010,
+     MXC_TZIC_PND      = 0xd00,
+ 
+-    GICC_CTRL         = 0x00,
+-    GICC_PMR          = 0x04,
+-    GICC_BPR          = 0x08,
+-    GICC_IAR          = 0x0c,
+-    GICC_EOIR         = 0x10,
+-    GICC_RPR          = 0x14,
+-    GICC_HPPIR        = 0x18,
+-
+     GICD_CTRL_ENABLE         = 1,
+ 
+     MXC_TZIC_CTRL_NSEN       = 1 << 16,
+     MXC_TZIC_CTRL_NSENMASK   = 1 << 31,
+ 
+-    GICC_CTRL_ENABLE_GRP0    = 1 << 0,
+-    GICC_CTRL_ENABLE_GRP1    = 1 << 1,
+-    GICC_CTRL_ENABLE         = GICC_CTRL_ENABLE_GRP0,
+-    GICC_CTRL_FIQEn          = 1 << 3,
+-
+-    Cpu_prio_val      = 0xf0,
++    Cpu_prio_val      = Gic_cpu::Cpu_prio_val,
+   };
+ 
+   Unsigned32 pcpu_to_sgi(Cpu_phys_id);
+@@ -116,18 +104,6 @@ PUBLIC inline
+ void Gic::softint_bcast(unsigned m)
+ { _dist.write<Unsigned32>((1 << 24) | m, GICD_SGIR); }
+ 
+-PUBLIC inline
+-void Gic::pmr(unsigned prio)
+-{ _cpu.write<Unsigned32>(prio, GICC_PMR); }
+-
+-PRIVATE inline
+-void Gic::gicc_enable()
+-{
+-  _cpu.write<Unsigned32>(GICC_CTRL_ENABLE | (Config_tz_sec ? GICC_CTRL_FIQEn : 0),
+-                         GICC_CTRL);
+-  pmr(Cpu_prio_val);
+-}
+-
+ PRIVATE inline
+ void Gic::gicd_enable()
+ {
+@@ -161,7 +137,7 @@ Gic::cpu_init(bool resume)
+   if (Config_tz_sec)
+     sec_irqs = 0x00000f00;
+ 
+-  _cpu.write<Unsigned32>(0, GICC_CTRL);
++  _cpu.disable();
+ 
+   if (!resume)
+     {
+@@ -207,7 +183,7 @@ Gic::cpu_init(bool resume)
+     }
+ 
+ 
+-  gicc_enable();
++  _cpu.enable();
+ 
+   // Ensure BSPs have provided a mapping for the CPUTargetList
+   assert(pcpu_to_sgi(Proc::cpu_id()) < 8);
+@@ -311,7 +287,7 @@ PUBLIC inline
+ void Gic::acknowledge_locked(unsigned irq)
+ {
+   if (!Config_mxc_tzic)
+-    _cpu.write<Unsigned32>(irq, GICC_EOIR);
++    _cpu.ack(irq);
+ }
+ 
+ PUBLIC
+@@ -485,7 +461,7 @@ Unsigned32 Gic::pending()
+       return 0;
+     }
+ 
+-  return _cpu.read<Unsigned32>(GICC_IAR) & 0x3ff;
++  return _cpu.iar() & 0x3ff;
+ }
+ 
+ //-------------------------------------------------------------------
+@@ -496,11 +472,11 @@ IMPLEMENTATION [arm && mp && pic_gic]:
+ PUBLIC inline NEEDS["io.h"]
+ Unsigned32 Gic::pending()
+ {
+-  Unsigned32 ack = _cpu.read<Unsigned32>(GICC_IAR);
++  Unsigned32 ack = _cpu.iar();
+ 
+   // IPIs/SGIs need to take the whole ack value
+   if ((ack & 0x3ff) < 16)
+-    _cpu.write<Unsigned32>(ack, GICC_EOIR);
++    _cpu.ack(ack);
+ 
+   return ack & 0x3ff;
+ }
+@@ -533,7 +509,12 @@ Gic::irq_prio(unsigned irq)
+ PUBLIC
+ unsigned
+ Gic::pmr()
+-{ return _cpu.read<Unsigned32>(GICC_PMR); }
++{ return _cpu.pmr(); }
++
++PUBLIC
++void
++Gic::pmr(unsigned prio)
++{ return _cpu.pmr(prio); }
+ 
+ PUBLIC
+ char const *
+diff --git a/src/kern/arm/gic_cpu.cpp b/src/kern/arm/gic_cpu.cpp
+new file mode 100644
+index 0000000..736b013
+--- /dev/null
++++ b/src/kern/arm/gic_cpu.cpp
+@@ -0,0 +1,92 @@
++INTERFACE:
++
++#include "mmio_register_block.h"
++
++
++class Gic_cpu
++{
++private:
++  Mmio_register_block _cpu;
++
++public:
++  enum
++  {
++    GICC_CTRL         = 0x00,
++    GICC_PMR          = 0x04,
++    GICC_BPR          = 0x08,
++    GICC_IAR          = 0x0c,
++    GICC_EOIR         = 0x10,
++    GICC_RPR          = 0x14,
++    GICC_HPPIR        = 0x18,
++
++    GICC_CTRL_ENABLE_GRP0    = 1 << 0,
++    GICC_CTRL_ENABLE_GRP1    = 1 << 1,
++    GICC_CTRL_ENABLE         = GICC_CTRL_ENABLE_GRP0,
++    GICC_CTRL_FIQEn          = 1 << 3,
++
++    Cpu_prio_val      = 0xf0,
++  };
++};
++
++// ------------------------------------------------------------------------
++INTERFACE [arm_em_tz]:
++
++EXTENSION class Gic_cpu { enum { Config_tz_sec = 1 }; };
++
++// ------------------------------------------------------------------------
++INTERFACE [!arm_em_tz]:
++
++EXTENSION class Gic_cpu { enum { Config_tz_sec = 0 }; };
++
++
++//-------------------------------------------------------------------
++IMPLEMENTATION:
++
++
++PUBLIC inline
++void
++Gic_cpu::pmr(unsigned prio)
++{
++  _cpu.write<Unsigned32>(prio, GICC_PMR);
++}
++
++PUBLIC inline
++void
++Gic_cpu::enable()
++{
++  _cpu.write<Unsigned32>(GICC_CTRL_ENABLE | (Config_tz_sec ? GICC_CTRL_FIQEn : 0),
++                         GICC_CTRL);
++  pmr(Cpu_prio_val);
++}
++
++PUBLIC inline
++void
++Gic_cpu::disable()
++{
++  _cpu.write<Unsigned32>(0, GICC_CTRL);
++}
++
++PUBLIC explicit inline
++Gic_cpu::Gic_cpu(Address cpu_base)
++  : _cpu(cpu_base)
++{}
++
++PUBLIC inline
++void
++Gic_cpu::ack(Unsigned32 irq)
++{
++  _cpu.write<Unsigned32>(irq, GICC_EOIR);
++}
++
++PUBLIC inline
++Unsigned32
++Gic_cpu::iar()
++{
++  return _cpu.read<Unsigned32>(GICC_IAR);
++}
++
++PUBLIC inline
++unsigned
++Gic_cpu::pmr()
++{ return _cpu.read<Unsigned32>(GICC_PMR); }
++

@@ -1,0 +1,96 @@
+"2007-03-28 16:48:40 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index baac799db..be5e9527b 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -541,8 +541,15 @@ config SPLIT
+ 	default n
+ 	help
+ 	  split a file into pieces.
+-	  
+-	  http://www.opengroup.org/onlinepubs/007904975/utilities/split.html
++
++config FEATURE_SPLIT_FANCY
++	bool "fancy extensions"
++	default n
++	depends on SPLIT
++	help
++	  Add support for features not required by SUSv3.
++	  Supports additional suffixes 'b' for 512 bytes,
++	  'g' for 1GiB for the -b option.
+ 
+ config STAT
+ 	bool "stat"
+diff --git a/coreutils/split.c b/coreutils/split.c
+index 07eb97e0c..10035e9ab 100644
+--- a/coreutils/split.c
++++ b/coreutils/split.c
+@@ -12,10 +12,14 @@
+ #include "busybox.h"
+ 
+ static const struct suffix_mult split_suffices[] = {
++#if ENABLE_FEATURE_SPLIT_FANCY
+ 	{ "b", 512 },
++#endif
+ 	{ "k", 1024 },
+ 	{ "m", 1024*1024 },
++#if ENABLE_FEATURE_SPLIT_FANCY
+ 	{ "g", 1024*1024*1024 },
++#endif
+ 	{ NULL, 0 }
+ };
+ 
+@@ -58,10 +62,10 @@ int split_main(int argc, char **argv)
+ 	char *pfx;
+ 	char *count_p;
+ 	const char *sfx;
+-	unsigned long cnt = 1000;
+-	unsigned long remaining = 0;
++	off_t cnt = 1000;
++	off_t remaining = 0;
+ 	unsigned opt;
+-	int bytes_read, to_write;
++	ssize_t bytes_read, to_write;
+ 	char *src;
+ 
+ 	opt_complementary = "?2";
+@@ -73,8 +77,9 @@ int split_main(int argc, char **argv)
+ 		cnt = xatoul_sfx(count_p, split_suffices);
+ 	if (opt & SPLIT_OPT_a)
+ 		suffix_len = xatou(sfx);
+-	argv += optind;
+ 	sfx = "x";
++
++	argv += optind;
+ 	if (argv[0]) {
+ 		if (argv[1])
+ 			sfx = argv[1];
+@@ -104,7 +109,7 @@ int split_main(int argc, char **argv)
+ 		do {
+ 			if (!remaining) {
+ 				if (!pfx)
+-					bb_error_msg_and_die("suffices exhausted");
++					bb_error_msg_and_die("suffixes exhausted");
+ 				xmove_fd(xopen(pfx, O_WRONLY | O_CREAT | O_TRUNC), 1);
+ 				pfx = next_file(pfx, suffix_len);
+ 				remaining = cnt;
+diff --git a/scripts/defconfig b/scripts/defconfig
+index 6ca10b63d..5846b0cf7 100644
+--- a/scripts/defconfig
++++ b/scripts/defconfig
+@@ -194,6 +194,7 @@ CONFIG_SHA1SUM=y
+ CONFIG_SLEEP=y
+ CONFIG_FEATURE_FANCY_SLEEP=y
+ CONFIG_SPLIT=y
++# CONFIG_FEATURE_SPLIT_FANCY is not set
+ CONFIG_SORT=y
+ CONFIG_FEATURE_SORT_BIG=y
+ CONFIG_STAT=y
+@@ -272,6 +273,7 @@ CONFIG_READLINK=y
+ CONFIG_FEATURE_READLINK_FOLLOW=y
+ CONFIG_RUN_PARTS=y
+ CONFIG_FEATURE_RUN_PARTS_LONG_OPTIONS=y
++CONFIG_FEATURE_RUN_PARTS_FANCY=y
+ CONFIG_START_STOP_DAEMON=y
+ CONFIG_FEATURE_START_STOP_DAEMON_FANCY=y
+ CONFIG_FEATURE_START_STOP_DAEMON_LONG_OPTIONS=y

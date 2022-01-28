@@ -1,0 +1,2131 @@
+"2004-12-21 08:35:58 +0000"
+diff --git a/extra/Configs/Config.bfin b/extra/Configs/Config.bfin
+new file mode 100644
+index 000000000..c4258e36b
+--- /dev/null
++++ b/extra/Configs/Config.bfin
+@@ -0,0 +1,28 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++
++config TARGET_ARCH
++	default "bfin"
++
++config HAVE_ELF
++	bool
++	select ARCH_HAS_NO_MMU
++	select ARCH_LITTLE_ENDIAN
++	select HAVE_NO_SHARED
++	select ARCH_HAS_NO_LDSO
++	default y
++
++config ARCH_CFLAGS
++	string
++
++config ARCH_LDFLAGS
++	string
++
++config LIBGCC_CFLAGS
++	string
++
++config HAVE_ELF
++	bool
++	default y
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 6969bdb5e..c65a767e7 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -17,6 +17,9 @@ config TARGET_alpha
+ config TARGET_arm
+ 	bool "arm"
+ 
++config TARGET_bfin
++	bool "bfin"
++
+ config TARGET_cris
+ 	bool "cris"
+ 
+@@ -75,6 +78,10 @@ if TARGET_arm
+ source "extra/Configs/Config.arm"
+ endif
+ 
++if TARGET_bfin
++source "extra/Configs/Config.bfin"
++endif
++
+ if TARGET_cris
+ source "extra/Configs/Config.cris"
+ endif
+diff --git a/libc/sysdeps/linux/bfin/Makefile b/libc/sysdeps/linux/bfin/Makefile
+new file mode 100644
+index 000000000..23a88f43d
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/Makefile
+@@ -0,0 +1,86 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2004 Erik Andersen <andersen@uclibc.org>
++#
++# This program is free software; you can redistribute it and/or modify it under
++# the terms of the GNU Library General Public License as published by the Free
++# Software Foundation; either version 2 of the License, or (at your option) any
++# later version.
++#
++# This program is distributed in the hope that it will be useful, but WITHOUT
++# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
++# FOR A PARTICULAR PURPOSE. See the GNU Library General Public License for more
++# details.
++#
++# You should have received a copy of the GNU Library General Public License
++# along with this program; if not, write to the Free Software Foundation, Inc.,
++# 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++
++TOPDIR=../../../../
++include $(TOPDIR)Rules.mak
++ASFLAGS=$(CFLAGS)
++
++CRT0_SRC = crt0.S
++CRT0_OBJ = crt0.o
++#CTOR_TARGETS=$(TOPDIR)lib/crti.o $(TOPDIR)lib/crtn.o
++CTOR_TARGETS=
++
++SSRC= __longjmp.S setjmp.S bsd-_setjmp.S vfork.S
++SOBJS=$(patsubst %.S,%.o, $(SSRC))
++
++CSRC=brk.c bsdsetjmp.c clone.c syscall.c
++COBJS=$(patsubst %.c,%.o, $(CSRC))
++
++OBJS=$(SOBJS) $(MOBJ) $(COBJS)
++
++all: $(OBJS) $(LIBC)
++
++$(LIBC): ar-target
++
++ar-target: $(OBJS) $(CRT0_OBJ) $(CTOR_TARGETS)
++	$(AR) $(ARFLAGS) $(LIBC) $(OBJS)
++	mkdir -p $(TOPDIR)lib/
++	cp $(CRT0_OBJ) $(TOPDIR)lib/
++
++$(CRT0_OBJ): $(CRT0_SRC)
++	$(CC) $(CFLAGS) -DL_$* $< -c -o $*.o
++	$(STRIPTOOL) -x -R .note -R .comment $*.o
++
++$(SOBJS): %.o : %.S
++	$(CC) $(CFLAGS) -c $< -o $@
++	$(STRIPTOOL) -x -R .note -R .comment $*.o
++
++$(COBJS): %.o : %.c
++	$(CC) $(CFLAGS) -c $< -o $@
++	$(STRIPTOOL) -x -R .note -R .comment $*.o
++
++ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
++crti.o: crti.S
++	$(CC) $(CFLAGS) -c crti.S -o crti.o
++
++$(TOPDIR)lib/crti.o: crti.o
++	$(INSTALL) -d $(TOPDIR)lib/
++	cp crti.o $(TOPDIR)lib/
++
++crtn.o: crtn.S
++	$(CC) $(CFLAGS) -c crtn.S -o crtn.o
++
++$(TOPDIR)lib/crtn.o: crtn.o
++	$(INSTALL) -d $(TOPDIR)lib/
++	cp crtn.o $(TOPDIR)lib/
++else
++$(TOPDIR)lib/crti.o:
++	$(INSTALL) -d $(TOPDIR)lib/
++	$(AR) $(ARFLAGS) $(TOPDIR)lib/crti.o
++$(TOPDIR)lib/crtn.o:
++	$(INSTALL) -d $(TOPDIR)lib/
++	$(AR) $(ARFLAGS) $(TOPDIR)lib/crtn.o
++endif
++
++headers:
++
++clean:
++	$(RM) *.[oa] *~ core
++	$(RM) bits/sysnum.h
++	$(RM) $(TOPDIR)lib/crt0.o
++
+diff --git a/libc/sysdeps/linux/bfin/README.bfin b/libc/sysdeps/linux/bfin/README.bfin
+new file mode 100644
+index 000000000..e27b41dd7
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/README.bfin
+@@ -0,0 +1,21 @@
++README for uClibc on the blackfin architecture
++
++developed/tested with bfin-elf-gcc 3.4.1, from
++
++Configuration:
++
++	Read and edit the Config file, carefully.
++
++	TARGET_ARCH=blackfin
++	CROSS = bfin-elf-
++	CC = $(CROSS)gcc
++	STRIPTOOL = $(CROSS)strip
++	KERNEL_SOURCE= your linux 2.6.8 kernel source tree	
++	HAS_MMU = false
++	HAS_FLOATS = false
++	MALLOC = malloc-simple
++	
++Problems:
++	The regular malloc library is broken. Use simple-malloc.
++
++TODO:
+diff --git a/libc/sysdeps/linux/bfin/__longjmp.S b/libc/sysdeps/linux/bfin/__longjmp.S
+new file mode 100644
+index 000000000..4c5189976
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/__longjmp.S
+@@ -0,0 +1,110 @@
++/*
++ * longjmp for the Blackfin project
++ *
++ * Copyright (C) 2004,
++ * Based on code from Analog Devices.
++ *
++ * This file is subject to the terms and conditions of the GNU Lesser
++ * General Public License.  See the file COPYING.LIB in the main
++ * directory of this archive for more details.
++ *
++ */
++#include <features.h>
++#define _SETJMP_H
++#define _ASM
++#include <bits/setjmp.h>
++
++.globl ___longjmp;
++.align 4;
++
++___longjmp:
++	P0 = R0;
++	R0 = [P0 + 0x00];
++	[--SP] = R0;		// Put P0 on the stack
++
++	P1 = [P0 + 0x04];
++	P2 = [P0 + 0x08];
++	P3 = [P0 + 0x0C];
++	P4 = [P0 + 0x10];
++	P5 = [P0 + 0x14];
++
++	FP = [P0 + 0x18];
++	R0 = [SP++];		// Grab P0 from old stack
++	SP = [P0 + 0x1C];	// Update Stack Pointer
++	[--SP] = R0;		// Put P0 on new stack
++	[--SP] = R1;		// Put VAL arg on new stack
++
++	R0 = [P0 + 0x20];	// Data Registers
++	R1 = [P0 + 0x24];
++	R2 = [P0 + 0x28];
++	R3 = [P0 + 0x2C];
++	R4 = [P0 + 0x30];
++	R5 = [P0 + 0x34];
++	R6 = [P0 + 0x38];
++	R7 = [P0 + 0x3C];
++
++	R0 = [P0 + 0x40];
++	ASTAT = R0;
++
++	R0 = [P0 + 0x44];	// Loop Counters
++	LC0 = R0;
++	R0 = [P0 + 0x48];
++	LC1 = R0;
++
++	R0 = [P0 + 0x4C];	// Accumulators
++	A0.W = R0;
++	R0 = [P0 + 0x50];
++	A0.X = R0;
++	R0 = [P0 + 0x54];
++	A1.W = R0;
++	R0 = [P0 + 0x58];
++	A1.X = R0;
++
++	R0 = [P0 + 0x5C];	// Index Registers
++	I0 = R0;
++	R0 = [P0 + 0x60];
++	I1 = R0;
++	R0 = [P0 + 0x64];
++	I2 = R0;
++	R0 = [P0 + 0x68];
++	I3 = R0;
++
++	R0 = [P0 + 0x6C];	// Modifier Registers
++	M0 = R0;
++	R0 = [P0 + 0x70];
++	M1 = R0;
++	R0 = [P0 + 0x74];
++	M2 = R0;
++	R0 = [P0 + 0x78];
++	M3 = R0;
++
++	R0 = [P0 + 0x7C];	// Length Registers
++	L0 = R0;
++	R0 = [P0 + 0x80];
++	L1 = R0;
++	R0 = [P0 + 0x84];
++	L2 = R0;
++	R0 = [P0 + 0x88];
++	L3 = R0;
++
++	R0 = [P0 + 0x8C];	// Base Registers
++	B0 = R0;
++	R0 = [P0 + 0x90];
++	B1 = R0;
++	R0 = [P0 + 0x94];
++	B2 = R0;
++	R0 = [P0 + 0x98];
++	B3 = R0;
++
++	R0 = [P0 + 0x9C];	// Return Address (PC)
++	RETS = R0;
++
++	R0 = [SP++];
++	P0 = [SP++];
++
++	CC = R0 == 0;
++	IF !CC JUMP finished;
++	R0 = 1;
++finished:
++	RTS;
++___longjmp.end:
+diff --git a/libc/sysdeps/linux/bfin/bits/endian.h b/libc/sysdeps/linux/bfin/bits/endian.h
+new file mode 100644
+index 000000000..8a36cf707
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/endian.h
+@@ -0,0 +1,7 @@
++/* Blackfin is Little-endian.  */
++
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++#define __BYTE_ORDER __LITTLE_ENDIAN
+diff --git a/libc/sysdeps/linux/bfin/bits/fcntl.h b/libc/sysdeps/linux/bfin/bits/fcntl.h
+new file mode 100644
+index 000000000..4b41b4715
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/fcntl.h
+@@ -0,0 +1,180 @@
++/* O_*, F_*, FD_* bit values for Linux.
++   Copyright (C) 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++
++#include <sys/types.h>
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	   0003
++#define O_RDONLY	     00
++#define O_WRONLY	     01
++#define O_RDWR		     02
++#define O_CREAT		   0100	/* not fcntl */
++#define O_EXCL		   0200	/* not fcntl */
++#define O_NOCTTY	   0400	/* not fcntl */
++#define O_TRUNC		  01000	/* not fcntl */
++#define O_APPEND	  02000
++#define O_NONBLOCK	  04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		 010000
++#define O_FSYNC		 O_SYNC
++#define O_ASYNC		 020000
++
++#ifdef __USE_GNU
++# define O_DIRECTORY	 040000	/* Must be a directory.	 */
++# define O_NOFOLLOW	0100000	/* Do not follow links.	 */
++# define O_DIRECT	0200000	/* Direct disk access.	*/
++# define O_STREAMING	04000000/* streaming access */
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	0400000
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	12	/* Get record locking info.  */
++#define F_SETLK64	13	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	14	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_XOPEN2K
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++#endif
++
++/* For F_[GET|SET]FL.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
+diff --git a/libc/sysdeps/linux/bfin/bits/huge_val.h b/libc/sysdeps/linux/bfin/bits/huge_val.h
+new file mode 100644
+index 000000000..f5f5b642a
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/huge_val.h
+@@ -0,0 +1,103 @@
++/* `HUGE_VAL' constants for blackfin (where it is infinity).
++   Used by <stdlib.h> and <math.h> functions for overflow.
++   Copyright (C) 1992, 1995, 1996, 1997, 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _MATH_H
++# error "Never use <bits/huge_val.h> directly; include <math.h> instead."
++#endif
++
++#include <features.h>
++
++/* IEEE positive infinity (-HUGE_VAL is negative infinity).  */
++
++#ifdef	__GNUC__
++
++# if __GNUC_PREREQ(2,96)
++
++#  define HUGE_VAL (__extension__ 0x1.0p2047)
++
++# else
++
++#  define HUGE_VAL \
++  (__extension__							      \
++   ((union { unsigned __l __attribute__((__mode__(__DI__))); double __d; })   \
++    { __l: 0x000000007ff00000ULL }).__d)
++
++# endif
++
++#else /* not GCC */
++
++# include <endian.h>
++
++typedef union { unsigned char __c[8]; double __d; } __huge_val_t;
++
++# if __BYTE_ORDER == __BIG_ENDIAN
++#  define __HUGE_VAL_bytes	{ 0, 0, 0, 0, 0x7f, 0xf0, 0, 0 }
++# endif
++# if __BYTE_ORDER == __LITTLE_ENDIAN
++#  define __HUGE_VAL_bytes	{ 0, 0, 0xf0, 0x7f, 0, 0, 0, 0 }
++# endif
++
++static __huge_val_t __huge_val = { __HUGE_VAL_bytes };
++# define HUGE_VAL	(__huge_val.__d)
++
++#endif	/* GCC.  */
++
++
++/* ISO C99 extensions: (float) HUGE_VALF and (long double) HUGE_VALL.  */
++
++#ifdef __USE_ISOC99
++
++# ifdef __GNUC__
++
++#  if __GNUC_PREREQ(2,96)
++
++#   define HUGE_VALF (__extension__ 0x1.0p255f)
++
++#  else
++
++#   define HUGE_VALF \
++  (__extension__							      \
++   ((union { unsigned __l __attribute__((__mode__(__SI__))); float __d; })    \
++    { __l: 0x7f800000UL }).__d)
++
++#  endif
++
++# else /* not GCC */
++
++typedef union { unsigned char __c[4]; float __f; } __huge_valf_t;
++
++#  if __BYTE_ORDER == __BIG_ENDIAN
++#   define __HUGE_VALF_bytes	{ 0x7f, 0x80, 0, 0 }
++#  endif
++#  if __BYTE_ORDER == __LITTLE_ENDIAN
++#   define __HUGE_VALF_bytes	{ 0, 0, 0x80, 0x7f }
++#  endif
++
++static __huge_valf_t __huge_valf = { __HUGE_VALF_bytes };
++#  define HUGE_VALF	(__huge_valf.__f)
++
++# endif	/* GCC.  */
++
++
++/* Generally there is no separate `long double' format and it is the
++   same as `double'.  */
++# define HUGE_VALL HUGE_VAL
++
++#endif /* __USE_ISOC99.  */
+diff --git a/libc/sysdeps/linux/bfin/bits/kernel_stat.h b/libc/sysdeps/linux/bfin/bits/kernel_stat.h
+new file mode 100644
+index 000000000..f10f72ae1
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/kernel_stat.h
+@@ -0,0 +1,57 @@
++#ifndef _BITS_STAT_STRUCT_H
++#define _BITS_STAT_STRUCT_H
++
++/* This file provides whatever this particular arch's kernel thinks 
++ * struct kernel_stat should look like...  It turns out each arch has a 
++ * different opinion on the subject... */
++
++struct kernel_stat {
++	unsigned short st_dev;
++	unsigned short __pad1;
++	unsigned long st_ino;
++	unsigned short st_mode;
++	unsigned short st_nlink;
++	unsigned short st_uid;
++	unsigned short st_gid;
++	unsigned short st_rdev;
++	unsigned short __pad2;
++	unsigned long  st_size;
++	unsigned long  st_blksize;
++	unsigned long  st_blocks;
++	unsigned long  st_atime;
++	unsigned long  __unused1;
++	unsigned long  st_mtime;
++	unsigned long  __unused2;
++	unsigned long  st_ctime;
++	unsigned long  __unused3;
++	unsigned long  __unused4;
++	unsigned long  __unused5;
++};
++
++struct kernel_stat64 {
++	unsigned char	__pad0[6];
++	unsigned short	st_dev;
++	unsigned char	__pad1[2];
++#define _HAVE_STAT64___ST_INO
++	unsigned long	__st_ino;
++	unsigned int	st_mode;
++	unsigned int	st_nlink;
++	unsigned long	st_uid;
++	unsigned long	st_gid;
++	unsigned char	__pad2[6];
++	unsigned short	st_rdev;
++	unsigned char	__pad3[2];
++	long long	st_size;
++	unsigned long	st_blksize;
++	unsigned long	__pad4;		/* future possible st_blocks high bits */
++	unsigned long	st_blocks;	/* Number 512-byte blocks allocated. */
++	unsigned long	st_atime;
++	unsigned long	__pad5;
++	unsigned long	st_mtime;
++	unsigned long	__pad6;
++	unsigned long	st_ctime;
++	unsigned long	__pad7;		/* will be high 32 bits of ctime someday */
++	unsigned long long	st_ino;
++};
++#endif	/*  _BITS_STAT_STRUCT_H */
++
+diff --git a/libc/sysdeps/linux/bfin/bits/kernel_types.h b/libc/sysdeps/linux/bfin/bits/kernel_types.h
+new file mode 100644
+index 000000000..520daf184
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/kernel_types.h
+@@ -0,0 +1,43 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts 
++ * with the posix_types.h kernel header, and will ensure that 
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++
++#ifndef __ARCH_BFIN_POSIX_TYPES_H
++#define __ARCH_BFIN_POSIX_TYPES_H
++typedef unsigned short	__kernel_dev_t;
++typedef unsigned long	__kernel_ino_t;
++typedef unsigned short	__kernel_mode_t;
++typedef unsigned short	__kernel_nlink_t;
++typedef long		__kernel_off_t;
++typedef int		__kernel_pid_t;
++typedef unsigned short	__kernel_ipc_pid_t;
++typedef unsigned short	__kernel_uid_t;
++typedef unsigned short	__kernel_gid_t;
++typedef unsigned int	__kernel_size_t;
++typedef int		__kernel_ssize_t;
++typedef int		__kernel_ptrdiff_t;
++typedef long		__kernel_time_t;
++typedef long		__kernel_suseconds_t;
++typedef long		__kernel_clock_t;
++typedef int		__kernel_daddr_t;
++typedef char *		__kernel_caddr_t;
++typedef unsigned short	__kernel_uid16_t;
++typedef unsigned short	__kernel_gid16_t;
++typedef unsigned int	__kernel_uid32_t;
++typedef unsigned int	__kernel_gid32_t;
++typedef unsigned short	__kernel_old_uid_t;
++typedef unsigned short	__kernel_old_gid_t;
++typedef long long	__kernel_loff_t;
++
++typedef struct {
++#ifdef __USE_ALL
++	int val[2];
++#else
++	int __val[2];
++#endif
++} __kernel_fsid_t;
++
++#endif /* __ARCH_BFIN_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/bfin/bits/mman.h b/libc/sysdeps/linux/bfin/bits/mman.h
+new file mode 100644
+index 000000000..0e0f8d113
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/mman.h
+@@ -0,0 +1,93 @@
++/* Definitions for POSIX memory map interface.  Linux/m68k version.
++   Copyright (C) 1997 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_MMAN_H
++# error "Never use <bits/mman.h> directly; include <sys/mman.h> instead."
++#endif
++
++/* The following definitions basically come from the kernel headers.
++   But the kernel header is not namespace clean.  */
++
++
++/* Protections are chosen from these bits, OR'd together.  The
++   implementation does not necessarily support PROT_EXEC or PROT_WRITE
++   without PROT_READ.  The only guarantees are that no writing will be
++   allowed without PROT_WRITE and no access will be allowed for PROT_NONE. */
++
++#define PROT_READ	0x1		/* Page can be read.  */
++#define PROT_WRITE	0x2		/* Page can be written.  */
++#define PROT_EXEC	0x4		/* Page can be executed.  */
++#define PROT_NONE	0x0		/* Page can not be accessed.  */
++
++/* Sharing types (must choose one and only one of these).  */
++#define MAP_SHARED	0x01		/* Share changes.  */
++#define MAP_PRIVATE	0x02		/* Changes are private.  */
++#ifdef __USE_MISC
++# define MAP_TYPE	0x0f		/* Mask for type of mapping.  */
++#endif
++
++/* Other flags.  */
++#define MAP_FIXED	0x10		/* Interpret addr exactly.  */
++#ifdef __USE_MISC
++# define MAP_FILE	0
++# define MAP_ANONYMOUS	0x20		/* Don't use a file.  */
++# define MAP_ANON	MAP_ANONYMOUS
++#endif
++
++/* These are Linux-specific.  */
++#ifdef __USE_MISC
++# define MAP_GROWSDOWN	0x0100		/* Stack-like segment.  */
++# define MAP_DENYWRITE	0x0800		/* ETXTBSY */
++# define MAP_EXECUTABLE	0x1000		/* Mark it as an executable.  */
++# define MAP_LOCKED	0x2000		/* Lock the mapping.  */
++# define MAP_NORESERVE	0x4000		/* Don't check for reservations.  */
++#endif
++
++/* Flags to `msync'.  */
++#define MS_ASYNC	1		/* Sync memory asynchronously.  */
++#define MS_SYNC		4		/* Synchronous memory sync.  */
++#define MS_INVALIDATE	2		/* Invalidate the caches.  */
++
++/* Flags for `mlockall'.  */
++#define MCL_CURRENT	1		/* Lock all currently mapped pages.  */
++#define MCL_FUTURE	2		/* Lock all additions to address
++					   space.  */
++
++/* Flags for `mremap'.  */
++#ifdef __USE_GNU
++# define MREMAP_MAYMOVE	1
++#endif
++
++/* Advice to `madvise'.  */
++#ifdef __USE_BSD
++# define MADV_NORMAL	 0	/* No further special treatment.  */
++# define MADV_RANDOM	 1	/* Expect random page references.  */
++# define MADV_SEQUENTIAL 2	/* Expect sequential page references.  */
++# define MADV_WILLNEED	 3	/* Will need these pages.  */
++# define MADV_DONTNEED	 4	/* Don't need these pages.  */
++#endif
++
++/* The POSIX people had to invent similar names for the same things.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_MADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_MADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_MADV_SEQUENTIAL	2 /* Expect sequential page references.  */
++# define POSIX_MADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_MADV_DONTNEED	4 /* Don't need these pages.  */
++#endif
+diff --git a/libc/sysdeps/linux/bfin/bits/setjmp.h b/libc/sysdeps/linux/bfin/bits/setjmp.h
+new file mode 100644
+index 000000000..abb7db6a0
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/setjmp.h
+@@ -0,0 +1,53 @@
++/* Copyright (C) 1997, 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Library General Public License as
++   published by the Free Software Foundation; either version 2 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Library General Public License for more details.
++
++   You should have received a copy of the GNU Library General Public
++   License along with the GNU C Library; see the file COPYING.LIB.  If not,
++   write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.  */
++
++/* Define the machine-dependent type `jmp_buf'.  bfin version.  Lineo, Inc. 2001*/
++
++#ifndef _SETJMP_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++#ifndef _ASM
++/* Jump buffer contains r7-r4, p5-p3, fp, sp and pc.  Other registers are not saved.  */
++typedef struct
++{
++	unsigned long __pregs[6];
++	unsigned long fp;
++	unsigned long sp;
++	unsigned long __rregs[8];
++	unsigned long astat;
++	unsigned long __lcregs[2];
++	unsigned long a0w;
++	unsigned long a0x;
++	unsigned long a1w;
++	unsigned long a1x;
++	unsigned long __iregs[4];
++	unsigned long __mregs[4];
++	unsigned long __lregs[4];
++	unsigned long __bregs[4];
++	unsigned long pc;
++}__jmp_buf[1];
++
++#endif
++
++#define __JMP_BUF_SP	8
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(jmpbuf, address) \
++  ((void *) (address) < (void *) (jmpbuf)->__pregs[6])
+diff --git a/libc/sysdeps/linux/bfin/bits/sigcontextinfo.h b/libc/sysdeps/linux/bfin/bits/sigcontextinfo.h
+new file mode 100644
+index 000000000..b7e08cfc9
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/sigcontextinfo.h
+@@ -0,0 +1,26 @@
++/* Copyright (C) 1998, 1999, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Andreas Schwab <schwab@issan.informatik.uni-dortmund.de>, 1998.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define SIGCONTEXT int _code, struct sigcontext *
++#define SIGCONTEXT_EXTRA_ARGS _code,
++#define GET_PC(ctx)	((void *) (ctx)->sc_pc)
++#define GET_FRAME(ctx)	((void *) __builtin_frame_address (1))
++#define GET_STACK(ctx)	((void *) (ctx)->sc_usp)
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libc/sysdeps/linux/bfin/bits/stackinfo.h b/libc/sysdeps/linux/bfin/bits/stackinfo.h
+new file mode 100644
+index 000000000..9e26de13f
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/stackinfo.h
+@@ -0,0 +1,28 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++/* On blackfin the stack grows down.  */
++#define _STACK_GROWS_DOWN	1
++
++#endif	/* stackinfo.h */
+diff --git a/libc/sysdeps/linux/bfin/bits/syscalls.h b/libc/sysdeps/linux/bfin/bits/syscalls.h
+new file mode 100644
+index 000000000..62541b873
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/syscalls.h
+@@ -0,0 +1,19 @@
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++#include <features.h>
++
++/* Do something very evil for now.  Until we create our own syscall
++ * macros, short circuit bits/sysnum.h  and use asm/unistd.h instead */
++#include <asm/unistd.h>
++
++/* This includes the `__NR_<name>' syscall numbers taken from the Linux kernel
++ * header files.  It also defines the traditional `SYS_<name>' macros for older
++ * programs.  */
++#include <bits/sysnum.h>
++
++#endif /* _BITS_SYSCALLS_H */
++
+diff --git a/libc/sysdeps/linux/bfin/bits/wordsize.h b/libc/sysdeps/linux/bfin/bits/wordsize.h
+new file mode 100644
+index 000000000..ba643b60a
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bits/wordsize.h
+@@ -0,0 +1,19 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define __WORDSIZE	32
+diff --git a/libc/sysdeps/linux/bfin/brk.c b/libc/sysdeps/linux/bfin/brk.c
+new file mode 100644
+index 000000000..178124ed3
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/brk.c
+@@ -0,0 +1,30 @@
++
++#include <unistd.h>
++#include <sys/syscall.h>
++#include <errno.h>
++
++/* This must be initialized data because commons can't have aliases.  */
++void * __curbrk = 0;
++
++int brk (void *addr)
++{
++    void *newbrk;
++
++	__asm__ __volatile__(
++		"P0 = %2;\n\t"
++		"R0 = %1;\n\t"
++		"excpt 0;\n\t"
++		"%0 = R0;\n\t"
++		: "=r"(newbrk)
++		: "r"(addr), "i" (__NR_brk): "P0" );
++
++    __curbrk = newbrk;
++
++    if (newbrk < addr)
++    {
++	__set_errno (ENOMEM);
++	return -1;
++    }
++
++    return 0;
++}
+diff --git a/libc/sysdeps/linux/bfin/bsd-_setjmp.S b/libc/sysdeps/linux/bfin/bsd-_setjmp.S
+new file mode 100644
+index 000000000..969515fa6
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bsd-_setjmp.S
+@@ -0,0 +1,97 @@
++
++/* Copyright (C) 2002, David McCullough <davidm@snapgear.com> */
++/* This file is released under the LGPL, any version you like */
++
++#define _ASM
++#define _SETJMP_H
++#include <bits/setjmp.h>
++
++.globl _setjmp;
++.align 4;
++
++_setjmp:
++	[--SP] = P0;	// Save P0
++	P0 = R0;
++	R0 = [SP++];
++	[P0 + 0x00] = R0;	// Save saved P0
++	[P0 + 0x04] = P1;
++	[P0 + 0x08] = P2;
++	[P0 + 0x0C] = P3;
++	[P0 + 0x10] = P4;
++	[P0 + 0x14] = P5;
++
++	[P0 + 0x18] = FP;	// Frame Pointer
++	[P0 + 0x1C] = SP;	// Stack Pointer
++
++	[P0 + 0x20] = P0;	// Data Registers
++	[P0 + 0x24] = R1;
++	[P0 + 0x28] = R2;
++	[P0 + 0x2C] = R3;
++	[P0 + 0x30] = R4;
++	[P0 + 0x34] = R5;
++	[P0 + 0x38] = R6;
++	[P0 + 0x3C] = R7;
++
++	R0 = ASTAT;
++	[P0 + 0x40] = R0;
++
++	R0 = LC0;		// Loop Counters
++	[P0 + 0x44] = R0;
++	R0 = LC1;
++	[P0 + 0x48] = R0;
++
++	R0 = A0.W;		// Accumulators
++	[P0 + 0x4C] = R0;
++	R0 = A0.X;
++	[P0 + 0x50] = R0;
++	R0 = A1.W;
++	[P0 + 0x54] = R0;
++	R0 = A1.X;
++	[P0 + 0x58] = R0;
++
++	R0 = I0;		// Index Registers
++	[P0 + 0x5C] = R0;
++	R0 = I1;
++	[P0 + 0x60] = R0;
++	R0 = I2;
++	[P0 + 0x64] = R0;
++	R0 = I3;
++	[P0 + 0x68] = R0;
++
++	R0 = M0;		// Modifier Registers
++	[P0 + 0x6C] = R0;
++	R0 = M1;
++	[P0 + 0x70] = R0;
++	R0 = M2;
++	[P0 + 0x74] = R0;
++	R0 = M3;
++	[P0 + 0x78] = R0;
++
++	R0 = L0;		// Length Registers
++	[P0 + 0x7c] = R0;
++	R0 = L1;
++	[P0 + 0x80] = R0;
++	R0 = L2;
++	[P0 + 0x84] = R0;
++	R0 = L3;
++	[P0 + 0x88] = R0;
++
++	R0 = B0;		// Base Registers
++	[P0 + 0x8C] = R0;
++	R0 = B1;
++	[P0 + 0x90] = R0;
++	R0 = B2;
++	[P0 + 0x94] = R0;
++	R0 = B3;
++	[P0 + 0x98] = R0;
++
++	R0 = RETS;
++	[P0 + 0x9C] = R0;
++
++	R0 = [P0 + 0x20];
++	R0 = 0;
++
++	RTS;
++_setjmp.end:
++
++
+diff --git a/libc/sysdeps/linux/bfin/bsdsetjmp.c b/libc/sysdeps/linux/bfin/bsdsetjmp.c
+new file mode 100644
+index 000000000..87de78a4c
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/bsdsetjmp.c
+@@ -0,0 +1,100 @@
++/*
++ * setjmp for the Blackfin project
++ *
++ * Copyright (C) 2003,  Metrowerks
++ * Based on code from Analog Devices.
++ *
++ * This file is subject to the terms and conditions of the GNU Lesser
++ * General Public License.  See the file COPYING.LIB in the main
++ * directory of this archive for more details.
++ *
++ */
++#include <setjmp.h>
++
++int setjmp(jmp_buf env){
++   __asm__ __volatile__("[--SP] = p0;\n\t"
++       "p0 = r0;\n\t"
++       "r0 = [SP++];\n\t"
++
++       "[p0++] = r0;\n\t"	/* GP address registers */
++       "[p0++] = p1;\n\t"
++       "[p0++] = p2;\n\t"
++       "[p0++] = p3;\n\t"
++       "[p0++] = p4;\n\t"
++       "[p0++] = p5;\n\t"
++
++       "[p0++] = FP;\n\t"       /* frame pointer */
++       "[p0++] = SP;\n\t"	/* stack pointer */
++
++       "[p0++] = p0;\n\t"	/* data regs */
++       "[p0++] = r1;\n\t"
++       "[p0++] = r2;\n\t"
++       "[p0++] = r3;\n\t"
++       "[p0++] = r4;\n\t"
++       "[p0++] = r5;\n\t"
++       "[p0++] = r6;\n\t"
++       "[p0++] = r7;\n\t"
++
++       "r0 = ASTAT;\n\t"
++       "[p0++] = r0;\n\t"
++
++       "r0 = LC0;\n\t"		/* loop counters */
++       "[p0++] = r0;\n\t"
++       "r0 = LC1;\n\t"
++       "[p0++] = r0;\n\t"
++
++       "r0 = A0.w;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0.l = A0.x;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = A1.w;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0.l = A1.x;\n\t"
++       "[p0++] = r0;\n\t"
++
++	       			/* Dag regs */
++       "r0 = i0;\n\t"		/* index registers */
++       "[p0++] = r0;\n\t"
++       "r0 = i1;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = i2;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = i3;\n\t"
++       "[p0++] = r0;\n\t"
++
++       "r0 = m0;\n\t"		/* modifier registers */
++       "[p0++] = r0;\n\t"
++       "r0 = m1;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = m2;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = m3;\n\t"
++       "[p0++] = r0;\n\t"
++
++       "r0 = l0;\n\t"	        /* length registers */
++       "[p0++] = r0;\n\t"
++       "r0 = l1;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = l2;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = l3;\n\t"
++       "[p0++] = r0;\n\t"
++
++       "r0 = b0;\n\t"	        /* base registers */
++       "[p0++] = r0;\n\t"
++       "r0 = b1;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = b2;\n\t"
++       "[p0++] = r0;\n\t"
++       "r0 = b3;\n\t"
++       "[p0++] = r0;\n\t"
++
++       "r0 = RETS;\n\t"		/* store return address */
++       "[p0++] = r0;\n\t"
++
++       "r0 = 0;\n\t"
++      :
++      :
++     );
++return 0;
++}
+diff --git a/libc/sysdeps/linux/bfin/clone.c b/libc/sysdeps/linux/bfin/clone.c
+new file mode 100644
+index 000000000..746da8e22
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/clone.c
+@@ -0,0 +1,39 @@
++/*
++ * libc/sysdeps/linux/bfin/clone.c -- `clone' syscall for linux/blackfin
++ *
++ *
++ * This file is subject to the terms and conditions of the GNU Lesser
++ * General Public License.  See the file COPYING.LIB in the main
++ * directory of this archive for more details.
++ *
++ */
++
++#include <asm/unistd.h>
++
++int
++clone (int (*fn)(void *arg), void *child_stack, int flags, void *arg)
++{
++	register long rval = -1;
++
++	if (fn && child_stack) {
++
++	__asm__ __volatile__ (
++			"r1 = %2;"
++			"r0 = %3;"
++			"P0 = %1;"
++			"excpt 0;"	 /*Call sys_clone*/
++			"%0  = r0;"
++			"cc = r0 == 0;"
++			"if !cc jump xxx;"	/* if (rval != 0) skip to parent */
++			"r0 = %4;"
++			"p0 = %5;"
++			"call (p0);"	/* Call cloned function */
++			"p0 = %6;"
++			"excpt 0;"	/* Call sys_exit */
++			"xxx: nop;"
++			: "=d" (rval)
++			: "i" (__NR_clone), "a" (child_stack), "a" (flags), "a" (arg), "a" (fn), "i" (__NR_exit)
++			: "CC", "R0", "R1", "P0");
++	}
++	return rval;
++}
+diff --git a/libc/sysdeps/linux/bfin/crt0.S b/libc/sysdeps/linux/bfin/crt0.S
+new file mode 100644
+index 000000000..4ddfd16b9
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/crt0.S
+@@ -0,0 +1,68 @@
++/* Copyright (C) 1991, 1992 Free Software Foundation, Inc.
++
++This file is part of the GNU C Library.
++
++The GNU C Library is free software; you can redistribute it and/or
++modify it under the terms of the GNU Library General Public License as
++published by the Free Software Foundation; either version 2 of the
++License, or (at your option) any later version.
++
++The GNU C Library is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++Library General Public License for more details.
++
++You should have received a copy of the GNU Library General Public
++License along with the GNU C Library; see the file COPYING.LIB.  If
++not, write to the Free Software Foundation, Inc., 675 Mass Ave,
++Cambridge, MA 02139, USA.  */
++
++
++/* When we enter this piece of code, the user stack looks like this:
++*      argc            argument counter (integer)
++*      argv[0]         program name (pointer)
++*      argv[1...N]     program args (pointers)
++*      NULL
++*      env[0...N]      environment variables (pointers)
++*      NULL
++
++*   When we are done here, we want
++*	R0=argc
++*	R1=*argv[0]
++*	R2=*envp[0]
++*/
++
++.text
++.align 2
++.global _start;
++.type	_start,STT_FUNC;
++.global ___uClibc_main;
++.type	___uClibc_main,STT_FUNC;
++
++/* Stick in a dummy reference to main(), so that if an application
++ * is linking when the main() function is in a static library (.a)
++ * we can be sure that main() actually gets linked in */
++
++.type	_main,STT_FUNC;
++
++_start:
++
++/*	clear the frame pointer */
++	FP = 0;
++/*	Load register R0 (argc) from the stack to its final resting place */
++	P0 = SP;
++	R0 = [P0++];
++
++/*	Copy argv pointer into R1 -- which its final resting place */
++	R1 = P0;
++
++/*	Skip to the end of argv and put a pointer to the environment in R2 */
++	R2 = R0;
++	R2 <<= 2;
++	R2 += 4;
++	R2 = R1+R2;
++
++/*	Ok, now run uClibc's main() -- shouldn't return */
++	sp += -12;
++	jump.l	___uClibc_main;
++
+diff --git a/libc/sysdeps/linux/bfin/crti.S b/libc/sysdeps/linux/bfin/crti.S
+new file mode 100644
+index 000000000..36897973e
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/crti.S
+@@ -0,0 +1,30 @@
++.file "initfini.c";
++	.section .init
++	.section .fini
++
++.text;
++.align 2
++.global _dummy;
++.type _dummy, STT_FUNC;
++_dummy:
++	P2 = R0;
++	LINK 0;
++	SP += -12;
++	cc =P2==0;
++	if cc jump L$L$1;
++	SP += 12;
++	UNLINK;
++	jump (P2);
++L$L$1:
++	SP += 12;
++	UNLINK;
++	rts;
++	.size	_dummy, .-_dummy
++.align 2
++.global __init;
++.type __init, STT_FUNC;
++__init:
++	LINK 0;
++	SP += -12;
++
++	.align 2
+diff --git a/libc/sysdeps/linux/bfin/crtn.S b/libc/sysdeps/linux/bfin/crtn.S
+new file mode 100644
+index 000000000..4f15aec50
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/crtn.S
+@@ -0,0 +1,37 @@
++.file "initfini.c";
++	.section .init
++	.section .fini
++
++.text;
++.align 2
++.global _dummy;
++.type _dummy, STT_FUNC;
++_dummy:
++	P2 = R0;
++	LINK 0;
++	SP += -12;
++	cc =P2==0;
++	if cc jump L$L$1;
++	SP += 12;
++	UNLINK;
++	jump (P2);
++L$L$1:
++	SP += 12;
++	UNLINK;
++	rts;
++	.size	_dummy, .-_dummy
++.align 2
++.global __init;
++.type __init, STT_FUNC;
++	SP += 12;
++	UNLINK;
++	rts;
++	.size	__init, .-__init
++.align 2
++.global __fini;
++.type __fini, STT_FUNC;
++	SP += 12;
++	UNLINK;
++	rts;
++	.size	__fini, .-__fini
++	.ident	"GCC: (GNU) 3.4.1"
+diff --git a/libc/sysdeps/linux/bfin/setjmp.S b/libc/sysdeps/linux/bfin/setjmp.S
+new file mode 100644
+index 000000000..9bb3ddc8b
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/setjmp.S
+@@ -0,0 +1,105 @@
++
++/* Cetjmp for the Blackfin project
++ *
++ * Copyright (C) 2003,  Metrowerks
++ * Based on code from Analog Devices.
++ *
++ * This file is subject to the terms and conditions of the GNU Lesser
++ * General Public License.  See the file COPYING.LIB in the main
++ * directory of this archive for more details.
++ *
++ */
++#define _ASM
++#define _SETJMP_H
++#include <bits/setjmp.h>
++
++.globl ___sigsetjmp;
++.align 4;
++
++___sigsetjmp:
++	[--SP] = P0;	/* Save P0 */
++	P0 = R0;
++	R0 = [SP++];
++	[P0 + 0x00] = R0;	/* Save saved P0 */
++	[P0 + 0x04] = P1;
++	[P0 + 0x08] = P2;
++	[P0 + 0x0C] = P3;
++	[P0 + 0x10] = P4;
++	[P0 + 0x14] = P5;
++
++	[P0 + 0x18] = FP;	/* Frame Pointer */
++	[P0 + 0x1C] = SP;	/* Stack Pointer */
++
++	[P0 + 0x20] = P0;	/* Data Registers */
++	[P0 + 0x24] = R1;
++	[P0 + 0x28] = R2;
++	[P0 + 0x2C] = R3;
++	[P0 + 0x30] = R4;
++	[P0 + 0x34] = R5;
++	[P0 + 0x38] = R6;
++	[P0 + 0x3C] = R7;
++
++	R0 = ASTAT;
++	[P0 + 0x40] = R0;
++
++	R0 = LC0;		/* Loop Counters */
++	[P0 + 0x44] = R0;
++	R0 = LC1;
++	[P0 + 0x48] = R0;
++
++	R0 = A0.W;		/* Accumulators */
++	[P0 + 0x4C] = R0;
++	R0 = A0.X;
++	[P0 + 0x50] = R0;
++	R0 = A1.W;
++	[P0 + 0x54] = R0;
++	R0 = A1.X;
++	[P0 + 0x58] = R0;
++
++	R0 = I0;		/* Index Registers */
++	[P0 + 0x5C] = R0;
++	R0 = I1;
++	[P0 + 0x60] = R0;
++	R0 = I2;
++	[P0 + 0x64] = R0;
++	R0 = I3;
++	[P0 + 0x68] = R0;
++
++	R0 = M0;		/* Modifier Registers */
++	[P0 + 0x6C] = R0;
++	R0 = M1;
++	[P0 + 0x70] = R0;
++	R0 = M2;
++	[P0 + 0x74] = R0;
++	R0 = M3;
++	[P0 + 0x78] = R0;
++
++	R0 = L0;		/* Length Registers */
++	[P0 + 0x7c] = R0;
++	R0 = L1;
++	[P0 + 0x80] = R0;
++	R0 = L2;
++	[P0 + 0x84] = R0;
++	R0 = L3;
++	[P0 + 0x88] = R0;
++
++	R0 = B0;		/* Base Registers */
++	[P0 + 0x8C] = R0;
++	R0 = B1;
++	[P0 + 0x90] = R0;
++	R0 = B2;
++	[P0 + 0x94] = R0;
++	R0 = B3;
++	[P0 + 0x98] = R0;
++
++	R0 = RETS;
++	[P0 + 0x9C] = R0;
++
++	R0 = [P0 + 0x20];
++	CC = R1 == 1;
++	IF CC JUMP finished;
++	CALL ___sigjmp_save;
++finished:
++	R0 = 0;
++	RTS;
++___sigsetjmp.end:
+diff --git a/libc/sysdeps/linux/bfin/sys/elf.h b/libc/sysdeps/linux/bfin/sys/elf.h
+new file mode 100644
+index 000000000..d959cdca1
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/sys/elf.h
+@@ -0,0 +1,26 @@
++/* Copyright (C) 1998, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_ELF_H
++#define _SYS_ELF_H	1
++
++#warning "This header is obsolete; use <sys/procfs.h> instead."
++
++#include <sys/procfs.h>
++
++#endif	/* _SYS_ELF_H */
+diff --git a/libc/sysdeps/linux/bfin/sys/io.h b/libc/sysdeps/linux/bfin/sys/io.h
+new file mode 100644
+index 000000000..68639902c
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/sys/io.h
+@@ -0,0 +1,48 @@
++/* Copyright (C) 1996, 1998, 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_SYS_IO_H
++
++#define	_SYS_IO_H	1
++#include <features.h>
++
++__BEGIN_DECLS
++
++/* If TURN_ON is TRUE, request for permission to do direct i/o on the
++   port numbers in the range [FROM,FROM+NUM-1].  Otherwise, turn I/O
++   permission off for that range.  This call requires root privileges.  */
++extern int ioperm (unsigned long int __from, unsigned long int __num,
++		   int __turn_on) __THROW;
++
++/* Set the I/O privilege level to LEVEL.  If LEVEL is nonzero,
++   permission to access any I/O port is granted.  This call requires
++   root privileges. */
++extern int iopl (int __level) __THROW;
++
++/* The functions that actually perform reads and writes.  */
++extern unsigned char inb (unsigned long int port) __THROW;
++extern unsigned short int inw (unsigned long int port) __THROW;
++extern unsigned long int inl (unsigned long int port) __THROW;
++
++extern void outb (unsigned char value, unsigned long int port) __THROW;
++extern void outw (unsigned short value, unsigned long int port) __THROW;
++extern void outl (unsigned long value, unsigned long int port) __THROW;
++
++__END_DECLS
++
++#endif /* _SYS_IO_H */
+diff --git a/libc/sysdeps/linux/bfin/sys/procfs.h b/libc/sysdeps/linux/bfin/sys/procfs.h
+new file mode 100644
+index 000000000..a656d86b2
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/sys/procfs.h
+@@ -0,0 +1,125 @@
++/* Copyright (C) 1996, 1997, 1999, 2000, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++
++/* And the whole bunch of them.  We could have used `struct
++   user_regs_struct' directly in the typedef, but tradition says that
++   the register set is an array, which does have some peculiar
++   semantics, so leave it that way.  */
++#define ELF_NGREG (sizeof (struct user_regs_struct) / sizeof(elf_greg_t))
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Register set for the floating-point registers.  */
++typedef struct user_bfinfp_struct elf_fpregset_t;
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned short int pr_uid;
++    unsigned short int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/bfin/sys/reg.h b/libc/sysdeps/linux/bfin/sys/reg.h
+new file mode 100644
+index 000000000..4ce6e15aa
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/sys/reg.h
+@@ -0,0 +1,133 @@
++/* Copyright (C) 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_REG_H
++#define _SYS_REG_H	1
++
++/* Index into an array of 4 byte integers returned from ptrace for
++   location of the users' stored general purpose registers. */
++
++enum
++{
++  PT_IPEND = 0,
++#define PT_IPEND PT_IPEND
++  PT_SYSCFG = 4,
++#define PT_SYSCFG PT_SYSCFG
++  PT_SR = 8,
++#define PT_SR PT_SR
++  PT_RETE = 12,
++#define PT_RETE PT_RETE
++  PT_RETN = 16,
++#define PT_RETN PT_RETN
++  PT_RETX = 20,
++#define PT_RETX PT_RETX
++  PT_PC = 24,
++#define PT_PC PT_PC
++  PT_RETS = 28,
++#define PT_RETS PT_RETS
++  PT_ASTAT = 32,
++#define PT_ASTAT PT_ASTAT
++  PT_LB1 = 40,
++#define PT_LB1 PT_LB1
++  PT_LB0 = 44,
++#define PT_LB0 PT_LB0
++  PT_LT1 = 48,
++#define PT_LT1 PT_LT1
++  PT_LT0 = 52,
++#define PT_LT0 PT_LT0
++  PT_LC1 = 56,
++#define PT_LC1 PT_LC1
++  PT_LC0 = 60,
++#define PT_LC0 PT_LC0
++  PT_A1W = 64,
++#define PT_A1W PT_A1W
++  PT_A1X = 68,
++#define PT_A1X PT_A1X
++  PT_A0W = 72,
++#define PT_A0W PT_A0W
++  PT_A0X = 76,
++#define PT_A0X PT_A0X
++  PT_B3 = 80,
++#define PT_B# PT_B3
++  PT_B2 = 84,
++#define PT_B2 PT_B2
++  PT_B1 = 88,
++#define PT_B1 PT_B1
++  PT_B0 = 92,
++#define PT_B0 PT_B0
++  PT_L3 = 96,
++#define PT_L3 PT_L3
++  PT_L2 = 100,
++#define PT_L2 PT_L2
++  PT_L1 = 104,
++#define PT_L1 PT_L1
++  PT_L0 = 108,
++#define PT_L0 PT_L0
++  PT_M3 = 112,
++#define PT_M3 PT_M3
++  PT_M2 = 116,
++#define PT_M2 PT_M2
++  PT_M1 = 120,
++#define PT_M1 PT_M1
++  PT_M0 = 124,
++#define PT_M0 PT_M0
++  PT_I3 = 128,
++#define PT_I3 PT_I3
++  PT_I2 = 132,
++#define PT_I2 PT_I2
++  PT_I1 = 136,
++#define PT_I1 PT_I1
++  PT_I0 = 140,
++#define PT_I0 PT_I0
++  PT_USP = 144,
++#define PT_USP PT_USP
++  PT_FP = 148,
++#define PT_FP PT_FP
++  PT_P5 = 152,
++#define PT_P5 PT_P5
++  PT_P4 = 156,
++#define PT_P4 PT_P4
++  PT_P3 = 160,
++#define PT_P3 PT_P3
++  PT_P2 = 164,
++#define PT_P2 PT_P2
++  PT_P1 = 168,
++#define PT_P1 PT_P1
++  PT_P0 = 172,
++#define PT_P0 PT_P0
++  PT_R7 = 176,
++#define PT_R7 PT_R7
++  PT_R6 = 180,
++#define PT_R6 PT_R6
++  PT_R5 = 184,
++#define PT_R5 PT_R5
++  PT_R4 = 188,
++#define PT_R4 PT_R4
++  PT_R3 = 192,
++#define PT_R3 PT_R3
++  PT_R2 = 196,
++#define PT_R2 PT_R2
++  PT_R1 = 200,
++#define PT_R1 PT_R1
++  PT_R0 = 204,
++#define PT_R0 PT_R0
++  PT_ORIG_R0 = 208,
++#define PT_ORIG_R0 PT_ORIG_R0
++};
++
++#endif	/* _SYS_REG_H */
+diff --git a/libc/sysdeps/linux/bfin/sys/ucontext.h b/libc/sysdeps/linux/bfin/sys/ucontext.h
+new file mode 100644
+index 000000000..ac469daac
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/sys/ucontext.h
+@@ -0,0 +1,153 @@
++/* Copyright (C) 1997, 1999, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* System V/blackfin ABI compliant context switching support.  */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++
++/* Type for general register.  */
++typedef int greg_t;
++
++/* Number of general registers.  */
++#define NGREG	47
++
++/* Container for all general registers.  */
++typedef greg_t gregset_t[NGREG];
++
++/* Number of each register is the `gregset_t' array.  */
++enum
++{
++  R0 = 0,
++#define R0	R0
++  R1 = 1,
++#define R1	R1
++  R2 = 2,
++#define R2	R2
++  R3 = 3,
++#define R3	R3
++  R4 = 4,
++#define R4	R4
++  R5 = 5,
++#define R5	R5
++  R6 = 6,
++#define R6	R6
++  R7 = 7,
++#define R7	R7
++  P0 = 8,
++#define P0	P0
++  P1 = 9,
++#define P1	P1
++  P2 = 10,
++#define P2	P2
++  P3 = 11,
++#define P3	P3
++  P4 = 12,
++#define P4	P4
++  P5 = 13,
++#define P5	P5
++  USP = 14,
++#define USP	USP
++  A0W = 15,
++#define A0W	A0W
++  A1W = 16,
++#define A1W	A1W
++  A0X = 17,
++#define A0X	A0X
++  A1X = 18,
++#define A1X	A1X
++  ASTAT = 19,
++#define ASTAT	ASTAT
++  RETS = 20,
++#define RETS	RETS
++  PC= 21,
++#define PC	PC
++  RETX = 22,
++#define RETX	RETX
++  FP = 23,
++#define FP	FP
++  I0 = 24,
++#define I0	I0
++  I1 = 25,
++#define I1	I1
++  I2 = 26,
++#define I2	I2
++  I3 = 27,
++#define I3	I3
++  M0 = 28,
++#define M0	M0
++  M1 = 29,
++#define M1	M1
++  M2 = 30,
++#define M2	M2
++  M3 = 31,
++#define M3	M3
++  L0 = 32,
++#define L0	L0
++  L1 = 33,
++#define L1	L1
++  L2 = 34,
++#define L2	L2
++  L3 = 35,
++#define L3	L3
++  B_0 = 36,
++#define B_0	B_0
++  B1 = 37,
++#define B1	B1
++  B2 = 38,
++#define B2	B2
++  B3 = 39,
++#define B3	B3
++  LC0 = 40,
++#define LC0	LC0
++  LC1 = 41,
++#define LC1	LC1
++  LT0 = 42,
++#define LT0	LT0
++  LT1 = 43,
++#define LT1	LT1
++  LB0 = 44,
++#define LB0	LB0
++  LB1 = 45,
++#define LB1	LB1
++  SEQSTAT = 46
++#define	SEQSTAT	SEQSTAT
++};
++
++/* Context to describe whole processor state.  */
++typedef struct
++{
++  int version;
++  gregset_t gregs;
++} mcontext_t;
++
++
++/* Userlevel context.  */
++typedef struct ucontext
++{
++  unsigned long int uc_flags;
++  struct ucontext *uc_link;
++  stack_t uc_stack;
++  mcontext_t uc_mcontext;
++  __sigset_t uc_sigmask;
++} ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/bfin/syscall.c b/libc/sysdeps/linux/bfin/syscall.c
+new file mode 100644
+index 000000000..6fe6cf2e6
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/syscall.c
+@@ -0,0 +1,49 @@
++/* vi: set sw=4 ts=4: */
++/* syscall for blackfin/uClibc
++ *
++ * Copyright (C) 2004 by Analog Devices Inc.
++ * Copyright (C) 2002 by Erik Andersen <andersen@uclibc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU Library General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or (at your
++ * option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Library General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Library General Public License
++ * along with this program; if not, write to the Free Software Foundation,
++ * Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ */
++
++#include <features.h>
++#include <errno.h>
++#include <sys/types.h>
++#include <sys/syscall.h>
++
++long syscall(long sysnum, long a, long b, long c, long d, long e)
++{
++	int _r0 = 0;
++    asm volatile(
++	    "p0 = %1;"		/*SysCall Number*/
++	    "r0 = %2;"
++	    "r1 = %3;"
++	    "r2 = %4;"
++		"r3 = %6;"
++		"r4 = %5;"
++		"excpt 0;"		/*Call the System Call*/
++		"%0 = r0;"		/*Store the result of syscall*/
++	    : "=r"(_r0)
++	    : "r"(sysnum), "r"(a), "r"(b),
++	      "r"(c), "r"(d), "r"(e)
++	    : "memory");
++
++    if(_r0 >=(unsigned long) -4095) {
++	(*__errno_location())=(-_r0);
++	_r0=(unsigned long) -1;
++    }
++    return (long) _r0;
++}
+diff --git a/libc/sysdeps/linux/bfin/vfork.S b/libc/sysdeps/linux/bfin/vfork.S
+new file mode 100644
+index 000000000..1f9539c55
+--- /dev/null
++++ b/libc/sysdeps/linux/bfin/vfork.S
+@@ -0,0 +1,12 @@
++
++#include <asm/unistd.h>
++	.text
++	.globl _vfork
++	.globl __libc_vfork
++	.type	 _vfork,STT_FUNC;
++	.align 4
++__libc_vfork:
++_vfork:
++	p0 = __NR_vfork;
++	excpt 0;
++	rts;

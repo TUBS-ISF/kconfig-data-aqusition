@@ -1,0 +1,584 @@
+"2015-06-29 17:08:49 -0300"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 6f6a1c62..0e80bcbe 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -51,6 +51,11 @@ config MAINLOOP_RIOTOS
+ 
+ endchoice
+ 
++config PTHREAD
++        bool "Pthread"
++        depends on HAVE_PTHREAD && SOL_PLATFORM_LINUX
++        default y
++
+ config LOG
+ 	bool "Log"
+ 	select USE_SYSTEMD
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index 0944d493..de16d06a 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -21,3 +21,9 @@ obj-core-$(SOL_PLATFORM_LINUX)-extra-cflags += $(SYSTEMD_CFLAGS)
+ 
+ obj-core-$(PLATFORM_SYSTEMD) += sol-platform-impl-systemd.o
+ obj-core-$(PLATFORM_SYSTEMD)-extra-cflags += $(SYSTEMD_CFLAGS) $(UDEV_CFLAGS)
++
++ifeq (y,$(PTHREAD))
++obj-core-$(CORE)             += sol-worker-thread.o
++obj-core-$(MAINLOOP_GLIB)    += sol-worker-thread-impl-glib.o
++obj-core-$(MAINLOOP_POSIX)   += sol-worker-thread-impl-posix.o
++endif
+diff --git a/src/lib/common/sol-mainloop-impl-posix.c b/src/lib/common/sol-mainloop-impl-posix.c
+index 63737ddc..7dd2813d 100644
+--- a/src/lib/common/sol-mainloop-impl-posix.c
++++ b/src/lib/common/sol-mainloop-impl-posix.c
+@@ -368,6 +368,24 @@ static unsigned char siginfo_storage_used;
+ #define SIGINFO_HANDLER_FOREACH(ptr) \
+     for (ptr = siginfo_handler; ptr < siginfo_handler + SIGINFO_HANDLER_COUNT; ptr++) if (ptr->sig)
+ 
++#ifdef HAVE_PTHREAD_H
++void sol_mainloop_posix_signals_block(void);
++void sol_mainloop_posix_signals_unblock(void);
++
++/* used externally by worker threads management */
++void
++sol_mainloop_posix_signals_block(void)
++{
++    pthread_sigmask(SIG_BLOCK, &sig_blockset, NULL);
++}
++
++void
++sol_mainloop_posix_signals_unblock(void)
++{
++    pthread_sigmask(SIG_UNBLOCK, &sig_blockset, NULL);
++}
++#endif
++
+ static void
+ sighandler(int sig, siginfo_t *si, void *context)
+ {
+diff --git a/src/lib/common/sol-worker-thread-impl-glib.c b/src/lib/common/sol-worker-thread-impl-glib.c
+new file mode 100644
+index 00000000..241fcf75
+--- /dev/null
++++ b/src/lib/common/sol-worker-thread-impl-glib.c
+@@ -0,0 +1,209 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <glib.h>
++
++#include "sol-mainloop.h"
++#include "sol-worker-thread-impl.h"
++
++struct sol_worker_thread_glib {
++    const void *data;
++    bool (*setup)(void *data);
++    void (*cleanup)(void *data);
++    bool (*iterate)(void *data);
++    void (*cancel)(void *data);
++    void (*finished)(void *data);
++    void (*feedback)(void *data);
++    struct sol_idle *idler;
++    GMutex lock;
++    GThread *thread;
++};
++
++static bool
++sol_worker_thread_finished(void *data)
++{
++    struct sol_worker_thread_glib *thread = data;
++
++    if (thread->thread) {
++        g_thread_join(thread->thread);
++        thread->thread = NULL;
++    }
++    g_mutex_clear(&thread->lock);
++
++    /* no locks since thread is now dead */
++    thread->idler = NULL;
++
++    SOL_DBG("worker thread %p finished", thread);
++
++    if (thread->finished)
++        thread->finished((void *)thread->data);
++
++    free(thread);
++    return false;
++}
++
++static gpointer
++sol_worker_thread_do(gpointer data)
++{
++    struct sol_worker_thread_glib *thread = data;
++
++    SOL_DBG("worker thread %p started", thread);
++
++    if (thread->setup) {
++        if (!thread->setup((void *)thread->data))
++            goto end;
++    }
++
++    while (thread->thread) {
++        if (!thread->iterate((void *)thread->data))
++            break;
++    }
++
++    if (thread->cleanup)
++        thread->cleanup((void *)thread->data);
++
++end:
++    g_mutex_lock(&thread->lock);
++    if (thread->idler)
++        sol_idle_del(thread->idler);
++    thread->idler = sol_idle_add(sol_worker_thread_finished, thread);
++    g_mutex_unlock(&thread->lock);
++
++    SOL_DBG("worker thread %p stopped", thread);
++
++    return thread;
++}
++
++void *
++sol_worker_thread_impl_new(bool (*setup)(void *data),
++    void (*cleanup)(void *data),
++    bool (*iterate)(void *data),
++    void (*cancel)(void *data),
++    void (*finished)(void *data),
++    void (*feedback)(void *data),
++    const void *data)
++{
++    static uint16_t thr_cnt = 0;
++    struct sol_worker_thread_glib *thread;
++    char name[16];
++
++    SOL_NULL_CHECK(iterate, NULL);
++
++    thread = calloc(1, sizeof(*thread));
++    SOL_NULL_CHECK(thread, NULL);
++
++    thread->data = data;
++    thread->setup = setup;
++    thread->cleanup = cleanup;
++    thread->iterate = iterate;
++    thread->cancel = cancel;
++    thread->finished = finished;
++    thread->feedback = feedback;
++
++    g_mutex_init(&thread->lock);
++
++    snprintf(name, 16, "thr-%u",
++             __atomic_fetch_add(&thr_cnt, 1, __ATOMIC_SEQ_CST));
++    thread->thread = g_thread_new(name, sol_worker_thread_do, thread);
++    SOL_NULL_CHECK_GOTO(thread->thread, error_thread);
++
++    return thread;
++
++error_thread:
++    free(thread);
++    return NULL;
++}
++
++void
++sol_worker_thread_impl_cancel(void *handle)
++{
++    struct sol_worker_thread_glib *thread = handle;
++
++    SOL_NULL_CHECK(thread);
++
++    if (!thread->thread) {
++        SOL_WRN("worker thread %p is not running.", thread);
++        return;
++    }
++    if (thread->thread == g_thread_self()) {
++        SOL_WRN("trying to cancel from worker thread %p.", thread);
++        return;
++    }
++
++    if (thread->cancel)
++        thread->cancel((void *)thread->data);
++
++    g_thread_join(thread->thread);
++    thread->thread = NULL;
++
++    /* no locks since thread is now dead */
++    sol_idle_del(thread->idler);
++    sol_worker_thread_finished(thread);
++}
++
++static bool
++sol_worker_thread_feedback_dispatch(void *data)
++{
++    struct sol_worker_thread_glib *thread = data;
++
++    g_mutex_lock(&thread->lock);
++    thread->idler = NULL;
++    g_mutex_unlock(&thread->lock);
++
++    thread->feedback((void *)thread->data);
++    return false;
++}
++
++void
++sol_worker_thread_impl_feedback(void *handle)
++{
++    struct sol_worker_thread_glib *thread = handle;
++    SOL_NULL_CHECK(thread);
++    SOL_NULL_CHECK(thread->feedback);
++
++    if (!thread->thread) {
++        SOL_WRN("worker thread %p is not running.", thread);
++        return;
++    }
++    if (thread->thread != g_thread_self()) {
++        SOL_WRN("trying to feedback from different worker thread %p.", thread);
++        return;
++    }
++
++    g_mutex_lock(&thread->lock);
++    if (!thread->idler)
++        thread->idler = sol_idle_add(sol_worker_thread_feedback_dispatch,
++                                     thread);
++    g_mutex_unlock(&thread->lock);
++}
+diff --git a/src/shared/sol-worker-thread-pthread.c b/src/lib/common/sol-worker-thread-impl-posix.c
+similarity index 84%
+rename from src/shared/sol-worker-thread-pthread.c
+rename to src/lib/common/sol-worker-thread-impl-posix.c
+index ddf14ca0..38dbe994 100644
+--- a/src/shared/sol-worker-thread-pthread.c
++++ b/src/lib/common/sol-worker-thread-impl-posix.c
+@@ -30,25 +30,14 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-/* TODO: threads it is common to have blocking calls and for those
+- * soletta should offer a way to help.
+- *
+- * I think that a sol_worker_add(setup, iterate, flush, data) would
+- * work, in systems with threads it would start a thread and call
+- * those functions from there, on non-threaded systems it would use
+- * idlers to run each iteration.
+- */
++#include <stdlib.h>
++#include <errno.h>
+ #include <pthread.h>
+ 
+-#define SOL_LOG_DOMAIN &_log_domain
+-#include "sol-log-internal.h"
+ #include "sol-mainloop.h"
+-#include "sol-util.h"
+-#include "sol-worker-thread.h"
++#include "sol-worker-thread-impl.h"
+ 
+-SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "worker-thread-pthread");
+-
+-struct sol_worker_thread {
++struct sol_worker_thread_posix {
+     const void *data;
+     bool (*setup)(void *data);
+     void (*cleanup)(void *data);
+@@ -62,7 +51,7 @@ struct sol_worker_thread {
+ };
+ 
+ static bool
+-sol_worker_thread_lock(struct sol_worker_thread *thread)
++sol_worker_thread_lock(struct sol_worker_thread_posix *thread)
+ {
+     int error = pthread_mutex_lock(&thread->lock);
+ 
+@@ -75,7 +64,7 @@ sol_worker_thread_lock(struct sol_worker_thread *thread)
+ }
+ 
+ static void
+-sol_worker_thread_unlock(struct sol_worker_thread *thread)
++sol_worker_thread_unlock(struct sol_worker_thread_posix *thread)
+ {
+     pthread_mutex_unlock(&thread->lock);
+ }
+@@ -83,7 +72,7 @@ sol_worker_thread_unlock(struct sol_worker_thread *thread)
+ static bool
+ sol_worker_thread_finished(void *data)
+ {
+-    struct sol_worker_thread *thread = data;
++    struct sol_worker_thread_posix *thread = data;
+ 
+     if (thread->thread) {
+         pthread_join(thread->thread, NULL);
+@@ -106,7 +95,7 @@ sol_worker_thread_finished(void *data)
+ static void *
+ sol_worker_thread_do(void *data)
+ {
+-    struct sol_worker_thread *thread = data;
++    struct sol_worker_thread_posix *thread = data;
+ 
+     SOL_DBG("worker thread %p started", thread);
+ 
+@@ -136,8 +125,11 @@ end:
+     return thread;
+ }
+ 
+-SOL_API struct sol_worker_thread *
+-sol_worker_thread_new(bool (*setup)(void *data),
++extern void sol_mainloop_posix_signals_block(void);
++extern void sol_mainloop_posix_signals_unblock(void);
++
++void *
++sol_worker_thread_impl_new(bool (*setup)(void *data),
+     void (*cleanup)(void *data),
+     bool (*iterate)(void *data),
+     void (*cancel)(void *data),
+@@ -146,7 +138,7 @@ sol_worker_thread_new(bool (*setup)(void *data),
+     const void *data)
+ {
+     pthread_mutexattr_t attrs;
+-    struct sol_worker_thread *thread;
++    struct sol_worker_thread_posix *thread;
+     int r;
+ 
+     SOL_NULL_CHECK(iterate, NULL);
+@@ -174,8 +166,10 @@ sol_worker_thread_new(bool (*setup)(void *data),
+     pthread_mutexattr_destroy(&attrs);
+     SOL_INT_CHECK_GOTO(r, != 0, error_mutex);
+ 
++    sol_mainloop_posix_signals_block();
+     r = pthread_create(&thread->thread, NULL,
+         sol_worker_thread_do, thread);
++    sol_mainloop_posix_signals_unblock();
+     SOL_INT_CHECK_GOTO(r, != 0, error_thread);
+ 
+     return thread;
+@@ -189,9 +183,10 @@ error_mutex:
+     return NULL;
+ }
+ 
+-SOL_API void
+-sol_worker_thread_cancel(struct sol_worker_thread *thread)
++void
++sol_worker_thread_impl_cancel(void *handle)
+ {
++    struct sol_worker_thread_posix *thread = handle;
+     pthread_t tid;
+     int r;
+ 
+@@ -222,7 +217,7 @@ sol_worker_thread_cancel(struct sol_worker_thread *thread)
+ static bool
+ sol_worker_thread_feedback_dispatch(void *data)
+ {
+-    struct sol_worker_thread *thread = data;
++    struct sol_worker_thread_posix *thread = data;
+ 
+     if (sol_worker_thread_lock(thread)) {
+         thread->idler = NULL;
+@@ -233,9 +228,10 @@ sol_worker_thread_feedback_dispatch(void *data)
+     return false;
+ }
+ 
+-SOL_API void
+-sol_worker_thread_feedback(struct sol_worker_thread *thread)
++void
++sol_worker_thread_impl_feedback(void *handle)
+ {
++    struct sol_worker_thread_posix *thread = handle;
+     SOL_NULL_CHECK(thread);
+     SOL_NULL_CHECK(thread->feedback);
+ 
+diff --git a/src/lib/common/sol-worker-thread-impl.h b/src/lib/common/sol-worker-thread-impl.h
+new file mode 100644
+index 00000000..f353f038
+--- /dev/null
++++ b/src/lib/common/sol-worker-thread-impl.h
+@@ -0,0 +1,44 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <stdbool.h>
++
++#define SOL_LOG_DOMAIN &_sol_worker_thread_log_domain
++extern struct sol_log_domain _sol_worker_thread_log_domain;
++#include "sol-log-internal.h"
++#include "sol-worker-thread.h"
++
++void *sol_worker_thread_impl_new(bool (*setup)(void *data), void (*cleanup)(void *data), bool (*iterate)(void *data), void (*cancel)(void *data), void (*finished)(void *data), void (*feedback)(void *data), const void *data);
++void sol_worker_thread_impl_cancel(void *handle);
++void sol_worker_thread_impl_feedback(void *handle);
+diff --git a/src/lib/common/sol-worker-thread.c b/src/lib/common/sol-worker-thread.c
+new file mode 100644
+index 00000000..e0e0f2fb
+--- /dev/null
++++ b/src/lib/common/sol-worker-thread.c
+@@ -0,0 +1,66 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdlib.h>
++
++#include "sol-worker-thread.h"
++#include "sol-worker-thread-impl.h"
++
++SOL_LOG_INTERNAL_DECLARE(_sol_worker_thread_log_domain, "worker-thread");
++
++SOL_API struct sol_worker_thread *
++sol_worker_thread_new(bool (*setup)(void *data),
++    void (*cleanup)(void *data),
++    bool (*iterate)(void *data),
++    void (*cancel)(void *data),
++    void (*finished)(void *data),
++    void (*feedback)(void *data),
++    const void *data)
++{
++    SOL_NULL_CHECK(iterate, NULL);
++    return sol_worker_thread_impl_new(setup, cleanup, iterate,
++                                      cancel, finished, feedback, data);
++}
++
++SOL_API void
++sol_worker_thread_cancel(struct sol_worker_thread *thread)
++{
++    SOL_NULL_CHECK(thread);
++    sol_worker_thread_impl_cancel(thread);
++}
++
++SOL_API void
++sol_worker_thread_feedback(struct sol_worker_thread *thread)
++{
++    SOL_NULL_CHECK(thread);
++    sol_worker_thread_impl_feedback(thread);
++}
+diff --git a/src/shared/sol-worker-thread.h b/src/lib/common/sol-worker-thread.h
+similarity index 99%
+rename from src/shared/sol-worker-thread.h
+rename to src/lib/common/sol-worker-thread.h
+index 6056b687..4c80109f 100644
+--- a/src/shared/sol-worker-thread.h
++++ b/src/lib/common/sol-worker-thread.h
+@@ -33,8 +33,6 @@
+ #pragma once
+ 
+ #include <stdbool.h>
+-#include <stdlib.h>
+-#include <errno.h>
+ 
+ // TODO abstract locks? see eina_lock.h
+ struct sol_worker_thread;
+diff --git a/src/shared/Kconfig b/src/shared/Kconfig
+index 07474408..bbef2020 100644
+--- a/src/shared/Kconfig
++++ b/src/shared/Kconfig
+@@ -1,8 +1,3 @@
+ config INTERNAL_SHARED
+ 	tristate
+ 	default m
+-
+-config PTHREAD
+-	bool "Pthread"
+-	depends on HAVE_PTHREAD && HAVE_GLIB && (PLATFORM_LINUX_MICRO || PLATFORM_SYSTEMD)
+-	default y
+\ No newline at end of file
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+index 520fc24c..84efed3f 100644
+--- a/src/shared/Makefile
++++ b/src/shared/Makefile
+@@ -17,10 +17,6 @@ obj-libshared-m += sol-conffile.o
+ obj-libshared-m-extra-cflags += $(GLIB_CFLAGS)
+ endif
+ 
+-ifeq (y,$(PTHREAD))
+-obj-libshared-m += sol-worker-thread-pthread.o
+-endif
+-
+ ifeq (y,$(PLATFORM_GALILEO))
+ obj-libshared-m  += sol-galileo.o
+ endif

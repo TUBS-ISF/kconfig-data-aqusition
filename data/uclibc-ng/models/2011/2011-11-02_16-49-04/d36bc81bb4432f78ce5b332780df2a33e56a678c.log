@@ -1,0 +1,74 @@
+"2011-11-02 16:49:04 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index a4398cb97..e44ac4631 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -930,9 +930,18 @@ config UCLIBC_GRP_BUFFER_SIZE
+ 
+ comment "Support various families of functions"
+ 
++config UCLIBC_LINUX_MODULE_26
++	bool "Linux kernel module functions (2.6)"
++	default y
++	help
++	  delete_module, init_module
++	  are used in linux for loadable kernel modules.
++
++	  Say N if you do not use kernel modules.
++
+ config UCLIBC_LINUX_MODULE_24
+-	bool "Linux kernel module functions"
+-	default !(TARGET_bfin)
++	bool "Linux kernel module functions (<2.6)"
++	depends on !TARGET_bfin && !TARGET_c6x
+ 	help
+ 	  create_module, query_module
+ 	  are used in linux (prior to 2.6) for loadable kernel modules.
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 570bb93e7..3d20672b8 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -15,6 +15,7 @@ CSRC_LFS := $(notdir $(wildcard $(COMMON_DIR)/*64.c))
+ CSRC-y := $(filter-out llseek.c $(CSRC_LFS),$(CSRC-y))
+ CSRC-$(UCLIBC_HAS_LFS) += llseek.c $(CSRC_LFS)
+ CSRC-$(findstring y,$(UCLIBC_HAS_SSP)$(UCLIBC_HAS_FORTIFY)) += ssp.c
++CSRC-$(UCLIBC_LINUX_MODULE_26) += delete_module.c init_module.c
+ CSRC-$(UCLIBC_LINUX_MODULE_24) += create_module.c query_module.c \
+ 	get_kernel_syms.c
+ # we need these internally: fstatfs.c statfs.c
+diff --git a/libc/sysdeps/linux/common/stubs.c b/libc/sysdeps/linux/common/stubs.c
+index 2f170ead9..10d6db15d 100644
+--- a/libc/sysdeps/linux/common/stubs.c
++++ b/libc/sysdeps/linux/common/stubs.c
+@@ -133,11 +133,11 @@ make_stub(capset)
+ make_stub(connect)
+ #endif
+ 
+-#ifndef __NR_create_module
++#if !defined __NR_create_module && defined __UCLIBC_LINUX_MODULE_24__
+ make_stub(create_module)
+ #endif
+ 
+-#ifndef __NR_delete_module
++#if !defined __NR_delete_module && defined __UCLIBC_LINUX_MODULE_26__
+ make_stub(delete_module)
+ #endif
+ 
+@@ -205,7 +205,7 @@ make_stub(getsockopt)
+ make_stub(getxattr)
+ #endif
+ 
+-#ifndef __NR_init_module
++#if !defined __NR_init_module && defined __UCLIBC_LINUX_MODULE_26__
+ make_stub(init_module)
+ #endif
+ 
+@@ -293,7 +293,7 @@ make_stub(readahead)
+ make_stub(reboot)
+ #endif
+ 
+-#ifndef __NR_query_module
++#if !defined __NR_query_module && defined __UCLIBC_LINUX_MODULE_24__
+ make_stub(query_module)
+ #endif
+ 

@@ -1,0 +1,119 @@
+"2015-03-24 00:11:21 +0100"
+diff --git a/Makefile.in b/Makefile.in
+index a64fec956..2233be8b2 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -294,6 +294,7 @@ HEADERS_RM-$(UCLIBC_HAS_THREADS)             += *thread*.h semaphore.h \
+ 	bits/initspin.h
+ HEADERS_RM-$(UCLIBC_HAS_THREADS_NATIVE)      += atomic.h bits/atomic.h
+ HEADERS_RM-$(UCLIBC_HAS_OBSTACK)             += obstack.h
++HEADERS_RM-$(UCLIBC_HAS_UTMP)               += bits/utmp.h utmp.h
+ HEADERS_RM-$(UCLIBC_HAS_UTMPX)               += bits/utmpx.h utmpx.h
+ HEADERS_RM-$(UCLIBC_HAS_WCHAR)               += wchar.h wctype.h
+ HEADERS_RM-$(UCLIBC_HAS_WORDEXP)             += wordexp.h
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 35c1cee9a..7546e96ea 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -700,6 +700,25 @@ config COMPAT_ATEXIT
+ 	  Enable this option if you want to update from 0.9.28 to git/0.9.29,
+ 	  else you will be missing atexit() until you rebuild all apps.
+ 
++config UCLIBC_HAS_UTMPX
++       bool "utmpx based support for tracking login/logouts to/from the system"
++	   depends on UCLIBC_HAS_UTMP # TODO, remove this, it's backward
++       help
++         Answer y to enable support for accessing user accounting database.
++         It can be used to track all login/logout to the system.
++
++config UCLIBC_HAS_UTMP
++       bool "utmp support (XPG2, SVr4 compat)"
++       help
++         Answer y to enable legacy SVID support for accessing
++		 user accounting database:
++		   getutent(), getutid(), getutline(), pututline(),
++		   setutent(), endutent(), utmpname() in utmp.h
++         It can be used to track all login/logout to the system.
++
++         If unsure, just answer N and use utmpx.h and corresponding
++		 POSIX functions.
++
+ config UCLIBC_SUSV2_LEGACY
+ 	bool "Enable SuSv2 LEGACY functions"
+ 	help
+@@ -2042,14 +2061,6 @@ config UCLIBC_HAS_GNU_GLOB
+ 
+ 	  Most people will answer N.
+ 
+-config UCLIBC_HAS_UTMPX
+-       bool "utmpx based support for tracking login/logouts to/from the system"
+-       help
+-         Answer y to enable support for accessing user accounting database.
+-         It can be used to track all login/logout to the system.
+-
+-         If unsure, just answer N.
+-
+ endmenu
+ 
+ 
+diff --git a/libc/misc/utmp/Makefile.in b/libc/misc/utmp/Makefile.in
+index 535efb150..715341c85 100644
+--- a/libc/misc/utmp/Makefile.in
++++ b/libc/misc/utmp/Makefile.in
+@@ -7,7 +7,9 @@
+ 
+ subdirs += libc/misc/utmp
+ 
+-CSRC-y := utent.c wtent.c
++CSRC-y :=
++CSRC-$(if $(findstring y,$(UCLIBC_HAS_UTMP)$(UCLIBC_HAS_UTMPX)),y) += wtent.c
++CSRC-$(UCLIBC_HAS_UTMP) += utent.c
+ CSRC-$(UCLIBC_HAS_UTMPX) += utxent.c
+ 
+ MISC_UTMP_DIR := $(top_srcdir)libc/misc/utmp
+diff --git a/libc/misc/utmp/utent.c b/libc/misc/utmp/utent.c
+index 07ca44eb2..6e1567865 100644
+--- a/libc/misc/utmp/utent.c
++++ b/libc/misc/utmp/utent.c
+@@ -1,3 +1,4 @@
++/* vi: set sw=4 ts=4: */
+ /* utent.c <ndf@linux.mit.edu> */
+ /* Let it be known that this is very possibly the worst standard ever.  HP-UX
+    does one thing, someone else does another, linux another... If anyone
+diff --git a/libc/misc/utmp/utxent.c b/libc/misc/utmp/utxent.c
+index a0e80a662..c32e4da49 100644
+--- a/libc/misc/utmp/utxent.c
++++ b/libc/misc/utmp/utxent.c
+@@ -1,3 +1,4 @@
++/* vi: set sw=4 ts=4: */
+ /*
+  * utexent.c : Support for accessing user accounting database.
+  * Copyright (C) 2010 STMicroelectronics Ltd.
+diff --git a/libc/misc/utmp/wtent.c b/libc/misc/utmp/wtent.c
+index b5e4ee576..30939ea43 100644
+--- a/libc/misc/utmp/wtent.c
++++ b/libc/misc/utmp/wtent.c
+@@ -1,3 +1,4 @@
++/* vi: set sw=4 ts=4: */
+ /*
+  * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+  *
+diff --git a/libutil/Makefile.in b/libutil/Makefile.in
+index f904fc7e1..98b178ef9 100644
+--- a/libutil/Makefile.in
++++ b/libutil/Makefile.in
+@@ -27,6 +27,14 @@ ifneq ($(UCLIBC_HAS_PTY),y)
+ libutil_SRC := $(filter-out $(libutil_DIR)/openpty.c $(libutil_DIR)/forkpty.c \
+ 		,$(libutil_SRC))
+ endif
++ifeq ($(UCLIBC_HAS_UTMP)$(UCLIBC_HAS_UTMPX),)
++libutil_SRC := $(filter-out \
++	$(libutil_DIR)/logwtmp.c \
++	$(libutil_DIR)/login.c \
++	$(libutil_DIR)/logout.c \
++		,$(libutil_SRC))
++endif
++
+ libutil_OBJ := $(patsubst $(libutil_DIR)/%.c,$(libutil_OUT)/%.o,$(libutil_SRC))
+ 
+ ifeq ($(DOPIC),y)

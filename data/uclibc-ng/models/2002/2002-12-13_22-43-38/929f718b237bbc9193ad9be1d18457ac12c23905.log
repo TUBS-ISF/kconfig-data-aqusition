@@ -1,0 +1,176 @@
+"2002-12-13 22:43:38 +0000"
+diff --git a/Makefile b/Makefile
+index df041cbd5..e57b6b1ec 100644
+--- a/Makefile
++++ b/Makefile
+@@ -34,7 +34,7 @@ include Rules.mak
+ 
+ DIRS = extra ldso libc libcrypt libresolv libnsl libutil libm libpthread
+ 
+-ifdef include_config
++ifeq ($(strip $(HAVE_DOT_CONFIG)),y)
+ 
+ all: headers subdirs shared utils finished
+ 
+@@ -80,7 +80,7 @@ endif
+ 
+ include/bits/uClibc_config.h: .config
+ 	@if [ ! -x ./extra/config/conf ] ; then \
+-	    make -C extra/config; \
++	    make -C extra/config conf; \
+ 	fi;
+ 	rm -rf include/bits
+ 	mkdir -p include/bits
+@@ -290,18 +290,21 @@ finished2:
+ 	@echo Finished installing...
+ 	@echo
+ 
+-else # ifdef include_config
++else # ifeq ($(strip $(HAVE_DOT_CONFIG)),y)
+ 
+ all: menuconfig
+ 
+-ifeq ($(filter-out $(noconfig_targets),$(MAKECMDGOALS)),)
+-# Targets which don't need .config
+-
+ # configuration
+ # ---------------------------------------------------------------------------
+ 
+-extra/config/conf extra/config/mconf:
+-	make -C extra/config
++extra/config/conf:
++	make -C extra/config conf
++	-@if [ ! -f .config ] ; then \
++		cp extra/Configs/Config.$(TARGET_ARCH).default .config; \
++	fi
++
++extra/config/mconf:
++	make -C extra/config ncurses conf mconf
+ 	-@if [ ! -f .config ] ; then \
+ 		cp extra/Configs/Config.$(TARGET_ARCH).default .config; \
+ 	fi
+@@ -384,8 +387,7 @@ release: distclean
+ 						\
+ 	tar -cvzf uClibc-$(VERSION).tar.gz --exclude CVS uClibc-$(VERSION)/;
+ 
+-endif # ifeq ($(filter-out $(noconfig_targets),$(MAKECMDGOALS)),)
+-endif # ifdef include_config
++endif # ifeq ($(strip $(HAVE_DOT_CONFIG)),y)
+ 
+ .PHONY: dummy subdirs release distclean clean config oldconfig menuconfig
+ 
+diff --git a/Rules.mak b/Rules.mak
+index ec8ed7a84..333f370e7 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -66,7 +66,6 @@ LIBC:=$(TOPDIR)libc/$(LIBNAME)
+ 
+ # Pull in the user's uClibc configuration
+ ifeq ($(filter $(noconfig_targets),$(MAKECMDGOALS)),)
+-include_config := 1
+ -include $(TOPDIR).config
+ endif
+ 
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 2945a94ba..6dd0c4e20 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -2,6 +2,9 @@
+ # For a description of the syntax of this configuration file,
+ # see extra/config/Kconfig-language.txt
+ #
++config HAVE_DOT_CONFIG
++	bool
++	default y
+ 
+ 
+ menu "General Library Settings"
+diff --git a/extra/config/Makefile b/extra/config/Makefile
+index 50d9ac096..442fbfbed 100644
+--- a/extra/config/Makefile
++++ b/extra/config/Makefile
+@@ -19,51 +19,44 @@
+ TOPDIR=../../
+ include $(TOPDIR)Rules.mak
+ 
+-
+ all: ncurses conf mconf
+ 
+ LIBS = -lncurses
+ ifeq (/usr/include/ncurses/ncurses.h, $(wildcard /usr/include/ncurses/ncurses.h))
+-	HOSTCFLAGS += -I/usr/include/ncurses -DCURSES_LOC="<ncurses.h>"
++	HOSTNCURSES += -I/usr/include/ncurses -DCURSES_LOC="<ncurses.h>"
+ else
+ ifeq (/usr/include/ncurses/curses.h, $(wildcard /usr/include/ncurses/curses.h))
+-	HOSTCFLAGS += -I/usr/include/ncurses -DCURSES_LOC="<ncurses/curses.h>"
++	HOSTNCURSES += -I/usr/include/ncurses -DCURSES_LOC="<ncurses/curses.h>"
+ else
+ ifeq (/usr/include/ncurses.h, $(wildcard /usr/include/ncurses.h))
+-	HOSTCFLAGS += -DCURSES_LOC="<ncurses.h>"
++	HOSTNCURSES += -DCURSES_LOC="<ncurses.h>"
+ else
+-	HOSTCFLAGS += -DCURSES_LOC="<curses.h>"
++	HOSTNCURSES += -DCURSES_LOC="<curses.h>"
+ endif
+ endif
+ endif
+ 
+ 
+-CONF_SRC  =conf.c zconf.tab.c
+-MCONF_SRC =mconf.c zconf.tab.c
+-LXDLG_SRC =checklist.c menubox.c textbox.c yesno.c inputbox.c util.c msgbox.c
++CONF_SRC  =conf.c
++MCONF_SRC =mconf.c checklist.c menubox.c textbox.c yesno.c inputbox.c util.c msgbox.c
++SHARED_SRC=zconf.tab.c
++SHARED_DEPS:=lkc.h lkc_proto.h lkc_defs.h expr.h zconf.tab.h
+ CONF_OBJS =$(patsubst %.c,%.o, $(CONF_SRC))
+ MCONF_OBJS=$(patsubst %.c,%.o, $(MCONF_SRC))
+-LXDLG_OBJS=$(patsubst %.c,%.o, $(LXDLG_SRC))
+-
+-conf: $(CONF_OBJS) 
+-	$(HOSTCC) $(HOSTCFLAGS) $(NATIVE_LDFLAGS) $^ -o $@
+-
+-mconf: $(MCONF_OBJS) $(LXDLG_OBJS)
+-	$(HOSTCC) $(HOSTCFLAGS) $(NATIVE_LDFLAGS) $^ -o $@ $(LIBS)
+-
+-lkc_deps:=lkc.h lkc_proto.h lkc_defs.h expr.h zconf.tab.h
+-
+-conf.o: conf.c $(lkc_deps)
+-
+-mconf.o: mconf.c $(lkc_deps)
++SHARED_OBJS=$(patsubst %.c,%.o, $(SHARED_SRC))
+ 
+-zconf.tab.o: zconf.tab.c lex.zconf.c confdata.c expr.c symbol.c menu.c $(lkc_deps)
++conf: $(CONF_OBJS) $(SHARED_OBJS) 
++	$(HOSTCC) $(NATIVE_LDFLAGS) $^ -o $@
+ 
+-lex.zconf.o: lex.zconf.c $(lkc_deps)
++mconf: $(MCONF_OBJS) $(SHARED_OBJS)
++	$(HOSTCC) $(NATIVE_LDFLAGS) $^ -o $@ $(LIBS)
+ 
+-%.o : %.c
++$(CONF_OBJS): %.o : %.c $(SHARED_DEPS)
+ 	$(HOSTCC) $(HOSTCFLAGS) -I. -c $< -o $@
+ 
++$(MCONF_OBJS): %.o : %.c $(SHARED_DEPS)
++	$(HOSTCC) $(HOSTCFLAGS) $(HOSTNCURSES) -I. -c $< -o $@
++
+ lkc_defs.h: lkc_proto.h
+ 	@sed < $< > $@ 's/P(\([^,]*\),.*/#define \1 (\*\1_p)/'
+ 
+@@ -82,9 +75,15 @@ lex.%.c: %.l
+ 	flex -P$(notdir $*) -o$@ $<
+ else
+ 
++lex.zconf.o: lex.zconf.c $(SHARED_DEPS)
++	$(HOSTCC) $(HOSTCFLAGS) -I. -c $< -o $@
++
+ lex.zconf.c: lex.zconf.c_shipped
+ 	cp lex.zconf.c_shipped lex.zconf.c
+ 
++zconf.tab.o: zconf.tab.c lex.zconf.c confdata.c expr.c symbol.c menu.c $(SHARED_DEPS)
++	$(HOSTCC) $(HOSTCFLAGS) -I. -c $< -o $@
++
+ zconf.tab.c: zconf.tab.c_shipped
+ 	cp zconf.tab.c_shipped zconf.tab.c
+ 

@@ -1,0 +1,125 @@
+"2007-04-29 19:55:21 -0400"
+diff --git a/lib/lib.c b/lib/lib.c
+index 6c8abb03..1f37eb59 100644
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -94,10 +94,12 @@ void *xzalloc(size_t size)
+ 
+ // Die unless we can change the size of an existing allocation, possibly
+ // moving it.  (Notice different arguments from libc function.)
+-void xrealloc(void **ptr, size_t size)
++void *xrealloc(void *ptr, size_t size)
+ {
+-	*ptr = realloc(*ptr, size);
+-	if (!*ptr) error_exit("xrealloc");
++	ptr = realloc(ptr, size);
++	if (!ptr) error_exit("xrealloc");
++
++	return ptr;
+ }
+ 
+ // Die unless we can allocate a copy of this many bytes of string.
+@@ -452,6 +454,30 @@ off_t fdlength(int fd)
+ 	return pos + 1;
+ }
+ 
++// This can return null (meaning file not found).  It just won't return null
++// for memory allocation reasons.
++char *xreadlink(char *name)
++{
++	int len, size = 0;
++	char *buf = 0;
++
++	// Grow by 64 byte chunks until it's big enough.
++	for(;;) {
++		size +=64;
++		buf = xrealloc(buf, size);
++		len = readlink(name, buf, size);
++
++		if (len<0) {
++			free(buf);
++			return 0;
++		}
++		if (len<size) {
++			buf[len]=0;
++			return buf;
++		}
++	}
++}
++
+ /*
+  This might be of use or might not.  Unknown yet...
+ 
+diff --git a/lib/lib.h b/lib/lib.h
+index e2d055bc..c95a743e 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -40,7 +40,7 @@ void usage_exit(void);
+ void strlcpy(char *dest, char *src, size_t size);
+ void *xmalloc(size_t size);
+ void *xzalloc(size_t size);
+-void xrealloc(void **ptr, size_t size);
++void *xrealloc(void *ptr, size_t size);
+ void *xstrndup(char *s, size_t n);
+ void *xstrdup(char *s);
+ char *xmsprintf(char *format, ...);
+@@ -67,6 +67,7 @@ char *utoa(unsigned n);
+ char *itoa(int n);
+ long atolx(char *c);
+ off_t fdlength(int fd);
++char *xreadlink(char *name);
+ struct dirtree *read_dirtree_node(char *path);
+ struct dirtree *read_dirtree(char *path, struct dirtree *parent);
+ 
+diff --git a/toys/Config.in b/toys/Config.in
+index 5634436c..5aae5c54 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -194,6 +194,22 @@ config PWD
+ 
+ 	  The print working directory command prints the current directory.
+ 
++config READLINK
++	bool "readlink"
++	default n
++	help
++	  usage: readlink
++
++	  Show what a symbolic link points to.
++
++config READLINK_FINAL
++	bool "readlink -f"
++	default n
++	help
++	  usage: readlink [-f]
++
++	  -f         Show final location, including normal files and multiple symlinks.
++
+ config SYNC
+ 	bool "sync"
+ 	default n
+diff --git a/toys/toylist.h b/toys/toylist.h
+index d686877c..125b0376 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -94,6 +94,7 @@ USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_USR))
+ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))
+ USE_ONEIT(NEWTOY(oneit, "+<1p", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
++USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))
+ USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
+ USE_SYNC(NEWTOY(sync, NULL, TOYFLAG_BIN))
+ USE_TOUCH(NEWTOY(touch, "l#t:r:mca", TOYFLAG_BIN))
+diff --git a/toys/toysh.c b/toys/toysh.c
+index c383b89a..ef061bde 100644
+--- a/toys/toysh.c
++++ b/toys/toysh.c
+@@ -61,7 +61,7 @@ static char *parse_word(char *start, struct command **cmd)
+ 	// Allocate more space if there's no room for NULL terminator.
+ 
+ 	if (!((*cmd)->argc & 7))
+-		xrealloc((void **)cmd,
++		*cmd=xrealloc(*cmd,
+ 				sizeof(struct command) + ((*cmd)->argc+8)*sizeof(char *));
+ 	(*cmd)->argv[(*cmd)->argc] = 0;
+ 	return end;

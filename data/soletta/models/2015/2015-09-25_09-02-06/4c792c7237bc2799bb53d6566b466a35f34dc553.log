@@ -1,0 +1,154 @@
+"2015-09-25 09:02:06 -0300"
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+index 4f5e6a23..07830b69 100644
+--- a/src/lib/io/Kconfig
++++ b/src/lib/io/Kconfig
+@@ -49,6 +49,11 @@ menuconfig USE_PIN_MUX
+ 
+           If unsure, say Y.
+ 
++config USE_IIO
++    bool "Linux Industrial I/O Support"
++    depends on LINUX
++    default y
++
+ source "src/modules/pin-mux/intel-galileo-rev-d/Kconfig"
+ source "src/modules/pin-mux/intel-galileo-rev-g/Kconfig"
+ source "src/modules/pin-mux/intel-edison-rev-c/Kconfig"
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index 96d9edfd..a0a439dc 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -16,6 +16,9 @@ obj-$(USE_I2C) += \
+ obj-$(USE_SPI) += \
+     io-spi.mod
+ 
++obj-$(USE_IIO) += \
++    io-iio.mod
++
+ obj-io-aio-$(USE_AIO) := \
+     sol-aio-common.o
+ obj-io-aio-$(PLATFORM_RIOTOS) += \
+@@ -56,6 +59,9 @@ obj-io-uart-$(PLATFORM_RIOTOS) := \
+ obj-io-uart-$(PLATFORM_LINUX) := \
+     sol-uart-linux.o
+ 
++obj-io-iio-$(USE_IIO) := \
++    sol-iio.o
++
+ headers-$(USE_AIO) += \
+     include/sol-aio.h
+ headers-$(USE_GPIO) += \
+@@ -68,3 +74,5 @@ headers-$(USE_SPI) += \
+     include/sol-spi.h
+ headers-$(USE_UART) += \
+     include/sol-uart.h
++headers-$(USE_IIO) += \
++    include/sol-iio.h
+diff --git a/src/shared/sol-iio.h b/src/lib/io/include/sol-iio.h
+similarity index 100%
+rename from src/shared/sol-iio.h
+rename to src/lib/io/include/sol-iio.h
+diff --git a/src/shared/sol-iio.c b/src/lib/io/sol-iio.c
+similarity index 99%
+rename from src/shared/sol-iio.c
+rename to src/lib/io/sol-iio.c
+index d5b6b37c..4174db0d 100644
+--- a/src/shared/sol-iio.c
++++ b/src/lib/io/sol-iio.c
+@@ -613,7 +613,7 @@ iio_set_channel_offset(struct sol_iio_channel *channel, int offset)
+     return result;
+ }
+ 
+-struct sol_iio_device *
++SOL_API struct sol_iio_device *
+ sol_iio_open(int device_id, const struct sol_iio_config *config)
+ {
+     bool r;
+@@ -856,7 +856,7 @@ iio_del_channel(struct sol_iio_channel *channel)
+     free(channel);
+ }
+ 
+-void
++SOL_API void
+ sol_iio_close(struct sol_iio_device *device)
+ {
+     int i;
+@@ -893,7 +893,7 @@ read_channel_index_in_buffer(struct sol_iio_channel *channel)
+     return true;
+ }
+ 
+-struct sol_iio_channel *
++SOL_API struct sol_iio_channel *
+ sol_iio_add_channel(struct sol_iio_device *device, const char *name, const struct sol_iio_channel_config *config)
+ {
+     struct sol_iio_channel *channel;
+@@ -1022,7 +1022,7 @@ iio_read_buffer_channel_value(struct sol_iio_channel *channel, double *value)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_iio_read_channel_value(struct sol_iio_channel *channel, double *value)
+ {
+     int len;
+@@ -1071,7 +1071,7 @@ calc_channel_offset_in_buffer(const struct sol_iio_channel *channel)
+     return offset;
+ }
+ 
+-bool
++SOL_API bool
+ sol_iio_device_trigger_now(struct sol_iio_device *device)
+ {
+     char path[PATH_MAX];
+@@ -1101,7 +1101,7 @@ sol_iio_device_trigger_now(struct sol_iio_device *device)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_iio_device_start_buffer(struct sol_iio_device *device)
+ {
+     struct sol_iio_channel *channel;
+@@ -1404,7 +1404,7 @@ create_or_resolve_device_address_dispatch(void *data)
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_iio_address_device(const char *commands, void (*cb)(void *data, int device_id), const void *data)
+ {
+     struct create_and_resolve_path_data *dispatcher_data;
+@@ -1428,7 +1428,7 @@ sol_iio_address_device(const char *commands, void (*cb)(void *data, int device_i
+     return true;
+ }
+ 
+-struct sol_str_slice
++SOL_API struct sol_str_slice
+ sol_iio_read_channel_raw_buffer(struct sol_iio_channel *channel)
+ {
+     struct sol_str_slice slice = SOL_STR_SLICE_EMPTY;
+diff --git a/src/modules/flow/iio/Kconfig b/src/modules/flow/iio/Kconfig
+index 7df169cd..a5849dd6 100644
+--- a/src/modules/flow/iio/Kconfig
++++ b/src/modules/flow/iio/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_IIO
+ 	tristate "Node type: iio"
+-	depends on PLATFORM_LINUX
++	depends on USE_IIO
+ 	default m
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+index caef0459..87f0ddcf 100644
+--- a/src/shared/Makefile
++++ b/src/shared/Makefile
+@@ -20,8 +20,7 @@ obj-libshared-$(PLATFORM_LINUX) += \
+     sol-file-reader.o \
+     sol-lib-loader.o \
+     sol-util-linux.o \
+-    sol-util-file.o \
+-    sol-iio.o
++    sol-util-file.o
+ 
+ obj-libshared-$(PLATFORM_RIOTOS) += \
+     sol-util-riot.o

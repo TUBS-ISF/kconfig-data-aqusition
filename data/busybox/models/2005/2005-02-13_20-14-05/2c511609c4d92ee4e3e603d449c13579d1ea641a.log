@@ -1,0 +1,351 @@
+"2005-02-13 20:14:05 +0000"
+diff --git a/AUTHORS b/AUTHORS
+index 2bce2e849..6e29eed54 100644
+--- a/AUTHORS
++++ b/AUTHORS
+@@ -88,7 +88,8 @@ Glenn McGrath <bug1@iinet.net.au>
+ 
+ Manuel Novoa III <mjn3@codepoet.org>
+     cat, head, mkfifo, mknod, rmdir, sleep, tee, tty, uniq, usleep, wc, yes,
+-    mesg, vconfig, make_directory, parse_mode, dirname, mode_string,
++    mesg, vconfig, nice, renice,
++    make_directory, parse_mode, dirname, mode_string,
+     get_last_path_component, simplify_path, and a number trivial libbb routines
+ 
+     also bug fixes, partial rewrites, and size optimizations in
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 4aff5ce69..a299506e6 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -329,6 +329,12 @@ config CONFIG_MV
+ 	help
+ 	  mv is used to move or rename files or directories.
+ 
++config CONFIG_NICE
++	bool "nice"
++	default n
++	help
++	  nice runs a program with modified scheduling priority.
++
+ config CONFIG_OD
+ 	bool "od"
+ 	default n
+diff --git a/coreutils/Makefile.in b/coreutils/Makefile.in
+index aacb813b3..63823657f 100644
+--- a/coreutils/Makefile.in
++++ b/coreutils/Makefile.in
+@@ -58,6 +58,7 @@ COREUTILS-$(CONFIG_MKDIR)   	+= mkdir.o
+ COREUTILS-$(CONFIG_MKFIFO)  	+= mkfifo.o
+ COREUTILS-$(CONFIG_MKNOD)   	+= mknod.o
+ COREUTILS-$(CONFIG_MV)      	+= mv.o
++COREUTILS-$(CONFIG_NICE)      	+= nice.o
+ COREUTILS-$(CONFIG_OD)      	+= od.o
+ COREUTILS-$(CONFIG_PRINTF)  	+= printf.o
+ COREUTILS-$(CONFIG_PWD)     	+= pwd.o
+diff --git a/coreutils/nice.c b/coreutils/nice.c
+new file mode 100644
+index 000000000..b66f9d82d
+--- /dev/null
++++ b/coreutils/nice.c
+@@ -0,0 +1,86 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * nice implementation for busybox
++ *
++ * Copyright (C) 2005  Manuel Novoa III  <mjn3@codepoet.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ *
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <limits.h>
++#include <errno.h>
++#include <unistd.h>
++#include <sys/time.h>
++#include <sys/resource.h>
++#include "busybox.h"
++
++static inline int int_add_no_wrap(int a, int b)
++{
++	int s = a + b;
++
++	if (b < 0) {
++		if (s > a) s = INT_MIN;
++	} else {
++		if (s < a) s = INT_MAX;
++	}
++
++	return s;
++}
++
++int nice_main(int argc, char **argv)
++{
++	static const char Xetpriority_msg[] = "cannot %cet priority";
++
++	int old_priority, adjustment;
++
++	errno = 0;			 /* Needed for getpriority error detection. */
++	old_priority = getpriority(PRIO_PROCESS, 0);
++	if (errno) {
++		bb_perror_msg_and_die(Xetpriority_msg, 'g');
++	}
++
++	if (!*++argv) {	/* No args, so (GNU) output current nice value. */
++		bb_printf("%d\n", old_priority);
++		bb_fflush_stdout_and_exit(EXIT_SUCCESS);
++	}
++
++	adjustment = 10;			/* Set default adjustment. */
++
++	if ((argv[0][0] == '-') && (argv[0][1] == 'n') && !argv[0][2]) { /* "-n" */
++		if (argc < 4) {			/* Missing priority and/or utility! */
++			bb_show_usage();
++		}
++		adjustment = bb_xgetlarg(argv[1], 10, INT_MIN, INT_MAX);
++		argv += 2;
++	}
++
++	{  /* Set our priority.  Handle integer wrapping for old + adjust. */
++		int new_priority = int_add_no_wrap(old_priority, adjustment);
++
++		if (setpriority(PRIO_PROCESS, 0, new_priority) < 0) {
++			bb_perror_msg_and_die(Xetpriority_msg, 's');
++		}
++	}
++	
++	execvp(*argv, argv);		/* Now exec the desired program. */
++
++	/* The exec failed... */
++	bb_default_error_retval = (errno == ENOENT) ? 127 : 126; /* SUSv3 */
++	bb_perror_msg_and_die("%s", *argv);
++}
+diff --git a/include/applets.h b/include/applets.h
+index 90d4195cc..125703216 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -412,6 +412,9 @@
+ #ifdef CONFIG_NETSTAT
+ 	APPLET(netstat, netstat_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_NICE
++	APPLET(nice, nice_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_NSLOOKUP
+ 	APPLET(nslookup, nslookup_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index c53ead0c7..fd0f68166 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1813,6 +1813,13 @@
+ 	"\t-w raw sockets\n" \
+ 	"\t-x unix sockets"
+ 
++#define nice_trivial_usage \
++	"[-n ADJUST] [COMMAND [ARG] ...]"
++#define nice_full_usage \
++	"Nice runs a program with modified scheduling priority.\n\n" \
++	"Options:\n" \
++	"\t-n ADJUST\tAdjust the scheduling priority by ADJUST.\n" \
++
+ #define nslookup_trivial_usage \
+ 	"[HOST] [SERVER]"
+ #define nslookup_full_usage \
+@@ -2011,11 +2018,14 @@
+ 	"\t-d\t\tdelay interval for rebooting."
+ 
+ #define renice_trivial_usage \
+-	"priority pid [pid ...]"
++	"{{-n INCREMENT} | PRIORITY} [[ -p | -g | -u ] ID ...]"
+ #define renice_full_usage \
+-	"Changes priority of running processes. Allowed priorities range\n" \
+-	"from 20 (the process runs only when nothing else is running) to 0\n" \
+-	"(default priority) to -20 (almost nothing else ever gets to run)."
++	"Changes priority of running processes.\n\n" \
++	"Options:\n" \
++	"\t-n\tadjusts current nice value (smaller is faster)\n" \
++	"\t-p\tprocess id(s) (default)\n" \
++	"\t-g\tprocess group id(s)\n" \
++	"\t-u\tprocess user name(s) and/or id(s)"
+ 
+ #define reset_trivial_usage \
+ 	""
+diff --git a/procps/renice.c b/procps/renice.c
+index a6f0820df..d4ce66d2e 100644
+--- a/procps/renice.c
++++ b/procps/renice.c
+@@ -1,8 +1,8 @@
++/* vi: set sw=4 ts=4: */
+ /*
+- * Mini renice implementation for busybox
++ * renice implementation for busybox
+  *
+- *
+- * Copyright (C) 2000 Dave 'Kill a Cop' Cinege <dcinege@psychosis.com>
++ * Copyright (C) 2005  Manuel Novoa III  <mjn3@codepoet.org>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -20,35 +20,133 @@
+  *
+  */
+ 
++/* Notes:
++ *   Setting an absolute priority was obsoleted in SUSv2 and removed
++ *   in SUSv3.  However, the common linux version of renice does
++ *   absolute and not relative.  So we'll continue supporting absolute,
++ *   although the stdout logging has been removed since both SUSv2 and
++ *   SUSv3 specify that stdout isn't used.
++ *
++ *   This version is lenient in that it doesn't require any IDs.  The
++ *   options -p, -g, and -u are treated as mode switches for the
++ *   following IDs (if any).  Multiple switches are allowed.
++ */
++
+ #include <stdio.h>
+-#include <errno.h>
+ #include <stdlib.h>
++#include <string.h>
++#include <limits.h>
++#include <errno.h>
++#include <unistd.h>
+ #include <sys/time.h>
+ #include <sys/resource.h>
+ #include "busybox.h"
+ 
++#if (PRIO_PROCESS < CHAR_MIN) || (PRIO_PROCESS > CHAR_MAX)
++#error Assumption violated : PRIO_PROCESS value
++#endif
++#if (PRIO_PGRP < CHAR_MIN) || (PRIO_PGRP > CHAR_MAX)
++#error Assumption violated : PRIO_PGRP value
++#endif
++#if (PRIO_USER < CHAR_MIN) || (PRIO_USER > CHAR_MAX)
++#error Assumption violated : PRIO_USER value
++#endif
++
++static inline int int_add_no_wrap(int a, int b)
++{
++	int s = a + b;
++
++	if (b < 0) {
++		if (s > a) s = INT_MIN;
++	} else {
++		if (s < a) s = INT_MAX;
++	}
+ 
+-extern int renice_main(int argc, char **argv)
++	return s;
++}
++
++int renice_main(int argc, char **argv)
+ {
+-	int prio, status = EXIT_SUCCESS;
++	static const char Xetpriority_msg[] = "%d : %cetpriority";
++
++	int retval = EXIT_SUCCESS;
++	int which = PRIO_PROCESS;	/* Default 'which' value. */
++	int use_relative = 0;
++	int adjustment, new_priority;
++	id_t who;
+ 
+-	if (argc < 3)	bb_show_usage();
++	++argv;
+ 
+-	prio = atoi(*++argv);
+-	if (prio > 20)		prio = 20;
+-	if (prio < -20)		prio = -20;
++	/* Check if we are using a relative adjustment. */
++	if (argv[0] && (argv[0][0] == '-') && (argv[0][1] == 'n') && !argv[0][2]) {
++		use_relative = 1;
++		++argv;
++	}
++
++	if (!*argv) {				/* No args?  Then show usage. */
++		bb_show_usage();
++	}
++
++	/* Get the priority adjustment (absolute or relative). */
++	adjustment = bb_xgetlarg(*argv, 10, INT_MIN, INT_MAX);
+ 
+ 	while (*++argv) {
+-		int ps = atoi(*argv);
+-		int oldp = getpriority(PRIO_PROCESS, ps);
++		/* Check for a mode switch. */
++		if ((argv[0][0] == '-') && argv[0][1] && !argv[0][2]) {
++			static const char opts[]
++				= { 'p', 'g', 'u', 0, PRIO_PROCESS, PRIO_PGRP, PRIO_USER };
++			const char *p;
++			if ((p = strchr(opts, argv[0][1]))) {
++				which = p[4];
++				continue;
++			}
++		}
+ 
+-		if (setpriority(PRIO_PROCESS, ps, prio) == 0) {
+-			printf("%d: old priority %d, new priority %d\n", ps, oldp, prio );
++		/* Process an ID arg. */
++		if (which == PRIO_USER) {
++			struct passwd *p;
++			if (!(p = getpwnam(*argv))) {
++				bb_error_msg("unknown user: %s", *argv);
++				goto HAD_ERROR;
++			}
++			who = p->pw_uid;
+ 		} else {
+-			bb_perror_msg("%d: setpriority", ps);
+-			status = EXIT_FAILURE;
++			char *e;
++			errno = 0;
++			who = strtoul(*argv, &e, 10);
++			if (*e || (*argv == e) || errno) {
++				bb_error_msg("bad value: %s", *argv);
++				goto HAD_ERROR;
++			}
+ 		}
++
++		/* Get priority to use, and set it. */
++		if (use_relative) {
++			int old_priority;
++
++			errno = 0;	 /* Needed for getpriority error detection. */
++			old_priority = getpriority(which, who);
++			if (errno) {
++				bb_perror_msg(Xetpriority_msg, who, 'g');
++				goto HAD_ERROR;
++			}
++
++			new_priority = int_add_no_wrap(old_priority, adjustment);
++		} else {
++			new_priority = adjustment;
++		}
++
++		if (setpriority(which, who, new_priority) == 0) {
++			continue;
++		}
++
++		bb_perror_msg(Xetpriority_msg, who, 's');
++	HAD_ERROR:
++		retval = EXIT_FAILURE;
+ 	}
+ 
+-	return status;
++	/* No need to check for errors outputing to stderr since, if it
++	 * was used, the HAD_ERROR label was reached and retval was set. */
++
++	return retval;
+ }

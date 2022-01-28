@@ -1,0 +1,442 @@
+"2014-06-22 16:30:41 +0200"
+diff --git a/Config.in b/Config.in
+index b6eaea541..b83beb52d 100644
+--- a/Config.in
++++ b/Config.in
+@@ -675,6 +675,14 @@ config DEBUG_PESSIMIZE
+ 	  in a much bigger executable that more closely matches the source
+ 	  code.
+ 
++config UNIT_TEST
++	bool "Build unit tests"
++	default n
++	help
++	  Say Y here if you want to build unit tests (both the framework and
++	  test cases) as a Busybox applet. This results in bigger code, so you
++	  probably don't want this option in production builds.
++
+ config WERROR
+ 	bool "Abort compilation on any warning"
+ 	default n
+diff --git a/Makefile.custom b/Makefile.custom
+index 8c95ef2d4..f8a12831d 100644
+--- a/Makefile.custom
++++ b/Makefile.custom
+@@ -55,7 +55,11 @@ endif
+ # (cp -pPR is POSIX-compliant (cp -dpR or cp -a would not be))
+ .PHONY: check
+ .PHONY: test
++ifeq ($(CONFIG_UNIT_TEST),y)
++UNIT_CMD = ./busybox unit
++endif
+ check test: busybox busybox.links
++	$(UNIT_CMD)
+ 	test -d $(objtree)/testsuite || cp -pPR $(srctree)/testsuite $(objtree)
+ 	bindir=$(objtree) srcdir=$(srctree)/testsuite \
+ 	$(SHELL) -c "cd $(objtree)/testsuite && $(srctree)/testsuite/runtest $(if $(KBUILD_VERBOSE:0=),-v)"
+diff --git a/docs/unit-tests.txt b/docs/unit-tests.txt
+new file mode 100644
+index 000000000..0fb522086
+--- /dev/null
++++ b/docs/unit-tests.txt
+@@ -0,0 +1,50 @@
++Busybox unit test framework
++===========================
++
++This document describes what you need to do to write test cases using the
++Busybox unit test framework.
++
++
++Building unit tests
++-------------------
++
++The framework and all tests are built as a regular Busybox applet if option
++CONFIG_UNIT_TEST (found in General Configuration -> Debugging Options) is set.
++
++
++Writing test cases
++------------------
++
++Unit testing interface can be found in include/bbunit.h.
++
++Tests can be placed in any .c file in Busybox tree - preferably right next to
++the functions they test. Test cases should be enclosed within an #if, and
++should start with BBUNIT_DEFINE_TEST macro and end with BBUNIT_ENDTEST within
++the test curly brackets. If an assertion fails the test ends immediately, ie.
++the following assertions will not be reached. Any code placed after
++BBUNIT_ENDTEST is executed regardless of the test result. Here's an example:
++
++#if ENABLE_UNIT_TEST
++
++BBUNIT_DEFINE_TEST(test_name)
++{
++	int *i;
++
++	i = malloc(sizeof(int));
++	BBUNIT_ASSERT_NOTNULL(i);
++	*i = 2;
++	BBUNIT_ASSERT_EQ((*i)*(*i), 4);
++
++	BBUNIT_ENDTEST;
++
++	free(i);
++}
++
++#endif /* ENABLE_UNIT_TEST */
++
++
++Running the unit test suite
++---------------------------
++
++To run the tests you can either directly run 'busybox unit' or use 'make test'
++to run both the unit tests (if compiled) and regular test suite.
+diff --git a/include/libbb.h b/include/libbb.h
+index 7a3610bb9..cede50cc2 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -1941,6 +1941,141 @@ static ALWAYS_INLINE unsigned char bb_ascii_tolower(unsigned char a)
+ #define isprint_asciionly(a) ((unsigned)((a) - 0x20) <= 0x7e - 0x20)
+ 
+ 
++/* Simple unit-testing framework */
++
++typedef void (*bbunit_testfunc)(void);
++
++struct bbunit_listelem {
++	struct bbunit_listelem* next;
++	const char* name;
++	bbunit_testfunc testfunc;
++};
++
++void bbunit_registertest(struct bbunit_listelem* test);
++void bbunit_settestfailed(void);
++
++#define BBUNIT_DEFINE_TEST(NAME) \
++	static void bbunit_##NAME##_test(void); \
++	static struct bbunit_listelem bbunit_##NAME##_elem = { \
++		.name = #NAME, \
++		.testfunc = bbunit_##NAME##_test, \
++	}; \
++	static void INIT_LAST bbunit_##NAME##_register(void) \
++	{ \
++		bbunit_registertest(&bbunit_##NAME##_elem); \
++	} \
++	static void bbunit_##NAME##_test(void)
++
++/*
++ * Both 'goto bbunit_end' and 'break' are here only to get rid
++ * of compiler warnings.
++ */
++#define BBUNIT_ENDTEST \
++	do { \
++		goto bbunit_end; \
++	bbunit_end: \
++		break; \
++	} while (0)
++
++#define BBUNIT_PRINTASSERTFAIL \
++	do { \
++		bb_error_msg( \
++			"[ERROR] Assertion failed in file %s, line %d", \
++			__FILE__, __LINE__); \
++	} while (0)
++
++#define BBUNIT_ASSERTION_FAILED \
++	do { \
++		bbunit_settestfailed(); \
++		goto bbunit_end; \
++	} while (0)
++
++/*
++ * Assertions.
++ * For now we only offer assertions which cause tests to fail
++ * immediately. In the future 'expects' might be added too -
++ * similar to those offered by the gtest framework.
++ */
++#define BBUNIT_ASSERT_EQ(EXPECTED, ACTUAL) \
++	do { \
++		if ((EXPECTED) != (ACTUAL)) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] '%s' isn't equal to '%s'", \
++						#EXPECTED, #ACTUAL); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_NOTEQ(EXPECTED, ACTUAL) \
++	do { \
++		if ((EXPECTED) == (ACTUAL)) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] '%s' is equal to '%s'", \
++						#EXPECTED, #ACTUAL); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_NOTNULL(PTR) \
++	do { \
++		if ((PTR) == NULL) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] '%s' is NULL!", #PTR); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_NULL(PTR) \
++	do { \
++		if ((PTR) != NULL) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] '%s' is not NULL!", #PTR); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_FALSE(STATEMENT) \
++	do { \
++		if ((STATEMENT)) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] Statement '%s' evaluated to true!", \
++								#STATEMENT); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_TRUE(STATEMENT) \
++	do { \
++		if (!(STATEMENT)) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] Statement '%s' evaluated to false!", \
++					#STATEMENT); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_STREQ(STR1, STR2) \
++	do { \
++		if (strcmp(STR1, STR2) != 0) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] Strings '%s' and '%s' " \
++					"are not the same", STR1, STR2); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++#define BBUNIT_ASSERT_STRNOTEQ(STR1, STR2) \
++	do { \
++		if (strcmp(STR1, STR2) == 0) { \
++			BBUNIT_PRINTASSERTFAIL; \
++			bb_error_msg("[ERROR] Strings '%s' and '%s' " \
++					"are the same, but were " \
++					"expected to differ", STR1, STR2); \
++			BBUNIT_ASSERTION_FAILED; \
++		} \
++	} while (0)
++
++
+ POP_SAVED_FUNCTION_VISIBILITY
+ 
+ #endif
+diff --git a/include/platform.h b/include/platform.h
+index 92f775551..413c2224c 100644
+--- a/include/platform.h
++++ b/include/platform.h
+@@ -76,6 +76,9 @@
+ # define UNUSED_PARAM_RESULT
+ #endif
+ 
++/* used by unit test machinery to run registration functions */
++#define INIT_LAST __attribute__ ((constructor(2000)))
++
+ /* -fwhole-program makes all symbols local. The attribute externally_visible
+  * forces a symbol global.  */
+ #if __GNUC_PREREQ(4,1)
+diff --git a/libbb/bbunit.c b/libbb/bbunit.c
+new file mode 100644
+index 000000000..256014441
+--- /dev/null
++++ b/libbb/bbunit.c
+@@ -0,0 +1,90 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * bbunit: Simple unit-testing framework for Busybox.
++ *
++ * Copyright (C) 2014 by Bartosz Golaszewski <bartekgola@gmail.com>
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this source tree.
++ */
++
++//kbuild:lib-$(CONFIG_UNIT_TEST) += bbunit.o
++//applet:IF_UNIT_TEST(APPLET(unit, BB_DIR_USR_BIN, BB_SUID_DROP))
++
++//usage:#define unit_trivial_usage
++//usage:       ""
++//usage:#define unit_full_usage "\n\n"
++//usage:       "Run the unit-test suite"
++
++#include "libbb.h"
++
++#define WANT_TIMING 0
++
++static llist_t *tests = NULL;
++static unsigned tests_registered = 0;
++static int test_retval;
++
++void bbunit_registertest(struct bbunit_listelem *test)
++{
++	llist_add_to_end(&tests, test);
++	tests_registered++;
++}
++
++void bbunit_settestfailed(void)
++{
++	test_retval = -1;
++}
++
++#if WANT_TIMING
++static void timeval_diff(struct timeval* res,
++				const struct timeval* x,
++				const struct timeval* y)
++{
++	long udiff = x->tv_usec - y->tv_usec;
++
++	res->tv_sec = x->tv_sec - y->tv_sec - (udiff < 0);
++	res->tv_usec = (udiff >= 0 ? udiff : udiff + 1000000);
++}
++#endif
++
++int unit_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) MAIN_EXTERNALLY_VISIBLE;
++int unit_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
++{
++	unsigned tests_run = 0;
++	unsigned tests_failed = 0;
++#if WANT_TIMING
++	struct timeval begin;
++	struct timeval end;
++	struct timeval time_spent;
++	gettimeofday(&begin, NULL);
++#endif
++
++	bb_error_msg("Running %d test(s)...", tests_registered);
++	for (;;) {
++		struct bbunit_listelem* el = llist_pop(&tests);
++		if (!el)
++			break;
++		bb_error_msg("Case: [%s]", el->name);
++		test_retval = 0;
++		el->testfunc();
++		if (test_retval < 0) {
++			bb_error_msg("[ERROR] [%s]: TEST FAILED", el->name);
++			tests_failed++;
++		}
++		tests_run++;
++		el = el->next;
++	}
++
++#if WANT_TIMING
++	gettimeofday(&end, NULL);
++	timeval_diff(&time_spent, &end, &begin);
++	bb_error_msg("Elapsed time %u.%06u seconds"
++			(int)time_spent.tv_sec,
++			(int)time_spent.tv_usec);
++#endif
++	if (tests_failed > 0) {
++		bb_error_msg("[ERROR] %u test(s) FAILED", tests_failed);
++		return EXIT_FAILURE;
++	}
++	bb_error_msg("All tests passed");
++	return EXIT_SUCCESS;
++}
+diff --git a/libbb/obscure.c b/libbb/obscure.c
+index 24c4ac917..ad17d1ff1 100644
+--- a/libbb/obscure.c
++++ b/libbb/obscure.c
+@@ -182,3 +182,41 @@ int FAST_FUNC obscure(const char *old, const char *newval, const struct passwd *
+ 	}
+ 	return 0;
+ }
++
++#if ENABLE_UNIT_TEST
++
++/* Test obscure_msg() instead of obscure() in order not to print anything. */
++
++static const struct passwd pw = {
++	.pw_name = (char *)"johndoe",
++	.pw_gecos = (char *)"John Doe",
++};
++
++BBUNIT_DEFINE_TEST(obscure_weak_pass)
++{
++	/* Empty password */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "", &pw));
++	/* Pure numbers */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "23577315", &pw));
++	/* Similar to pw_name */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "johndoe123%", &pw));
++	/* Similar to pw_gecos, reversed */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "eoD nhoJ^44@", &pw));
++	/* Similar to the old password */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "d4#21?'S", &pw));
++	/* adjacent letters */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "qwerty123", &pw));
++	/* Many similar chars */
++	BBUNIT_ASSERT_NOTNULL(obscure_msg("Ad4#21?'S|", "^33Daaaaaa1", &pw));
++
++	BBUNIT_ENDTEST;
++}
++
++BBUNIT_DEFINE_TEST(obscure_strong_pass)
++{
++	BBUNIT_ASSERT_NULL(obscure_msg("Rt4##2&:'|", "}(^#rrSX3S*22", &pw));
++
++	BBUNIT_ENDTEST;
++}
++
++#endif /* ENABLE_UNIT_TEST */
+diff --git a/libbb/strrstr.c b/libbb/strrstr.c
+index d8823fc51..93d970a1b 100644
+--- a/libbb/strrstr.c
++++ b/libbb/strrstr.c
+@@ -7,13 +7,7 @@
+  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
+  */
+ 
+-#ifdef __DO_STRRSTR_TEST
+-#include <stdlib.h>
+-#include <string.h>
+-#include <stdio.h>
+-#else
+ #include "libbb.h"
+-#endif
+ 
+ /*
+  * The strrstr() function finds the last occurrence of the substring needle
+@@ -34,8 +28,9 @@ char* FAST_FUNC strrstr(const char *haystack, const char *needle)
+ 	}
+ }
+ 
+-#ifdef __DO_STRRSTR_TEST
+-int main(int argc, char **argv)
++#if ENABLE_UNIT_TEST
++
++BBUNIT_DEFINE_TEST(strrstr)
+ {
+ 	static const struct {
+ 		const char *h, *n;
+@@ -59,13 +54,13 @@ int main(int argc, char **argv)
+ 	i = 0;
+ 	while (i < sizeof(test_array) / sizeof(test_array[0])) {
+ 		const char *r = strrstr(test_array[i].h, test_array[i].n);
+-		printf("'%s' vs. '%s': '%s' - ", test_array[i].h, test_array[i].n, r);
+ 		if (r == NULL)
+ 			r = test_array[i].h - 1;
+-		printf("%s\n", r == test_array[i].h + test_array[i].pos ? "PASSED" : "FAILED");
++		BBUNIT_ASSERT_EQ(r, test_array[i].h + test_array[i].pos);
+ 		i++;
+ 	}
+ 
+-	return 0;
++	BBUNIT_ENDTEST;
+ }
+-#endif
++
++#endif /* ENABLE_UNIT_TEST */

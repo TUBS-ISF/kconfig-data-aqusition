@@ -1,0 +1,256 @@
+"2006-11-17 18:58:16 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index c4c75a83f..78fa68861 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -246,6 +246,8 @@ USE_RPM(APPLET(rpm, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_RPM2CPIO(APPLET(rpm2cpio, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_RUN_PARTS(APPLET_ODDNAME(run-parts, run_parts, _BB_DIR_BIN, _BB_SUID_NEVER, run_parts))
+ USE_RUNLEVEL(APPLET(runlevel, _BB_DIR_SBIN, _BB_SUID_NEVER))
++USE_RUNSV(APPLET(runsv, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_RUNSVDIR(APPLET(runsvdir, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_RX(APPLET(rx, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SED(APPLET(sed, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SEQ(APPLET(seq, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+@@ -270,6 +272,7 @@ USE_STTY(APPLET(stty, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SU(APPLET(su, _BB_DIR_BIN, _BB_SUID_ALWAYS))
+ USE_SULOGIN(APPLET(sulogin, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_SUM(APPLET(sum, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_SV(APPLET(sv, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SVLOGD(APPLET(svlogd, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SWAPONOFF(APPLET_ODDNAME(swapoff, swap_on_off, _BB_DIR_SBIN, _BB_SUID_NEVER,swapoff))
+ USE_SWAPONOFF(APPLET_ODDNAME(swapon, swap_on_off, _BB_DIR_SBIN, _BB_SUID_NEVER, swapon))
+diff --git a/include/usage.h b/include/usage.h
+index f1b4b351a..77986fea7 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2571,6 +2571,16 @@ USE_FEATURE_MDEV_CONFIG( \
+ 	"$ runlevel /var/run/utmp\n" \
+ 	"N 2"
+ 
++#define runsv_trivial_usage \
++	"dir"
++#define runsv_full_usage \
++	"Start and monitor a service and optionally an appendant log service."
++
++#define runsvdir_trivial_usage \
++	"[-P] dir"
++#define runsvdir_full_usage \
++	"Start a runsv process for each subdirectory."
++
+ #define rx_trivial_usage \
+ 	"FILE"
+ #define rx_full_usage \
+@@ -2844,6 +2854,12 @@ USE_FEATURE_START_STOP_DAEMON_FANCY( \
+ 	"\t-r\tuse BSD sum algorithm (1K blocks)\n" \
+ 	"\t-s\tuse System V sum algorithm (512byte blocks)"
+ 
++#define sv_trivial_usage \
++	"[-v] [-w sec] command service..."
++#define sv_full_usage \
++	"Report the current status and control the state of services " \
++	"monitored by the runsv supervisor."
++
+ #define svlogd_trivial_usage \
+ 	"[-ttv] [-r c] [-R abc] [-l len] [-b buflen] dir..."
+ #define svlogd_full_usage \
+diff --git a/runit/Config.in b/runit/Config.in
+index c849c074c..8a7deea72 100644
+--- a/runit/Config.in
++++ b/runit/Config.in
+@@ -5,6 +5,28 @@
+ 
+ menu "Runit Utilities"
+ 
++config RUNSV
++	bool "runsv"
++	default n
++	help
++	  runsv starts and monitors a service and optionally an appendant log
++	  service.
++
++config RUNSVDIR
++	bool "runsvdir"
++	default n
++	help
++	  runsvdir starts a runsv process for each subdirectory, or symlink to
++	  a directory, in the services directory dir, up to a limit of 1000
++	  subdirectories, and restarts a runsv process if it terminates.
++
++config SV
++	bool "sv"
++	default n
++	help
++	  sv reports the current status and controls the state of services
++	  monitored by the runsv supervisor.
++
+ config SVLOGD
+ 	bool "svlogd"
+ 	default n
+diff --git a/runit/Kbuild b/runit/Kbuild
+index 730035632..ad1706cb6 100644
+--- a/runit/Kbuild
++++ b/runit/Kbuild
+@@ -5,5 +5,8 @@
+ # Licensed under the GPL v2, see the file LICENSE in this tarball.
+ 
+ lib-y:=
+-lib-$(CONFIG_CHPST) += chpst.o
++lib-$(CONFIG_RUNSV) += runsv.o runit_lib.o
++lib-$(CONFIG_RUNSVDIR) += runsvdir.o runit_lib.o
++lib-$(CONFIG_SV) += sv.o runit_lib.o
+ lib-$(CONFIG_SVLOGD) += svlogd.o runit_lib.o
++lib-$(CONFIG_CHPST) += chpst.o
+diff --git a/runit/runit_lib.c b/runit/runit_lib.c
+index 322bef858..c95d641f1 100644
+--- a/runit/runit_lib.c
++++ b/runit/runit_lib.c
+@@ -519,6 +519,7 @@ void taia_uint(struct taia *t,unsigned s)
+ 
+ 
+ /*** stralloc_cat.c ***/
++#if 0
+ 
+ int stralloc_cat(stralloc *sato,const stralloc *safrom)
+ {
+@@ -577,6 +578,7 @@ int stralloc_copys(stralloc *sa,const char *s)
+ 
+ GEN_ALLOC_append(stralloc,char,s,len,a,i,n,x,30,stralloc_readyplus,stralloc_append)
+ 
++#endif /* stralloc */
+ 
+ /*** iopause.c ***/
+ 
+@@ -643,7 +645,7 @@ int ndelay_on(int fd)
+ 
+ int open_append(const char *fn)
+ {
+-	return open(fn,O_WRONLY | O_NDELAY | O_APPEND | O_CREAT,0600);
++	return open(fn, O_WRONLY|O_NDELAY|O_APPEND|O_CREAT, 0600);
+ }
+ 
+ 
+@@ -651,7 +653,7 @@ int open_append(const char *fn)
+ 
+ int open_read(const char *fn)
+ {
+-	return open(fn,O_RDONLY | O_NDELAY);
++	return open(fn, O_RDONLY|O_NDELAY);
+ }
+ 
+ 
+@@ -667,12 +669,12 @@ int open_trunc(const char *fn)
+ 
+ int open_write(const char *fn)
+ {
+-	return open(fn,O_WRONLY | O_NDELAY);
++	return open(fn, O_WRONLY|O_NDELAY);
+ }
+ 
+ 
+ /*** openreadclose.c ***/
+-
++#if 0
+ int openreadclose(const char *fn,stralloc *sa,unsigned bufsize)
+ {
+ 	int fd;
+@@ -684,10 +686,11 @@ int openreadclose(const char *fn,stralloc *sa,unsigned bufsize)
+ 	if (readclose(fd,sa,bufsize) == -1) return -1;
+ 	return 1;
+ }
++#endif
+ 
+ 
+ /*** pathexec_env.c ***/
+-
++#if 0
+ static stralloc plus;
+ static stralloc tmp;
+ 
+@@ -748,10 +751,10 @@ void pathexec(char **argv)
+ 	pathexec_run(*argv,argv,e);
+ 	free(e);
+ }
+-
++#endif
+ 
+ /*** pathexec_run.c ***/
+-
++#if 0
+ static stralloc tmp;
+ 
+ void pathexec_run(const char *file,char *const *argv,char *const *envp)
+@@ -792,7 +795,7 @@ void pathexec_run(const char *file,char *const *argv,char *const *envp)
+ 		path += 1;
+ 	}
+ }
+-
++#endif
+ 
+ /*** pmatch.c ***/
+ 
+@@ -853,7 +856,7 @@ int prot_uid(int uid)
+ 
+ 
+ /*** readclose.c ***/
+-
++#if 0
+ int readclose_append(int fd,stralloc *sa,unsigned bufsize)
+ {
+ 	int r;
+@@ -871,7 +874,7 @@ int readclose(int fd,stralloc *sa,unsigned bufsize)
+ 	if (!stralloc_copys(sa,"")) { close(fd); return -1; }
+ 	return readclose_append(fd,sa,bufsize);
+ }
+-
++#endif
+ 
+ /*** scan_ulong.c ***/
+ 
+diff --git a/runit/runit_lib.h b/runit/runit_lib.h
+index d306164ea..1f911919d 100644
+--- a/runit/runit_lib.h
++++ b/runit/runit_lib.h
+@@ -233,7 +233,7 @@ int ta_append(ta *x,const type *i) \
+ 
+ 
+ /*** stralloc.h ***/
+-
++#if 0
+ GEN_ALLOC_typedef(stralloc,char,s,len,a)
+ 
+ extern int stralloc_ready(stralloc *,unsigned);
+@@ -256,7 +256,7 @@ extern int stralloc_catlong0(stralloc *,long,unsigned);
+ #define stralloc_catuint0(sa,i,n) (stralloc_catulong0((sa),(i),(n)))
+ #define stralloc_catint0(sa,i,n) (stralloc_catlong0((sa),(i),(n)))
+ #define stralloc_catint(sa,i) (stralloc_catlong0((sa),(i),0))
+-
++#endif
+ 
+ /*** iopause.h ***/
+ 
+@@ -290,9 +290,9 @@ extern int open_write(const char *);
+ 
+ 
+ /*** openreadclose.h ***/
+-
++#if 0
+ extern int openreadclose(const char *,stralloc *,unsigned);
+-
++#endif
+ 
+ /*** pathexec.h ***/
+ 
+@@ -313,10 +313,10 @@ extern int prot_uid(int);
+ 
+ 
+ /*** readclose.h ***/
+-
++#if 0
+ extern int readclose_append(int,stralloc *,unsigned);
+ extern int readclose(int,stralloc *,unsigned);
+-
++#endif
+ 
+ /*** scan.h ***/
+ 

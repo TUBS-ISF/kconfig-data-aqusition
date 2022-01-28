@@ -1,0 +1,144 @@
+"2008-10-06 08:55:23 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 87cd21af7..088a8838e 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -802,8 +802,6 @@ config UCLIBC_SV4_DEPRECATED
+ config UCLIBC_HAS_REALTIME
+ 	bool "Realtime-related family of SUSv functions"
+ 	default y
+-	# glitch in mq_{send,receive} currently forces this on
+-	select UCLIBC_HAS_ADVANCED_REALTIME
+ 	help
+ 	  These functions are part of the Timers option and need not
+ 	  be available on all implementations.
+diff --git a/librt/mq_receive.c b/librt/mq_receive.c
+index 3da88f391..c0392b0f9 100644
+--- a/librt/mq_receive.c
++++ b/librt/mq_receive.c
+@@ -6,16 +6,13 @@
+ #include <stddef.h>
+ #include <sys/syscall.h>
+ #include <mqueue.h>
+-#warning FIXME: hard dependency on ADVANCED REALTIME feature
+ 
+-librt_hidden_proto(mq_timedreceive)
+ #ifdef __NR_mq_timedreceive
+ #define __NR___syscall_mq_timedreceive __NR_mq_timedreceive
+-static __inline__ _syscall5(int, __syscall_mq_timedreceive, int, mqdes,
+-			char *, msg_ptr, size_t, msg_len, unsigned int *,
+-			msg_prio, const void *, abs_timeout);
+-#endif
+-
++static _syscall5(int, __syscall_mq_timedreceive, int, mqdes,
++		 char *, msg_ptr, size_t, msg_len, unsigned int *,
++		 msg_prio, const void *, abs_timeout)
++# if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /*
+  * Receive the oldest from highest priority messages.
+  * Stop waiting if abs_timeout expires.
+@@ -24,20 +21,31 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *msg_ptr, size_t msg_len,
+ 			unsigned int *msg_prio,
+ 			const struct timespec *abs_timeout)
+ {
+-#ifdef __NR_mq_timedreceive
+ 	return __syscall_mq_timedreceive(mqdes, msg_ptr, msg_len, msg_prio,
+ 					 abs_timeout);
+-#else
+-	errno = ENOSYS;
+-	return -1;
+-#endif
+ }
+-
+-librt_hidden_def(mq_timedreceive)
++# endif
+ 
+ /* Receive the oldest from highest priority messages */
+ ssize_t mq_receive(mqd_t mqdes, char *msg_ptr, size_t msg_len,
+ 		   unsigned int *msg_prio)
+ {
+-	return mq_timedreceive(mqdes, msg_ptr, msg_len, msg_prio, NULL);
++	return __syscall_mq_timedreceive(mqdes, msg_ptr, msg_len, msg_prio, NULL);
+ }
++#elif defined __UCLIBC_HAS_STUBS__
++# if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
++ssize_t mq_timedreceive(mqd_t mqdes attribute_unused, char *msg_ptr attribute_unused,
++			size_t msg_len attribute_unused, unsigned int *msg_prio attribute_unused,
++			const struct timespec *abs_timeout attribute_unused)
++{
++	__set_errno(ENOSYS);
++	return -1;
++}
++# endif
++ssize_t mq_receive(mqd_t mqdes attribute_unused, char *msg_ptr attribute_unused,
++		   size_t msg_len attribute_unused, unsigned int *msg_prio attribute_unused)
++{
++	__set_errno(ENOSYS);
++	return -1;
++}
++#endif
+diff --git a/librt/mq_send.c b/librt/mq_send.c
+index 446ecc89a..4c1a492b4 100644
+--- a/librt/mq_send.c
++++ b/librt/mq_send.c
+@@ -6,16 +6,14 @@
+ #include <stddef.h>
+ #include <sys/syscall.h>
+ #include <mqueue.h>
+-#warning FIXME: hard dependency on ADVANCED REALTIME feature
+ 
+-librt_hidden_proto(mq_timedsend)
+ #ifdef __NR_mq_timedsend
+ #define __NR___syscall_mq_timedsend __NR_mq_timedsend
+-static __inline__ _syscall5(int, __syscall_mq_timedsend, int, mqdes,
+-			const char *, msg_ptr, size_t, msg_len, unsigned int,
+-			msg_prio, const void *, abs_timeout);
+-#endif
++static _syscall5(int, __syscall_mq_timedsend, int, mqdes,
++		 const char *, msg_ptr, size_t, msg_len, unsigned int,
++		 msg_prio, const void *, abs_timeout);
+ 
++# if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /*
+  * Add a message to queue. If O_NONBLOCK is set and queue is full, wait
+  * for sufficient room in the queue until abs_timeout expires.
+@@ -23,20 +21,31 @@ static __inline__ _syscall5(int, __syscall_mq_timedsend, int, mqdes,
+ int mq_timedsend(mqd_t mqdes, const char *msg_ptr, size_t msg_len,
+ 		 unsigned int msg_prio, const struct timespec *abs_timeout)
+ {
+-#ifdef __NR_mq_timedsend
+ 	return __syscall_mq_timedsend(mqdes, msg_ptr, msg_len, msg_prio,
+ 				      abs_timeout);
+-#else
+-	errno = ENOSYS;
+-	return -1;
+-#endif
+ }
+-
+-librt_hidden_def(mq_timedsend)
++# endif
+ 
+ /* Add a message to queue */
+ int mq_send(mqd_t mqdes, const char *msg_ptr, size_t msg_len,
+ 	    unsigned int msg_prio)
+ {
+-	return mq_timedsend(mqdes, msg_ptr, msg_len, msg_prio, NULL);
++	return __syscall_mq_timedsend(mqdes, msg_ptr, msg_len, msg_prio, NULL);
++}
++#elif defined __UCLIBC_HAS_STUBS__
++# if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
++int mq_timedsend(mqd_t mqdes attribute_unused, const char *msg_ptr attribute_unused,
++		 size_t msg_len attribute_unused, unsigned int msg_prio attribute_unused,
++		 const struct timespec *abs_timeout attribute_unused)
++{
++	__set_errno(ENOSYS);
++	return -1;
++}
++# endif
++int mq_send(mqd_t mqdes attribute_unused, const char *msg_ptr attribute_unused,
++	    size_t msg_len attribute_unused, unsigned int msg_prio attribute_unused)
++{
++	__set_errno(ENOSYS);
++	return -1;
+ }
++#endif

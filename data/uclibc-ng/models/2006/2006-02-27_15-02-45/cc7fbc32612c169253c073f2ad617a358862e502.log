@@ -1,0 +1,76 @@
+"2006-02-27 15:02:45 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index b0334d078..bc57a730a 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1086,6 +1086,14 @@ config UCLIBC_HAS_GNU_GETOPT
+ 
+ 	  Most people will answer Y.
+ 
++config UCLIBC_HAS_GNU_GETSUBOPT
++	bool "Support glibc getsubopt"
++	default y
++	help
++	  Answer Y if you want to include glibc getsubopt() instead of a
++	  smaller SUSv3 compatible getsubopt().
++
++	  Most people will answer Y.
+ endmenu
+ 
+ 
+diff --git a/libc/unistd/Makefile.in b/libc/unistd/Makefile.in
+index 4a0bb0734..5bd612465 100644
+--- a/libc/unistd/Makefile.in
++++ b/libc/unistd/Makefile.in
+@@ -24,6 +24,12 @@ else
+ CSRC := $(filter-out getopt.c,$(CSRC))
+ endif
+ 
++ifeq ($(UCLIBC_HAS_GNU_GETSUBOPT),y)
++CSRC := $(filter-out getsubopt-susv3.c,$(CSRC))
++else
++CSRC := $(filter-out getsubopt.c,$(CSRC))
++endif
++
+ ifeq ($(UCLIBC_HAS_THREADS_NATIVE),y)
+ CSRC := $(filter-out sleep.c,$(CSRC))
+ endif
+diff --git a/libc/unistd/getsubopt-susv3.c b/libc/unistd/getsubopt-susv3.c
+new file mode 100644
+index 000000000..464223c42
+--- /dev/null
++++ b/libc/unistd/getsubopt-susv3.c
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (C) 2006 Rich Felker <dalias@aerifal.cx>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <stdlib.h>
++#include <string.h>
++
++libc_hidden_proto(strchr)
++libc_hidden_proto(strlen)
++libc_hidden_proto(strncmp)
++
++int getsubopt(char **opt, char *const *keys, char **val)
++{
++	char *s = *opt;
++	int i;
++
++	*val = NULL;
++	*opt = strchr(s, ',');
++	if (*opt) *(*opt)++ = 0;
++	else *opt = s + strlen(s);
++
++	for (i=0; keys[i]; i++) {
++		size_t l = strlen(keys[i]);
++		if (strncmp(keys[i], s, l)) continue;
++		if (s[l] == '=')
++			*val = s + l;
++		else if (s[l]) continue;
++		return i;
++	}
++	return -1;
++}

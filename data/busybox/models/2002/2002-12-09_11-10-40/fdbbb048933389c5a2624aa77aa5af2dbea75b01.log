@@ -1,0 +1,234 @@
+"2002-12-09 11:10:40 +0000"
+diff --git a/shell/Config.in b/shell/Config.in
+index 69f848272..b643c8f3d 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -3,7 +3,7 @@
+ # see scripts/kbuild/config-language.txt.
+ #
+ 
+-menu "Bourne Shell"
++menu "Another Bourne-like Shell"
+ 
+ choice
+ 	prompt "Choose your default shell"
+@@ -95,12 +95,6 @@ config CONFIG_ASH_OPTIMIZE_FOR_SIZE
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
+-config CONFIG_FEATURE_COMMAND_SAVEHISTORY
+-	bool "  history saving"
+-	default n
+-	depends on CONFIG_ASH
+-	help
+-	  Please submit a patch to add help text for this item.
+ 
+ if CONFIG_FEATURE_SH_IS_HUSH
+ 	config CONFIG_HUSH
+@@ -158,6 +152,13 @@ config CONFIG_FEATURE_COMMAND_EDITING
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
++config CONFIG_FEATURE_COMMAND_SAVEHISTORY
++	bool "  history saving"
++	default n
++	depends on CONFIG_ASH
++	help
++	  Please submit a patch to add help text for this item.
++
+ config CONFIG_FEATURE_COMMAND_TAB_COMPLETION
+ 	bool "tab completion"
+ 	default n
+diff --git a/shell/ash.c b/shell/ash.c
+index bec37cfcc..715169053 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -1196,6 +1196,10 @@ static struct var vlc_all;
+ static struct var vlc_ctype;
+ #endif
+ 
++#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
++static struct var vhistfile;
++#endif
++
+ struct varinit {
+ 	struct var *var;
+ 	int flags;
+@@ -1241,6 +1245,10 @@ static const struct varinit varinit[] = {
+ 	 change_lc_all},
+ 	{&vlc_ctype, VSTRFIXED | VTEXTFIXED | VUNSET, "LC_CTYPE=",
+ 	 change_lc_ctype},
++#endif
++#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
++	{&vhistfile, VSTRFIXED | VTEXTFIXED | VUNSET, "HISTFILE=",
++	 NULL},
+ #endif
+ 	{NULL, 0, NULL,
+ 	 NULL}
+@@ -7312,6 +7320,20 @@ int ash_main(int argc, char **argv)
+ 	init();
+ 	setstackmark(&smark);
+ 	procargs(argc, argv);
++#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
++	if ( iflag ) {
++		const char *hp = lookupvar("HISTFILE");
++
++		if(hp == NULL ) {
++			hp = lookupvar("HOME");
++			if(hp != NULL) {
++				char *defhp = concat_path_file(hp, ".ash_history");
++				setvar("HISTFILE", defhp, 0);
++				free(defhp);
++			}
++		}
++	}
++#endif
+ 	if (argv[0] && argv[0][0] == '-')
+ 		isloginsh = 1;
+ 	if (isloginsh) {
+@@ -7357,8 +7379,12 @@ int ash_main(int argc, char **argv)
+ 	if (sflag || minusc == NULL) {
+ 	  state4:			/* XXX ??? - why isn't this before the "if" statement */
+ #ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
+-	    if ( iflag )
+-	    	load_history ( ".ash_history" );
++	    if ( iflag ) {
++		const char *hp = lookupvar("HISTFILE");
++
++		if(hp != NULL )
++			load_history ( hp );
++	    }
+ #endif
+ 		cmdloop(1);
+ 	}
+@@ -7550,10 +7576,6 @@ static int exitcmd(int argc, char **argv)
+ {
+ 	if (stoppedjobs())
+ 		return 0;
+-#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
+-	if ( iflag )
+-		save_history ( ".ash_history" );
+-#endif			
+ 		
+ 	if (argc > 1)
+ 		exitstatus = number(argv[1]);
+@@ -11615,12 +11637,22 @@ static void exitshell(int status)
+ 		trap[0] = NULL;
+ 		evalstring(p, 0);
+ 	}
+-  l1:handler = &loc2;	/* probably unnecessary */
++l1:
++	handler = &loc2;   /* probably unnecessary */
+ 	flushall();
+ #ifdef CONFIG_ASH_JOB_CONTROL
+ 	setjobctl(0);
+ #endif
+-  l2:_exit(status);
++#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
++	if (iflag && rootshell) {
++		const char *hp = lookupvar("HISTFILE");
++
++		if(hp != NULL )
++			save_history ( hp );
++	}
++#endif
++l2:
++	_exit(status);
+ 	/* NOTREACHED */
+ }
+ 
+diff --git a/shell/cmdedit.c b/shell/cmdedit.c
+index 73378e659..2e102e351 100644
+--- a/shell/cmdedit.c
++++ b/shell/cmdedit.c
+@@ -1131,40 +1131,44 @@ static int get_next_history(void)
+ 	}
+ }
+ 
+-
+-extern void load_history ( char *fromfile )
+-{
+ #ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
++extern void load_history ( const char *fromfile )
++{
+ 	FILE *fp;
++	int hi;
+ 
+-	// cleanup old
+-	while ( n_history ) {
+-		if ( history [n_history - 1] )
+-			free ( history [n_history - 1] );
+-		n_history--;
++	/* cleanup old */
++
++	for(hi = n_history; hi > 0; ) {
++		hi--;
++		free ( history [hi] );
+ 	}
+ 
+ 	if (( fp = fopen ( fromfile, "r" ))) {
+-		char buffer [256];
+-		int i, l;
+ 	
+-		for ( i = 0; i < MAX_HISTORY; i++ ) {
+-			if ( !fgets ( buffer, sizeof( buffer ) - 1, fp ))
++		for ( hi = 0; hi < MAX_HISTORY; ) {
++			char * hl = get_line_from_file(fp);
++			int l;
++
++			if(!hl)
+ 				break;
+-			l = xstrlen	( buffer );
+-			if ( l && buffer [l - 1] == '\n' )
+-				buffer [l - 1] = 0;
+-			history [n_history++] = xstrdup ( buffer );
++			chomp(hl);
++			l = strlen(hl);
++			if(l >= BUFSIZ)
++				hl[BUFSIZ-1] = 0;
++			if(l == 0 || hl[0] == ' ') {
++				free(hl);
++				continue;
++			}
++			history [hi++] = hl;
+ 		}
+ 		fclose ( fp );
+ 	}
+-	cur_history = n_history;
+-#endif
++	cur_history = n_history = hi;
+ }
+ 
+-extern void save_history ( char *tofile )
++extern void save_history ( const char *tofile )
+ {
+-#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
+ 	FILE *fp = fopen ( tofile, "w" );
+ 	
+ 	if ( fp ) {
+@@ -1176,8 +1180,8 @@ extern void save_history ( char *tofile )
+ 		}
+ 		fclose ( fp );
+ 	}
+-#endif
+ }
++#endif
+ 
+ #endif
+ 
+diff --git a/shell/cmdedit.h b/shell/cmdedit.h
+index 045588dc1..991dafcd1 100644
+--- a/shell/cmdedit.h
++++ b/shell/cmdedit.h
+@@ -3,7 +3,9 @@
+ 
+ int     cmdedit_read_input(char* promptStr, char* command);
+ 
+-void    load_history ( char *fromfile );
+-void    save_history ( char *tofile );
++#ifdef CONFIG_FEATURE_COMMAND_SAVEHISTORY
++void    load_history ( const char *fromfile );
++void    save_history ( const char *tofile );
++#endif
+ 
+ #endif /* CMDEDIT_H */

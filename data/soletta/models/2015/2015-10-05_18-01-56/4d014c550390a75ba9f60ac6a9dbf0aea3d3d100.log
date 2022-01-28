@@ -1,0 +1,895 @@
+"2015-10-05 18:01:56 -0300"
+diff --git a/data/schemas/node-type-genspec.schema b/data/schemas/node-type-genspec.schema
+index a07af08b..76c58037 100644
+--- a/data/schemas/node-type-genspec.schema
++++ b/data/schemas/node-type-genspec.schema
+@@ -53,6 +53,10 @@
+         {
+           "type": "string",
+           "pattern": "^custom:[a-zA-Z_][a-zA-Z0-9_]*$"
++        },
++        {
++          "type": "string",
++          "pattern": "^composed:([a-zA-Z]*?)((,[a-zA-Z]+)+)$"
+         }
+       ]
+     },
+diff --git a/data/scripts/sol-flow-node-type-gen.py.in b/data/scripts/sol-flow-node-type-gen.py.in
+index da4d81bb..2d726095 100755
+--- a/data/scripts/sol-flow-node-type-gen.py.in
++++ b/data/scripts/sol-flow-node-type-gen.py.in
+@@ -272,6 +272,8 @@ data_type_to_default_member_map = {
+     "rgb": "rgb",
+     "direction-vector": "direction_vector",
+     }
++composed_types_signatures = {}
++
+ def data_type_to_default_member(typename):
+     return data_type_to_default_member_map.get(typename, "ptr")
+ 
+@@ -450,6 +452,14 @@ def generate_header_tail(outfile, data):
+ #endif
+ """)
+ 
++def generate_composed_type_get_signature(outfile, composed_type, prefix):
++    types = composed_type[len("composed:"):]
++    types_with_underscore = types.replace(",", "_")
++    sig = "%s_get_composed_%s_packet_type(void)" % (prefix, types_with_underscore)
++    if sig in composed_types_signatures:
++        return
++    composed_types_signatures[sig] = types
++    outfile.write("const struct sol_flow_packet_type *%s;\n" % (sig))
+ 
+ def generate_header_entry(outfile, data):
+     outfile.write("""\
+@@ -530,6 +540,8 @@ struct %(name_c)s_options {
+                     outfile.write("#define %s__IN__%s_LAST (%d)\n" % (
+                         data["NAME_C"], c_clean(pname).upper(),
+                         i + port_number_offset))
++            if o["data_type"].startswith("composed:"):
++                generate_composed_type_get_signature(outfile, o["data_type"], data["name_c"])
+         outfile.write("#define %s__IN_LAST (%d)\n" % (
+             data["NAME_C"], i + port_number_offset))
+ 
+@@ -551,6 +563,8 @@ struct %(name_c)s_options {
+                     outfile.write("#define %s__OUT__%s_LAST (%d)\n" % (
+                         data["NAME_C"], c_clean(pname).upper(),
+                         i + port_number_offset))
++            if o["data_type"].startswith("composed:"):
++                generate_composed_type_get_signature(outfile, o["data_type"], data["name_c"])
+         outfile.write("#define %s__OUT_LAST (%d)\n" % (
+             data["NAME_C"], i + port_number_offset))
+ 
+@@ -665,6 +679,27 @@ sol_flow_foreach_builtin_node_type_%(name)s(bool (*cb)(void *data, const struct
+ #endif // SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+ """)
+ 
++def generate_composed_type_get_function(outfile):
++    for key in sorted(composed_types_signatures.keys()):
++        packet_types = composed_types_signatures[key].split(",")
++        packet_type_final = []
++        type_names_underscore = composed_types_signatures[key].replace(",", "_")
++        for packet_type in packet_types:
++            packet_type_final.append(data_type_to_packet_type_map[packet_type])
++        outfile.write("""
++const struct sol_flow_packet_type *
++%s
++{
++    static const struct sol_flow_packet_type *composed_type = NULL;
++
++    if (composed_type == NULL) {
++        const struct sol_flow_packet_type *types[] = {%s, NULL};
++        composed_type = sol_flow_packet_type_composed_new(types);
++        SOL_NULL_CHECK(composed_type, NULL);
++    }
++
++    return composed_type;
++}\n""" % (key, ", ".join(packet_type_final)))
+ 
+ def generate_code_entry(outfile, data):
+     methods = data.get("methods", {})
+@@ -708,7 +743,6 @@ static struct sol_flow_port_type_in %(type_c)s = {
+     "connect": connect,
+     "disconnect": disconnect,
+     })
+-
+     out_ports_names = []
+     out_ports_count = 0
+     out_ports_get_port = ""
+@@ -785,7 +819,10 @@ static void
+         outfile.write("    if (%s.packet_type == NULL) {\n" % (all_ports_names[0]))
+ 
+         for port, d_type in zip(all_ports_names, all_ports_types):
+-            packet_type = packet_type_from_data_type(d_type)
++            if d_type.startswith("composed:"):
++                packet_type = "%s_get_composed_%s_packet_type()" % (data["name_c"] , d_type.split(":", 1)[1].replace(",", "_"))
++            else:
++                packet_type = packet_type_from_data_type(d_type)
+             outfile.write("        %s.packet_type = %s;\n"  % (port, packet_type))
+         outfile.write("    }\n")
+ 
+@@ -1305,6 +1342,7 @@ using the sol-flow-node-type-stub-gen.py tool.
+             if t["category"] != "internal":
+                 generate_description_entry(descriptions, t)
+ 
++        generate_composed_type_get_function(args.output_code)
+         generate_header_tail(args.output_header, data)
+         generate_code_tail(args.output_code, data)
+         output_header.close()
+diff --git a/data/scripts/sol-flow-node-type-stub-gen.py b/data/scripts/sol-flow-node-type-stub-gen.py
+index a7ebea64..3f5be5bb 100755
+--- a/data/scripts/sol-flow-node-type-stub-gen.py
++++ b/data/scripts/sol-flow-node-type-stub-gen.py
+@@ -48,6 +48,15 @@ def is_custom(typename):
+ def custom_get_name(typename):
+     return c_clean(typename[7:].lower())
+ 
++def is_composed(typename):
++    return typename.startswith("composed:")
++
++def get_composed_types_with_underscore(types):
++    return types[len("composed:"):].replace(",", "_")
++
++def get_composed_types_as_list(types):
++    return types[len("composed:"):].split(",")
++
+ data_type_to_c_map = {
+     "boolean": "bool ",
+     "blob": "struct sol_blob *",
+@@ -204,8 +213,33 @@ def include_common_headers(outfile):
+ 
+ """)
+ 
+-
+-def declare_packet(outfile, port, packets):
++def get_composed_types_as_arguments(types_list):
++    s = ""
++    for i, type_name in enumerate(types_list):
++        if type_name == "string" or type_name == "blob":
++            pointer = ""
++        else:
++            pointer = "*"
++        s += "%s%s out_value_%d," % (data_type_to_c(type_name), pointer, i)
++    s = s[:-1]
++    return s
++
++def generate_new_packet_type_functions(types_list):
++    s = ""
++    for i, type_name in enumerate(types_list):
++        if type_name == "int":
++            final_type = "irange"
++        elif type_name == "float":
++            final_type = "drange"
++        else:
++            final_type = type_name
++        s += """\
++   children[%d] = sol_flow_packet_new_%s(out_value_%d);
++   SOL_NULL_CHECK_GOTO(children[%d], exit);
++\n""" % (i, final_type, i, i)
++    return s
++
++def declare_packet(outfile, port, packets, name_c):
+     data_type = port.get("data_type");
+     if (is_custom(data_type)):
+         packet_name = custom_get_name(data_type)
+@@ -296,15 +330,52 @@ send_%(name)s_packet(struct sol_flow_node *src, uint16_t src_port
+     "NAME": packet_name.upper(),
+     "name_data": packet_name + "_packet_data"
+     })
++    elif is_composed(data_type):
++        data_type_with_underscore = get_composed_types_with_underscore(data_type)
++        data_type_as_list = get_composed_types_as_list(data_type)
++        outfile.write("""
++static int
++send_%s_packet(struct sol_flow_node *src, uint16_t src_port, %s)
++{
++   struct sol_flow_packet **children, *composed_packet;
++   const struct sol_flow_packet_type *p_type;
++   uint16_t len, i;
++   int r;
++
++   p_type = %s_get_composed_%s_packet_type();
++   r = sol_flow_packet_get_composed_members_len(p_type, &len);
++   SOL_INT_CHECK(r, < 0, r);
++   children = alloca(len * sizeof(struct sol_flow_packet *));
++   memset(children, 0, len * sizeof(struct sol_flow_packet *));
++
++   %s
++   composed_packet = sol_flow_packet_new(p_type, children);
++   SOL_NULL_CHECK_GOTO(composed_packet, exit);
++
++   r = sol_flow_send_packet(src, src_port, composed_packet);
++exit:
++   for (i = 0; i < len; i++) {
++        if (children[i] == NULL && r == 0) {
++          r = -ENOMEM;
++          break;
++        }
++        sol_flow_packet_del(children[i]);
++   }
++   return r;
++}
++""" % (data_type_with_underscore,
++       get_composed_types_as_arguments(data_type_as_list),
++       name_c, data_type_with_underscore,
++       generate_new_packet_type_functions(data_type_as_list)))
+ 
+ 
+-def declare_packets(outfile, data, packets):
++def declare_packets(outfile, data, packets, prefix):
+     if "in_ports" in data:
+         for port in data["in_ports"]:
+-            declare_packet(outfile, port, packets)
++            declare_packet(outfile, port, packets, prefix)
+     if "out_ports" in data:
+         for port in data["out_ports"]:
+-            declare_packet(outfile, port, packets)
++            declare_packet(outfile, port, packets, prefix)
+ 
+ 
+ def declare_structs(outfile, data, structs):
+@@ -319,7 +390,6 @@ struct %s {
+ """ % struct)
+         structs.append(struct)
+ 
+-
+ def declare_methods(outfile, data, methods):
+     struct = data.get("private_data_type", None)
+     method_open = None
+@@ -442,9 +512,35 @@ static int
+ """ % method_process)
+         print_data_struct(outfile, struct)
+         single_type = get_single_packet_type(methods_process[method_process])
+-        if single_type:
+-            outfile.write("""\
++        if single_type and is_composed(single_type):
++            types_list = get_composed_types_as_list(single_type)
++            for i, type in enumerate(types_list):
++                outfile.write("""
++    %sin_value_%d;""" % (data_type_to_c(type), i))
++            outfile.write("""
++    const struct sol_flow_packet_type *p_type;
++    struct sol_flow_packet **packets;
++    int r;
++    uint16_t len;
++
++    p_type = sol_flow_packet_get_type(packet);
++    if (p_type != %s_get_composed_%s_packet_type())
++       return -EINVAL;
++    r = sol_flow_packet_get_composed_members_len(p_type, &len);
++    SOL_INT_CHECK(r, < 0, r);
++    packets = malloc(len * sizeof(struct sol_flow_packet *));
++    SOL_NULL_CHECK(packets, -ENOMEM);
++    r = sol_flow_packet_get(packet, &packets);
++    SOL_INT_CHECK_GOTO(r, < 0, err_exit);
++""" % (data["name_c"], get_composed_types_with_underscore(single_type)))
++            for i, type in enumerate(types_list):
++                outfile.write("""
++    r = %s;
++    SOL_INT_CHECK_GOTO(r, < 0, err_exit);""" % (data_type_to_packet_getter(type).replace(")", (("_%d" % (i)))) + ")" ))
++        elif single_type:
++            outfile.write("""
+     int r;
++
+     %sin_value;
+ 
+     r = %s;
+@@ -452,14 +548,18 @@ static int
+ 
+ """ % (data_type_to_c(single_type),
+        data_type_to_packet_getter(single_type)))
+-        outfile.write("""\
++        outfile.write("""
+     /* TODO: implement process method */
+ 
+     return 0;
+-}
+-
+ """)
+-
++        if single_type and is_composed(single_type):
++            outfile.write("""
++err_exit:
++    free(packets);
++    return r;""")
++        outfile.write("""
++}\n""")
+ 
+ def generate_stub(stub_file, inputs_list, prefix, is_module, namespace):
+     data = []
+@@ -489,10 +589,10 @@ def generate_stub(stub_file, inputs_list, prefix, is_module, namespace):
+     # declare all custom packets - structs and functions
+     for data_item in data:
+         if not "types" in data_item:
+-            declare_packets(stub_file, data_item, packets)
++            declare_packets(stub_file, data_item, packets, "")
+         else:
+             for t in data_item["types"]:
+-                declare_packets(stub_file, t, packets)
++                declare_packets(stub_file, t, packets, data_item["name_c"] + "_" + c_clean(t["name"].split("/")[1]))
+ 
+     # declare private data structs
+     for data_item in data:
+diff --git a/src/bin/sol-fbp-runner/inspector.c b/src/bin/sol-fbp-runner/inspector.c
+index 3f6156e7..b8de0e00 100644
+--- a/src/bin/sol-fbp-runner/inspector.c
++++ b/src/bin/sol-fbp-runner/inspector.c
+@@ -36,6 +36,7 @@
+ #include "sol-flow.h"
+ #include "sol-flow-inspector.h"
+ #include "sol-util.h"
++#include "sol-log.h"
+ 
+ struct timespec start;
+ 
+@@ -123,7 +124,7 @@ inspector_show_out_port(const struct sol_flow_node *node, uint16_t port_idx)
+ }
+ 
+ static void
+-inspector_show_packet(const struct sol_flow_packet *packet)
++inspector_show_packet_value(const struct sol_flow_packet *packet)
+ {
+     const struct sol_flow_packet_type *type = sol_flow_packet_get_type(packet);
+ 
+@@ -234,6 +235,28 @@ inspector_show_packet(const struct sol_flow_packet *packet)
+     fputs("<?>", stdout);
+ }
+ 
++static void
++inspector_show_packet(const struct sol_flow_packet *packet)
++{
++    const struct sol_flow_packet_type *type = sol_flow_packet_get_type(packet);
++
++    if (sol_flow_packet_is_composed_type(type)) {
++        uint16_t len, i;
++        struct sol_flow_packet **packets;
++
++        sol_flow_packet_get_composed_members_len(type, &len);
++        packets = malloc(len * sizeof(struct sol_flow_packet *));
++        SOL_NULL_CHECK(packets);
++        sol_flow_packet_get(packet, packets);
++        fprintf(stdout, "<COMPOSED-PACKET {");
++        for (i = 0; i < len; i++)
++            inspector_show_packet_value(packets[i]);
++        fprintf(stdout, "}>");
++        free(packets);
++    } else
++        inspector_show_packet_value(packet);
++}
++
+ static void
+ inspector_did_open_node(const struct sol_flow_inspector *inspector, const struct sol_flow_node *node, const struct sol_flow_node_options *options)
+ {
+diff --git a/src/lib/flow/include/sol-flow-packet.h b/src/lib/flow/include/sol-flow-packet.h
+index 55867565..96af0d9c 100644
+--- a/src/lib/flow/include/sol-flow-packet.h
++++ b/src/lib/flow/include/sol-flow-packet.h
+@@ -156,6 +156,9 @@ int sol_flow_packet_get_location(const struct sol_flow_packet *packet, struct so
+ struct sol_flow_packet *sol_flow_packet_new_timestamp(const struct timespec *timestamp);
+ int sol_flow_packet_get_timestamp(const struct sol_flow_packet *packet, struct timespec *timestamp);
+ 
++const struct sol_flow_packet_type *sol_flow_packet_type_composed_new(const struct sol_flow_packet_type **types);
++bool sol_flow_packet_is_composed_type(const struct sol_flow_packet_type *type);
++int sol_flow_packet_get_composed_members_len(const struct sol_flow_packet_type *type, uint16_t *len);
+ /**
+  * @}
+  */
+diff --git a/src/lib/flow/sol-flow-internal.h b/src/lib/flow/sol-flow-internal.h
+index a913682e..5684aa5d 100644
+--- a/src/lib/flow/sol-flow-internal.h
++++ b/src/lib/flow/sol-flow-internal.h
+@@ -296,3 +296,5 @@ int sol_flow_builder_add_node_taking_options(
+ sol_flow_metatype_create_type_func get_dynamic_create_type_func(const struct sol_str_slice name);
+ void loaded_metatype_cache_shutdown(void);
+ #endif
++
++void sol_flow_packet_type_composed_shutdown(void);
+diff --git a/src/lib/flow/sol-flow-packet.c b/src/lib/flow/sol-flow-packet.c
+index a573387c..06cc11e8 100644
+--- a/src/lib/flow/sol-flow-packet.c
++++ b/src/lib/flow/sol-flow-packet.c
+@@ -36,12 +36,11 @@
+ #include <float.h>
+ #include <time.h>
+ 
+-#define SOL_LOG_DOMAIN &_sol_flow_log_domain
+-#include "sol-log-internal.h"
+-extern struct sol_log_domain _sol_flow_log_domain;
+-
++#include "sol-flow-internal.h"
+ #include "sol-flow-packet.h"
+ #include "sol-util.h"
++#include "sol-vector.h"
++#include "sol-buffer.h"
+ 
+ #define SOL_FLOW_PACKET_CHECK(packet, _type, ...)        \
+     do {                                                \
+@@ -60,6 +59,14 @@ struct sol_flow_packet {
+     void *data;
+ };
+ 
++struct sol_flow_packet_composed_type {
++    struct sol_flow_packet_type self;
++    const struct sol_flow_packet_type **members;
++    uint16_t members_len;
++};
++
++static struct sol_ptr_vector composed_types_cache = SOL_PTR_VECTOR_INIT;
++
+ static inline void *
+ sol_flow_packet_get_memory(const struct sol_flow_packet *packet)
+ {
+@@ -776,3 +783,148 @@ sol_flow_packet_get_error(const struct sol_flow_packet *packet, int *code, const
+ 
+     return ret;
+ }
++
++static int
++composed_type_init(const struct sol_flow_packet_type *packet_type, void *mem, const void *input)
++{
++    const struct sol_flow_packet **in = (void *)input;
++    struct sol_flow_packet **array = mem;
++    void *data;
++    uint16_t i, last;
++    const struct sol_flow_packet_type *type;
++    int r;
++
++    for (i = 0; i < packet_type->data_size / sizeof(struct sol_flow_packet *);
++        i++) {
++        type = sol_flow_packet_get_type(in[i]);
++        if (type->data_size == 0)
++            data = NULL;
++        else {
++            data = malloc(type->data_size);
++            SOL_NULL_CHECK_GOTO(data, err_exit);
++        }
++        r = sol_flow_packet_get(in[i], data);
++        SOL_INT_CHECK_GOTO(r, < 0, err_data);
++        array[i] = sol_flow_packet_new(type, data);
++        free(data);
++        SOL_NULL_CHECK_GOTO(array[i], err_exit);
++    }
++
++    return 0;
++
++err_data:
++    free(data);
++err_exit:
++
++    last = i;
++    for (i = 0; i < last; i++)
++        sol_flow_packet_del(array[i]);
++    return -ENOMEM;
++}
++
++static void
++composed_type_dispose(const struct sol_flow_packet_type *packet_type, void *mem)
++{
++    struct sol_flow_packet **array = mem;
++    uint16_t i;
++
++    for (i = 0; i < packet_type->data_size / sizeof(struct sol_flow_packet *);
++        i++)
++        sol_flow_packet_del(array[i]);
++}
++
++SOL_API const struct sol_flow_packet_type *
++sol_flow_packet_type_composed_new(const struct sol_flow_packet_type **types)
++{
++    struct sol_flow_packet_composed_type *ctype, *itr;
++    uint16_t i, types_len, members_bytes;
++    int r;
++    struct sol_buffer buf;
++
++    SOL_NULL_CHECK(types, NULL);
++
++    for (types_len = 0; types[types_len]; types_len++) ;
++
++    members_bytes = types_len * sizeof(struct sol_flow_packet_type *);
++    SOL_PTR_VECTOR_FOREACH_IDX (&composed_types_cache, itr, i) {
++        if (types_len != itr->members_len)
++            continue;
++        if (!memcmp(itr->members, types, members_bytes))
++            return &itr->self;
++    }
++
++    ctype = calloc(1, sizeof(struct sol_flow_packet_composed_type));
++    SOL_NULL_CHECK(ctype, NULL);
++
++    ctype->members_len = types_len;
++    ctype->members = malloc(members_bytes);
++    SOL_NULL_CHECK_GOTO(ctype->members, err_members);
++
++    memcpy(ctype->members, types, members_bytes);
++
++    sol_buffer_init(&buf);
++
++    r = sol_buffer_append_slice(&buf, sol_str_slice_from_str("COMPOSED-TYPE:"));
++    SOL_INT_CHECK_GOTO(r, < 0, err_buf);
++    for (i = 0; i < types_len; i++) {
++        if (i == types_len - 1)
++            r = sol_buffer_append_printf(&buf, "%s", types[i]->name);
++        else
++            r = sol_buffer_append_printf(&buf, "%s,", types[i]->name);
++        SOL_INT_CHECK_GOTO(r, < 0, err_buf);
++    }
++
++    ctype->self.api_version = SOL_FLOW_PACKET_TYPE_API_VERSION;
++    ctype->self.name = sol_buffer_steal(&buf, NULL);
++    ctype->self.data_size = types_len * sizeof(struct sol_flow_packet *);
++    ctype->self.init = composed_type_init;
++    ctype->self.dispose = composed_type_dispose;
++
++    r = sol_ptr_vector_append(&composed_types_cache, ctype);
++    SOL_INT_CHECK_GOTO(r, < 0, err_buf);
++
++    return &ctype->self;
++
++err_buf:
++    sol_buffer_fini(&buf);
++    free(ctype->members);
++err_members:
++    free(ctype);
++    return NULL;
++}
++
++void
++sol_flow_packet_type_composed_shutdown(void)
++{
++    uint16_t i;
++    struct sol_flow_packet_composed_type *ctype;
++
++    SOL_PTR_VECTOR_FOREACH_IDX (&composed_types_cache, ctype, i) {
++        free((void *)ctype->self.name);
++        free(ctype->members);
++        free(ctype);
++    }
++    sol_ptr_vector_clear(&composed_types_cache);
++}
++
++SOL_API bool
++sol_flow_packet_is_composed_type(const struct sol_flow_packet_type *type)
++{
++    SOL_NULL_CHECK(type, false);
++    return type->init == composed_type_init;
++}
++
++SOL_API int
++sol_flow_packet_get_composed_members_len(const struct sol_flow_packet_type *type, uint16_t *len)
++{
++    SOL_NULL_CHECK(type, -EINVAL);
++    SOL_NULL_CHECK(len, -EINVAL);
++
++    if (!sol_flow_packet_is_composed_type(type)) {
++        SOL_ERR("Not a composed packet type. Type name:%s", type->name);
++        return -EINVAL;
++    }
++
++    *len = type->data_size / sizeof(struct sol_flow_packet *);
++    return 0;
++}
+diff --git a/src/lib/flow/sol-flow.c b/src/lib/flow/sol-flow.c
+index c444ddd2..f467e991 100644
+--- a/src/lib/flow/sol-flow.c
++++ b/src/lib/flow/sol-flow.c
+@@ -56,6 +56,7 @@ sol_flow_shutdown(void)
+ #ifdef ENABLE_DYNAMIC_MODULES
+     loaded_metatype_cache_shutdown();
+ #endif
++    sol_flow_packet_type_composed_shutdown();
+ }
+ 
+ #ifdef SOL_FLOW_INSPECTOR_ENABLED
+diff --git a/src/modules/flow/console/console.c b/src/modules/flow/console/console.c
+index ae8f7968..3a6d6aeb 100644
+--- a/src/modules/flow/console/console.c
++++ b/src/modules/flow/console/console.c
+@@ -45,70 +45,74 @@ struct console_data {
+     bool flush;
+ };
+ 
+-SOL_ATTR_PRINTF(2, 3) static void
+-console_output(struct console_data *mdata, const char *fmt, ...)
++SOL_ATTR_PRINTF(5, 6) static void
++console_output(struct console_data *mdata, const char *prefix, const char *suffix, char separator, const char *fmt, ...)
+ {
+     va_list ap;
+ 
+-    fputs(mdata->prefix, mdata->fp);
++    if (prefix)
++        fputs(mdata->prefix, mdata->fp);
+ 
+     va_start(ap, fmt);
+     vfprintf(mdata->fp, fmt, ap);
+     va_end(ap);
+ 
+-    fprintf(mdata->fp, "%s\n", mdata->suffix);
++    if (suffix)
++        fprintf(mdata->fp, "%s%c", mdata->suffix, separator);
++    else
++        fprintf(mdata->fp, "%c", separator);
+ }
+ 
+ static int
+-console_in_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++print_packet_content(const struct sol_flow_packet *packet, struct sol_flow_node *node, struct console_data *mdata,
++    const char *prefix, const char *suffix, char separator)
+ {
+-    struct console_data *mdata = data;
+     const struct sol_flow_packet_type *packet_type = sol_flow_packet_get_type(packet);
+ 
+     if (packet_type == SOL_FLOW_PACKET_TYPE_EMPTY) {
+-        console_output(mdata, "(empty)");
++        console_output(mdata, prefix, suffix, separator, "(empty)");
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_BOOLEAN) {
+         bool value;
+         int r = sol_flow_packet_get_boolean(packet, &value);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "%s (boolean)", value ? "true" : "false");
++        console_output(mdata, prefix, suffix, separator, "%s (boolean)", value ? "true" : "false");
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_BYTE) {
+         unsigned char value;
+         int r = sol_flow_packet_get_byte(packet, &value);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "#%02x (byte)", value);
++        console_output(mdata, prefix, suffix, separator, "#%02x (byte)", value);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_IRANGE) {
+         int32_t val;
+         int r = sol_flow_packet_get_irange_value(packet, &val);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "%" PRId32 " (integer range)", val);
++        console_output(mdata, prefix, suffix, separator, "%" PRId32 " (integer range)", val);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_DRANGE) {
+         double val;
+         int r = sol_flow_packet_get_drange_value(packet, &val);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "%f (float range)", val);
++        console_output(mdata, prefix, suffix, separator, "%f (float range)", val);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_RGB) {
+         uint32_t red, green, blue;
+         int r = sol_flow_packet_get_rgb_components(packet, &red, &green, &blue);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "(%" PRIu32 ", %" PRIu32 ", %" PRIu32 ") (rgb)", red, green, blue);
++        console_output(mdata, prefix, suffix, separator, "(%" PRIu32 ", %" PRIu32 ", %" PRIu32 ") (rgb)", red, green, blue);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_DIRECTION_VECTOR) {
+         double x, y, z;
+         int r = sol_flow_packet_get_direction_vector_components(packet, &x, &y, &z);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "(%lf, %lf, %lf) (direction-vector)", x, y, z);
++        console_output(mdata, prefix, suffix, separator, "(%lf, %lf, %lf) (direction-vector)", x, y, z);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_LOCATION) {
+         struct sol_location location;
+         int r = sol_flow_packet_get_location(packet, &location);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "latitude=%g, longitude=%g altitude=%g (location)",
++        console_output(mdata, prefix, suffix, separator, "latitude=%g, longitude=%g altitude=%g (location)",
+             location.lat, location.lon, location.alt);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_STRING) {
+         const char *val;
+ 
+         int r = sol_flow_packet_get_string(packet, &val);
+         SOL_INT_CHECK(r, < 0, r);
+-        console_output(mdata, "%s (string)", val);
++        console_output(mdata, prefix, suffix, separator, "%s (string)", val);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_TIMESTAMP) {
+         struct timespec timestamp;
+         struct tm cur_time;
+@@ -127,7 +131,7 @@ console_in_process(struct sol_flow_node *node, void *data, uint16_t port, uint16
+         r = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &cur_time);
+         SOL_INT_CHECK(r, == 0, -EINVAL);
+ 
+-        console_output(mdata, "%s (timestamp)", buf);
++        console_output(mdata, prefix, suffix, separator, "%s (timestamp)", buf);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_BLOB) {
+         struct sol_blob *val;
+         const char *buf, *bufend;
+@@ -147,15 +151,14 @@ console_in_process(struct sol_flow_node *node, void *data, uint16_t port, uint16
+             if (buf + 1 < bufend)
+                 fputs(", ", mdata->fp);
+         }
+-
+-        fprintf(mdata->fp, "} (blob)%s\n", mdata->suffix);
++        fprintf(mdata->fp, "} (blob)%s%c", mdata->suffix, separator);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_JSON_OBJECT) {
+         struct sol_blob *val;
+ 
+         int r = sol_flow_packet_get_json_object(packet, &val);
+         SOL_INT_CHECK(r, < 0, r);
+ 
+-        console_output(mdata, "%.*s (JSON object)", (int)val->size,
++        console_output(mdata, prefix, suffix, separator, "%.*s (JSON object)", (int)val->size,
+             (char *)val->mem);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_JSON_ARRAY) {
+         struct sol_blob *val;
+@@ -163,19 +166,51 @@ console_in_process(struct sol_flow_node *node, void *data, uint16_t port, uint16
+         int r = sol_flow_packet_get_json_array(packet, &val);
+         SOL_INT_CHECK(r, < 0, r);
+ 
+-        console_output(mdata, "%.*s (JSON array)", (int)val->size,
++        console_output(mdata, prefix, suffix, separator, "%.*s (JSON array)", (int)val->size,
+             (char *)val->mem);
+     } else if (packet_type == SOL_FLOW_PACKET_TYPE_ERROR) {
+         int code;
+         const char *msg;
+         int r = sol_flow_packet_get_error(packet, &code, &msg);
+         SOL_INT_CHECK(r, < 0, r);
+-        fprintf(mdata->fp, "%s#%02x (error)%s - %s\n",
+-            mdata->prefix, code, mdata->suffix, msg ? : "");
++        fprintf(mdata->fp, "%s#%02x (error)%s - %s%c",
++            mdata->prefix, code, mdata->suffix, msg ? : "", separator);
+     } else {
+         sol_flow_send_error_packet(node, -EINVAL, "Unsupported packet=%p type=%p (%s)",
+             packet, packet_type, packet_type->name);
+-        return 0;
++        return -EINVAL;
++    }
++    return 0;
++}
++
++static int
++console_in_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int r;
++    struct console_data *mdata = data;
++    const struct sol_flow_packet_type *packet_type = sol_flow_packet_get_type(packet);
++
++    if (sol_flow_packet_is_composed_type(packet_type)) {
++        uint16_t len, i;
++        struct sol_flow_packet **packets;
++
++        sol_flow_packet_get_composed_members_len(packet_type, &len);
++        packets = malloc(len * sizeof(struct sol_flow_packet *));
++        SOL_NULL_CHECK(packets, -ENOMEM);
++        sol_flow_packet_get(packet, packets);
++        console_output(mdata, mdata->prefix, NULL, 0, "Composed packet {");
++        for (i = 0; i < len; i++) {
++            char sep = ',';
++            if (i == len - 1)
++                sep = 0;
++            r = print_packet_content(packets[i], node, mdata, NULL, NULL, sep);
++            SOL_INT_CHECK(r, < 0, r);
++        }
++        console_output(mdata, NULL, mdata->suffix, '\n',  "} (%s)", packet_type->name);
++        free(packets);
++    } else {
++        r = print_packet_content(packet, node, mdata, mdata->prefix, mdata->suffix,  '\n');
++        SOL_INT_CHECK(r, < 0, r);
+     }
+ 
+     if (mdata->flush)
+diff --git a/src/test-stub-gen/dummy.json b/src/test-stub-gen/dummy.json
+index 8cc4b1ea..b3b92c93 100644
+--- a/src/test-stub-gen/dummy.json
++++ b/src/test-stub-gen/dummy.json
+@@ -140,6 +140,16 @@
+          "process": "timestamp_process"
+         },
+         "name": "TIMESTAMP"
++       },
++       {
++        "data_type": "composed:string,int,string,float,location",
++        "description": "Dummy composed input port.",
++        "methods": {
++         "connect": "composed_connect",
++         "disconnect": "composed_disconnect",
++         "process": "composed_process"
++        },
++        "name": "COMPOSED"
+        }
+       ],
+       "methods": {
+@@ -282,6 +292,11 @@
+         "data_type": "timestamp",
+         "description": "Dummy timestamp output port.",
+         "name": "TIMESTAMP"
++       },
++       {
++        "data_type": "composed:string,int",
++        "description": "Dummy composed [string,int] output port.",
++        "name": "COMPOSED"
+        }
+       ],
+       "private_data_type": "dummy_data",
+diff --git a/src/test/Kconfig b/src/test/Kconfig
+index 96555227..36036254 100644
+--- a/src/test/Kconfig
++++ b/src/test/Kconfig
+@@ -92,3 +92,7 @@ config TEST_JSON
+ config TEST_UTIL
+ 	bool "util"
+ 	default y
++
++config TEST_COMPOSED_TYPE
++      bool "composed-type"
++      default y
+diff --git a/src/test/Makefile b/src/test/Makefile
+index 2e5c49b5..2cd19857 100644
+--- a/src/test/Makefile
++++ b/src/test/Makefile
+@@ -65,3 +65,6 @@ test-test-json-$(TEST_JSON) := test.c test-json.c
+ 
+ test-$(TEST_UTIL) += test-util
+ test-test-util-$(TEST_UTIL) := test.c test-util.c
++
++test-$(TEST_COMPOSED_TYPE) += test-composed-type
++test-test-composed-type-$(TEST_COMPOSED_TYPE) := test.c test-composed-type.c
+diff --git a/src/test/test-composed-type.c b/src/test/test-composed-type.c
+new file mode 100644
+index 00000000..d952de8b
+--- /dev/null
++++ b/src/test/test-composed-type.c
+@@ -0,0 +1,74 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "test.h"
++#include "sol-vector.h"
++#include "sol-util.h"
++#include "sol-flow-packet.h"
++
++DEFINE_TEST(test_composed_type);
++
++static void
++test_composed_type(void)
++{
++    const struct sol_flow_packet_type *types[] =
++    { SOL_FLOW_PACKET_TYPE_BOOLEAN, SOL_FLOW_PACKET_TYPE_STRING,
++      SOL_FLOW_PACKET_TYPE_IRANGE, NULL };
++    const struct sol_flow_packet_type *types2[] =
++    { SOL_FLOW_PACKET_TYPE_BOOLEAN, SOL_FLOW_PACKET_TYPE_STRING, NULL };
++    const struct sol_flow_packet_type *composed_type, *composed_type2,
++    *composed_type3;
++    bool is_composed;
++
++    composed_type = sol_flow_packet_type_composed_new(NULL);
++    ASSERT(!composed_type);
++
++    composed_type = sol_flow_packet_type_composed_new(types);
++    ASSERT(composed_type);
++
++    composed_type2 = sol_flow_packet_type_composed_new(types);
++    ASSERT(composed_type == composed_type2);
++
++    composed_type3 = sol_flow_packet_type_composed_new(types2);
++    ASSERT(composed_type != composed_type3);
++
++    is_composed = sol_flow_packet_is_composed_type(composed_type);
++    ASSERT(is_composed);
++
++    is_composed = sol_flow_packet_is_composed_type(composed_type2);
++    ASSERT(is_composed);
++
++    is_composed = sol_flow_packet_is_composed_type(SOL_FLOW_PACKET_TYPE_DRANGE);
++    ASSERT(!is_composed);
++}
++
++TEST_MAIN();

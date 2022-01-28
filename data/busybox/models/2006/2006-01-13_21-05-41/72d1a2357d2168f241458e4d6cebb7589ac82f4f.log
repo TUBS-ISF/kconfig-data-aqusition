@@ -1,0 +1,101 @@
+"2006-01-13 21:05:41 +0000"
+diff --git a/findutils/Config.in b/findutils/Config.in
+index 3c28ec03a..050fe901d 100644
+--- a/findutils/Config.in
++++ b/findutils/Config.in
+@@ -17,7 +17,15 @@ config CONFIG_FEATURE_FIND_MTIME
+ 	depends on CONFIG_FIND
+ 	help
+ 	  Allow searching based on the modification time of
+-	  files.
++	  files, in days.
++
++config CONFIG_FEATURE_FIND_MMIN
++	bool "  Enable modified time matching (-min) option"
++	default y
++	depends on CONFIG_FIND
++	help
++	  Allow searching based on the modification time of
++	  files, in minutes.
+ 
+ config CONFIG_FEATURE_FIND_PERM
+ 	bool "  Enable permissions matching (-perm) option"
+diff --git a/findutils/find.c b/findutils/find.c
+index 75ed4e208..603c20643 100644
+--- a/findutils/find.c
++++ b/findutils/find.c
+@@ -53,6 +53,11 @@ static char mtime_char;
+ static int mtime_days;
+ #endif
+ 
++#ifdef CONFIG_FEATURE_FIND_MMIN
++static char mmin_char;
++static int mmin_mins;
++#endif
++
+ #ifdef CONFIG_FEATURE_FIND_XDEV
+ static dev_t *xdev_dev;
+ static int xdev_count = 0;
+@@ -109,6 +114,17 @@ static int fileAction(const char *fileName, struct stat *statbuf, void* junk)
+ 			goto no_match;
+ 	}
+ #endif
++#ifdef CONFIG_FEATURE_FIND_MMIN
++	if (mmin_char != 0) {
++		time_t file_age = time(NULL) - statbuf->st_mtime;
++		time_t mmin_secs = mmin_mins * 60;
++		if (!((isdigit(mmin_char) && file_age >= mmin_secs &&
++						file_age < mmin_secs + 60) ||
++				(mmin_char == '+' && file_age >= mmin_secs + 60) ||
++				(mmin_char == '-' && file_age < mmin_secs)))
++			goto no_match;
++	}
++#endif
+ #ifdef CONFIG_FEATURE_FIND_XDEV
+ 	if (xdev_count) {
+ 		int i;
+@@ -239,6 +255,17 @@ int find_main(int argc, char **argv)
+ 			if ((mtime_char = argv[i][0]) == '-')
+ 				mtime_days = -mtime_days;
+ #endif
++#ifdef CONFIG_FEATURE_FIND_MMIN
++		} else if (strcmp(argv[i], "-mmin") == 0) {
++			char *end;
++			if (++i == argc)
++				bb_error_msg_and_die(msg_req_arg, "-mmin");
++			mmin_mins = strtol(argv[i], &end, 10);
++			if (end[0] != '\0')
++				bb_error_msg_and_die(msg_invalid_arg, argv[i], "-mmin");
++			if ((mmin_char = argv[i][0]) == '-')
++				mmin_mins = -mmin_mins;
++#endif
+ #ifdef CONFIG_FEATURE_FIND_XDEV
+ 		} else if (strcmp(argv[i], "-xdev") == 0) {
+ 			struct stat stbuf;
+diff --git a/include/usage.h b/include/usage.h
+index 9387238ab..81f0e1d6d 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -722,6 +722,11 @@
+ #else
+ #  define USAGE_FIND_MTIME(a)
+ #endif
++#ifdef CONFIG_FEATURE_FIND_MMIN
++  #define USAGE_FIND_MMIN(a) a
++#else
++  #define USAGE_FIND_MMIN(a)
++#endif
+ #ifdef CONFIG_FEATURE_FIND_NEWER
+ #  define USAGE_FIND_NEWER(a) a
+ #else
+@@ -752,7 +757,9 @@
+ ) USAGE_FIND_PERM( \
+ 	"\n\t-perm PERMS\tPermissions match any of (+NNN); all of (-NNN);\n\t\t\tor exactly (NNN)" \
+ ) USAGE_FIND_MTIME( \
+-	"\n\t-mtime TIME\tModified time is greater than (+N); less than (-N);\n\t\t\tor exactly (N) days" \
++	"\n\t-mtime DAYS\tModified time is greater than (+N); less than (-N);\n\t\t\tor exactly (N) days" \
++) USAGE_FIND_MMIN( \
++	"\n\t-mmin MINS\tModified time is greater than (+N); less than (-N);\n\t\t\tor exactly (N) minutes" \
+ ) USAGE_FIND_NEWER( \
+ 	"\n\t-newer FILE\tModified time is more recent than FILE's" \
+ ) USAGE_FIND_INUM( \

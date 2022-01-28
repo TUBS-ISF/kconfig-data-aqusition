@@ -1,0 +1,402 @@
+"2008-06-27 09:08:44 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 892768500..884a59e8b 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1018,6 +1018,18 @@ config UCLIBC_USE_NETLINK
+ 
+ 	  Most people can safely answer N.
+ 
++config UCLIBC_SUPPORT_AI_ADDRCONFIG
++	bool "Support the AI_ADDRCONFIG flag"
++	depends on UCLIBC_USE_NETLINK
++	default n
++	help
++	  The implementation of AI_ADDRCONFIG is aligned with the glibc
++	  implementation using netlink to query interfaces to find both
++	  ipv4 and ipv6 support. This is only needed if an application uses
++	  the AI_ADDRCONFIG flag.
++
++	  Most people can safely answer N.
++
+ config UCLIBC_HAS_BSD_RES_CLOSE
+ 	bool "Support res_close() (bsd-compat)"
+ 	default n
+diff --git a/include/ifaddrs.h b/include/ifaddrs.h
+new file mode 100644
+index 000000000..90ab481a3
+--- /dev/null
++++ b/include/ifaddrs.h
+@@ -0,0 +1,19 @@
++#ifndef _IFADDRS_H
++#include <libc/inet/ifaddrs.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++struct in6addrinfo
++{
++  enum {
++    in6ai_deprecated = 1,
++    in6ai_temporary = 2,
++    in6ai_homeaddress = 4
++  } flags;
++  uint32_t addr[4];
++};
++
++extern void __check_pf (bool *seen_ipv4, bool *seen_ipv6)
++  attribute_hidden;
++
++#endif	/* ifaddrs.h */
+diff --git a/libc/inet/Makefile.in b/libc/inet/Makefile.in
+index 493041ff6..e87287a4a 100644
+--- a/libc/inet/Makefile.in
++++ b/libc/inet/Makefile.in
+@@ -14,7 +14,7 @@ CSRC :=
+ ifneq ($(UCLIBC_HAS_IPV4)$(UCLIBC_HAS_IPV6),)
+ CSRC +=	getservice.c getproto.c hostid.c getnetent.c getnetbynm.c getnetbyad.c \
+ 	inet_net.c herror.c if_index.c gai_strerror.c getaddrinfo.c \
+-	ether_addr.c ntohl.c ifaddrs.c ntop.c
++	ether_addr.c ntohl.c ifaddrs.c ntop.c check_pf.c
+ endif
+ ifeq ($(UCLIBC_HAS_IPV6),y)
+ CSRC += in6_addr.c
+diff --git a/libc/inet/check_pf.c b/libc/inet/check_pf.c
+new file mode 100644
+index 000000000..b6c93783a
+--- /dev/null
++++ b/libc/inet/check_pf.c
+@@ -0,0 +1,65 @@
++/* Determine protocol families for which interfaces exist.  Generic version.
++   Copyright (C) 2003, 2006 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <features.h>
++#include <ifaddrs.h>
++#include <netdb.h>
++
++
++void
++attribute_hidden
++__check_pf (bool *seen_ipv4, bool *seen_ipv6)
++{
++  *seen_ipv4 = false;
++  *seen_ipv6 = false;
++#if __UCLIBC_SUPPORT_AI_ADDRCONFIG__
++  {
++    /* Get the interface list via getifaddrs.  */
++    struct ifaddrs *ifa = NULL;
++    struct ifaddrs *runp;
++    if (getifaddrs (&ifa) != 0)
++    {
++      /* We cannot determine what interfaces are available.  Be
++      optimistic.  */
++      *seen_ipv4 = true;
++#if __UCLIBC_HAS_IPV6__
++      *seen_ipv6 = true;
++#endif /* __UCLIBC_HAS_IPV6__ */
++      return;
++    }
++
++    for (runp = ifa; runp != NULL; runp = runp->ifa_next)
++      if (runp->ifa_addr->sa_family == PF_INET)
++        *seen_ipv4 = true;
++#if __UCLIBC_HAS_IPV6__
++      else if (runp->ifa_addr->sa_family == PF_INET6)
++        *seen_ipv6 = true;
++#endif /* __UCLIBC_HAS_IPV6__ */
++
++    (void) freeifaddrs (ifa);
++  }
++#else
++  /* AI_ADDRCONFIG is disabled, assume both ipv4 and ipv6 available. */
++  *seen_ipv4 = true;
++#if __UCLIBC_HAS_IPV6__
++  *seen_ipv6 = true;
++#endif /* __UCLIBC_HAS_IPV6__ */
++
++#endif /* __UCLIBC_SUPPORT_AI_ADDRCONFIG__ */
++}
+diff --git a/libc/inet/getaddrinfo.c b/libc/inet/getaddrinfo.c
+index e3caf6f0d..0bc66e393 100644
+--- a/libc/inet/getaddrinfo.c
++++ b/libc/inet/getaddrinfo.c
+@@ -66,6 +66,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include <sys/un.h>
+ #include <sys/utsname.h>
+ #include <net/if.h>
++#include <ifaddrs.h>
+ 
+ /* Experimentally off - libc_hidden_proto(memcpy) */
+ /* Experimentally off - libc_hidden_proto(memset) */
+@@ -156,19 +157,29 @@ static const struct addrinfo default_hints =
+ { 0, PF_UNSPEC, 0, 0, 0, NULL, NULL, NULL };
+ #endif
+ 
+-
+ static int addrconfig (sa_family_t af)
+ {
+     int s;
+     int ret;
+     int saved_errno = errno;
+-    s = socket(af, SOCK_DGRAM, 0);
+-    if (s < 0)
+-	ret = (errno == EMFILE) ? 1 : 0;
++    bool seen_ipv4;
++    bool seen_ipv6;
++
++    __check_pf(&seen_ipv4, &seen_ipv6);
++    if (af == AF_INET)
++	ret = (int)seen_ipv4;
++    else if (af == AF_INET6)
++	ret = (int)seen_ipv6;
+     else
+     {
+-	close(s);
+-	ret = 1;
++	s = socket(af, SOCK_DGRAM, 0);
++	if (s < 0)
++	    ret = (errno == EMFILE) ? 1 : 0;
++	else
++	{
++	    close(s);
++	    ret = 1;
++	}
+     }
+     __set_errno (saved_errno);
+     return ret;
+@@ -373,6 +384,9 @@ gaih_inet (const char *name, const struct gaih_service *service,
+     int rc;
+     int v4mapped = (req->ai_family == PF_UNSPEC || req->ai_family == PF_INET6) &&
+ 	(req->ai_flags & AI_V4MAPPED);
++    bool seen_ipv4;
++    bool seen_ipv6;
++    __check_pf(&seen_ipv4, &seen_ipv6);
+ 
+     if (req->ai_protocol || req->ai_socktype)
+     {
+@@ -560,14 +574,16 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 
+ #if defined __UCLIBC_HAS_IPV6__
+ 	    if (req->ai_family == AF_UNSPEC || req->ai_family == AF_INET6)
+-		gethosts (AF_INET6, struct in6_addr);
++		if (!(req->ai_flags & AI_ADDRCONFIG) || seen_ipv6)
++		    gethosts (AF_INET6, struct in6_addr);
+ #endif
+ 	    no_inet6_data = no_data;
+ 
+ 	    if (req->ai_family == AF_INET ||
+ 		(!v4mapped && req->ai_family == AF_UNSPEC) ||
+ 		(v4mapped && (no_inet6_data != 0 || (req->ai_flags & AI_ALL))))
+-		gethosts (AF_INET, struct in_addr);
++		if (!(req->ai_flags & AI_ADDRCONFIG) || seen_ipv4)
++		    gethosts (AF_INET, struct in_addr);
+ 
+ 	    if (no_data != 0 && no_inet6_data != 0)
+ 	    {
+@@ -698,6 +714,14 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ #endif
+ 	    for (st2 = st; st2 != NULL; st2 = st2->next)
+ 	    {
++		if (req->ai_flags & AI_ADDRCONFIG) {
++		    if (family == AF_INET && !seen_ipv4)
++			break;
++#if defined __UCLIBC_HAS_IPV6__
++		    else if (family == AF_INET6 && !seen_ipv6)
++			break;
++#endif
++		}
+ 		*pai = malloc (sizeof (struct addrinfo) + socklen + namelen);
+ 		if (*pai == NULL)
+ 		    return -EAI_MEMORY;
+@@ -859,7 +883,10 @@ getaddrinfo (const char *name, const char *service,
+ 	if (hints->ai_family == g->family || hints->ai_family == AF_UNSPEC)
+ 	{
+ 	    if ((hints->ai_flags & AI_ADDRCONFIG) && !addrconfig(g->family))
++	    {
++		++g;
+ 		continue;
++	    }
+ 	    j++;
+ 	    if (pg == NULL || pg->gaih != g->gaih)
+ 	    {
+diff --git a/libc/inet/ifaddrs.c b/libc/inet/ifaddrs.c
+index d1ff8d47f..c60dcf76d 100644
+--- a/libc/inet/ifaddrs.c
++++ b/libc/inet/ifaddrs.c
+@@ -22,7 +22,7 @@
+ #include <alloca.h>
+ #include <assert.h>
+ #include <errno.h>
+-/*#include <ifaddrs.h>*/
++#include <ifaddrs.h>
+ #include <net/if.h>
+ #include <netinet/in.h>
+ #include <netpacket/packet.h>
+@@ -57,7 +57,7 @@ libc_hidden_proto(abort)
+ 
+ 
+ #if __ASSUME_NETLINK_SUPPORT
+-#if 0 /* unused code */
++#ifdef __UCLIBC_SUPPORT_AI_ADDRCONFIG__
+ /* struct to hold the data for one ifaddrs entry, so we can allocate
+    everything at once.  */
+ struct ifaddrs_storage
+@@ -74,7 +74,7 @@ struct ifaddrs_storage
+   } addr, netmask, broadaddr;
+   char name[IF_NAMESIZE + 1];
+ };
+-#endif /* unused code */
++#endif /* __UCLIBC_SUPPORT_AI_ADDRCONFIG__ */
+ 
+ 
+ void
+@@ -324,7 +324,7 @@ __netlink_open (struct netlink_handle *h)
+ }
+ 
+ 
+-#if 0 /* unused code */
++#ifdef __UCLIBC_SUPPORT_AI_ADDRCONFIG__
+ /* We know the number of RTM_NEWLINK entries, so we reserve the first
+    # of entries for this type. All RTM_NEWADDR entries have an index
+    pointer to the RTM_NEWLINK entry.  To find the entry, create
+@@ -562,7 +562,7 @@ getifaddrs (struct ifaddrs **ifap)
+ 		      if ((rta_payload + 1) <= sizeof (ifas[ifa_index].name))
+ 			{
+ 			  ifas[ifa_index].ifa.ifa_name = ifas[ifa_index].name;
+-			  *(char *) __mempcpy (ifas[ifa_index].name, rta_data,
++			  *(char *) mempcpy (ifas[ifa_index].name, rta_data,
+ 					       rta_payload) = '\0';
+ 			}
+ 		      break;
+@@ -761,7 +761,7 @@ getifaddrs (struct ifaddrs **ifap)
+ 		      if (rta_payload + 1 <= sizeof (ifas[ifa_index].name))
+ 			{
+ 			  ifas[ifa_index].ifa.ifa_name = ifas[ifa_index].name;
+-			  *(char *) __mempcpy (ifas[ifa_index].name, rta_data,
++			  *(char *) mempcpy (ifas[ifa_index].name, rta_data,
+ 					       rta_payload) = '\0';
+ 			}
+ 		      else
+@@ -872,6 +872,6 @@ freeifaddrs (struct ifaddrs *ifa)
+ }
+ #endif
+ 
+-#endif /* unused code */
++#endif /* __UCLIBC_SUPPORT_AI_ADDRCONFIG__ */
+ 
+ #endif /* __ASSUME_NETLINK_SUPPORT */
+diff --git a/libc/inet/ifaddrs.h b/libc/inet/ifaddrs.h
+new file mode 100644
+index 000000000..ba6a1554b
+--- /dev/null
++++ b/libc/inet/ifaddrs.h
+@@ -0,0 +1,74 @@
++/* ifaddrs.h -- declarations for getting network interface addresses
++   Copyright (C) 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _IFADDRS_H
++#define _IFADDRS_H	1
++
++#include <features.h>
++#include <sys/socket.h>
++
++__BEGIN_DECLS
++
++/* The `getifaddrs' function generates a linked list of these structures.
++   Each element of the list describes one network interface.  */
++struct ifaddrs
++{
++  struct ifaddrs *ifa_next;	/* Pointer to the next structure.  */
++
++  char *ifa_name;		/* Name of this network interface.  */
++  unsigned int ifa_flags;	/* Flags as from SIOCGIFFLAGS ioctl.  */
++
++  struct sockaddr *ifa_addr;	/* Network address of this interface.  */
++  struct sockaddr *ifa_netmask; /* Netmask of this interface.  */
++  union
++  {
++    /* At most one of the following two is valid.  If the IFF_BROADCAST
++       bit is set in `ifa_flags', then `ifa_broadaddr' is valid.  If the
++       IFF_POINTOPOINT bit is set, then `ifa_dstaddr' is valid.
++       It is never the case that both these bits are set at once.  */
++    struct sockaddr *ifu_broadaddr; /* Broadcast address of this interface. */
++    struct sockaddr *ifu_dstaddr; /* Point-to-point destination address.  */
++  } ifa_ifu;
++  /* These very same macros are defined by <net/if.h> for `struct ifaddr'.
++     So if they are defined already, the existing definitions will be fine.  */
++# ifndef ifa_broadaddr
++#  define ifa_broadaddr	ifa_ifu.ifu_broadaddr
++# endif
++# ifndef ifa_dstaddr
++#  define ifa_dstaddr	ifa_ifu.ifu_dstaddr
++# endif
++
++  void *ifa_data;		/* Address-specific data (may be unused).  */
++};
++
++
++/* Create a linked list of `struct ifaddrs' structures, one for each
++   network interface on the host machine.  If successful, store the
++   list in *IFAP and return 0.  On errors, return -1 and set `errno'.
++
++   The storage returned in *IFAP is allocated dynamically and can
++   only be properly freed by passing it to `freeifaddrs'.  */
++extern int getifaddrs (struct ifaddrs **__ifap) __THROW;
++
++/* Reclaim the storage allocated by a previous `getifaddrs' call.  */
++extern void freeifaddrs (struct ifaddrs *__ifa)  __THROW;
++
++__END_DECLS
++
++#endif /* ifaddrs.h */
+diff --git a/libc/inet/netlinkaccess.h b/libc/inet/netlinkaccess.h
+index 2fa0d76b3..acadcb544 100644
+--- a/libc/inet/netlinkaccess.h
++++ b/libc/inet/netlinkaccess.h
+@@ -62,13 +62,13 @@ struct netlink_handle
+ };
+ 
+ 
+-#if 0 /* unused code */
++#ifdef __UCLIBC_SUPPORT_AI_ADDRCONFIG__
+ #if __ASSUME_NETLINK_SUPPORT == 0
+ extern smallint __no_netlink_support attribute_hidden;
+ #else
+ # define __no_netlink_support 0
+ #endif
+-#endif /* unused code */
++#endif /* __UCLIBC_SUPPORT_AI_ADDRCONFIG__ */
+ 
+ 
+ extern int __netlink_open (struct netlink_handle *h) attribute_hidden;

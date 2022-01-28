@@ -1,0 +1,170 @@
+"2005-08-01 16:04:40 +0000"
+diff --git a/Makefile b/Makefile
+index 12a4f36d0..e6c5a35d0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -200,7 +200,7 @@ scripts/split-include: $(top_srcdir)/scripts/split-include.c
+ 	scripts/mkdep -I include -- \
+ 	  `find $(top_srcdir) -name \*.h -print | sed -e "s,^./,,"` >> .hdepend;
+ 
+-depend dep: .depend
++depend dep: .depend include/bbconfigopts.h
+ 
+ include/config/MARKER: depend scripts/split-include
+ 	scripts/split-include include/config.h include/config
+@@ -219,6 +219,10 @@ include/bb_config.h: include/config.h
+ 		< $< >> $@
+ 	echo "#endif" >> $@
+ 
++include/bbconfigopts.h: .config
++	scripts/config/mkconfigs >include/bbconfigopts.h
++       
++
+ finished2:
+ 	$(SECHO)
+ 	$(SECHO) Finished installing...
+diff --git a/include/applets.h b/include/applets.h
+index 6bce2ee75..8ef5f460f 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -76,6 +76,9 @@
+ #ifdef CONFIG_BASENAME
+ 	APPLET(basename, basename_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_BBCONFIG
++	APPLET(bbconfig, bbconfig_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_BUNZIP2
+ 	APPLET(bunzip2, bunzip2_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 21980eeba..291ccb91a 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -231,6 +231,11 @@
+ 	"\t-2\tSuppress lines unique to FILE2\n" \
+ 	"\t-3\tSuppress lines common to both files"
+ 
++#define bbconfig_trivial_usage \
++	""
++#define bbconfig_full_usage \
++	"Print the config file which built busybox\n"
++       
+ #define cp_trivial_usage \
+ 	"[OPTION]... SOURCE DEST"
+ #define cp_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 57afd32ed..69a330058 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -34,6 +34,13 @@ config CONFIG_FEATURE_CROND_CALL_SENDMAIL
+ 	help
+ 	  Support calling /usr/sbin/sendmail for send cmd outputs.
+ 
++config CONFIG_BBCONFIG
++	bool "bbconfig"
++	default n
++	help
++	  The bbconfig applet will print the config file with which
++	  busybox was built.
++
+ config CONFIG_CRONTAB
+ 	bool "crontab"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index 5cff2fe69..d4c5ff76b 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -27,6 +27,7 @@ MISCUTILS-y:=
+ MISCUTILS-$(CONFIG_ADJTIMEX)    += adjtimex.o
+ MISCUTILS-$(CONFIG_CROND)       += crond.o
+ MISCUTILS-$(CONFIG_CRONTAB)     += crontab.o
++MISCUTILS-$(CONFIG_BBCONFIG)    += bbconfig.o
+ MISCUTILS-$(CONFIG_DC)          += dc.o
+ MISCUTILS-$(CONFIG_DEVFSD)      += devfsd.o
+ MISCUTILS-$(CONFIG_EJECT)       += eject.o
+diff --git a/miscutils/bbconfig.c b/miscutils/bbconfig.c
+new file mode 100644
+index 000000000..f2c692c9b
+--- /dev/null
++++ b/miscutils/bbconfig.c
+@@ -0,0 +1,8 @@
++#include "busybox.h"
++#include "bbconfigopts.h"
++
++int bbconfig_main(int argc, char **argv)
++{
++	printf(bbconfig_config);
++	return 0;
++}
+diff --git a/scripts/config/mkconfigs b/scripts/config/mkconfigs
+new file mode 100755
+index 000000000..f09c04ccd
+--- /dev/null
++++ b/scripts/config/mkconfigs
+@@ -0,0 +1,65 @@
++#!/bin/sh
++#
++# Copyright (C) 2002 Khalid Aziz <khalid_aziz at hp.com>
++# Copyright (C) 2002 Randy Dunlap <rddunlap at osdl.org>
++# Copyright (C) 2002 Al Stone <ahs3 at fc.hp.com>
++# Copyright (C) 2002 Hewlett-Packard Company
++#
++#   This program is free software; you can redistribute it and/or modify
++#   it under the terms of the GNU General Public License as published by
++#   the Free Software Foundation; either version 2 of the License, or
++#   (at your option) any later version.
++#
++#   This program is distributed in the hope that it will be useful,
++#   but WITHOUT ANY WARRANTY; without even the implied warranty of
++#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++#   GNU General Public License for more details.
++#
++#   You should have received a copy of the GNU General Public License
++#   along with this program; if not, write to the Free Software
++#   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++#
++#   Busybox version by Matteo Croce <3297627799 at wind.it>
++#
++# Rules to generate bbconfig.h from .config:
++#      - Retain lines that begin with "CONFIG_"
++#      - Retain lines that begin with "# CONFIG_"
++#      - lines that use double-quotes must \\-escape-quote them
++
++if [ $# -lt 1 ]
++then
++	config=.config
++else	config=$1
++fi
++
++echo "#ifndef _BBCONFIG_H"
++echo "#define _BBCONFIG_H"
++echo \
++"/*
++ * 
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or (at
++ * your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
++ * NON INFRINGEMENT.  See the GNU General Public License for more
++ * details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ *
++ *
++ * 
++ * This file is generated automatically by scripts/config/mkconfigs. Do not edit.
++ *
++ */"
++
++echo "static char const bbconfig_config[] = "
++echo "\"CONFIG_BEGIN=n\\n\\"
++echo "`cat $config | sed 's/\"/\\\\\"/g' | grep "^#\? \?CONFIG_" | awk '{ print $0 "\\\\n\\\\" }' `"
++echo "CONFIG_END=n\\n\";"
++echo "#endif /* _BBCONFIG_H */"

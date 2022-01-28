@@ -1,0 +1,201 @@
+"2006-01-04 00:46:31 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 4c7365e56..d110a19c7 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -460,6 +460,18 @@ config UCLIBC_HAS_PROGRAM_INVOCATION_NAME
+ 
+ 	  If unsure, just answer N.
+ 
++config UCLIBC_HAS___PROGNAME
++	bool "Support for __progname"
++	default y
++	help
++	  Some packages (like openssh) like to peek into internal libc
++	  symbols to make their output a bit more user friendly.
++
++	  At startup, __progname is automatically set up based on the
++	  value of ARGV[0].
++
++	  If unsure, just answer N.
++
+ config UNIX98PTY_ONLY
+ 	bool "Support only Unix 98 PTYs"
+ 	default y
+diff --git a/include/libc-internal.h b/include/libc-internal.h
+index c85629042..2e372267f 100644
+--- a/include/libc-internal.h
++++ b/include/libc-internal.h
+@@ -440,6 +440,9 @@ extern int __gettimeofday(struct timeval *__restrict __tv, *__restrict __timezon
+ #   define __pthread_mutex_unlock(mutex)                  ((void)0)
+ #  endif
+ 
++/* internal access to program name */
++extern const char *__uclibc_progname attribute_hidden;
++
+ # endif /* IS_IN_libc */
+ #endif /* __ASSEMBLER__ */
+ 
+diff --git a/libc/misc/assert/__assert.c b/libc/misc/assert/__assert.c
+index 2949b75f0..c55f0b6ae 100644
+--- a/libc/misc/assert/__assert.c
++++ b/libc/misc/assert/__assert.c
+@@ -41,10 +41,6 @@
+ 
+ #define ASSERT_SHOW_PROGNAME 1
+ 
+-#ifdef ASSERT_SHOW_PROGNAME
+-extern const char *__progname;
+-#endif
+-
+ static int in_assert;			/* bss inits to 0. */
+ 
+ void __assert(const char *assertion, const char * filename,
+@@ -55,7 +51,7 @@ void __assert(const char *assertion, const char * filename,
+ 
+ 		fprintf(stderr,
+ #ifdef ASSERT_SHOW_PROGNAME
+-				"%s: %s: %d: %s: Assertion `%s' failed.\n", __progname,
++				"%s: %s: %d: %s: Assertion `%s' failed.\n", __uclibc_progname,
+ #else
+ 				"%s: %d: %s: Assertion `%s' failed.\n",
+ #endif
+diff --git a/libc/misc/ctype/ctype.c b/libc/misc/ctype/ctype.c
+index 0a7e1bf84..69b4c1a6d 100644
+--- a/libc/misc/ctype/ctype.c
++++ b/libc/misc/ctype/ctype.c
+@@ -156,11 +156,9 @@ int CTYPE_NAME(NAME) (int c) \
+ #ifdef L___ctype_assert
+ #ifdef __UCLIBC_HAS_CTYPE_ENFORCED__
+ 
+-extern const char *__progname;
+-
+ void __isctype_assert(int c, int mask)
+ {
+-	fprintf(stderr,	"%s: __is*{_l}(%d,%#x {locale})\n", __progname, c, mask);
++	fprintf(stderr,	"%s: __is*{_l}(%d,%#x {locale})\n", __uclibc_progname, c, mask);
+ 	abort();
+ }
+ 
+diff --git a/libc/misc/error/err.c b/libc/misc/error/err.c
+index ddb8786b0..43fe60cc6 100644
+--- a/libc/misc/error/err.c
++++ b/libc/misc/error/err.c
+@@ -19,10 +19,8 @@
+ #endif
+ 
+ #ifdef __UCLIBC_MJN3_ONLY__
+-#warning REMINDER: Need a centralized __progname prototype.
+ #warning REMINDER: Deal with wide oriented stderr case.
+ #endif
+-extern const char *__progname;
+ 
+ static void vwarn_work(const char *format, va_list args, int showerr)
+ {
+@@ -41,7 +39,7 @@ static void vwarn_work(const char *format, va_list args, int showerr)
+ 
+ 	__STDIO_AUTO_THREADLOCK(stderr);
+ 
+-	fprintf(stderr, fmt, __progname);
++	fprintf(stderr, fmt, __uclibc_progname);
+ 	if (format) {
+ 		vfprintf(stderr, format, args);
+ 		f -= 2;					/* At 5 (showerr) or 9. */
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 424d066bb..3876c7606 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -63,13 +63,15 @@ extern void weak_function _locale_init(void) attribute_hidden;
+ #ifdef __UCLIBC_HAS_THREADS__
+ extern void weak_function __pthread_initialize_minimal(void);
+ #endif
++
++attribute_hidden const char *__uclibc_progname = NULL;
++#ifdef __UCLIBC_HAS___PROGNAME__
++strong_alias (__uclibc_progname, __progname)
++#endif
+ #ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
+-char *program_invocation_name = (char *) "";
+-char *program_invocation_short_name = (char *) "";
+-hidden_strong_alias (program_invocation_name, __progname_full)
+-hidden_strong_alias (program_invocation_short_name, __progname)
+-#else
+-attribute_hidden const char *__progname = NULL;
++attribute_hidden const char *__progname_full = NULL;
++strong_alias (__uclibc_progname, program_invocation_short_name)
++strong_alias (__progname_full, program_invocation_name)
+ #endif
+ 
+ /*
+@@ -261,16 +263,14 @@ __uClibc_main(int (*main)(int, char **, char **), int argc,
+ #endif
+ 
+ #ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
+-    if (likely(argv && argv[0])) {
+-	__progname_full = *argv;
+-	__progname = __strrchr(*argv, '/');
+-	if (__progname != NULL)
+-		++__progname;
+-	else
+-		__progname = __progname_full;
+-    }
++    __progname_full = *argv;
++    __progname = __strrchr(*argv, '/');
++    if (__progname != NULL)
++	++__progname;
++    else
++	__progname = __progname_full;
+ #else
+-    __progname = *argv;
++    __uclibc_progname = *argv;
+ #endif
+ 
+ #ifdef __UCLIBC_CTOR_DTOR__
+diff --git a/libc/sysdeps/linux/common/ssp.c b/libc/sysdeps/linux/common/ssp.c
+index ee9938650..6893ac358 100644
+--- a/libc/sysdeps/linux/common/ssp.c
++++ b/libc/sysdeps/linux/common/ssp.c
+@@ -77,12 +77,11 @@ static __always_inline attribute_noreturn void terminate(void)
+ void attribute_noreturn __stack_smash_handler(char func[], int damaged __attribute__ ((unused)));
+ void attribute_noreturn __stack_smash_handler(char func[], int damaged)
+ {
+-	extern char *__progname;
+ 	static const char message[] = ": stack smashing attack in function ";
+ 
+ 	block_signals();
+ 
+-	ssp_write(STDERR_FILENO, __progname, message, func);
++	ssp_write(STDERR_FILENO, __uclibc_progname, message, func);
+ 
+ 	/* The loop is added only to keep gcc happy. */
+ 	while(1)
+@@ -91,13 +90,12 @@ void attribute_noreturn __stack_smash_handler(char func[], int damaged)
+ 
+ void attribute_noreturn __stack_chk_fail(void)
+ {
+-	extern char *__progname;
+ 	static const char msg1[] = "stack smashing detected: ";
+ 	static const char msg3[] = " terminated";
+ 
+ 	block_signals();
+ 
+-	ssp_write(STDERR_FILENO, msg1, __progname, msg3);
++	ssp_write(STDERR_FILENO, msg1, __uclibc_progname, msg3);
+ 
+ 	/* The loop is added only to keep gcc happy. */
+ 	while(1)
+@@ -107,13 +105,12 @@ void attribute_noreturn __stack_chk_fail(void)
+ #if 0
+ void attribute_noreturn __chk_fail(void)
+ {
+-	extern char *__progname;
+ 	static const char msg1[] = "buffer overflow detected: ";
+ 	static const char msg3[] = " terminated";
+ 
+ 	block_signals();
+ 
+-	ssp_write(STDERR_FILENO, msg1, __progname, msg3);
++	ssp_write(STDERR_FILENO, msg1, __uclibc_progname, msg3);
+ 
+ 	/* The loop is added only to keep gcc happy. */
+ 	while(1)

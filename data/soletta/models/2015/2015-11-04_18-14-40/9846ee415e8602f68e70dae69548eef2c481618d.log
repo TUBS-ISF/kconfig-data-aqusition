@@ -1,0 +1,264 @@
+"2015-11-04 18:14:40 -0200"
+diff --git a/.gitmodules b/.gitmodules
+index 7310b57b..3545dca6 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -4,3 +4,6 @@
+ [submodule "src/thirdparty/tinycbor"]
+ 	path = src/thirdparty/tinycbor
+ 	url = https://github.com/01org/tinycbor/
++[submodule "src/thirdparty/tinydtls"]
++	path = src/thirdparty/tinydtls
++	url = git://git.code.sf.net/p/tinydtls/code
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 14df1c50..045254f3 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -473,6 +473,17 @@
+       "dependency": "openssl",
+       "type": "pkg-config",
+       "pkgname": "openssl"
++    },
++    {
++      "dependency": "tinydtls_src",
++      "type": "filesystem",
++      "files": [
++        "dtls.h"
++      ],
++      "path": {
++        "in-tree": "{TOP_SRCDIR}/src/thirdparty/tinydtls",
++        "out-of-tree": "{TINYDTLS_SRC}"
++      }
+     }
+   ]
+ }
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index 9de5fd57..07047e76 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -6,6 +6,16 @@ config NETWORK
+             making it possible to observe events, to inquire available links
+             and to set their states.
+ 
++config DTLS
++	bool "Enable DTLS (Datagram Transport Layer Security) support"
++	default n
++	depends on HAVE_TINYDTLS_SRC
++	help
++	    This enables support for DTLS (a derivation from the SSL protocol)
++	    support in the socket abstraction layer.
++
++	    If unsure, say N.
++
+ config COAP
+ 	bool "CoAP"
+ 	default y
+diff --git a/src/lib/comms/Makefile b/src/lib/comms/Makefile
+index 8b2590b4..d7f2fb7c 100644
+--- a/src/lib/comms/Makefile
++++ b/src/lib/comms/Makefile
+@@ -4,6 +4,30 @@ obj-networking-$(NETWORK) := \
+     sol-comms.o \
+     sol-socket.o
+ 
++obj-networking-$(DTLS) += \
++    $(TINYDTLS_SRC_PATH)/ccm.o \
++    $(TINYDTLS_SRC_PATH)/crypto.o \
++    $(TINYDTLS_SRC_PATH)/dtls.o \
++    $(TINYDTLS_SRC_PATH)/dtls_time.o \
++    $(TINYDTLS_SRC_PATH)/hmac.o \
++    $(TINYDTLS_SRC_PATH)/netq.o \
++    $(TINYDTLS_SRC_PATH)/peer.o \
++    $(TINYDTLS_SRC_PATH)/session.o \
++    $(TINYDTLS_SRC_PATH)/ecc/ecc.o \
++    $(TINYDTLS_SRC_PATH)/aes/rijndael.o \
++    $(TINYDTLS_SRC_PATH)/sha2/sha2.o
++
++obj-networking-$(DTLS)-extra-cflags += \
++    -I$(TINYDTLS_SRC_PATH) \
++    -Wno-sign-compare \
++    -Wno-discarded-qualifiers \
++    -Wno-old-style-definition \
++    -Wno-old-style-declaration \
++    -Wno-strict-prototypes \
++    -Wno-shadow \
++    -Wno-missing-prototypes \
++    -Wno-incompatible-pointer-types
++
+ obj-networking-$(PLATFORM_RIOTOS) += \
+     sol-network-impl-riot.o \
+     sol-socket-impl-riot.o
+@@ -25,7 +49,7 @@ obj-networking-$(OIC) += \
+     $(TINYCBOR_SRC_PATH)/cborparser.o \
+     $(TINYCBOR_SRC_PATH)/cborpretty.o
+ 
+-obj-networking-$(OIC)-extra-cflags := \
++obj-networking-$(OIC)-extra-cflags += \
+     -I$(TINYCBOR_SRC_PATH) \
+     -Wno-cpp \
+     -Wno-declaration-after-statement \
+diff --git a/src/lib/comms/dtls_config.h b/src/lib/comms/dtls_config.h
+new file mode 100644
+index 00000000..e5aca99b
+--- /dev/null
++++ b/src/lib/comms/dtls_config.h
+@@ -0,0 +1,91 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include "sol-common-buildopts.h"
++#include "sol_config.h"
++
++/* This file is required to build TinyDLS, and uses the constants defined
++ * by Soletta's build system to create one that TinyDTLS will be happy
++ * with, without actually running or generating its configure script. */
++
++#define NDEBUG
++
++#define DTLSv12 1
++
++#define DTLS_ECC 1
++#define DTLS_PSK 1
++
++#define SHA2_USE_INTTYPES_H 1
++#define WITH_SHA256 1
++
++#ifdef SOL_PLATFORM_CONTIKI
++/* Enabling WITH_CONTIKI will generate Contiki-only code paths, including
++ * generating code that does not depend on pthreads.  */
++#define WITH_CONTIKI 1
++#elif defined(PTHREAD) && PTHREAD == 1
++/* Pthread implementation exists, so use it.  */
++#else
++/* For TinyDTLS, if platform is not Contiki, it requires pthread because of
++ * a mutex in crypto.c.  Provide stub versions of pthread_mutex_t in this
++ * case, as Soletta is single-threaded.
++ *
++ * This is not optimal, though. Some cleanup must be performed in TinyDTLS
++ * in order to make it not assume Contiki when working with small embedded
++ * systems.  */
++typedef char pthread_mutex_t;
++
++static inline void
++pthread_mutex_lock(pthread_mutex_t *mtx)
++{
++    (void)mtx;
++}
++
++static inline void
++pthread_mutex_unlock(pthread_mutex_t *mtx)
++{
++    (void)mtx;
++}
++#endif
++
++#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++#define WORDS_BIGENDIAN 1
++#elif __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
++#undef WORDS_BIGENDIAN
++#else
++#error "Unknown byte order"
++#endif
++
++#define HAVE_ASSERT_H 1
++#define HAVE_SYS_TIME_H 1
++#define HAVE_TIME_H 1
+diff --git a/src/lib/comms/tinydtls.h b/src/lib/comms/tinydtls.h
+new file mode 100644
+index 00000000..3eede6aa
+--- /dev/null
++++ b/src/lib/comms/tinydtls.h
+@@ -0,0 +1,39 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++/* This file is required to build TinyDLS, and uses the constants defined
++ * by Soletta's build system to create one that TinyDTLS will be happy
++ * with, without actually running or generating its configure script. */
++
++#include "dtls_config.h"
+diff --git a/src/thirdparty/README b/src/thirdparty/README
+index 84e2acf8..288958c4 100644
+--- a/src/thirdparty/README
++++ b/src/thirdparty/README
+@@ -15,3 +15,11 @@ Thirdparty
+       - CBOR is the "Concise Binary Object Representation", and is the
+         format used by OIC to encode network payload. TinyCBOR is a library
+         to encode and decode data in CBOR.
++
++- TinyDTLS
++      - Repository: http://sourceforge.net/projects/tinydtls/
++      - License: MIT
++      - "Provides a very simple datagram server with DTLS support. It is
++        designed to support session multiplexing in single-threaded
++        applications and thus targets specifically on embedded systems."
++        (copied as is from its documentation)
+diff --git a/src/thirdparty/tinydtls b/src/thirdparty/tinydtls
+new file mode 160000
+index 00000000..ded031bc
+--- /dev/null
++++ b/src/thirdparty/tinydtls
+@@ -0,0 +1 @@
++Subproject commit ded031bc0642875daa47946d10e974318a5c95c4

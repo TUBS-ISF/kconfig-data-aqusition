@@ -1,0 +1,279 @@
+"2017-08-18 19:15:29 +0200"
+diff --git a/Config.in b/Config.in
+index f4b673abd..ae611f81e 100644
+--- a/Config.in
++++ b/Config.in
+@@ -691,6 +691,7 @@ source archival/Config.in
+ source coreutils/Config.in
+ source console-tools/Config.in
+ source debianutils/Config.in
++source klibc-utils/Config.in
+ source editors/Config.in
+ source findutils/Config.in
+ source init/Config.in
+diff --git a/Makefile b/Makefile
+index c756dfeaf..56d05ce16 100644
+--- a/Makefile
++++ b/Makefile
+@@ -470,6 +470,7 @@ libs-y		:= \
+ 		coreutils/ \
+ 		coreutils/libcoreutils/ \
+ 		debianutils/ \
++		klibc-utils/ \
+ 		e2fsprogs/ \
+ 		editors/ \
+ 		findutils/ \
+diff --git a/klibc-utils/Config.src b/klibc-utils/Config.src
+new file mode 100644
+index 000000000..fe7cb1315
+--- /dev/null
++++ b/klibc-utils/Config.src
+@@ -0,0 +1,10 @@
++#
++# For a description of the syntax of this configuration file,
++# see scripts/kbuild/config-language.txt.
++#
++
++menu "klibc-utils"
++
++INSERT
++
++endmenu
+diff --git a/klibc-utils/Kbuild.src b/klibc-utils/Kbuild.src
+new file mode 100644
+index 000000000..6b4fb7470
+--- /dev/null
++++ b/klibc-utils/Kbuild.src
+@@ -0,0 +1,9 @@
++# Makefile for busybox
++#
++# Copyright (C) 1999-2005 by Erik Andersen <andersen@codepoet.org>
++#
++# Licensed under GPLv2, see file LICENSE in this source tree.
++
++lib-y:=
++
++INSERT
+diff --git a/klibc-utils/minips.c b/klibc-utils/minips.c
+new file mode 100644
+index 000000000..96ce8868d
+--- /dev/null
++++ b/klibc-utils/minips.c
+@@ -0,0 +1,12 @@
++/*
++ * Copyright (c) 2017 Denys Vlasenko <vda.linux@googlemail.com>
++ *
++ * Licensed under GPLv2, see file LICENSE in this source tree.
++ */
++//config:config MINIPS
++//config:	bool "minips (11 kb)"
++//config:	default n  # for god's sake, just use "ps" name in your scripts
++//config:	help
++//config:	Alias to "ps".
++
++/* applet abd kbuild hooks are in ps.c */
+diff --git a/klibc-utils/nuke.c b/klibc-utils/nuke.c
+new file mode 100644
+index 000000000..363e03cce
+--- /dev/null
++++ b/klibc-utils/nuke.c
+@@ -0,0 +1,46 @@
++/*
++ * Copyright (c) 2017 Denys Vlasenko <vda.linux@googlemail.com>
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this source tree.
++ */
++//config:config NUKE
++//config:	bool "nuke"
++//config:	default y
++//config:	help
++//config:	Alias to "rm -rf".
++
++//applet:IF_NUKE(APPLET_NOEXEC(nuke, nuke, BB_DIR_BIN, BB_SUID_DROP, nuke))
++
++//kbuild:lib-$(CONFIG_NUKE) += nuke.o
++
++//usage:#define nuke_trivial_usage
++//usage:       "DIR..."
++//usage:#define nuke_full_usage "\n\n"
++//usage:       "Resursively remove DIRs"
++
++#include "libbb.h"
++
++/* This is a NOEXEC applet. Be very careful! */
++
++int nuke_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
++int nuke_main(int argc UNUSED_PARAM, char **argv)
++{
++// klibc-utils do not check opts, will try to delete "-dir" args
++	//opt = getopt32(argv, "");
++	//argv += optind;
++
++	while (*++argv) {
++#if 0
++// klibc-utils do not check this, will happily operate on ".."
++		const char *base = bb_get_last_path_component_strip(*argv);
++		if (DOT_OR_DOTDOT(base)) {
++			bb_error_msg("can't remove '.' or '..'");
++			continue;
++		}
++#endif
++		remove_file(*argv, FILEUTILS_FORCE | FILEUTILS_RECUR);
++	}
++
++// klibc-utils do not indicate errors
++	return EXIT_SUCCESS;
++}
+diff --git a/klibc-utils/resume.c b/klibc-utils/resume.c
+new file mode 100644
+index 000000000..de142f350
+--- /dev/null
++++ b/klibc-utils/resume.c
+@@ -0,0 +1,115 @@
++/*
++ * Copyright (c) 2017 Denys Vlasenko <vda.linux@googlemail.com>
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this source tree.
++ */
++//config:config RESUME
++//config:	bool "resume"
++//config:	default y
++//config:	help
++//config:	Resume from saved "suspend-to-disk" image
++
++//applet:IF_RESUME(APPLET_NOEXEC(resume, resume, BB_DIR_BIN, BB_SUID_DROP, resume))
++
++//kbuild:lib-$(CONFIG_RESUME) += resume.o
++
++#include "libbb.h"
++
++/* This is a NOEXEC applet. Be very careful! */
++
++/* name_to_dev_t() in klibc-utils supports extended device name formats,
++ * apart from the usual case where /dev/NAME already exists.
++ *
++ * - device number in hexadecimal represents itself (in dev_t layout).
++ * - device number in major:minor decimal represents itself.
++ * - if block device (or partition) with this name is found in sysfs.
++ * - if /dev/ prefix is not given, it is assumed.
++ *
++ * klibc-utils also recognizes these, but they don't work
++ * for "resume" tool purposes (thus we don't support them (yet?)):
++ * - /dev/nfs
++ * - /dev/ram (alias to /dev/ram0)
++ * - /dev/mtd
++ */
++static dev_t name_to_dev_t(const char *devname)
++{
++	char devfile[sizeof(int)*3 * 2 + 4];
++	char *sysname;
++	unsigned major_num, minor_num;
++	struct stat st;
++	int r;
++
++	if (strncmp(devname, "/dev/", 5) != 0) {
++		char *cptr;
++
++		cptr = strchr(devname, ':');
++		if (cptr) {
++			/* Colon-separated decimal device number? */
++			*cptr = '\0';
++			major_num = bb_strtou(devname, NULL, 10);
++			if (!errno)
++				minor_num = bb_strtou(cptr + 1, NULL, 10);
++			*cptr = ':';
++			if (!errno)
++				return makedev(major_num, minor_num);
++		} else {
++			/* Hexadecimal device number? */
++			dev_t res = (dev_t) bb_strtoul(devname, NULL, 16);
++			if (!errno)
++				return res;
++		}
++
++		devname = xasprintf("/dev/%s", devname);
++	}
++	/* Now devname is always "/dev/FOO" */
++
++	if (stat(devname, &st) == 0 && S_ISBLK(st.st_mode))
++		return st.st_rdev;
++
++	/* Full blockdevs as well as partitions may be visible
++	 * in /sys/class/block/ even if /dev is not populated.
++	 */
++	sysname = xasprintf("/sys/class/block/%s/dev", devname + 5);
++	r = open_read_close(sysname, devfile, sizeof(devfile) - 1);
++	//free(sysname);
++	if (r > 0) {
++		devfile[r] = '\0';
++		if (sscanf(devfile, "%u:%u", &major_num, &minor_num) == 2) {
++			return makedev(major_num, minor_num);
++		}
++	}
++
++	return (dev_t) 0;
++}
++
++//usage:#define resume_trivial_usage
++//usage:       "BLOCKDEV [OFFSET]"
++//usage:#define resume_full_usage "\n"
++//usage:   "\n""Restore system state from 'suspend-to-disk' data in BLOCKDEV"
++
++int resume_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
++int resume_main(int argc UNUSED_PARAM, char **argv)
++{
++	unsigned long long ofs;
++	dev_t resume_device;
++	char *s;
++	int fd;
++
++	argv++;
++	if (!argv[0])
++		bb_show_usage();
++
++	resume_device = name_to_dev_t(argv[0]);
++	if (major(resume_device) == 0) {
++		bb_error_msg_and_die("invalid resume device: %s", argv[0]);
++	}
++	ofs = (argv[1] ? xstrtoull(argv[1], 0) : 0);
++
++	fd = xopen("/sys/power/resume", O_WRONLY);
++	s = xasprintf("%u:%u:%llu", major(resume_device), minor(resume_device), ofs);
++
++	xwrite_str(fd, s);
++	/* if write() returns, resume did not succeed */
++
++	return EXIT_FAILURE; /* klibc-utils exits -1 aka 255 */
++}
+diff --git a/procps/ps.c b/procps/ps.c
+index 646b1144e..7edf6dbd1 100644
+--- a/procps/ps.c
++++ b/procps/ps.c
+@@ -50,9 +50,12 @@
+ //config:	Include support for measuring HZ on old kernels and non-ELF systems
+ //config:	(if you are on Linux 2.4.0+ and use ELF, you don't need this)
+ 
+-//applet:IF_PS(APPLET_NOEXEC(ps, ps, BB_DIR_BIN, BB_SUID_DROP, ps))
++//                 APPLET_NOEXEC:name    main location    suid_type     help
++//applet:IF_PS(    APPLET_NOEXEC(ps,     ps,  BB_DIR_BIN, BB_SUID_DROP, ps))
++//applet:IF_MINIPS(APPLET_NOEXEC(minips, ps,  BB_DIR_BIN, BB_SUID_DROP, ps))
+ 
+ //kbuild:lib-$(CONFIG_PS) += ps.o
++//kbuild:lib-$(CONFIG_MINIPS) += ps.o
+ 
+ //usage:#if ENABLE_DESKTOP
+ //usage:
+diff --git a/scripts/Makefile.IMA b/scripts/Makefile.IMA
+index 0eced2982..f155108d7 100644
+--- a/scripts/Makefile.IMA
++++ b/scripts/Makefile.IMA
+@@ -115,6 +115,9 @@ lib-y:=
+ include debianutils/Kbuild
+ lib-all-y += $(patsubst %,debianutils/%,$(sort $(lib-y)))
+ lib-y:=
++include klibc-utils/Kbuild
++lib-all-y += $(patsubst %,klibc-utils/%,$(sort $(lib-y)))
++lib-y:=
+ include runit/Kbuild
+ lib-all-y += $(patsubst %,runit/%,$(sort $(lib-y)))
+ lib-y:=

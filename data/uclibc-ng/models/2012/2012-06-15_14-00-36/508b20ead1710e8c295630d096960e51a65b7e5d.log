@@ -1,0 +1,96 @@
+"2012-06-15 14:00:36 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index cbf2c96b8..f57109584 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -745,7 +745,6 @@ config UCLIBC_HAS_PROGRAM_INVOCATION_NAME
+ config UCLIBC_HAS___PROGNAME
+ 	bool "Support for __progname"
+ 	default y
+-	depends on UCLIBC_HAS_PROGRAM_INVOCATION_NAME
+ 	help
+ 	  Some packages (like openssh) like to peek into internal libc
+ 	  symbols to make their output a bit more user friendly.
+diff --git a/include/errno.h b/include/errno.h
+index 7e1f583a8..fb7c1f561 100644
+--- a/include/errno.h
++++ b/include/errno.h
+@@ -47,6 +47,9 @@ __BEGIN_DECLS
+ extern int errno;
+ #endif
+ 
++#ifdef _LIBC
++extern const char *__progname, *__progname_full;
++#endif
+ #if defined __USE_GNU && defined __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
+ 
+ /* The full and simple forms of the name with which the program was
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index f2290b32a..d120fa22e 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -140,14 +140,19 @@ extern void (*__fini_array_end []) (void) attribute_hidden;
+ # endif
+ #endif
+ 
+-attribute_hidden const char *__uclibc_progname = "";
+-#ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
+-const char *program_invocation_short_name = "";
+-const char *program_invocation_name = "";
++const char *__uclibc_progname = "";
++#if !defined __UCLIBC_HAS___PROGNAME__ && defined __USE_GNU && defined __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
++# define __progname program_invocation_short_name
++# define __progname_full program_invocation_name
+ #endif
+-#ifdef __UCLIBC_HAS___PROGNAME__
+-weak_alias (program_invocation_short_name, __progname)
+-weak_alias (program_invocation_name, __progname_full)
++#if defined __UCLIBC_HAS___PROGNAME__ || (defined __USE_GNU && defined __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__)
++const char *__progname = "";
++/* psm: why have a visible __progname_full? */
++const char *__progname_full = "";
++# if defined __UCLIBC_HAS___PROGNAME__ && defined __USE_GNU && defined __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
++weak_alias (__progname, program_invocation_short_name)
++weak_alias (__progname_full, program_invocation_name)
++# endif
+ #endif
+ 
+ /*
+@@ -380,14 +385,14 @@ void __uClibc_main(int (*main)(int, char **, char **), int argc,
+ #endif
+ 
+     __uclibc_progname = *argv;
+-#ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
++#if defined __UCLIBC_HAS___PROGNAME__ || (defined __USE_GNU && defined __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__)
+     if (*argv != NULL) {
+-	program_invocation_name = *argv;
+-	program_invocation_short_name = strrchr(*argv, '/');
+-	if (program_invocation_short_name != NULL)
+-	    ++program_invocation_short_name;
++	__progname_full = *argv;
++	__progname = strrchr(*argv, '/');
++	if (__progname != NULL)
++	    ++__progname;
+ 	else
+-	    program_invocation_short_name = program_invocation_name;
++	    __progname = *argv;
+     }
+ #endif
+ 
+diff --git a/utils/getconf.c b/utils/getconf.c
+index 4c058a080..dba4a9e8c 100644
+--- a/utils/getconf.c
++++ b/utils/getconf.c
+@@ -1053,10 +1053,8 @@ static const struct { const char *name; int num; } specs[] =
+   };
+ static const int nspecs = sizeof (specs) / sizeof (specs[0]);
+ 
+-#ifdef __UCLIBC_HAS___PROGNAME__
+-extern const char *__progname;
+-#else
+-#define __progname "foo"
++#ifndef __UCLIBC_HAS___PROGNAME__
++static const char *__progname = "getconf"
+ #endif
+ 
+ static attribute_noreturn void

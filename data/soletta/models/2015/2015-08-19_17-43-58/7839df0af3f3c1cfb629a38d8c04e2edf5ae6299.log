@@ -1,0 +1,645 @@
+"2015-08-19 17:43:58 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index e8d8bced..e115e605 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -67,6 +67,7 @@ source "src/modules/flow/random/Kconfig"
+ source "src/modules/flow/servo-motor/Kconfig"
+ source "src/modules/flow/string/Kconfig"
+ source "src/modules/flow/switcher/Kconfig"
++source "src/modules/flow/temperature/Kconfig"
+ source "src/modules/flow/test/Kconfig"
+ source "src/modules/flow/thingspeak/Kconfig"
+ source "src/modules/flow/timer/Kconfig"
+diff --git a/src/modules/flow/temperature/Kconfig b/src/modules/flow/temperature/Kconfig
+new file mode 100644
+index 00000000..c663b41c
+--- /dev/null
++++ b/src/modules/flow/temperature/Kconfig
+@@ -0,0 +1,3 @@
++config FLOW_NODE_TYPE_TEMPERATURE
++	tristate "Node type: temperature"
++	default y
+diff --git a/src/modules/flow/temperature/Makefile b/src/modules/flow/temperature/Makefile
+new file mode 100644
+index 00000000..c55e2775
+--- /dev/null
++++ b/src/modules/flow/temperature/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_TEMPERATURE) += temperature.mod
++obj-temperature-$(FLOW_NODE_TYPE_TEMPERATURE) := temperature.json temperature.o
+diff --git a/src/modules/flow/temperature/temperature.c b/src/modules/flow/temperature/temperature.c
+new file mode 100644
+index 00000000..f4a12970
+--- /dev/null
++++ b/src/modules/flow/temperature/temperature.c
+@@ -0,0 +1,265 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "temperature-gen.h"
++#include "sol-flow-internal.h"
++
++#include <sol-util.h>
++#include <errno.h>
++
++
++#define CELSIUS_TO_FAHRENHEIT(_var) \
++    do { \
++        _var = _var * 9.0 / 5 + 32; \
++    } while (0)
++
++#define CELSIUS_TO_FAHRENHEIT_INTERVAL(_var) \
++    do { \
++        _var *= 9.0 / 5; \
++    } while (0)
++
++#define CELSIUS_TO_KELVIN(_var) \
++    do { \
++        _var += 273.15; \
++    } while (0)
++
++#define FAHRENHEIT_TO_CELSIUS(_var) \
++    do { \
++        _var = (_var - 32) * 5.0 / 9; \
++    } while (0)
++
++#define FAHRENHEIT_TO_CELSIUS_INTERVAL(_var) \
++    do { \
++        _var *= 5.0 / 9; \
++    } while (0)
++
++#define FAHRENHEIT_TO_RANKINE(_var) \
++    do { \
++        _var += 459.67; \
++    } while (0)
++
++#define KELVIN_TO_CELSIUS(_var) \
++    do { \
++        _var -= 273.15; \
++    } while (0)
++
++#define KELVIN_TO_RANKINE(_var) \
++    do { \
++        _var *= 9.0 / 5; \
++    } while (0)
++
++#define RANKINE_TO_CELSIUS(_var) \
++    do { \
++        _var = (_var - 491.67) * 5.0 / 9; \
++    } while (0)
++
++#define RANKINE_TO_CELSIUS_INTERVAL(_var) \
++    do { \
++        _var *= 5.0 / 9; \
++    } while (0)
++
++#define RANKINE_TO_FAHRENHEIT(_var) \
++    do { \
++        _var -= 459.67; \
++    } while (0)
++
++#define RANKINE_TO_KELVIN(_var) \
++    do { \
++        _var *= 5.0 / 9; \
++    } while (0)
++
++
++static int
++fahrenheit_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int r;
++    struct sol_drange in_value, out_value;
++
++    r = sol_flow_packet_get_drange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__FAHRENHEIT, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    FAHRENHEIT_TO_RANKINE(out_value.val);
++    FAHRENHEIT_TO_RANKINE(out_value.min);
++    FAHRENHEIT_TO_RANKINE(out_value.max);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__RANKINE, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    RANKINE_TO_KELVIN(out_value.val);
++    RANKINE_TO_KELVIN(out_value.min);
++    RANKINE_TO_KELVIN(out_value.max);
++    RANKINE_TO_KELVIN(out_value.step);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__KELVIN, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    FAHRENHEIT_TO_CELSIUS(out_value.val);
++    FAHRENHEIT_TO_CELSIUS(out_value.min);
++    FAHRENHEIT_TO_CELSIUS(out_value.max);
++    FAHRENHEIT_TO_CELSIUS_INTERVAL(out_value.step);
++
++    return sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__CELSIUS, &out_value);
++}
++
++static int
++celsius_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int r;
++    struct sol_drange in_value, out_value;
++
++    r = sol_flow_packet_get_drange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__CELSIUS, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    CELSIUS_TO_KELVIN(out_value.val);
++    CELSIUS_TO_KELVIN(out_value.min);
++    CELSIUS_TO_KELVIN(out_value.max);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__KELVIN, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    KELVIN_TO_RANKINE(out_value.val);
++    KELVIN_TO_RANKINE(out_value.min);
++    KELVIN_TO_RANKINE(out_value.max);
++    KELVIN_TO_RANKINE(out_value.step);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__RANKINE, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    CELSIUS_TO_FAHRENHEIT(out_value.val);
++    CELSIUS_TO_FAHRENHEIT(out_value.min);
++    CELSIUS_TO_FAHRENHEIT(out_value.max);
++    CELSIUS_TO_FAHRENHEIT_INTERVAL(out_value.step);
++
++    return sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__FAHRENHEIT, &out_value);
++}
++
++static int
++kelvin_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int r;
++    struct sol_drange in_value, out_value;
++
++    r = sol_flow_packet_get_drange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__KELVIN, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    KELVIN_TO_CELSIUS(out_value.val);
++    KELVIN_TO_CELSIUS(out_value.min);
++    KELVIN_TO_CELSIUS(out_value.max);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__CELSIUS, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    KELVIN_TO_RANKINE(out_value.val);
++    KELVIN_TO_RANKINE(out_value.min);
++    KELVIN_TO_RANKINE(out_value.max);
++    KELVIN_TO_RANKINE(out_value.step);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__RANKINE, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    RANKINE_TO_FAHRENHEIT(out_value.val);
++    RANKINE_TO_FAHRENHEIT(out_value.min);
++    RANKINE_TO_FAHRENHEIT(out_value.max);
++
++    return sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__FAHRENHEIT, &out_value);
++}
++
++static int
++rankine_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int r;
++    struct sol_drange in_value, out_value;
++
++    r = sol_flow_packet_get_drange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__RANKINE, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    RANKINE_TO_KELVIN(out_value.val);
++    RANKINE_TO_KELVIN(out_value.min);
++    RANKINE_TO_KELVIN(out_value.max);
++    RANKINE_TO_KELVIN(out_value.step);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__KELVIN, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    RANKINE_TO_FAHRENHEIT(out_value.val);
++    RANKINE_TO_FAHRENHEIT(out_value.min);
++    RANKINE_TO_FAHRENHEIT(out_value.max);
++
++    r = sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__FAHRENHEIT, &out_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    out_value = in_value;
++    RANKINE_TO_CELSIUS(out_value.val);
++    RANKINE_TO_CELSIUS(out_value.min);
++    RANKINE_TO_CELSIUS(out_value.max);
++    RANKINE_TO_CELSIUS_INTERVAL(out_value.step);
++
++    return sol_flow_send_drange_packet(node,
++        SOL_FLOW_NODE_TYPE_TEMPERATURE_CONVERTER__OUT__CELSIUS, &out_value);
++}
++
++#include "temperature-gen.c"
+diff --git a/src/modules/flow/temperature/temperature.json b/src/modules/flow/temperature/temperature.json
+new file mode 100644
+index 00000000..11f9caf5
+--- /dev/null
++++ b/src/modules/flow/temperature/temperature.json
+@@ -0,0 +1,73 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "temperature",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "BSD 3-Clause",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "temperature",
++      "description": "Convert temperatures between Kelvin, Celsius, Farenheit and Rankine.",
++      "in_ports": [
++        {
++          "data_type": "float",
++          "description": "Temperature in Celsius.",
++          "methods": {
++            "process": "celsius_process"
++          },
++          "name": "CELSIUS"
++        },
++        {
++          "data_type": "float",
++          "description": "Temperature in Fahrenheit.",
++          "methods": {
++            "process": "fahrenheit_process"
++          },
++          "name": "FAHRENHEIT"
++        },
++        {
++          "data_type": "float",
++          "description": "Temperature in Kelvin.",
++          "methods": {
++            "process": "kelvin_process"
++          },
++          "name": "KELVIN"
++        },
++        {
++          "data_type": "float",
++          "description": "Temperature in Rankine.",
++          "methods": {
++            "process": "rankine_process"
++          },
++          "name": "RANKINE"
++        }
++      ],
++      "name": "temperature/converter",
++      "out_ports": [
++        {
++          "data_type": "float",
++          "description": "Temperature in Celsius.",
++          "name": "CELSIUS"
++        },
++        {
++          "data_type": "float",
++          "description": "Temperature in Fahrenheit.",
++          "name": "FAHRENHEIT"
++        },
++        {
++          "data_type": "float",
++          "description": "Temperature in Kelvin.",
++          "name": "KELVIN"
++        },
++        {
++          "data_type": "float",
++          "description": "Temperature in Rankine.",
++          "name": "RANKINE"
++        }
++      ],
++      "url": "http://solettaproject.org/doc/latest/node_types/temperature/converter.html"
++    }
++  ]
++}
+diff --git a/src/samples/flow/am2315/am2315.fbp b/src/samples/flow/am2315/am2315.fbp
+index 9a3522fc..217edc1c 100644
+--- a/src/samples/flow/am2315/am2315.fbp
++++ b/src/samples/flow/am2315/am2315.fbp
+@@ -38,6 +38,7 @@
+ timer(timer)
+ temp(am2315/temperature:i2c_bus=0,i2c_slave=1)
+ humidity(am2315/humidity:i2c_bus=0,i2c_slave=1)
++converter(temperature/converter)
+ 
+-timer OUT -> TICK temp CELSIUS -> IN _(console)
++timer OUT -> TICK temp KELVIN -> KELVIN converter CELSIUS -> IN _(console)
+ timer OUT -> TICK humidity OUT -> IN _(console)
+diff --git a/src/samples/flow/galileo-grove-kit/grove-temperature-sensor.fbp b/src/samples/flow/galileo-grove-kit/grove-temperature-sensor.fbp
+index 73609e3c..69f4ebe3 100755
+--- a/src/samples/flow/galileo-grove-kit/grove-temperature-sensor.fbp
++++ b/src/samples/flow/galileo-grove-kit/grove-temperature-sensor.fbp
+@@ -37,6 +37,6 @@
+ 
+ const_celsius_symbol(constant/string:value= C)
+ 
+-temperatureSensor(TemperatureSensor) CELSIUS -> IN converter(converter/float-to-string)
++temperatureSensor(TemperatureSensor) KELVIN -> KELVIN _(temperature/converter) CELSIUS -> IN converter(converter/float-to-string)
+ converter OUT -> IN[0] concat(string/concatenate)
+ const_celsius_symbol OUT -> IN[1] concat OUT -> IN screen(LCDString)
+diff --git a/src/test-fbp/temperature-converter-celsius.fbp b/src/test-fbp/temperature-converter-celsius.fbp
+new file mode 100644
+index 00000000..99eb1bf9
+--- /dev/null
++++ b/src/test-fbp/temperature-converter-celsius.fbp
+@@ -0,0 +1,54 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++boiling_point_water_c(constant/float:value=99.9839)
++boiling_point_water_k(constant/float:value=373.1339)
++boiling_point_water_f(constant/float:value=211.97102)
++boiling_point_water_r(constant/float:value=671.64102)
++
++converter(temperature/converter)
++
++boiling_point_water_c OUT -> CELSIUS converter
++
++converter CELSIUS -> IN[0] cmp_celsius(float/equal)
++boiling_point_water_c OUT -> IN[1] cmp_celsius
++cmp_celsius OUT -> RESULT result_celsius(test/result)
++
++converter KELVIN -> IN[0] cmp_kelvin(float/equal)
++boiling_point_water_k OUT -> IN[1] cmp_kelvin
++cmp_kelvin OUT -> RESULT result_kelvin(test/result)
++
++converter RANKINE -> IN[0] cmp_rankine(float/equal)
++boiling_point_water_r OUT -> IN[1] cmp_rankine
++cmp_rankine OUT -> RESULT result_rankine(test/result)
++
++converter FAHRENHEIT -> IN[0] cmp_fahrenheit(float/equal)
++boiling_point_water_f OUT -> IN[1] cmp_fahrenheit
++cmp_fahrenheit OUT -> RESULT result_fahrenheit(test/result)
+diff --git a/src/test-fbp/temperature-converter-fahrenheit.fbp b/src/test-fbp/temperature-converter-fahrenheit.fbp
+new file mode 100644
+index 00000000..ae0d9921
+--- /dev/null
++++ b/src/test-fbp/temperature-converter-fahrenheit.fbp
+@@ -0,0 +1,54 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++boiling_point_water_c(constant/float:value=99.9839)
++boiling_point_water_k(constant/float:value=373.1339)
++boiling_point_water_f(constant/float:value=211.97102)
++boiling_point_water_r(constant/float:value=671.64102)
++
++converter(temperature/converter)
++
++boiling_point_water_f OUT -> FAHRENHEIT converter
++
++converter CELSIUS -> IN[0] cmp_celsius(float/equal)
++boiling_point_water_c OUT -> IN[1] cmp_celsius
++cmp_celsius OUT -> RESULT result_celsius(test/result)
++
++converter KELVIN -> IN[0] cmp_kelvin(float/equal)
++boiling_point_water_k OUT -> IN[1] cmp_kelvin
++cmp_kelvin OUT -> RESULT result_kelvin(test/result)
++
++converter RANKINE -> IN[0] cmp_rankine(float/equal)
++boiling_point_water_r OUT -> IN[1] cmp_rankine
++cmp_rankine OUT -> RESULT result_rankine(test/result)
++
++converter FAHRENHEIT -> IN[0] cmp_fahrenheit(float/equal)
++boiling_point_water_f OUT -> IN[1] cmp_fahrenheit
++cmp_fahrenheit OUT -> RESULT result_fahrenheit(test/result)
+diff --git a/src/test-fbp/temperature-converter-kelvin.fbp b/src/test-fbp/temperature-converter-kelvin.fbp
+new file mode 100644
+index 00000000..4a9b0f7f
+--- /dev/null
++++ b/src/test-fbp/temperature-converter-kelvin.fbp
+@@ -0,0 +1,54 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++boiling_point_water_c(constant/float:value=99.9839)
++boiling_point_water_k(constant/float:value=373.1339)
++boiling_point_water_f(constant/float:value=211.97102)
++boiling_point_water_r(constant/float:value=671.64102)
++
++converter(temperature/converter)
++
++boiling_point_water_k OUT -> KELVIN converter
++
++converter CELSIUS -> IN[0] cmp_celsius(float/equal)
++boiling_point_water_c OUT -> IN[1] cmp_celsius
++cmp_celsius OUT -> RESULT result_celsius(test/result)
++
++converter KELVIN -> IN[0] cmp_kelvin(float/equal)
++boiling_point_water_k OUT -> IN[1] cmp_kelvin
++cmp_kelvin OUT -> RESULT result_kelvin(test/result)
++
++converter RANKINE -> IN[0] cmp_rankine(float/equal)
++boiling_point_water_r OUT -> IN[1] cmp_rankine
++cmp_rankine OUT -> RESULT result_rankine(test/result)
++
++converter FAHRENHEIT -> IN[0] cmp_fahrenheit(float/equal)
++boiling_point_water_f OUT -> IN[1] cmp_fahrenheit
++cmp_fahrenheit OUT -> RESULT result_fahrenheit(test/result)
+diff --git a/src/test-fbp/temperature-converter-rankine.fbp b/src/test-fbp/temperature-converter-rankine.fbp
+new file mode 100644
+index 00000000..39929c43
+--- /dev/null
++++ b/src/test-fbp/temperature-converter-rankine.fbp
+@@ -0,0 +1,54 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++boiling_point_water_c(constant/float:value=99.9839)
++boiling_point_water_k(constant/float:value=373.1339)
++boiling_point_water_f(constant/float:value=211.97102)
++boiling_point_water_r(constant/float:value=671.64102)
++
++converter(temperature/converter)
++
++boiling_point_water_r OUT -> RANKINE converter
++
++converter CELSIUS -> IN[0] cmp_celsius(float/equal)
++boiling_point_water_c OUT -> IN[1] cmp_celsius
++cmp_celsius OUT -> RESULT result_celsius(test/result)
++
++converter KELVIN -> IN[0] cmp_kelvin(float/equal)
++boiling_point_water_k OUT -> IN[1] cmp_kelvin
++cmp_kelvin OUT -> RESULT result_kelvin(test/result)
++
++converter RANKINE -> IN[0] cmp_rankine(float/equal)
++boiling_point_water_r OUT -> IN[1] cmp_rankine
++cmp_rankine OUT -> RESULT result_rankine(test/result)
++
++converter FAHRENHEIT -> IN[0] cmp_fahrenheit(float/equal)
++boiling_point_water_f OUT -> IN[1] cmp_fahrenheit
++cmp_fahrenheit OUT -> RESULT result_fahrenheit(test/result)

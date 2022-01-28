@@ -1,0 +1,431 @@
+"2015-08-07 13:59:36 -0300"
+diff --git a/Kconfig b/Kconfig
+index 3215a22f..62753725 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -17,11 +17,16 @@ config ENABLE_DYNAMIC_MODULES
+ 	bool
+ 	default n
+ 
++config SHARED_LIBRARY
++    bool "Build shared library"
++    default y
++    depends on FEATURE_DYNAMIC_LINKER
++
+ config MODULES
+ 	bool "Enable loadable module support"
+ 	option modules
+ 	select ENABLE_DYNAMIC_MODULES
+-	depends on PLATFORM_LINUX
++	depends on SHARED_LIBRARY
+ 	default y
+ 	help
+             This option enables dynamically loadable modules to be
+@@ -57,19 +62,21 @@ endmenu
+ menu "Core library"
+ source "src/lib/common/Kconfig"
+ source "src/lib/datatypes/Kconfig"
+-source "src/lib/io/Kconfig"
+ source "src/lib/parsers/Kconfig"
+ endmenu
+ 
+ menu "Flow Based Programming (FBP)"
++depends on FEATURE_FLOW
+ source "src/lib/flow/Kconfig"
+ endmenu
+ 
+ menu "Networking"
++depends on FEATURE_NETWORK
+ source "src/lib/comms/Kconfig"
+ endmenu
+ 
+ menu "Samples"
++depends on FEATURE_RUNNABLE_PROGRAMS
+ source "src/samples/coap/Kconfig"
+ source "src/samples/common/Kconfig"
+ 
+@@ -96,6 +103,7 @@ source "src/samples/flow/misc/Kconfig"
+ endmenu
+ 
+ menu "Tools"
++depends on FEATURE_RUNNABLE_PROGRAMS
+ source "src/bin/sol-fbp-generator/Kconfig"
+ source "src/bin/sol-fbp-runner/Kconfig"
+ source "src/bin/sol-fbp-to-dot/Kconfig"
+@@ -103,5 +111,6 @@ source "src/bin/sol-flow-node-types/Kconfig"
+ endmenu
+ 
+ menu "Test suite"
++depends on FEATURE_RUNNABLE_PROGRAMS
+ source "src/test/Kconfig"
+ endmenu
+diff --git a/src/bin/sol-fbp-generator/Kconfig b/src/bin/sol-fbp-generator/Kconfig
+index 8fe26a03..6c79676b 100644
+--- a/src/bin/sol-fbp-generator/Kconfig
++++ b/src/bin/sol-fbp-generator/Kconfig
+@@ -1,4 +1,4 @@
+ config FBP_GENERATOR
+ 	bool "fbp generator"
+-	depends on PLATFORM_LINUX && NODE_DESCRIPTION
++	depends on NODE_DESCRIPTION
+ 	default y
+diff --git a/src/bin/sol-fbp-runner/Kconfig b/src/bin/sol-fbp-runner/Kconfig
+index ccc724be..4569ba09 100644
+--- a/src/bin/sol-fbp-runner/Kconfig
++++ b/src/bin/sol-fbp-runner/Kconfig
+@@ -1,4 +1,4 @@
+ config FBP_RUNNER
+ 	bool "fbp runner"
+-	depends on PLATFORM_LINUX && NODE_DESCRIPTION
++	depends on NODE_DESCRIPTION
+ 	default y
+diff --git a/src/bin/sol-fbp-to-dot/Kconfig b/src/bin/sol-fbp-to-dot/Kconfig
+index 804d5ceb..523cc01f 100644
+--- a/src/bin/sol-fbp-to-dot/Kconfig
++++ b/src/bin/sol-fbp-to-dot/Kconfig
+@@ -1,4 +1,4 @@
+ config FBP_TO_DOT
+ 	bool "fbp-to-dot converter"
+-	depends on PLATFORM_LINUX && NODE_DESCRIPTION
++	depends on NODE_DESCRIPTION
+ 	default y
+diff --git a/src/bin/sol-flow-node-types/Kconfig b/src/bin/sol-flow-node-types/Kconfig
+index b9b70fde..89f87435 100644
+--- a/src/bin/sol-flow-node-types/Kconfig
++++ b/src/bin/sol-flow-node-types/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPES
+ 	bool "flow node types"
+-	depends on PLATFORM_LINUX && NODE_DESCRIPTION
++	depends on NODE_DESCRIPTION
+ 	default y
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index bdc70eeb..786963e6 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -19,6 +19,10 @@ config PLATFORM_LINUX
+ 
+ choice
+ 	prompt "Target platform"
++	default PLATFORM_SYSTEMD if LINUX && HAVE_SYSTEMD
++	default PLATFORM_LINUX_MICRO if LINUX
++	default PLATFORM_RIOTOS if RIOT
++	default PLATFORM_CONTIKI if CONTIKI
+ 	default PLATFORM_DUMMY
+ 	help
+ 
+@@ -43,8 +47,7 @@ choice
+ 
+ config PLATFORM_DUMMY
+ 	bool "dummy"
+-	depends on !HAVE_RIOTOS
+-	select PLATFORM_LINUX
++	select PLATFORM_LINUX if LINUX
+ 	help
+             This platform is an empty stub and will not do any state
+             transition or manage any service.
+@@ -55,9 +58,9 @@ config PLATFORM_DUMMY
+ 
+ 
+ config PLATFORM_LINUX_MICRO
+-	select PLATFORM_LINUX
+-	depends on HAVE_LINUX
+ 	bool "linux-micro"
++	select PLATFORM_LINUX
++	depends on LINUX
+ 	help
+             This platform allows using a Soletta application as PID1
+             (/init). In this case some extra care needs to be done,
+@@ -76,7 +79,7 @@ config PLATFORM_LINUX_MICRO
+ 
+ config PLATFORM_SYSTEMD
+ 	bool "systemd"
+-	depends on HAVE_SYSTEMD
++	depends on LINUX && HAVE_SYSTEMD
+ 	select PLATFORM_LINUX
+ 	select SOL_BUS
+ 	help
+@@ -101,7 +104,7 @@ config PLATFORM_SYSTEMD
+ 
+ config PLATFORM_RIOTOS
+ 	bool "riotos"
+-	depends on HAVE_RIOTOS
++	depends on RIOT
+ 	help
+             This platform is to be used with RIOT Small OS.
+ 
+@@ -118,7 +121,7 @@ config PLATFORM_RIOTOS
+ 
+ config PLATFORM_CONTIKI
+ 	bool "contiki"
+-	depends on HAVE_CONTIKI
++	depends on CONTIKI
+ 	help
+             This platform is to be used with Contiki Small OS.
+ 
+@@ -131,10 +134,20 @@ config PLATFORM_CONTIKI
+ 
+ endchoice
+ 
++config SOL_BUS
++    bool "Sd-bus support"
++    depends on LINUX && HAVE_SYSTEMD && HAVE_SD_DBUS
++    default n
++    help
++          Systemd's sd-bus support.
++
+ source "src/modules/linux-micro/Kconfig"
+ 
+ choice
+ 	prompt "Mainloop"
++	default MAINLOOP_POSIX if LINUX
++	default MAINLOOP_RIOTOS if RIOT
++	default MAINLOOP_CONTIKI if CONTIKI
+ 	help
+             The main loop is used to provide uniform event delivering
+             accross multiple operating systems.
+@@ -169,7 +182,7 @@ choice
+ 
+ config MAINLOOP_GLIB
+ 	bool "glib"
+-	depends on PLATFORM_LINUX && HAVE_GLIB
++	depends on LINUX && HAVE_GLIB
+ 	help
+             The mainloop is implementated on top of Glib.
+ 
+@@ -184,7 +197,7 @@ config MAINLOOP_GLIB
+ 
+ config MAINLOOP_POSIX
+ 	bool "posix"
+-	depends on PLATFORM_LINUX
++	depends on LINUX
+ 	help
+             The mainloop is implementated on top of poll(2) syscall.
+ 
+@@ -199,13 +212,13 @@ config MAINLOOP_POSIX
+ 
+ config MAINLOOP_RIOTOS
+ 	bool "riotos"
+-	depends on PLATFORM_RIOTOS && HAVE_RIOTOS
++	depends on RIOT
+ 	help
+             The mainloop to be used in RIOT platform.
+ 
+ config MAINLOOP_CONTIKI
+ 	bool "contiki"
+-	depends on PLATFORM_CONTIKI
++	depends on CONTIKI
+ 	help
+             The mainloop to be used in Contiki platform.
+ 
+@@ -213,7 +226,7 @@ endchoice
+ 
+ config PTHREAD
+ 	bool "POSIX threads (pthread)"
+-	depends on HAVE_PTHREAD_H && PLATFORM_LINUX
++	depends on HAVE_PTHREAD_H && LINUX
+ 	default y
+ 	help
+             Allow usage of POSIX threads (pthreads) in Soletta applications.
+@@ -243,6 +256,19 @@ config PTHREAD
+ 
+             If unsure, say Y.
+ 
++config WORKER_THREAD
++    bool "Worker thread support"
++    depends on FEATURE_WORKER_THREADS && (!LINUX || (LINUX && PTHREAD))
++    default y
++    help
++            Enable support for worker threads.
++
++            Worker threads are a mechanism through which developers can
++            run expensive tasks separately from the mainloop. They will
++            use whatever infrastructure the underlying OS provides to do
++            so, allowing the developer to not worry about manually
++            handling threads or locks.
++
+ config LOG
+ 	bool "Log"
+ 	default y
+@@ -297,60 +323,6 @@ config MAXIMUM_LOG_LEVEL_UNLIMITED
+ 	bool "unlimited"
+ endchoice
+ 
+-config SOL_BUS
+-	bool "Sd-bus support"
+-	depends on SOL_PLATFORM_LINUX && HAVE_SYSTEMD && HAVE_SD_BUS
+-	help
+-          Systemd's sd-bus support.
+-	default n
+-
+ menu "Hardware Options"
+-config USE_AIO
+-	bool "Analog I/O (AIO) Support"
+-	default y
+-
+-config USE_PWM
+-	bool "PWM Support"
+-	default y
+-
+-config USE_SPI
+-	bool "SPI Support"
+-	default y
+-
+-config USE_UART
+-	bool "UART Support"
+-	default y
+-
+-config USE_I2C
+-	bool "I2C Support"
+-	default y
+-
+-config USE_GPIO
+-	bool "GPIO Support"
+-	default y
++source "src/lib/io/Kconfig"
+ endmenu
+-
+-menuconfig USE_PIN_MUX
+-        bool "Pin Multiplexer"
+-        depends on USE_GPIO
+-        default y
+-        help
+-          Pin Multiplexer is a feature that helps to setup
+-          physical pins shared by more than one feature in
+-          some platforms.
+-
+-          This switch enables the logic to handle pin multiplexers,
+-          but the multiplexer logic is to be defined in separate
+-          pin-mux modules that can be built-in libsoletta or installed
+-          as dynamically loadable modules at
+-          $PREFIX/lib/soletta/modules/pin-mux/<module>.so
+-
+-          Pin mux modules are used based on the platform-detect logic
+-          defined in $PREFIX/share/soletta/platform_detect.json or
+-          statically defined PLATFORM_NAME.
+-
+-          If unsure, say Y.
+-
+-source "src/modules/pin-mux/intel-galileo-rev-d/Kconfig"
+-source "src/modules/pin-mux/intel-galileo-rev-g/Kconfig"
+-source "src/modules/pin-mux/intel-edison-rev-c/Kconfig"
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index 2d1ea9c7..28d3ddb4 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -61,9 +61,9 @@ obj-core-$(PLATFORM_SYSTEMD) += \
+ obj-core-$(PLATFORM_SYSTEMD)-extra-cflags += $(SYSTEMD_CFLAGS) $(UDEV_CFLAGS)
+ obj-core-$(PLATFORM_SYSTEMD)-extra-ldflags += $(SYSTEMD_LDFLAGS) $(UDEV_LDFLAGS)
+ 
+-obj-$(PTHREAD) += \
++obj-$(WORKER_THREAD) += \
+     thread.mod
+-obj-thread-$(PTHREAD) := \
++obj-thread-$(WORKER_THREAD) := \
+     sol-worker-thread.o
+ obj-thread-$(MAINLOOP_GLIB) += \
+     sol-worker-thread-impl-glib.o
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index 1c139c89..fb84ae61 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -9,7 +9,7 @@ config NETWORK
+ config COAP
+ 	bool "CoAP"
+ 	default y
+-	depends on NETWORK
++	depends on NETWORK && FEATURE_COAP
+ 	help
+             The Constrained Application Protocol (CoAP) is a
+             specialized web transfer protocol for use with constrained
+@@ -54,6 +54,6 @@ config OIC
+ config HTTP_CLIENT
+ 	bool "HTTP Client"
+ 	default y
+-	depends on HAVE_LIBCURL && NETWORK
++	depends on NETWORK && FEATURE_HTTP_CLIENT
+ 	help
+             Client API for both HTTP and HTTPS.
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+index e69de29b..0033d096 100644
+--- a/src/lib/io/Kconfig
++++ b/src/lib/io/Kconfig
+@@ -0,0 +1,54 @@
++config USE_AIO
++    bool "Analog I/O (AIO) Support"
++    depends on FEATURE_HW_AIO
++    default y
++
++config USE_PWM
++    bool "PWM Support"
++    depends on FEATURE_HW_PWM
++    default y
++
++config USE_SPI
++    bool "SPI Support"
++    depends on FEATURE_HW_SPI
++    default y
++
++config USE_UART
++    bool "UART Support"
++    depends on FEATURE_HW_UART
++    default y
++
++config USE_I2C
++    bool "I2C Support"
++    depends on FEATURE_HW_I2C
++    default y
++
++config USE_GPIO
++    bool "GPIO Support"
++    depends on FEATURE_HW_GPIO
++    default y
++
++menuconfig USE_PIN_MUX
++    bool "Pin Multiplexer"
++    depends on LINUX && USE_GPIO
++    default y
++    help
++          Pin Multiplexer is a feature that helps to setup
++          physical pins shared by more than one feature in
++          some platforms.
++
++          This switch enables the logic to handle pin multiplexers,
++          but the multiplexer logic is to be defined in separate
++          pin-mux modules that can be built-in libsoletta or installed
++          as dynamically loadable modules at
++          $PREFIX/lib/soletta/modules/pin-mux/<module>.so
++
++          Pin mux modules are used based on the platform-detect logic
++          defined in $PREFIX/share/soletta/platform_detect.json or
++          statically defined PLATFORM_NAME.
++
++          If unsure, say Y.
++
++source "src/modules/pin-mux/intel-galileo-rev-d/Kconfig"
++source "src/modules/pin-mux/intel-galileo-rev-g/Kconfig"
++source "src/modules/pin-mux/intel-edison-rev-c/Kconfig"
+diff --git a/src/modules/flow/unix-socket/Kconfig b/src/modules/flow/unix-socket/Kconfig
+index 12a6402a..40c9e06b 100644
+--- a/src/modules/flow/unix-socket/Kconfig
++++ b/src/modules/flow/unix-socket/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_UNIX_SOCKET
+ 	tristate "Node type: unix-socket"
+-	depends on PLATFORM_LINUX
++	depends on FEATURE_UNIX_SOCKETS
+ 	default m
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 58539912..8264a91d 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -129,7 +129,9 @@ HEADERDIRS += $(build_includedir)
+ LIB_OUTPUTDIR := $(build_libdir)
+ 
+ SOL_LIB_AR := $(LIB_OUTPUTDIR)libsoletta.a
++ifeq (y,$(SHARED_LIBRARY))
+ SOL_LIB_SO := $(LIB_OUTPUTDIR)libsoletta.so
++endif
+ 
+ GDB_AUTOLOAD_PY_DEST := $(build_gdbautoload)libsoletta.so.$(VERSION)-gdb.py
+ GDB_AUTOLOAD_PY := $(top_srcdir)data/gdb/libsoletta.so-gdb.py

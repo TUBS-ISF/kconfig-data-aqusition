@@ -1,0 +1,219 @@
+"2018-05-09 16:02:56 +0200"
+diff --git a/src/Modules.arm b/src/Modules.arm
+index e8197c9..78b9bc8 100644
+--- a/src/Modules.arm
++++ b/src/Modules.arm
+@@ -124,7 +124,7 @@ PRIVATE_INCDIR 	+= kern/$(CONFIG_XARCH)/$(BITS) kern/$(CONFIG_XARCH) kern
+ INTERFACES_KERNEL += 	__main mem_op kmem_space boot_uart_init     \
+ 			irq_chip_generic bootstrap                  \
+ 			outer_cache utcb_support cascade_irq   \
+-			irq_mgr_multi_chip
++			irq_mgr_multi_chip smc_call
+ 
+ INTERFACES_KERNEL-$(CONFIG_ARM_MPCORE) += scu
+ INTERFACES_KERNEL-$(CONFIG_ARM_CORTEX_A9) += scu
+@@ -132,6 +132,7 @@ INTERFACES_KERNEL-$(CONFIG_BIT32) += kern_lib_page
+ INTERFACES_KERNEL-$(CONFIG_SERIAL) += uart_console
+ INTERFACES_KERNEL-$(CONFIG_ARM_EM_TZ) += vm
+ INTERFACES_KERNEL-$(CONFIG_CPU_VIRT) += vgic
++INTERFACES_KERNEL-$(CONFIG_ARM_SMC_USER) += smc_user
+ INTERFACES_KERNEL += boot_infos
+ 
+ 
+diff --git a/src/abi/l4_types.cpp b/src/abi/l4_types.cpp
+index cc012c4..971865d 100644
+--- a/src/abi/l4_types.cpp
++++ b/src/abi/l4_types.cpp
+@@ -428,6 +428,7 @@ public:
+     Label_semaphore = -20L,    ///< Protocol ID for semaphore objects.
+     Label_iommu = -22L,        ///< Protocol ID for IOMMUs
+     Label_debugger = -23L,     ///< Protocol ID for the debugger
++    Label_smc = -24L,          ///< Protocol ID for ARM SMC calls.
+     Max_factory_label = Label_iommu,
+   };
+ private:
+diff --git a/src/kern/arm/Kconfig b/src/kern/arm/Kconfig
+index 745a21b..bb2af22 100644
+--- a/src/kern/arm/Kconfig
++++ b/src/kern/arm/Kconfig
+@@ -232,6 +232,14 @@ config ARM_SECMONIF_MC
+ 
+ endchoice
+ 
++config ARM_SMC_USER
++	bool "Enable SMC user interface"
++	help
++	  When enabled then Fiasco offers an interface that allows user threads
++	  to talk to Trusted Applications and a Trusted OS on the secure-side.
++	  Fiasco only allows service calls in the range 0x30000000 to 0x3f000000.
++	  All other SMC calls will be blocked.
++
+ config BIT64_CHOICE
+ 	bool "Run Fiasco in 64bit processor mode"
+ 	default y
+diff --git a/src/kern/arm/platform_control-arm-psci.cpp b/src/kern/arm/platform_control-arm-psci.cpp
+index e60aa34..4585b6f 100644
+--- a/src/kern/arm/platform_control-arm-psci.cpp
++++ b/src/kern/arm/platform_control-arm-psci.cpp
+@@ -54,28 +54,6 @@ private:
+   static bool psci_is_v1;
+ };
+ 
+-INTERFACE [arm && arm_psci && 32bit]:
+-
+-#define FIASCO_ARM_PSCI_CALL_ASM_OPERANDS \
+-    : "=r" (r0), "=r" (r1), "=r" (r2), "=r" (r3) \
+-    : "0" (r0), "1" (r1), "2" (r2), "3" (r3), \
+-      "r" (r4), "r" (r5), "r" (r6), "r" (r7) \
+-    : "memory"
+-
+-#define FIASCO_ARM_ASM_REG(n) asm("r" # n)
+-
+-INTERFACE [arm && arm_psci && 64bit]:
+-
+-#define FIASCO_ARM_PSCI_CALL_ASM_OPERANDS \
+-    : "=r" (r0), "=r" (r1), "=r" (r2), "=r" (r3), \
+-      "=r" (r4), "=r" (r5), "=r" (r6), "=r" (r7) \
+-    : "0" (r0), "1" (r1), "2" (r2), "3" (r3), \
+-      "4" (r4), "5" (r5), "6" (r6), "7" (r7) \
+-    : "memory", "x8", "x9", "x10", "x11", "x12", "x13", \
+-      "x14", "x15", "x16", "x17"
+-
+-#define FIASCO_ARM_ASM_REG(n) asm("x" # n)
+-
+ INTERFACE [arm && arm_psci && arm_psci_smc]:
+ 
+ #define FIASCO_ARM_PSCI_CALL_ASM_FUNC "smc #0"
+@@ -89,6 +67,7 @@ IMPLEMENTATION [arm && arm_psci]:
+ #include "mem.h"
+ #include "mmio_register_block.h"
+ #include "kmem.h"
++#include "smc_call.h"
+ 
+ #include <cstdio>
+ 
+@@ -114,7 +93,7 @@ Platform_control::psci_fn(unsigned fn)
+     };
+ }
+ 
+-PUBLIC static inline
++PUBLIC static inline NEEDS ["smc_call.h"]
+ Platform_control::Psci_result
+ Platform_control::psci_call(Mword fn_id,
+                             Mword a0 = 0, Mword a1 = 0,
+@@ -132,7 +111,7 @@ Platform_control::psci_call(Mword fn_id,
+   register Mword r7 FIASCO_ARM_ASM_REG(7) = a6;
+ 
+   asm volatile(FIASCO_ARM_PSCI_CALL_ASM_FUNC
+-               FIASCO_ARM_PSCI_CALL_ASM_OPERANDS);
++               FIASCO_ARM_SMC_CALL_ASM_OPERANDS);
+ 
+   Psci_result res = { r0, r1, r2, r3 };
+   return res;
+diff --git a/src/kern/arm/smc_call.cpp b/src/kern/arm/smc_call.cpp
+new file mode 100644
+index 0000000..8e7e692
+--- /dev/null
++++ b/src/kern/arm/smc_call.cpp
+@@ -0,0 +1,22 @@
++INTERFACE [arm && 32bit]:
++
++#define FIASCO_ARM_SMC_CALL_ASM_OPERANDS \
++    : "=r" (r0), "=r" (r1), "=r" (r2), "=r" (r3) \
++    : "0" (r0), "1" (r1), "2" (r2), "3" (r3), \
++      "r" (r4), "r" (r5), "r" (r6), "r" (r7) \
++    : "memory"
++
++#define FIASCO_ARM_ASM_REG(n) asm("r" # n)
++
++INTERFACE [arm && 64bit]:
++
++#define FIASCO_ARM_SMC_CALL_ASM_OPERANDS \
++    : "=r" (r0), "=r" (r1), "=r" (r2), "=r" (r3), \
++      "=r" (r4), "=r" (r5), "=r" (r6), "=r" (r7) \
++    : "0" (r0), "1" (r1), "2" (r2), "3" (r3), \
++      "4" (r4), "5" (r5), "6" (r6), "7" (r7) \
++    : "memory", "x8", "x9", "x10", "x11", "x12", "x13", \
++      "x14", "x15", "x16", "x17"
++
++#define FIASCO_ARM_ASM_REG(n) asm("x" # n)
++
+diff --git a/src/kern/arm/smc_user.cpp b/src/kern/arm/smc_user.cpp
+new file mode 100644
+index 0000000..0bbab5b
+--- /dev/null
++++ b/src/kern/arm/smc_user.cpp
+@@ -0,0 +1,57 @@
++IMPLEMENTATION[arm_smc_user]:
++
++#include "kobject_helper.h"
++#include "smc_call.h"
++
++JDB_DEFINE_TYPENAME(Smc_user, "SMC");
++
++struct Smc_user : Kobject_h<Smc_user, Kobject>
++{
++  L4_msg_tag kinvoke(L4_obj_ref, L4_fpage::Rights rights,
++                     Syscall_frame *f, Utcb const *in, Utcb *out)
++  {
++    L4_msg_tag tag = f->tag();
++
++    if (!Ko::check_basics(&tag, rights, L4_msg_tag::Label_smc))
++      return tag;
++
++    if (f->tag().words() != 8)
++      return commit_result(-L4_err::EInval);
++
++    // only allow calls to trusted applications or a trusted OS
++    if ((in->values[0] & 0x3F000000) < 0x30000000)
++      return commit_result(-L4_err::ENosys);
++
++    register Mword r0 FIASCO_ARM_ASM_REG(0) = in->values[0];
++    register Mword r1 FIASCO_ARM_ASM_REG(1) = in->values[1];
++    register Mword r2 FIASCO_ARM_ASM_REG(2) = in->values[2];
++    register Mword r3 FIASCO_ARM_ASM_REG(3) = in->values[3];
++    register Mword r4 FIASCO_ARM_ASM_REG(4) = in->values[4];
++    register Mword r5 FIASCO_ARM_ASM_REG(5) = in->values[5];
++    register Mword r6 FIASCO_ARM_ASM_REG(6) = in->values[6];
++    register Mword r7 FIASCO_ARM_ASM_REG(7) = in->values[7];
++
++    asm volatile("smc #0" FIASCO_ARM_SMC_CALL_ASM_OPERANDS);
++
++    out->values[0] = r0;
++    out->values[1] = r1;
++    out->values[2] = r2;
++    out->values[3] = r3;
++
++    return commit_result(0, 4);
++
++
++  }
++};
++
++static Static_object<Smc_user> _glbl_smc_user;
++
++PUBLIC static
++void
++Smc_user::init()
++{
++  _glbl_smc_user.construct();
++  initial_kobjects.register_obj(_glbl_smc_user, Initial_kobjects::Smc);
++}
++
++STATIC_INITIALIZE(Smc_user);
+diff --git a/src/kern/globals.cpp b/src/kern/globals.cpp
+index 90c2a81..0052152 100644
+--- a/src/kern/globals.cpp
++++ b/src/kern/globals.cpp
+@@ -36,9 +36,10 @@ public:
+     Scheduler =  7,
+     Iommu     =  8,
+     Jdb       = 10,
++    Smc       = 11,
+ 
+     First_alloc_cap = Log,
+-    Num_alloc       = 6,
++    Num_alloc       = 7,
+     End_alloc_cap   = First_alloc_cap + Num_alloc,
+   };
+ 

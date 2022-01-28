@@ -1,0 +1,286 @@
+"2015-11-09 19:00:12 -0200"
+diff --git a/src/samples/flow/oic/README b/src/samples/flow/oic/README
+deleted file mode 100644
+index 1ae7a66e..00000000
+--- a/src/samples/flow/oic/README
++++ /dev/null
+@@ -1,21 +0,0 @@
+-These examples communicate usin OIC - http://openinterconnect.org/
+-
+-The OIC communication is done over IP, including 6loWPAN, Ethernet or
+-WiFi.
+-
+-The examples rely on client and servers. Since the pairing is still
+-undefined and thus not implemeted, please edit a configuration file to
+-state your device_id in your node.
+-
+-Usage example (in the same machine):
+- * server:
+-    $ export SOL_MACHINE_ID="580a3d6a9d194a23b90a24573558d2f4"
+-    $ export SOL_FLOW_MODULE_RESOLVER_CONFFILE=light-server.json
+-    $ sol-fbp-runner light-server.fbp
+- * client:
+-    $ export SOL_FLOW_MODULE_RESOLVER_CONFFILE=light-client.json
+-    $ sol-fbp-runner light-client.fbp
+-
+-Server should print on console light state (it is changed by
+-client at each second). SOL_MACHINE_ID must match device_id set
+-on client configuration file.
+diff --git a/src/samples/flow/oic/README.md b/src/samples/flow/oic/README.md
+new file mode 100644
+index 00000000..7c0ef398
+--- /dev/null
++++ b/src/samples/flow/oic/README.md
+@@ -0,0 +1,50 @@
++# OIC Examples
++
++These examples communicate usin OIC - http://openinterconnect.org/
++
++The OIC communication is done over IP, including 6loWPAN, Ethernet or
++WiFi.
++
++## Light Client
++
++The examples rely on client and servers. Since the pairing is still
++undefined and thus not implemeted, please edit a configuration file to
++state your device_id in your node.
++
++Usage example (server and clients may be run in different machines,
++or in the same machine):
++
++ * server:
++```sh
++export SOL_MACHINE_ID="580a3d6a9d194a23b90a24573558d2f4"
++export SOL_FLOW_MODULE_RESOLVER_CONFFILE=light-server.json
++sol-fbp-runner light-server.fbp
++```
++
++ * client:
++```sh
++export SOL_FLOW_MODULE_RESOLVER_CONFFILE=light-client.json
++sol-fbp-runner light-client.fbp
++```
++
++Server should print on console light state (it is changed by
++client at each second). SOL_MACHINE_ID must match device_id set
++on client configuration file.
++
++# Light Scan
++
++Light scan works similarly to Light Client example, but it scans for server with
++OIC lights, instead of using SOL_MACHINE_ID to locate the server.
++
++Usage example:
++
++ * server (run as many as you want, in different machines):
++```sh
++export SOL_FLOW_MODULE_RESOLVER_CONFFILE=light-server.json
++sol-fbp-runner light-server.fbp
++```
++
++ * client:
++```sh
++sol-fbp-runner light-scan/light-client.fbp
++```
+diff --git a/src/samples/flow/oic/light-scan/Kconfig b/src/samples/flow/oic/light-scan/Kconfig
+new file mode 100644
+index 00000000..b3b4d763
+--- /dev/null
++++ b/src/samples/flow/oic/light-scan/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_OIC_SCAN_SAMPLE
++	bool
++	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_OIC
++	default y
+diff --git a/src/samples/flow/oic/light-scan/Makefile b/src/samples/flow/oic/light-scan/Makefile
+new file mode 100644
+index 00000000..54fb0f6d
+--- /dev/null
++++ b/src/samples/flow/oic/light-scan/Makefile
+@@ -0,0 +1,7 @@
++sample-$(FLOW_OIC_SAMPLE) += \
++	light-client-scan-gtk
++
++sample-light-client-scan-gtk-$(FLOW_OIC_SAMPLE) := \
++	light-client-scan.fbp
++sample-light-client-scan-gtk-$(FLOW_OIC_SAMPLE)-conffile := \
++	sol-flow.json
+diff --git a/src/samples/flow/oic/light-client-scan.fbp b/src/samples/flow/oic/light-scan/light-client-scan.fbp
+similarity index 56%
+rename from src/samples/flow/oic/light-client-scan.fbp
+rename to src/samples/flow/oic/light-scan/light-client-scan.fbp
+index 1fa62971..258e750c 100755
+--- a/src/samples/flow/oic/light-client-scan.fbp
++++ b/src/samples/flow/oic/light-scan/light-client-scan.fbp
+@@ -29,18 +29,43 @@
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-# This will timely (every 3 seconds) trigger scan for OIC lights. This node type
+-# is resolved using the light-client.json, please adjust to your network
+-# configuration:
++# This will wait for 3 seconds, then scan for OIC lights.
++# The oic node type and IO node types are resolved by
++# sol-flow.json, using gtk backend, or sol-flow-intel-edison-rev-c.json.
+ #
+-#    $ export SOL_FLOW_MODULE_RESOLVER_CONFFILE=light-client-mynet.json
+-#    $ ./light-client-scan.fbp
++# To run this sample in an edison device connect an LCD to I2C port,
++# 3 buttons in ports IO3, IO4 and IO7 and a
++# LED to IO8.
++#
++# Then run:
+ #
+-# or save it as sol-flow.json
++#    $ ./light-client-scan.fbp
++
++#Input/Output nodes
++lcd(LCD)
++next(BtnNext)
++select(BtnSelect)
++light_button(BtnLight)
++status(LEDStatus)
++_(constant/boolean:value=false) OUT -> IN status
+ 
+-timer(timer:interval=3000)
++wait(constant/string:value="Wait...") OUT -> IN lcd
++
++#Scanning
+ light(Light)
++light_selector(form/selector:rows=2,columns=16,circular=true)
++
++scan(timer:interval=3000) OUT -> SCAN light
++light DEVICE_ID -> ADD_ITEM light_selector
++light_selector STRING -> IN lcd
++scan OUT -> IN _(converter/empty-to-boolean:output_value=false) OUT -> ENABLED scan
++
++next OUT -> PULSE_IF_TRUE _(converter/boolean-to-empty) OUT -> NEXT light_selector
++select OUT -> PULSE_IF_TRUE _(converter/boolean-to-empty) OUT -> SELECT light_selector
++light OUT_STATE -> IN status
++light_button OUT -> PULSE_IF_TRUE _(converter/boolean-to-empty) OUT -> IN toggle(boolean/toggle) OUT -> IN_STATE light
+ 
+-timer OUT -> IN Scanning(console)
+-timer OUT -> SCAN light
+-light DEVICE_ID -> IN DeviceFound(console)
++#DeviceID Persistence
++light_selector SELECTED -> IN persistence(DeviceIDPersistence)
++persistence OUT -> DEVICE_ID light
++persistence OUT -> SELECTED light_selector
+diff --git a/src/samples/flow/oic/light-scan/sol-flow-intel-edison-rev-c.json b/src/samples/flow/oic/light-scan/sol-flow-intel-edison-rev-c.json
+new file mode 100644
+index 00000000..26a483ff
+--- /dev/null
++++ b/src/samples/flow/oic/light-scan/sol-flow-intel-edison-rev-c.json
+@@ -0,0 +1,66 @@
++{
++ "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++ "nodetypes": [
++  {
++   "name": "Light",
++   "type": "oic/client-brightlight"
++  },
++  {
++   "name": "LCD",
++   "options": {
++    "bus": 6
++   },
++   "type": "grove/lcd-string"
++  },
++  {
++   "name": "BtnNext",
++   "options":
++   {
++    "active_low": false,
++    "edge_falling": true,
++    "edge_rising": true,
++    "pin": "3"
++   },
++  "type": "gpio/reader"
++  },
++  {
++   "name": "BtnSelect",
++   "options":
++   {
++    "active_low": false,
++    "edge_falling": true,
++    "edge_rising": true,
++    "pin": "4"
++   },
++   "type": "gpio/reader"
++  },
++  {
++   "name": "BtnLight",
++   "options":
++   {
++    "active_low": false,
++    "edge_falling": true,
++    "edge_rising": true,
++    "pin": "7"
++   },
++   "type": "gpio/reader"
++  },
++  {
++   "name": "LEDStatus",
++   "options":
++   {
++    "active_low": false,
++    "pin": "8"
++   },
++   "type": "gpio/writer"
++  },
++  {
++   "name": "DeviceIDPersistence",
++   "options": {
++    "storage": "fs",
++    "name": "device_id"
++   },
++   "type": "persistence/string"
++  }
++ ]
++}
+diff --git a/src/samples/flow/oic/light-scan/sol-flow.json b/src/samples/flow/oic/light-scan/sol-flow.json
+new file mode 100644
+index 00000000..63127e1c
+--- /dev/null
++++ b/src/samples/flow/oic/light-scan/sol-flow.json
+@@ -0,0 +1,40 @@
++{
++ "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++ "nodetypes": [
++  {
++   "name": "Light",
++   "type": "oic/client-brightlight"
++  },
++  {
++   "name": "LCD",
++   "type": "gtk/label"
++  },
++  {
++   "name": "BtnNext",
++   "type": "gtk/pushbutton"
++  },
++  {
++   "name": "BtnSelect",
++   "type": "gtk/pushbutton"
++  },
++  {
++   "name": "BtnLight",
++   "type": "gtk/pushbutton"
++  },
++  {
++   "name": "LEDStatus",
++   "options": {
++    "rgb": "0|255|0"
++   },
++   "type": "gtk/led"
++  },
++  {
++   "name": "DeviceIDPersistence",
++   "options": {
++    "storage": "fs",
++    "name": "device_id"
++   },
++   "type": "persistence/string"
++  }
++ ]
++}

@@ -1,0 +1,356 @@
+"2016-09-26 20:23:29 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 12dc0df66..fc6669b89 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1526,14 +1526,7 @@ choice
+ 
+ prompt "Locale data"
+ 	depends on UCLIBC_HAS_LOCALE
+-	default UCLIBC_BUILD_ALL_LOCALE
+-
+-config UCLIBC_BUILD_ALL_LOCALE
+-	bool "All locales"
+-	depends on UCLIBC_HAS_LOCALE
+-	help
+-	  This builds all the locales that are available on your
+-	  host-box.
++	default UCLIBC_BUILD_MINIMAL_LOCALE
+ 
+ config UCLIBC_BUILD_MINIMAL_LOCALE
+ 	bool "Only selected locales"
+@@ -1542,6 +1535,13 @@ config UCLIBC_BUILD_MINIMAL_LOCALE
+ 	  If you do not need all locales that are available on your
+ 	  host-box, then set this to 'Y'.
+ 
++config UCLIBC_BUILD_ALL_LOCALE
++	bool "All locales"
++	depends on UCLIBC_HAS_LOCALE
++	help
++	  This builds all the locales that are available on your
++	  host-box.
++
+ endchoice
+ 
+ config UCLIBC_BUILD_MINIMAL_LOCALES
+diff --git a/extra/locale/Makefile.in b/extra/locale/Makefile.in
+index 117993fd0..a16f82b73 100644
+--- a/extra/locale/Makefile.in
++++ b/extra/locale/Makefile.in
+@@ -8,11 +8,6 @@
+ locale_DIR := $(top_srcdir)extra/locale
+ locale_OUT := $(top_builddir)extra/locale
+ 
+-# command used to download source code
+-WGET := wget --passive-ftp
+-
+-LOCALE_DATA_FILENAME := uClibc-locale-20081111-$(ARCH_NATIVE_BIT)-$(if $(ARCH_LITTLE_ENDIAN),el,eb).tgz
+-
+ BUILD_CFLAGS-locale-common := \
+ 	-D__UCLIBC_GEN_LOCALE \
+ 	-I$(top_builddir)
+@@ -72,7 +67,7 @@ locale_headers: $(locale_headers-y)
+ # we do not know though which locales were really enabled for libc at build time
+ ifeq ($(wildcard /usr/include/iconv.h),)
+ 
+-$(locale_OUT)/codesets.txt:
++$(locale_OUT)/codesets.txt: $(locale_OUT)/gen_wc8bit
+ 	@if [ ! -f $@ ] ; then \
+ 	    set -e; \
+ 	    echo " "; \
+@@ -117,7 +112,7 @@ endif
+ 
+ # the lines beginning w/ '#-' are mandatory
+ # at least one conversion is needed (euro/cyrillic)
+-$(locale_OUT)/locales.txt: $(locale_DIR)/LOCALES
++$(locale_OUT)/locales.txt: $(locale_DIR)/LOCALES $(locale_OUT)/gen_locale
+ 	@$(disp_gen)
+ ifeq ($(UCLIBC_BUILD_MINIMAL_LOCALE),y)
+ 	$(Q)echo "@euro e" > $@
+diff --git a/extra/locale/gen_collate.c b/extra/locale/gen_collate.c
+index 15582c1ba..fc219ad57 100644
+--- a/extra/locale/gen_collate.c
++++ b/extra/locale/gen_collate.c
+@@ -339,7 +339,6 @@ static section_t *new_section(const char *name)
+ 		snprintf(buf, sizeof(buf), "%s %05d", cur_col->name, anonsection);
+ 		++anonsection;
+ 	}
+-#warning devel code
+ /* 	verbose_msg(VDETAIL, "section %s\n", name); */
+ 	p->name = xsymdup(name);
+ 	p->itm_list = NULL;
+@@ -350,7 +349,6 @@ static section_t *new_section(const char *name)
+ /* 	memset(p->rules, 0, MAX_COLLATION_WEIGHTS); */
+ /* 	memset(cur_rule, R_FORWARD, 4); */
+ 
+-#warning devel code
+ 	if (*p->name == 'a') {
+ 		cur_num_weights = p->num_rules = 4;
+ 		memset(p->rules, R_FORWARD, 4);
+@@ -725,7 +723,6 @@ static void processfile(void)
+ 	const keyword_table_t *k;
+ 
+ 	order_state = 0;
+-#warning devel code
+ /* 	cur_num_weights = 0; */
+ /* 	cur_num_weights = 4; */
+ /* 	memset(cur_rule, R_FORWARD, 4); */
+@@ -1289,7 +1286,6 @@ static int old_main(int argc, char **argv)
+ 			override_len, multistart_len, weightstr_len,
+ 			wcs2colidt_len, index2weight_len, index2ruleidx_len,
+ 			ruletable_len,
+-#warning mult by 2 for rule indecies
+ 			(override_len + multistart_len + weightstr_len
+ 			 + wcs2colidt_len + index2weight_len + index2ruleidx_len + ruletable_len) * 2,
+ 			(override_len + multistart_len + weightstr_len
+@@ -1515,7 +1511,6 @@ static void do_copy(void)
+ 			++s;
+ 			if (cur_base && !strcmp(cur_base->name,s)) {
+ /* 				verbose_msg(VDETAIL, "skipping copy of base file %s\n", s); */
+-#warning need to update last in order and position or check
+ 				return;
+ 			}
+ /* 			verbose_msg(VDETAIL, "full copy of %s\n", s); */
+@@ -1601,7 +1596,6 @@ static ll_item_t *find_section_list_item(const char *name, col_locale_t *loc)
+ 	p = loc->section_list;
+ 
+ 	while (p) {
+-#warning devel code
+ /* 		if (!((p->data_type == DT_SECTION) || (p->data_type == DT_REORDER))) { */
+ /* 			verbose_msg(VDETAIL, "fsli = %d\n", p->data_type); */
+ /* 		} */
+@@ -1744,7 +1738,6 @@ static void add_colitem(char *item, char *def)
+ 
+ 	p = new_colitem(item, def);
+ 
+-#warning devel code
+ 	if (superset) {
+ 		if (tfind(p, &cur_base->root_colitem, colitem_cmp)) {
+ /* 			verbose_msg(VDETAIL, "skipping superset duplicate collating item \"%s\"\n", p->string); */
+@@ -1865,7 +1858,6 @@ static void do_order_start(void)
+ 	cur_section = sect;
+ /* 	fprintf(stdout, "cur_section now %s\n", cur_section->name); */
+ 
+-#warning need to add section to weight list?
+ 
+ 	/* now do rules */
+ 	do {
+@@ -1945,7 +1937,6 @@ static void do_reorder_after(void)
+ 		error_msg("currently reorder_after is not supported in supersets");
+ 	}
+ 
+-#warning have to use rule for current section!!!
+ 
+ 	if (!(t = next_token())) {
+ 		error_msg("missing arg for reorder_after");
+@@ -1996,10 +1987,8 @@ static void do_reorder_after(void)
+ 	memcpy(cur_section->rules, save_cur_rule, MAX_COLLATION_WEIGHTS);
+ 
+ 
+-#warning devel code
+ /* 	verbose_msg(VDETAIL, "reorder -- %s %d\n", ((weighted_item_t *)(lli->data))->symbol, w->num_weights); */
+ 
+-#warning hack to get around hu_HU reorder-after problem
+ /* 	if (!w->num_weights) { */
+ 
+ /* 	} else { */
+@@ -2406,7 +2395,6 @@ static ll_item_t *init_comm_ptr(void)
+ 		comm_cur_ptr = comm_cur_ptr->next;
+ 	}
+ 
+-#warning devel code
+ /* 	{ */
+ /* 		ll_item_t *p = comm_cur_ptr; */
+ /* 		verbose_msg(VDETAIL, "init_comm_ptr\n"); */
+@@ -2672,7 +2660,6 @@ static void finalize_base(void)
+ 	base_locale_array[base_locale_len].index2weight_offset = index2weight_len;
+ 	base_locale_array[base_locale_len].index2ruleidx_offset = index2ruleidx_len;
+ 	if (!strcmp(cur_base->name,"ja_JP") || !strcmp(cur_base->name,"ko_KR")) {
+-#warning fix the index2weight check!!
+ 		index2weight_len_inc = 0;
+ 	}
+ /* 	printf("%s -- index2weight_len = %d\n", cur_base->name, index2weight_len); */
+@@ -2709,14 +2696,12 @@ static void finalize_base(void)
+ 			if (lli->data_type & DT_RANGE) {
+ 				i += mr;
+ 				mr = 0;
+-#warning check ko_kR and 9
+ /* 				++i; */
+ 				lli->idx = i;
+ 				assert(!rli);
+ 				rli = lli;
+ 				verbose_msg(VDETAIL, "range pre = %d  after = ", i);
+ 				i += ((range_item_t *)(lli->data))->length + 1;
+-#warning check ko_kR and 9
+ /* 				++i; */
+ 				verbose_msg(VDETAIL, "%d\n", i);
+ 				if (!index2weight_len_inc) { /* ko_KR hack */
+@@ -2740,7 +2725,6 @@ static void finalize_base(void)
+ 			} else {
+ 				assert(lli->data_type & DT_REORDER);
+ 				r = ll_len( ((section_t *)(lli->data))->itm_list );
+-#warning check ko_kR and 9
+ 				if (r > mr) {
+ 					mr = r;
+ 				}
+@@ -2762,7 +2746,6 @@ static void finalize_base(void)
+ 				i += mr;
+ 				mr = 0;
+ 				i = lli->idx + ((range_item_t *)(lli->data))->length + 1;
+-#warning check
+ 			} else if ((lli->data_type & DT_WEIGHTED) && !(s->data_type & DT_REORDER)) {
+ 				i += mr;
+ 				mr = 0;
+@@ -3247,7 +3230,6 @@ static void finalize_base(void)
+ 
+ #endif
+ 
+-#warning handle UNDEFINED idx specially?  what if in only some of derived?
+ /* 	base_locale_array[base_locale_len].undefined_idx = final_index_val0("UNDEFINED"); */
+ 	base_locale_array[base_locale_len].undefined_idx = 0;
+ 
+diff --git a/extra/locale/gen_locale.c b/extra/locale/gen_locale.c
+index 5e8936082..a2cb52ee7 100644
+--- a/extra/locale/gen_locale.c
++++ b/extra/locale/gen_locale.c
+@@ -1080,8 +1080,6 @@ static void lc_monetary_C(int X, int k)
+ 	int j, m;
+ 	char c_buf[2];
+ 
+-#warning fix the char entries for monetary... target signedness of char may be different!
+-
+ 	c_buf[1] = 0;
+ 	c_buf[0] = *nl_langinfo(X);
+ 	j = addstring(c_buf);
+diff --git a/extra/locale/gen_wc8bit.c b/extra/locale/gen_wc8bit.c
+index e16b283a2..8031df1cf 100644
+--- a/extra/locale/gen_wc8bit.c
++++ b/extra/locale/gen_wc8bit.c
+@@ -127,25 +127,6 @@ int main(int argc, char **argv)
+ 		pclose(fp);
+ 	}
+ 
+-#if 0
+-	if (argc == 1) {
+-		/* User requested 8-bit codesets, but didn't list any... */
+-		/* Allow to build, just so this feature can be left on in config. */
+-		printf("#ifdef __CTYPE_HAS_8_BIT_LOCALES\n");
+-		printf("#warning ignoring 8 bit codesets request"
+-				" as no codesets specified.\n");
+-		printf("#endif\n");
+-		printf("#undef __CTYPE_HAS_8_BIT_LOCALES\n\n");
+-
+-		printf("#define __LOCALE_DATA_NUM_CODESETS\t\t0\n");
+-		printf("#define __LOCALE_DATA_CODESET_LIST\t\t\"\"\n");
+-		return EXIT_SUCCESS;
+-	}
+-
+-/*  	printf("#define __CTYPE_HAS_8_BIT_LOCALES\t1\n\n"); */
+-	printf("#ifdef __CTYPE_HAS_8_BIT_LOCALES\n\n");
+-#endif
+-
+ 	if (argc == 1) {
+ 		printf("#undef __CTYPE_HAS_8_BIT_LOCALES\n\n");
+ 
+diff --git a/extra/locale/gen_wctype.c b/extra/locale/gen_wctype.c
+index d5b5c5c28..70345096b 100644
+--- a/extra/locale/gen_wctype.c
++++ b/extra/locale/gen_wctype.c
+@@ -682,7 +682,6 @@ int main(int argc, char **argv)
+ 		output_table("ctype", &cttable);
+ 		output_table("uplow", &ultable);
+ 
+-#warning fix the upper bound on the upper/lower tables... save 200 bytes or so
+ 		printf("#define __LOCALE_DATA_WCuplow_diffs  %7u\n", ul_count);
+ 		printf("\n#ifdef WANT_WCuplow_diff_data\n\n");
+ 		printf("\nstatic const short __LOCALE_DATA_WCuplow_diff_data[%zu] = {",
+diff --git a/libc/misc/locale/locale.c b/libc/misc/locale/locale.c
+index f868ac022..e38792b51 100644
+--- a/libc/misc/locale/locale.c
++++ b/libc/misc/locale/locale.c
+@@ -58,9 +58,6 @@
+ #include <ctype.h>
+ #include <stdio.h>
+ 
+-#undef link_warning
+-#define link_warning(A,B)
+-
+ #undef __LOCALE_C_ONLY
+ #ifndef __UCLIBC_HAS_LOCALE__
+ #define __LOCALE_C_ONLY
+@@ -118,8 +115,6 @@ extern void _locale_init_l(__locale_t base) attribute_hidden;
+ 
+ #ifdef __LOCALE_C_ONLY
+ 
+-link_warning(setlocale,"REMINDER: The 'setlocale' function supports only C|POSIX locales.")
+-
+ static const char C_string[] = "C";
+ 
+ char *setlocale(int category, register const char *locale)
+@@ -135,10 +130,6 @@ char *setlocale(int category, register const char *locale)
+ 
+ #else /* ---------------------------------------------- __LOCALE_C_ONLY */
+ 
+-#ifdef __UCLIBC_HAS_THREADS__
+-link_warning(setlocale,"REMINDER: The 'setlocale' function is _not_ threadsafe except for simple queries.")
+-#endif
+-
+ #if !defined(__LOCALE_DATA_NUM_LOCALES) || (__LOCALE_DATA_NUM_LOCALES <= 1)
+ #error locales enabled, but not data other than for C locale!
+ #endif
+@@ -263,8 +254,6 @@ char *setlocale(int category, const char *locale)
+ 
+ #ifdef __LOCALE_C_ONLY
+ 
+-link_warning(localeconv,"REMINDER: The 'localeconv' function is hardwired for C/POSIX locale only.")
+-
+ static struct lconv the_lconv;
+ 
+ static const char decpt[] = ".";
+@@ -1002,8 +991,6 @@ libc_hidden_def(__XL_NPP(nl_langinfo))
+ /**********************************************************************/
+ #ifdef L_newlocale
+ 
+-#warning mask defines for extra locale categories
+-
+ static const char posix[] = "POSIX";
+ static const char utf8[] = "UTF-8";
+ 
+diff --git a/libc/sysdeps/linux/common/bits/uClibc_locale.h b/libc/sysdeps/linux/common/bits/uClibc_locale.h
+index b42236d38..6598eafd2 100644
+--- a/libc/sysdeps/linux/common/bits/uClibc_locale.h
++++ b/libc/sysdeps/linux/common/bits/uClibc_locale.h
+@@ -326,11 +326,6 @@ extern int __locale_mbrtowc_l(wchar_t *__restrict dst,
+ 				__locale_t loc) attribute_hidden;
+ #endif
+ 
+-#ifdef L_setlocale
+-/* so we only get the warning once... */
+-#warning need thread version of CUR_LOCALE!
+-#endif
+-
+ /**********************************************************************/
+ #ifdef __UCLIBC_HAS_XLOCALE__
+ 
+diff --git a/utils/Makefile.in b/utils/Makefile.in
+index 6349aa73d..545777661 100644
+--- a/utils/Makefile.in
++++ b/utils/Makefile.in
+@@ -91,7 +91,7 @@ endif
+ utils_LOCALE_OBJ :=
+ ifeq ($(UCLIBC_HAS_LOCALE),y)
+ utils_OBJ += iconv
+-#utils_LOCALE_OBJ += $(utils_OUT)/locale
++utils_LOCALE_OBJ += $(utils_OUT)/locale
+ endif
+ 
+ utils_OBJ := $(patsubst %,$(utils_OUT)/%,$(utils_OBJ))
+@@ -130,7 +130,7 @@ ifeq ($(HAVE_SHARED),y)
+ endif
+ ifeq ($(UCLIBC_HAS_LOCALE),y)
+ 	$(Q)$(INSTALL) -D -m 755 $(utils_OUT)/iconv$(DOTHOST) $(PREFIX)$(DEVEL_PREFIX)bin/iconv
+-	#$(Q)$(INSTALL) -m 755 $(utils_OUT)/locale$(DOTHOST) $(PREFIX)$(DEVEL_PREFIX)bin/locale
++	$(Q)$(INSTALL) -m 755 $(utils_OUT)/locale$(DOTHOST) $(PREFIX)$(DEVEL_PREFIX)bin/locale
+ endif
+ 
+ 

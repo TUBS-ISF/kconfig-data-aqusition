@@ -1,0 +1,44 @@
+"2015-02-08 15:06:11 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index cec06e408..c7a3b2dd2 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -420,6 +420,15 @@ config LDSO_RUNPATH
+ 	  Usage of RUNPATH tags is not too common, so disabling this feature
+ 	  should be safe for most people.
+ 
++config LDSO_RUNPATH_OF_EXECUTABLE
++	bool "Use executables RPATH/RUNPATH when searching for libraries."
++	depends on LDSO_RUNPATH
++	default n
++	help
++	  Use the executables RPATH/RUNPATH to find to find libraries even
++	  though this behavour is not standard.  Setting this option causes
++	  the uclibc dynamic linker behavour to match the glibc dynamic linker.
++
+ config LDSO_SAFE_RUNPATH
+ 	bool "Allow only RUNPATH beginning with /"
+ 	depends on LDSO_RUNPATH
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index 6fc95b300..d42b91281 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -266,6 +266,18 @@ struct elf_resolve *_dl_load_shared_library(unsigned rflags, struct dyn_elf **rp
+ 		if ((tpnt1 = search_for_named_library(libname, rflags, pnt, rpnt, NULL)) != NULL)
+ 			return tpnt1;
+ 	}
++#ifdef __LDSO_RUNPATH_OF_EXECUTABLE__
++        /*
++         * Try the DT_RPATH of the executable itself.
++         */
++        pnt = (char *) _dl_loaded_modules->dynamic_info[DT_RPATH];
++        if (pnt) {
++                pnt += (unsigned long) _dl_loaded_modules->dynamic_info[DT_STRTAB];
++                _dl_if_debug_dprint("\tsearching exe's RPATH='%s'\n", pnt);
++                if ((tpnt1 = search_for_named_library(libname, rflags, pnt, rpnt)) != NULL)
++                        return tpnt1;
++        }
++#endif
+ #endif
+ 
+ 	/*

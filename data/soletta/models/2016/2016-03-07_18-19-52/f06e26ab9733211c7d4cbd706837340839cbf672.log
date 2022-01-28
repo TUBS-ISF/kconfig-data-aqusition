@@ -1,0 +1,1481 @@
+"2016-03-07 18:19:52 -0300"
+diff --git a/src/lib/flow/Makefile b/src/lib/flow/Makefile
+index 4554ff81..ce3fb33e 100644
+--- a/src/lib/flow/Makefile
++++ b/src/lib/flow/Makefile
+@@ -4,6 +4,7 @@ obj-flow-$(FLOW_SUPPORT) := \
+     sol-flow-node-options.o \
+     sol-flow-packet.o \
+     sol-flow-simplectype.o \
++    sol-flow-single.o \
+     sol-flow-static.o \
+     sol-flow.o
+ 
+@@ -37,5 +38,6 @@ headers-$(FLOW_SUPPORT) := \
+     include/sol-flow-parser.h \
+     include/sol-flow-resolver.h \
+     include/sol-flow-simplectype.h \
++    include/sol-flow-single.h \
+     include/sol-flow-static.h \
+     sol-flow-buildopts.h.in
+diff --git a/src/lib/flow/include/sol-flow-single.h b/src/lib/flow/include/sol-flow-single.h
+new file mode 100644
+index 00000000..f739a6a3
+--- /dev/null
++++ b/src/lib/flow/include/sol-flow-single.h
+@@ -0,0 +1,376 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include "sol-flow.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @defgroup SingleFlow Single Flow
++ * @ingroup Flow
++ *
++ * @brief Single flow is a parent node that creates a single children
++ * that works stand alone.
++ *
++ * Sometimes it is desired to use a single node, manually feeding
++ * packets and processing those being sent on the node's output port.
++ *
++ * The single node type does exactly that by wrapping a base type
++ * (also called "child type"), it will create an internal node and
++ * take care to deliver incoming packets to that and also take its
++ * outgoing packets and calling the provided @c process() method, if
++ * any.
++ *
++ * It also forwards connections and disconnections requests, as some
++ * nodes will only work if there is a connection established for a
++ * given port.
++ *
++ * See sol_flow_single_new() and sol_flow_single_new_type().
++ *
++ * @{
++ */
++
++/**
++ * @def SOL_FLOW_SINGLE_CONNECTIONS()
++ *
++ * Convenience macro to declare an array of @c uint16_t terminated by
++ * @c UINT16_MAX.
++ *
++ * This can be used in sol_flow_single_new() or
++ * struct sol_flow_single_options.
++ */
++#define SOL_FLOW_SINGLE_CONNECTIONS(...) \
++    (const uint16_t[]){ __VA_ARGS__, UINT16_MAX }
++
++/**
++ * @brief Structure for the specification of a single node.
++ *
++ * This option is used to instatiate a single-node that wrappes an
++ * inner node of a given type specified at sol_flow_single_new_type().
++ *
++ * It is used internally by sol_flow_single_new() or explicitly by
++ * those calling sol_flow_new() manually.
++ *
++ * It contains a struct sol_flow_node_options header (@c base) so it
++ * conforms to the options protocol. Be sure to fill its @c
++ * api_version with #SOL_FLOW_NODE_OPTIONS_API_VERSION and @c sub_api
++ * with #SOL_FLOW_SINGLE_OPTIONS_API_VERSION, or use
++ * SOL_FLOW_SINGLE_OPTIONS_DEFAULTS() to help you.
++ */
++struct sol_flow_single_options {
++    /**
++     * @brief base guarantees sol_flow_node_options compatibility.
++     *
++     * its sub_api must be set to #SOL_FLOW_SINGLE_OPTIONS_API_VERSION.
++     */
++    struct sol_flow_node_options base;
++
++#ifndef SOL_NO_API_VERSION
++    /**
++     * @def SOL_FLOW_SINGLE_OPTIONS_API_VERSION
++     *
++     * This versions the rest of the structure and should be used in
++     * @c base.sub_api.
++     *
++     * @see SOL_FLOW_SINGLE_OPTIONS_DEFAULTS()
++     */
++#define SOL_FLOW_SINGLE_OPTIONS_API_VERSION (1)
++#endif
++
++    /**
++     * @brief options to give to the actual base type.
++     *
++     * If thie single node type wraps SOL_FLOW_NODE_TYPE_CONSOLE, then
++     * the options member should be of that sub_api and will be passed
++     * to @c SOL_FLOW_NODE_TYPE_CONSOLE->open().
++     */
++    const struct sol_flow_node_options *options;
++
++    /**
++     * @brief callback to deliver outgoing packets.
++     *
++     * If non-NULL, this callback is used to deliver packets produced
++     * by the base node, with the first parameter @c user_data being
++     * the sibling member of the same name, @c node being the wrapper
++     * single node (not the actual instance to avoid
++     * miscommunications), @c port is the index of producing output
++     * port and @c packet is the produced packet to be delivered, it
++     * will be automatically deleted after this function returns, so
++     * don't keep a reference to it.
++     *
++     * If NULL, the packet is dropped.
++     *
++     * @note some node types only produce packets to ports that are
++     *       connected, then make sure the port index is specified in
++     *       the @c connected_ports_out.
++     */
++    void (*process)(void *user_data, struct sol_flow_node *node, uint16_t port, const struct sol_flow_packet *packet);
++
++    /**
++     * @brief user data to give to callback @c process().
++     */
++    const void *user_data;
++
++    /**
++     * @brief indexes of input ports that should be connected.
++     *
++     * If non-NULL, must be an array terminated with @c
++     * UINT16_MAX. See SOL_FLOW_SINGLE_CONNECTIONS().
++     *
++     * @note some nodes will only process data from connected input
++     *       ports, such as boolean/and will wait all connected ports
++     *       before processing and sending output packets.
++     */
++    const uint16_t *connected_ports_in;
++
++    /**
++     * @brief indexes of output ports that should be connected.
++     *
++     * If non-NULL, must be an array terminated with @c UINT16_MAX.
++     * See SOL_FLOW_SINGLE_CONNECTIONS().
++     *
++     * @note some node types only produce packets to ports that are
++     *       connected, then make sure the port index is specified
++     *       so you get the packets in @c process(). Then it is
++     *       @b mandatory to connect to ports one wants to receive
++     *       packets, but this is not checked due performance reasons.
++     */
++    const uint16_t *connected_ports_out;
++};
++
++/**
++ * @def SOL_FLOW_SINGLE_OPTIONS_DEFAULTS()
++ *
++ * This macro sets struct sol_flow_single_options base member to
++ * contain the proper @c api_version
++ * (#SOL_FLOW_NODE_OPTIONS_API_VERSION) and @c sub_api
++ * (#SOL_FLOW_SINGLE_OPTIONS_API_VERSION).
++ *
++ * The remaining variable arguments are passed as member initializers,
++ * please use ".name = value" to avoid problems and make code easy to
++ * read.
++ */
++#define SOL_FLOW_SINGLE_OPTIONS_DEFAULTS(...) { \
++        .base = { \
++            SOL_SET_API_VERSION(.api_version = SOL_FLOW_NODE_OPTIONS_API_VERSION, ) \
++            SOL_SET_API_VERSION(.sub_api = SOL_FLOW_SINGLE_OPTIONS_API_VERSION) \
++        }, \
++        __VA_ARGS__ \
++}
++
++
++/**
++ * @brief create a single-node instance for the given @a base_type.
++ *
++ * Sometimes it is desired to use a single node, manually feeding
++ * packets and processing those being sent on the node's output port.
++ *
++ * This function is a helper around sol_flow_single_new_type() that
++ * creates the type and instance using the provided parameters.
++ *
++ * If many instances of the same type are desired, it is recommended
++ * to create a single type with sol_flow_single_new_type() and then
++ * call sol_flow_node_new() on it, using
++ * struct sol_flow_single_options to inform options of the inner
++ * node, connected ports and process callback.
++ *
++ * It is worth to mention that node must be informed of the ports they
++ * will receive packets and those that they should send by specifying
++ * the @c connected_ports_in and @c connected_ports_out
++ * arrays.
++ *
++ * @param id A string to identify the node, may be @c NULL.
++ * @param base_type The type of the node to be wrapped, it must be
++ *        valid and a reference is stored during the returned node
++ *        lifetime.
++ * @param options the options to be forwarded to the wrapped node of
++ *        type @a base_type.
++ * @param connected_ports_in if non-NULL, an array of input port
++ *        indexes to connect. The array must be @c UINT16_MAX
++ *        terminated. See SOL_FLOW_SINGLE_CONNECTIONS().
++ * @param connected_ports_out if non-NULL, an array of output port
++ *        indexes to connect. The array must be @c UINT16_MAX
++ *        terminated. See SOL_FLOW_SINGLE_CONNECTIONS().
++ * @param process if non-NULL, the callback to process outgoing
++ *        packets produced by node. The first argument,
++ *        @c user_data will be the value of the same-name
++ *        sibling parameter.
++ * @param user_data the context to provide to @a process when it is
++ *        called.
++ *
++ * @return NULL on error or the newly created node. It should be
++ *         deleted with sol_flow_node_del(). One can feed the node
++ *         with packets by calling sol_flow_send_packet().
++ *
++ * @see sol_flow_single_new_type()
++ */
++struct sol_flow_node *sol_flow_single_new(const char *id, const struct sol_flow_node_type *base_type, const struct sol_flow_node_options *options, const uint16_t *connected_ports_in, const uint16_t *connected_ports_out, void (*process)(void *user_data, struct sol_flow_node *node, uint16_t port, const struct sol_flow_packet *packet), const void *user_data);
++
++/**
++ * Connect the input port @a port_idx of the inner node.
++ *
++ * Ports connections are counted, so a matching number of disconnects
++ * must happen to actually disconnect.
++ *
++ * @param node a valid node created from sol_flow_single_new() or
++ *        sol_flow_single_new_type().
++ * @param port_idx the port index to connect.
++ *
++ * @return number of connections (>1) on success, -errno on error. 0
++ *         is never returned.
++ */
++int32_t sol_flow_single_port_in_connect(struct sol_flow_node *node, uint16_t port_idx);
++
++/**
++ * Disconnect the input port @a port_idx of the inner node.
++ *
++ * Ports connections are counted, so a matching number of disconnects
++ * must happen to actually disconnect.
++ *
++ * @param node a valid node created from sol_flow_single_new() or
++ *        sol_flow_single_new_type().
++ * @param port_idx the port index to disconnect.
++ *
++ * @return number of connections (>1) on success, -errno on error. 0
++ *         if the last connection is gone.
++ */
++int32_t sol_flow_single_port_in_disconnect(struct sol_flow_node *node, uint16_t port_idx);
++
++/**
++ * Connect the output port @a port_idx of the inner node.
++ *
++ * Ports connections are counted, so a matching number of disconnects
++ * must happen to actually disconnect.
++ *
++ * @note prefer a static list of connections specified at node
++ *       creation time. Some inner nodes will deliver packets when
++ *       they are opened/created, then you will miss the initial
++ *       packets since they will be dropped due lack of connections.
++ *
++ * @param node a valid node created from sol_flow_single_new() or
++ *        sol_flow_single_new_type().
++ * @param port_idx the port index to connect.
++ *
++ * @return number of connections (>1) on success, -errno on error. 0
++ *         is never returned.
++ */
++int32_t sol_flow_single_port_out_connect(struct sol_flow_node *node, uint16_t port_idx);
++
++/**
++ * Disconnect the output port @a port_idx of the inner node.
++ *
++ * Ports connections are counted, so a matching number of disconnects
++ * must happen to actually disconnect.
++ *
++ * @param node a valid node created from sol_flow_single_new() or
++ *        sol_flow_single_new_type().
++ * @param port_idx the port index to disconnect.
++ *
++ * @return number of connections (>1) on success, -errno on error. 0
++ *         if the last connection is gone.
++ */
++int32_t sol_flow_single_port_out_disconnect(struct sol_flow_node *node, uint16_t port_idx);
++
++/**
++ * Return the reference to the inner node.
++ *
++ * @param node a valid node created from sol_flow_single_new() or
++ *        sol_flow_single_new_type().
++ *
++ * @return the inner node wrapped by the given @a node.
++ */
++struct sol_flow_node *sol_flow_single_get_child(const struct sol_flow_node *node);
++
++/**
++ * @brief create a wrapper type to use @a base_type nodes without a flow.
++ *
++ * Sometimes it is desired to use a single node, manually feeding
++ * packets and processing those being sent on the node's output port.
++ *
++ * To make it easy this function returns a wrapper node type that can
++ * be instantiated with sol_flow_node_new() and when
++ * sol_flow_send_packet() (or variants such as
++ * sol_flow_send_boolean_packet()) will feed the base type's instance
++ * with such packets, as well as outgoing packets produced by that
++ * instance can be processed by the external user.
++ *
++ * To process the outgoing packets provide the @c process member of
++ * the struct sol_flow_single_options or the same-name parameter
++ * for the sol_flow_single_new() helper. They will receive the context
++ * data provided in @c user_data.
++ *
++ * It is worth to mention that node must be informed of the ports they
++ * will receive packets and those that they should send by specifying
++ * the @c connected_ports_in and @c connected_ports_out
++ * arrays. Sending packets to disconnected ports is not verified may
++ * result in malfunction.
++ *
++ * However, some nodes may produce packets even in disconnected ports
++ * and these are not filtered-out automatically. If you do not want to
++ * receive packets in disconnected ports, filter them by checking the
++ * @c port parameter.
++ *
++ * @param base_type the type to be wrapped. It must be a valid type
++ *        and a reference is stored while the returned type is alive.
++ *
++ * @return @c NULL on error or newly allocated node type wrapping @a
++ *         base_type, this should be deleted with
++ *         sol_flow_node_type_del().
++ *
++ * @see sol_flow_single_new()
++ */
++struct sol_flow_node_type *sol_flow_single_new_type(const struct sol_flow_node_type *base_type);
++
++/**
++ * Given a single-node type wrapper, return the internal (child) type.
++ *
++ * This is useful to create options since the wrapper type options
++ * differ from the internal.
++ *
++ * @param single_type a type previously created with
++ * sol_flow_single_new_type().
++ *
++ * @return the internal (child or base_type) used with
++ * sol_flow_single_new_type(), or NULL on failures.
++ */
++const struct sol_flow_node_type *sol_flow_single_type_get_child_type(const struct sol_flow_node_type *single_type);
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/flow/include/sol-flow.h b/src/lib/flow/include/sol-flow.h
+index 42955962..65e76e72 100644
+--- a/src/lib/flow/include/sol-flow.h
++++ b/src/lib/flow/include/sol-flow.h
+@@ -972,6 +972,18 @@ struct sol_flow_node_container_type {
+      */
+     int (*send)(struct sol_flow_node *container, struct sol_flow_node *source_node, uint16_t source_out_port_idx, struct sol_flow_packet *packet);
+ 
++    /**
++     * @brief Member function issued when there is no parent and a sol_flow_send() was called in this container.
++     *
++     * This method, if present, may be used to redirect the packet to
++     * some child node. Otherwise the packet is dropped (deleted).
++     *
++     * If this method is implemented and returns 0, the ownership of
++     * the packet is then handled by the function. If it returns
++     * non-zero, then the packet is automatically deleted.
++     */
++    int (*process)(struct sol_flow_node *container, uint16_t source_in_port_idx, struct sol_flow_packet *packet);
++
+     /**
+      * @brief Member function that, if not @c NULL, is issued when child nodes of of an instance of this type are created
+      */
+diff --git a/src/lib/flow/sol-flow-single.c b/src/lib/flow/sol-flow-single.c
+new file mode 100644
+index 00000000..952b8f72
+--- /dev/null
++++ b/src/lib/flow/sol-flow-single.c
+@@ -0,0 +1,652 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "sol-flow-internal.h"
++#include "sol-flow-single.h"
++#include "sol-mainloop.h"
++
++struct port_conn {
++    const void *port_type;
++    uint16_t idx;
++    uint16_t references;
++};
++
++struct pending {
++    struct sol_flow_packet *packet;
++    uint16_t port_idx;
++};
++
++struct sol_flow_single_data {
++    struct sol_vector connected_ports_in;
++    struct sol_vector connected_ports_out;
++    struct {
++        struct sol_vector packets;
++        struct sol_timeout *timeout;
++    } pending;
++    void (*process)(void *user_data, struct sol_flow_node *node, uint16_t port, const struct sol_flow_packet *packet);
++    const void *user_data;
++    struct sol_flow_node child; /* keep last, type->data_size = sizeof(sol_flow_single_data) + child->type->data_size */
++};
++
++struct sol_flow_single_type {
++    struct sol_flow_node_container_type base;
++    const struct sol_flow_node_type *child_type;
++
++    /* This type was created for a single node, so when the node goes
++     * down, the type will be finalized. */
++    bool owned_by_node;
++};
++
++static int sol_flow_single_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options);
++#define SOL_FLOW_SINGLE_TYPE_CHECK(type, ...) \
++    do { \
++        if (!(type)) { \
++            SOL_WRN("" # type " == NULL"); \
++            return __VA_ARGS__; \
++        } \
++        if (((type)->flags & SOL_FLOW_NODE_TYPE_FLAGS_CONTAINER) == 0 \
++            || ((type)->open != sol_flow_single_open)) { \
++            SOL_WRN("" # type " isn't a single flow type!"); \
++            return __VA_ARGS__; \
++        } \
++    } while (0)
++
++#define SOL_FLOW_SINGLE_CHECK(node, ...) \
++    do { \
++        const struct sol_flow_node_type *_sol_flow_node_type_local = sol_flow_node_get_type(node); \
++        SOL_FLOW_SINGLE_TYPE_CHECK(_sol_flow_node_type_local, __VA_ARGS__); \
++    } while (0)
++
++static struct port_conn *
++find_port_conn(const struct sol_vector *vector, uint16_t port_idx)
++{
++    const struct port_conn *pc;
++    uint16_t itr;
++
++    SOL_VECTOR_FOREACH_IDX (vector, pc, itr) {
++        if (pc->idx == port_idx)
++            return (struct port_conn *)pc;
++    }
++
++    return NULL;
++}
++
++static int32_t
++port_connect(struct sol_vector *vector, uint16_t port_idx, const void *port_type)
++{
++    struct port_conn *pc;
++
++    pc = find_port_conn(vector, port_idx);
++    if (!pc) {
++        pc = sol_vector_append(vector);
++        SOL_NULL_CHECK(pc, -ENOMEM);
++        pc->idx = port_idx;
++        pc->port_type = port_type;
++    }
++
++    SOL_INT_CHECK(pc->references, == UINT16_MAX, -EOVERFLOW);
++    pc->references++;
++    return pc->references;
++}
++
++static int32_t
++port_disconnect(struct sol_vector *vector, uint16_t port_idx, const void **ret_port_type)
++{
++    struct port_conn *pc;
++
++    if (ret_port_type)
++        *ret_port_type = NULL;
++
++    pc = find_port_conn(vector, port_idx);
++    SOL_NULL_CHECK(pc, -ENOENT);
++
++    if (ret_port_type)
++        *ret_port_type = pc->port_type;
++
++    pc->references--;
++    if (pc->references > 0)
++        return pc->references;
++
++    return sol_vector_del_element(vector, pc);
++}
++
++static int32_t
++sol_flow_single_port_in_connect_internal(struct sol_flow_node *node, uint16_t port_idx)
++{
++    const struct sol_flow_node_type *type = node->type;
++    struct sol_flow_single_data *mdata = (void *)node->data;
++    const struct sol_flow_port_type_in *port_type;
++    int32_t r;
++
++    port_type = sol_flow_node_type_get_port_in(type, port_idx);
++    SOL_NULL_CHECK_MSG(port_type, -ENOENT,
++        "type %p has no input port #%" PRIu16, type, port_idx);
++
++    r = port_connect(&mdata->connected_ports_in, port_idx, port_type);
++    if (r != 1)
++        return r;
++
++    if (port_type->connect) {
++        r = port_type->connect(&mdata->child, mdata->child.data, port_idx, 0);
++        if (r < 0) {
++            SOL_WRN("failed to connect to internal node %p (type %p) input port #%" PRIu16 ": %s",
++                &mdata->child, mdata->child.type, port_idx, sol_util_strerrora(-r));
++            port_disconnect(&mdata->connected_ports_in, port_idx, NULL);
++            return r;
++        }
++    }
++
++    return 1;
++}
++
++static int32_t
++sol_flow_single_port_in_disconnect_internal(struct sol_flow_node *node, uint16_t port_idx)
++{
++    struct sol_flow_single_data *mdata = (void *)node->data;
++    const struct sol_flow_port_type_in *port_type;
++    int32_t r;
++
++    r = port_disconnect(&mdata->connected_ports_in, port_idx, (const void **)&port_type);
++    if (r != 0)
++        return r;
++
++    if (!port_type->disconnect)
++        return 0;
++
++    port_type->disconnect(&mdata->child, mdata->child.data, port_idx, 0);
++    return 0;
++}
++
++static int32_t
++sol_flow_single_port_out_connect_internal(struct sol_flow_node *node, uint16_t port_idx)
++{
++    const struct sol_flow_node_type *type = node->type;
++    struct sol_flow_single_data *mdata = (void *)node->data;
++    const struct sol_flow_port_type_out *port_type;
++    int32_t r;
++
++    port_type = sol_flow_node_type_get_port_out(type, port_idx);
++    SOL_NULL_CHECK_MSG(port_type, -ENOENT,
++        "type %p has no output port #%" PRIu16, type, port_idx);
++
++    r = port_connect(&mdata->connected_ports_out, port_idx, port_type);
++    if (r != 1)
++        return r;
++
++    if (port_type->connect) {
++        r = port_type->connect(&mdata->child, mdata->child.data, port_idx, 0);
++        if (r < 0) {
++            SOL_WRN("failed to connect to internal node %p (type %p) output port #%" PRIu16 ": %s",
++                &mdata->child, mdata->child.type, port_idx, sol_util_strerrora(-r));
++            port_disconnect(&mdata->connected_ports_out, port_idx, NULL);
++            return r;
++        }
++    }
++
++    return 1;
++}
++
++static int32_t
++sol_flow_single_port_out_disconnect_internal(struct sol_flow_node *node, uint16_t port_idx)
++{
++    struct sol_flow_single_data *mdata = (void *)node->data;
++    const struct sol_flow_port_type_out *port_type;
++    int32_t r;
++
++    r = port_disconnect(&mdata->connected_ports_out, port_idx, (const void **)&port_type);
++    if (r != 0)
++        return r;
++
++    if (!port_type->disconnect)
++        return 0;
++
++    port_type->disconnect(&mdata->child, mdata->child.data, port_idx, 0);
++    return 0;
++}
++
++static const struct sol_flow_port_type_in *
++sol_flow_single_get_port_in(const struct sol_flow_node_type *type, uint16_t port)
++{
++    const struct sol_flow_single_type *single_type = (const struct sol_flow_single_type *)type;
++
++    return sol_flow_node_type_get_port_in(single_type->child_type, port);
++}
++
++static const struct sol_flow_port_type_out *
++sol_flow_single_get_port_out(const struct sol_flow_node_type *type, uint16_t port)
++{
++    const struct sol_flow_single_type *single_type = (const struct sol_flow_single_type *)type;
++
++    return sol_flow_node_type_get_port_out(single_type->child_type, port);
++}
++
++static int
++sol_flow_single_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    const struct sol_flow_single_type *single_type;
++    const struct sol_flow_single_options *opts;
++    struct sol_flow_single_data *mdata = data;
++    const uint16_t *itr;
++    int32_t r;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
++        SOL_FLOW_SINGLE_OPTIONS_API_VERSION,
++        -EINVAL);
++
++    opts = (const struct sol_flow_single_options *)options;
++
++    single_type = (const struct sol_flow_single_type *)node->type;
++    mdata->process = opts->process;
++    mdata->user_data = opts->user_data;
++
++    sol_vector_init(&mdata->connected_ports_in, sizeof(struct port_conn));
++    sol_vector_init(&mdata->connected_ports_out, sizeof(struct port_conn));
++    sol_vector_init(&mdata->pending.packets, sizeof(struct pending));
++
++    /* first pass will register what we want to connect without doing
++     * actual connect() calls since the node wasn't created yet (needs
++     * sol_flow_node_init() below.
++     *
++     * we need this since on node open it may produce some packets and
++     * we'd drop them since they were not connected (as in the array).
++     */
++    if (opts->connected_ports_in) {
++        for (itr = opts->connected_ports_in; *itr != UINT16_MAX; itr++) {
++            const struct sol_flow_port_type_in *port_type;
++            struct port_conn *pc;
++
++            port_type = node->type->get_port_in(node->type, *itr);
++            r = -ENOENT;
++            SOL_NULL_CHECK_MSG_GOTO(port_type, error,
++                "type %p has no input port #%" PRIu16, node->type, *itr);
++
++            pc = find_port_conn(&mdata->connected_ports_in, *itr);
++            if (pc)
++                continue;
++
++            pc = sol_vector_append(&mdata->connected_ports_in);
++            r = -ENOMEM;
++            SOL_NULL_CHECK_GOTO(pc, error);
++            pc->idx = *itr;
++            pc->port_type = port_type;
++            pc->references = 0;
++        }
++    }
++
++    if (opts->connected_ports_out) {
++        for (itr = opts->connected_ports_out; *itr != UINT16_MAX; itr++) {
++            const struct sol_flow_port_type_out *port_type;
++            struct port_conn *pc;
++
++            port_type = node->type->get_port_out(node->type, *itr);
++            r = -ENOENT;
++            SOL_NULL_CHECK_MSG_GOTO(port_type, error,
++                "type %p has no output port #%" PRIu16, node->type, *itr);
++
++            pc = find_port_conn(&mdata->connected_ports_out, *itr);
++            if (pc)
++                continue;
++
++            pc = sol_vector_append(&mdata->connected_ports_out);
++            r = -ENOMEM;
++            SOL_NULL_CHECK_GOTO(pc, error);
++            pc->idx = *itr;
++            pc->port_type = port_type;
++            pc->references = 0;
++        }
++    }
++
++    r = sol_flow_node_init(&mdata->child, node, "child",
++        single_type->child_type, opts->options);
++    SOL_INT_CHECK(r, < 0, r);
++
++    if (opts->connected_ports_in) {
++        for (itr = opts->connected_ports_in; *itr != UINT16_MAX; itr++) {
++            r = sol_flow_single_port_in_connect_internal(node, *itr);
++            SOL_INT_CHECK_GOTO(r, < 0, failed_ports_in);
++        }
++    }
++
++    if (opts->connected_ports_out) {
++        for (itr = opts->connected_ports_out; *itr != UINT16_MAX; itr++) {
++            r = sol_flow_single_port_out_connect_internal(node, *itr);
++            SOL_INT_CHECK_GOTO(r, < 0, failed_ports_out);
++        }
++    }
++
++    return 0;
++
++failed_ports_out:
++    for (; itr >= opts->connected_ports_out; itr--)
++        sol_flow_single_port_out_disconnect_internal(node, *itr);
++
++    if (opts->connected_ports_in) {
++        for (itr = opts->connected_ports_in; *itr != UINT16_MAX; itr++) {
++        }
++        itr--;
++    }
++
++failed_ports_in:
++    for (; itr >= opts->connected_ports_in; itr--)
++        sol_flow_single_port_in_disconnect_internal(node, *itr);
++
++    return r;
++
++error:
++    sol_vector_clear(&mdata->connected_ports_in);
++    sol_vector_clear(&mdata->connected_ports_out);
++    return r;
++}
++
++static void
++sol_flow_single_close(struct sol_flow_node *node, void *data)
++{
++    struct sol_flow_single_type *single_type = (struct sol_flow_single_type *)node->type;
++    struct sol_flow_single_data *mdata = data;
++    const struct port_conn *pc;
++    struct pending *pending;
++    uint16_t idx;
++
++    SOL_VECTOR_FOREACH_REVERSE_IDX (&mdata->connected_ports_in, pc, idx) {
++        const struct sol_flow_port_type_in *port_type = pc->port_type;
++
++        if (!port_type->disconnect)
++            continue;
++        port_type->disconnect(&mdata->child, mdata->child.data, pc->idx, 0);
++    }
++    sol_vector_clear(&mdata->connected_ports_in);
++
++    SOL_VECTOR_FOREACH_REVERSE_IDX (&mdata->connected_ports_out, pc, idx) {
++        const struct sol_flow_port_type_out *port_type = pc->port_type;
++
++        if (!port_type->disconnect)
++            continue;
++        port_type->disconnect(&mdata->child, mdata->child.data, pc->idx, 0);
++    }
++    sol_vector_clear(&mdata->connected_ports_out);
++
++    SOL_VECTOR_FOREACH_REVERSE_IDX (&mdata->pending.packets, pending, idx) {
++        sol_flow_packet_del(pending->packet);
++    }
++    sol_vector_clear(&mdata->pending.packets);
++
++    if (mdata->pending.timeout)
++        sol_timeout_del(mdata->pending.timeout);
++
++    sol_flow_node_fini(&mdata->child);
++
++    if (single_type->owned_by_node)
++        sol_flow_node_type_del(&single_type->base.base);
++}
++
++static void
++sol_flow_single_dispose_type(struct sol_flow_node_type *type)
++{
++    free(type);
++}
++
++static bool
++sol_flow_single_send_do(void *data)
++{
++    struct sol_flow_node *node = data;
++    struct sol_flow_single_data *mdata = (void *)node->data;
++    struct sol_vector *v = &mdata->pending.packets;
++    struct pending *pending;
++    uint16_t idx, last_idx;
++
++    /* do not dispatch newly added packets immediately, otherwise it
++     * may get into infinite recursion loop
++     */
++    last_idx = v->len;
++
++    SOL_VECTOR_FOREACH_IDX (v, pending, idx) {
++        struct sol_flow_packet *packet;
++        uint16_t port_idx;
++
++        if (idx == last_idx)
++            break;
++
++        packet = pending->packet;
++        port_idx = pending->port_idx;
++        mdata->process((void *)mdata->user_data, node, port_idx, packet);
++        sol_flow_packet_del(packet);
++    }
++
++    if (v->len == last_idx) {
++        sol_vector_clear(v);
++        mdata->pending.timeout = NULL;
++        return false;
++    }
++
++    for (idx = 0; idx < last_idx; idx++)
++        sol_vector_del(v, 0);
++    return true;
++}
++
++static int
++sol_flow_single_send(struct sol_flow_node *container, struct sol_flow_node *source_node, uint16_t source_out_port_idx, struct sol_flow_packet *packet)
++{
++    struct sol_flow_single_data *mdata = (void *)container->data;
++    const struct port_conn *pc;
++    struct pending *pending;
++
++    if (!mdata->process) {
++        const struct sol_flow_packet_type *packet_type;
++
++        packet_type = sol_flow_packet_get_type(packet);
++        SOL_DBG("drop packet %p (%s) from single-node %p port #%" PRIu16 ": no process() callback provided.",
++            packet, packet_type->name, container, source_out_port_idx);
++        goto drop;
++    }
++
++    pc = find_port_conn(&mdata->connected_ports_out, source_out_port_idx);
++    if (!pc) {
++        const struct sol_flow_packet_type *packet_type;
++
++        packet_type = sol_flow_packet_get_type(packet);
++        SOL_DBG("drop packet %p (%s) from single-node %p port #%" PRIu16 ": not connected.",
++            packet, packet_type->name, container, source_out_port_idx);
++        goto drop;
++    }
++
++    pending = sol_vector_append(&mdata->pending.packets);
++    SOL_NULL_CHECK_GOTO(pending, drop);
++    pending->packet = packet;
++    pending->port_idx = source_out_port_idx;
++
++    if (!mdata->pending.timeout) {
++        mdata->pending.timeout = sol_timeout_add(0, sol_flow_single_send_do, container);
++        SOL_NULL_CHECK_GOTO(mdata->pending.timeout, pop_and_drop);
++    }
++
++    return 0;
++
++pop_and_drop:
++    sol_vector_del_last(&mdata->pending.packets);
++
++drop:
++    sol_flow_packet_del(packet);
++    return 0;
++}
++
++static int
++sol_flow_single_process(struct sol_flow_node *container, uint16_t source_in_port_idx, struct sol_flow_packet *packet)
++{
++    struct sol_flow_single_data *mdata = (void *)container->data;
++    const struct port_conn *pc;
++    const struct sol_flow_port_type_in *port_type;
++
++    pc = find_port_conn(&mdata->connected_ports_in, source_in_port_idx);
++    if (!pc) {
++        const struct sol_flow_packet_type *packet_type;
++
++        packet_type = sol_flow_packet_get_type(packet);
++        SOL_DBG("drop packet %p (%s) to single-node %p port %" PRIu16 ": not connected.",
++            packet, packet_type->name, container, source_in_port_idx);
++        goto end;
++    }
++
++    port_type = pc->port_type;
++    if (!port_type->process) {
++        const struct sol_flow_packet_type *packet_type;
++
++        packet_type = sol_flow_packet_get_type(packet);
++        SOL_DBG("drop packet %p (%s) to single-node %p port %" PRIu16 ": port doesn't provide process()",
++            packet, packet_type->name, container, source_in_port_idx);
++        goto end;
++    }
++
++    port_type->process(&mdata->child, mdata->child.data, source_in_port_idx, 0, packet);
++
++end:
++    sol_flow_packet_del(packet);
++    return 0;
++}
++
++SOL_API struct sol_flow_node *
++sol_flow_single_new(const char *id, const struct sol_flow_node_type *base_type, const struct sol_flow_node_options *options, const uint16_t *connected_ports_in, const uint16_t *connected_ports_out, void (*process)(void *user_data, struct sol_flow_node *node, uint16_t port, const struct sol_flow_packet *packet), const void *user_data)
++{
++    struct sol_flow_single_type *single_type;
++    struct sol_flow_node_options empty_opts = {
++#ifndef SOL_NO_API_VERSION
++        .api_version = SOL_FLOW_NODE_OPTIONS_API_VERSION,
++        .sub_api = 0,
++#endif
++    };
++    struct sol_flow_single_options child_opts = SOL_FLOW_SINGLE_OPTIONS_DEFAULTS(
++        .options = options,
++        .process = process,
++        .user_data = user_data,
++        .connected_ports_in = connected_ports_in,
++        .connected_ports_out = connected_ports_out,
++        );
++
++    errno = -EINVAL;
++    SOL_NULL_CHECK(base_type, NULL);
++    SOL_FLOW_NODE_TYPE_API_CHECK(base_type, SOL_FLOW_NODE_TYPE_API_VERSION, NULL);
++
++    single_type = (struct sol_flow_single_type *)sol_flow_single_new_type(base_type);
++    SOL_NULL_CHECK(single_type, NULL);
++
++    single_type->owned_by_node = true;
++
++    if (!child_opts.options)
++        child_opts.options = single_type->child_type->default_options;
++    if (!child_opts.options)
++        child_opts.options = &empty_opts;
++
++    errno = 0;
++    return sol_flow_node_new(NULL, id, &single_type->base.base, &child_opts.base);
++}
++
++SOL_API struct sol_flow_node_type *
++sol_flow_single_new_type(const struct sol_flow_node_type *base_type)
++{
++    struct sol_flow_single_type *single_type;
++    static const struct sol_flow_single_options default_options = SOL_FLOW_SINGLE_OPTIONS_DEFAULTS();
++
++    errno = -EINVAL;
++    SOL_NULL_CHECK(base_type, NULL);
++    SOL_FLOW_NODE_TYPE_API_CHECK(base_type, SOL_FLOW_NODE_TYPE_API_VERSION, NULL);
++
++    errno = 0;
++    single_type = calloc(1, sizeof(*single_type));
++    SOL_NULL_CHECK(single_type, NULL);
++
++    SOL_SET_API_VERSION(single_type->base.base.api_version = SOL_FLOW_NODE_TYPE_API_VERSION);
++
++    single_type->base.base.data_size = base_type->data_size + sizeof(struct sol_flow_single_data);
++    single_type->base.base.options_size = sizeof(struct sol_flow_single_options);
++    single_type->base.base.flags = base_type->flags | SOL_FLOW_NODE_TYPE_FLAGS_CONTAINER;
++    single_type->base.base.default_options = &default_options;
++    single_type->base.base.ports_in_count = base_type->ports_in_count;
++    single_type->base.base.ports_out_count = base_type->ports_out_count;
++    single_type->base.base.get_port_in = sol_flow_single_get_port_in;
++    single_type->base.base.get_port_out = sol_flow_single_get_port_out;
++    single_type->base.base.open = sol_flow_single_open;
++    single_type->base.base.close = sol_flow_single_close;
++    single_type->base.base.dispose_type = sol_flow_single_dispose_type;
++#ifdef SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
++    single_type->base.base.description = base_type->description;
++#endif
++    single_type->base.send = sol_flow_single_send;
++    single_type->base.process = sol_flow_single_process;
++    single_type->child_type = base_type;
++
++    return &single_type->base.base;
++}
++
++SOL_API int32_t
++sol_flow_single_port_in_connect(struct sol_flow_node *node, uint16_t port_idx)
++{
++    SOL_FLOW_SINGLE_CHECK(node, -EINVAL);
++    return sol_flow_single_port_in_connect_internal(node, port_idx);
++}
++
++SOL_API int32_t
++sol_flow_single_port_in_disconnect(struct sol_flow_node *node, uint16_t port_idx)
++{
++    SOL_FLOW_SINGLE_CHECK(node, -EINVAL);
++    return sol_flow_single_port_in_disconnect_internal(node, port_idx);
++}
++
++SOL_API int32_t
++sol_flow_single_port_out_connect(struct sol_flow_node *node, uint16_t port_idx)
++{
++    SOL_FLOW_SINGLE_CHECK(node, -EINVAL);
++    return sol_flow_single_port_out_connect_internal(node, port_idx);
++}
++
++SOL_API int32_t
++sol_flow_single_port_out_disconnect(struct sol_flow_node *node, uint16_t port_idx)
++{
++    SOL_FLOW_SINGLE_CHECK(node, -EINVAL);
++    return sol_flow_single_port_out_disconnect_internal(node, port_idx);
++}
++
++SOL_API struct sol_flow_node *
++sol_flow_single_get_child(const struct sol_flow_node *node)
++{
++    struct sol_flow_single_data *mdata;
++
++    SOL_FLOW_SINGLE_CHECK(node, NULL);
++
++    mdata = sol_flow_node_get_private_data(node);
++    return &mdata->child;
++}
++
++SOL_API const struct sol_flow_node_type *
++sol_flow_single_type_get_child_type(const struct sol_flow_node_type *single_type)
++{
++    SOL_FLOW_SINGLE_TYPE_CHECK(single_type, NULL);
++    return ((const struct sol_flow_single_type *)single_type)->child_type;
++}
+diff --git a/src/lib/flow/sol-flow.c b/src/lib/flow/sol-flow.c
+index 6a033ae1..68f3460d 100644
+--- a/src/lib/flow/sol-flow.c
++++ b/src/lib/flow/sol-flow.c
+@@ -232,14 +232,25 @@ sol_flow_send_packet(struct sol_flow_node *src, uint16_t src_port, struct sol_fl
+ {
+     struct sol_flow_node *parent;
+     struct sol_flow_node_container_type *parent_type;
+-    int ret;
++    int ret = 0;
+ 
+     SOL_FLOW_NODE_CHECK_GOTO(src, err);
+     parent = src->parent;
+ 
+     if (!parent) {
++        if (src->type->flags & SOL_FLOW_NODE_TYPE_FLAGS_CONTAINER) {
++            struct sol_flow_node_container_type *container_type;
++
++            container_type = (struct sol_flow_node_container_type *)src->type;
++            if (container_type->process) {
++                ret = container_type->process(src, src_port, packet);
++                if (ret == 0)
++                    return 0;
++            }
++        }
++        SOL_DBG("no parent to deliver packet %p, drop it.", packet);
+         sol_flow_packet_del(packet);
+-        return 0;
++        return ret;
+     }
+ 
+     inspector_will_send_packet(src, src_port, packet);
+diff --git a/src/samples/flow/c-api/Kconfig b/src/samples/flow/c-api/Kconfig
+index 97e9ce43..17e22530 100644
+--- a/src/samples/flow/c-api/Kconfig
++++ b/src/samples/flow/c-api/Kconfig
+@@ -22,3 +22,8 @@ config FLOW_C_API_FIND_TYPE_SAMPLE
+ 	bool
+ 	depends on RESOLVER_CONFFILE
+ 	default y
++
++config FLOW_C_API_SINGLE_NODE_SAMPLE
++	bool
++	depends on NODE_DESCRIPTION && FLOW_NODE_TYPE_WALLCLOCK
++	default y
+diff --git a/src/samples/flow/c-api/Makefile b/src/samples/flow/c-api/Makefile
+index e8ed3435..658ff2f4 100644
+--- a/src/samples/flow/c-api/Makefile
++++ b/src/samples/flow/c-api/Makefile
+@@ -19,3 +19,6 @@ sample-simplectype-$(FLOW_C_API_SIMPLECTYPE_SAMPLE) := simplectype.c
+ sample-$(FLOW_C_API_FIND_TYPE_SAMPLE) += find-type
+ sample-find-type-$(FLOW_C_API_FIND_TYPE_SAMPLE) := find-type.c
+ sample-find-type-$(FLOW_C_API_FIND_TYPE_SAMPLE)-extra-ldflags := -ldl
++
++sample-$(FLOW_C_API_SINGLE_NODE_SAMPLE) += single-node
++sample-single-node-$(FLOW_C_API_SINGLE_NODE_SAMPLE) := single-node.c
+diff --git a/src/samples/flow/c-api/single-node.c b/src/samples/flow/c-api/single-node.c
+new file mode 100644
+index 00000000..3a3f7ade
+--- /dev/null
++++ b/src/samples/flow/c-api/single-node.c
+@@ -0,0 +1,336 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <errno.h>
++
++#include "sol-flow-single.h"
++#include "sol-log.h"
++#include "sol-util.h"
++#include "soletta.h"
++
++/**
++ * @file single-node.c
++ *
++ * Example how to create and use a single node without an associated
++ * flow. This is useful when you need to access a component, send
++ * packets to its input ports manually and be notified when it's
++ * sending packets on its output ports.
++ *
++ * To showcase it we use "wallclock/minute" and "wallclock/second"
++ * node types, they use both input and output ports as well as
++ * options. Although simple, this is a realistic example since to
++ * properly tick at every minute one needs to calculate the expire
++ * time to the next minute (not just start a 60s timer) and handle
++ * monitoring the system clock for changes.
++ */
++
++static struct sol_flow_node *minutes, *seconds;
++
++static uint16_t minutes_port_out, minutes_port_enabled;
++static uint16_t seconds_port_out, seconds_port_enabled;
++
++static int32_t
++get_int32_packet_and_log(const struct sol_flow_node *n, uint16_t port, const struct sol_flow_packet *packet)
++{
++    const struct sol_flow_node_type *type;
++    const struct sol_flow_port_description *port_desc;
++    int32_t value;
++    int err;
++
++    /* get the struct sol_irange::value member. This function also validates if the
++     * given packet is of requested type (irange), otherise will return an -errno.
++     */
++    err = sol_flow_packet_get_irange_value(packet, &value);
++    if (err < 0) {
++        fprintf(stderr, "ERROR: could not get irange packet value: %p %s\n",
++            packet, sol_util_strerrora(-err));
++        return err;
++    }
++
++    /* log the value to stdout. First we get the node type from
++     * current node (minutes or seconds), then we find the port
++     * description from its index. with that we can get the port name.
++     */
++    type = sol_flow_node_get_type(n);
++    port_desc = sol_flow_node_get_port_out_description(type, port);
++    if (!port_desc) {
++        fprintf(stderr, "ERROR: no output port description for index %" PRIu16
++            " of node %p\n",
++            port, n);
++        return -ENOENT;
++    }
++
++    printf("node type %s port #%" PRIu16 " '%s' (%s): %" PRId32 "\n",
++        type->description->name, port, port_desc->name,
++        port_desc->data_type, value);
++    return value;
++}
++
++static void
++on_minutes_packet(void *data, struct sol_flow_node *n, uint16_t port, const struct sol_flow_packet *packet)
++{
++    int32_t value = get_int32_packet_and_log(n, port, packet);
++    static int i = 0;
++
++    if (value < 0)
++        return;
++
++    /* do some logic.
++     *
++     * Here we will disconnect the 'OUT' output port from 'seconds',
++     * this would have single-node to stop delivering packets on that
++     * port to 'on_seconds_packet()', if running with
++     * SOL_LOG_LEVELS=sol-flow:4 you'd see that packets were dropped.
++     *
++     * And we send a boolean packet with value 'false' to the input
++     * port 'ENABLED' of 'seconds' node so it will stop emitting these
++     * packets.
++     *
++     * in the next minute we reverse it, re-connecting the 'OUT' port
++     * and sending true to 'ENABLED'.
++     */
++    i++;
++    if (i == 1)
++        return; /* first time let it go */
++    if (i % 2 == 0) {
++        puts("stop seconds and disconnect output port, will change in 1 minute");
++        sol_flow_single_port_out_disconnect(seconds, seconds_port_out);
++        sol_flow_send_boolean_packet(seconds, seconds_port_enabled, false);
++    } else {
++        puts("start seconds and connect output port, will change in 1 minute");
++        sol_flow_single_port_out_connect(seconds, seconds_port_out);
++        sol_flow_send_boolean_packet(seconds, seconds_port_enabled, true);
++    }
++}
++
++static void
++on_seconds_packet(void *data, struct sol_flow_node *n, uint16_t port, const struct sol_flow_packet *packet)
++{
++    /* do no logic, just print to stdout. */
++    get_int32_packet_and_log(n, port, packet);
++}
++
++static void
++create_minutes(void)
++{
++    const struct sol_flow_node_type *type;
++    struct sol_flow_node_named_options named_opts = {};
++    const char *strv_opts[] = {
++        "send_initial_packet=1",
++        NULL
++    };
++    struct sol_flow_node_options *opts;
++    int err;
++
++    /* Resolves the type based on its name. This will take care of
++     * built-in modules and external modules, loading on demand as
++     * required. This macro also handles static-compiles, so the
++     * second parameter is the C symbol to be used in such case.
++     */
++    err = sol_flow_get_node_type("wallclock",
++        SOL_FLOW_NODE_TYPE_WALLCLOCK_MINUTE, &type);
++    if (err < 0) {
++        fputs("could not find type: wallclock/minute\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    /* For efficiency matters Soletta doesn't work with port names,
++     * rather using port indexes. If
++     * SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED, then we can resolve
++     * strings to numbers, otherwise it is required to check the port
++     * numbers, which are often available in the header file such as
++     * sol-flow/wallclock.h such as
++     * SOL_FLOW_NODE_TYPE_WALLCLOCK_MINUTE__OUT__OUT.
++     */
++    minutes_port_enabled = sol_flow_node_find_port_in(type, "ENABLED");
++    if (minutes_port_enabled == UINT16_MAX) {
++        fputs("ERROR: couldn't find ouput port by name: ENABLED\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++    minutes_port_out = sol_flow_node_find_port_out(type, "OUT");
++    if (minutes_port_out == UINT16_MAX) {
++        fputs("ERROR: couldn't find ouput port by name: OUT\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    /* wallclock/minute takes a boolean option send_initial_packet.
++     * We have couple of options to create it:
++     *
++     * 1 - include sol-flow/wallclock.h, declare a variable of type
++     *     struct sol_flow_node_type_wallclock_minute_options and fill
++     *     its members. This requires sol-flow/wallclock.h to be
++     *     avaiable, but is more efficient since goes straight to the
++     *     point, no parsing or memory allocations. It would look
++     *     like:
++     *
++     *        #include <sol-flow/wallclock.h>
++     *
++     *        struct sol_flow_node_type_wallclock_minute_options opts =
++     *           SOL_FLOW_NODE_TYPE_WALLCLOCK_MINUTE_OPTIONS_DEFAULTS(
++     *              .send_initial_packet = true);
++     *
++     * 2 - access type->options_size,
++     *     type->default_options and
++     *     type->description->options and manually
++     *     create the structure in runtime. This demands
++     *     SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED, but may be useful
++     *     when converting from a different representation, like a
++     *     language binding such as JavaScript or Python where one can
++     *     get an object, hashmap or dictionary and convert straight
++     *     to the C structure needed by the flow node type.
++     *
++     * 3 - use helper sol_flow_node_named_options_init_from_strv() and
++     *     sol_flow_node_options_new(), giving it an array of
++     *     "key=value" strings. It will do the work described in #2
++     *     for us, thus also depends on
++     *     SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED.
++     *
++     * We'll use approach #3 since it is simpler. Language bindings
++     * should go with option #2 and those that want to squeeze the
++     * size and get performance should consider #1.
++     */
++    err = sol_flow_node_named_options_init_from_strv(&named_opts, type, strv_opts);
++    if (err < 0) {
++        fputs("could not parse options for wallclock/minute\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    /* convert the named options in the actual options structure */
++    err = sol_flow_node_options_new(type, &named_opts, &opts);
++    sol_flow_node_named_options_fini(&named_opts);
++    if (err < 0) {
++        fputs("could not create options for wallclock/minute\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    /* Build the single node wrapping the wanted 'wallclock/minute'.
++     * For most matters the single node behaves like the inner node,
++     * it will copy the descriptions and options.
++     *
++     * The difference is that if you call sol_flow_send_packet() on
++     * its input ports, it will forward the packet to the inner
++     * node. Likewise, packets originated at the outgoing ports of the
++     * inner node will be delivered through the process callback
++     * (on_packet()) provided to the single node.
++     *
++     * Note that ports you want to send (in) or receive (out) packets
++     * must be connected with the connected_ports_in and
++     * connected_ports_out parameters, or later with
++     * sol_flow_single_port_in_connect() and
++     * sol_flow_single_port_out_connect().
++     */
++    minutes = sol_flow_single_new("minutes", type, opts,
++        SOL_FLOW_SINGLE_CONNECTIONS(minutes_port_enabled),
++        SOL_FLOW_SINGLE_CONNECTIONS(minutes_port_out),
++        on_minutes_packet, NULL);
++    sol_flow_node_options_del(type, opts);
++}
++
++
++static void
++create_seconds(void)
++{
++    const struct sol_flow_node_type *type;
++    struct sol_flow_node_named_options named_opts = {};
++    const char *strv_opts[] = {
++        "send_initial_packet=1",
++        NULL
++    };
++    struct sol_flow_node_options *opts;
++    int err;
++
++    err = sol_flow_get_node_type("wallclock",
++        SOL_FLOW_NODE_TYPE_WALLCLOCK_SECOND, &type);
++    if (err < 0) {
++        fputs("could not find type: wallclock/second\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    seconds_port_enabled = sol_flow_node_find_port_in(type, "ENABLED");
++    if (seconds_port_enabled == UINT16_MAX) {
++        fputs("ERROR: couldn't find ouput port by name: ENABLED\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++    seconds_port_out = sol_flow_node_find_port_out(type, "OUT");
++    if (seconds_port_out == UINT16_MAX) {
++        fputs("ERROR: couldn't find ouput port by name: OUT\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    err = sol_flow_node_named_options_init_from_strv(&named_opts, type, strv_opts);
++    if (err < 0) {
++        fputs("could not parse options for wallclock/second\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    err = sol_flow_node_options_new(type, &named_opts, &opts);
++    sol_flow_node_named_options_fini(&named_opts);
++    if (err < 0) {
++        fputs("could not create options for wallclock/second\n", stderr);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    seconds = sol_flow_single_new("seconds", type, opts,
++        SOL_FLOW_SINGLE_CONNECTIONS(seconds_port_enabled),
++        SOL_FLOW_SINGLE_CONNECTIONS(seconds_port_out),
++        on_seconds_packet, NULL);
++    sol_flow_node_options_del(type, opts);
++}
++
++static void
++startup(void)
++{
++    create_minutes();
++    create_seconds();
++}
++
++static void
++shutdown(void)
++{
++    sol_flow_node_del(minutes);
++    sol_flow_node_del(seconds);
++}
++
++SOL_MAIN_DEFAULT(startup, shutdown);

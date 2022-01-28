@@ -1,0 +1,1967 @@
+"2015-09-02 13:57:24 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index 4e00f74d..5f4c4248 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -45,7 +45,6 @@ source "src/modules/flow/file/Kconfig"
+ source "src/modules/flow/filter-repeated/Kconfig"
+ source "src/modules/flow/float/Kconfig"
+ source "src/modules/flow/freegeoip/Kconfig"
+-source "src/modules/flow/fs/Kconfig"
+ source "src/modules/flow/gpio/Kconfig"
+ source "src/modules/flow/grove/Kconfig"
+ source "src/modules/flow/gtk/Kconfig"
+@@ -58,6 +57,7 @@ source "src/modules/flow/magnetometer/Kconfig"
+ source "src/modules/flow/max31855/Kconfig"
+ source "src/modules/flow/network/Kconfig"
+ source "src/modules/flow/oic/Kconfig"
++source "src/modules/flow/persistence/Kconfig"
+ source "src/modules/flow/piezo-speaker/Kconfig"
+ source "src/modules/flow/platform/Kconfig"
+ source "src/modules/flow/process/Kconfig"
+diff --git a/src/modules/flow/fs/Kconfig b/src/modules/flow/fs/Kconfig
+deleted file mode 100644
+index d8ea0469..00000000
+--- a/src/modules/flow/fs/Kconfig
++++ /dev/null
+@@ -1,4 +0,0 @@
+-config FLOW_NODE_TYPE_FS
+-	tristate "Node type: fs"
+-	depends on FEATURE_FILESYSTEM
+-	default m
+diff --git a/src/modules/flow/fs/Makefile b/src/modules/flow/fs/Makefile
+deleted file mode 100644
+index 1eea622f..00000000
+--- a/src/modules/flow/fs/Makefile
++++ /dev/null
+@@ -1,2 +0,0 @@
+-obj-$(FLOW_NODE_TYPE_FS) += fs.mod
+-obj-fs-$(FLOW_NODE_TYPE_FS) := fs.json fs.o flow-node-type-gpio.mod
+diff --git a/src/modules/flow/fs/fs.c b/src/modules/flow/fs/fs.c
+deleted file mode 100644
+index da61847f..00000000
+--- a/src/modules/flow/fs/fs.c
++++ /dev/null
+@@ -1,421 +0,0 @@
+-/*
+- * This file is part of the Soletta Project
+- *
+- * Copyright (C) 2015 Intel Corporation. All rights reserved.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions
+- * are met:
+- *
+- *   * Redistributions of source code must retain the above copyright
+- *     notice, this list of conditions and the following disclaimer.
+- *   * Redistributions in binary form must reproduce the above copyright
+- *     notice, this list of conditions and the following disclaimer in
+- *     the documentation and/or other materials provided with the
+- *     distribution.
+- *   * Neither the name of Intel Corporation nor the names of its
+- *     contributors may be used to endorse or promote products derived
+- *     from this software without specific prior written permission.
+- *
+- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+- */
+-
+-#include <sys/stat.h>
+-#include <sys/types.h>
+-#include <unistd.h>
+-#include <errno.h>
+-#include <limits.h>
+-#include <regex.h>
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-
+-#include "fs-gen.h"
+-
+-#include "sol-flow.h"
+-#include "sol-util.h"
+-
+-struct fs_persist_data {
+-    FILE *file;
+-    void *value_ptr;
+-    struct sol_flow_packet *(*packet_new_fn)(const struct fs_persist_data *data);
+-    int (*packet_data_get_fn)(const struct sol_flow_packet *packet, void *value_ptr);
+-    int (*packet_send_fn)(struct sol_flow_node *node);
+-    size_t packet_data_size;
+-    bool last_set;
+-};
+-
+-static int
+-fs_persist_open(struct sol_flow_node *node,
+-    void *data,
+-    const char *path)
+-{
+-    struct fs_persist_data *mdata = data;
+-    struct stat st;
+-    int r;
+-
+-    mdata->file = fopen(path, "re+");
+-    if (!mdata->file) {
+-        SOL_WRN("Failed to open file %s", path);
+-        return -errno;
+-    }
+-
+-    r = fstat(fileno(mdata->file), &st);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    /* a zero packet_data_size means dynamic size content */
+-    if (mdata->packet_data_size) {
+-        /* by returning early, mdata->last_set continues as false */
+-        if ((size_t)st.st_size < mdata->packet_data_size)
+-            return 0;
+-
+-        r = fread(mdata->value_ptr, mdata->packet_data_size, 1, mdata->file);
+-        SOL_INT_CHECK(r, < 0, r);
+-    } else {
+-        /* by returning early, mdata->last_set continues as false */
+-        if (!st.st_size)
+-            return 0;
+-        mdata->value_ptr = calloc(1, st.st_size + 1);
+-        SOL_NULL_CHECK(mdata->value_ptr, -ENOMEM);
+-        do {
+-            r = fread(mdata->value_ptr, 256, 1, mdata->file);
+-        } while (r > 0);
+-        SOL_INT_CHECK(r, < 0, r);
+-        ((char *)mdata->value_ptr)[st.st_size] = '\0';
+-    }
+-
+-    mdata->last_set = true;
+-
+-    return mdata->packet_send_fn(node);
+-}
+-
+-static void
+-fs_persist_close(struct sol_flow_node *node, void *data)
+-{
+-    struct fs_persist_data *mdata = data;
+-
+-    fclose(mdata->file);
+-    if (!mdata->packet_data_size)
+-        free(mdata->value_ptr);
+-}
+-
+-static int
+-fs_persist_process(struct sol_flow_node *node,
+-    void *data,
+-    uint16_t port,
+-    uint16_t conn_id,
+-    const struct sol_flow_packet *packet)
+-{
+-    struct fs_persist_data *mdata = data;
+-    unsigned char value[mdata->packet_data_size];
+-    void *value_ptr = NULL;
+-    size_t size = 0;
+-    int r;
+-
+-    if (mdata->packet_data_size) {
+-        r = mdata->packet_data_get_fn(packet, value);
+-    } else {
+-        r = mdata->packet_data_get_fn(packet, &value_ptr);
+-    }
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    r = fseek(mdata->file, SEEK_SET, 0);
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    if (mdata->packet_data_size) {
+-        r = fwrite(value, mdata->packet_data_size, 1, mdata->file);
+-    } else {
+-        size = strlen(value_ptr) + 1;
+-        r = fwrite(value_ptr, size, 1, mdata->file);
+-    }
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    fflush(mdata->file);
+-
+-    if (mdata->packet_data_size) {
+-        memcpy(mdata->value_ptr, value, mdata->packet_data_size);
+-    } else {
+-        if (!mdata->value_ptr || strlen(mdata->value_ptr) + 1 < size) {
+-            void *tmp = realloc(mdata->value_ptr, size);
+-            SOL_NULL_CHECK(tmp, -ENOMEM);
+-            mdata->value_ptr = tmp;
+-        }
+-        memcpy(mdata->value_ptr, value_ptr, size);
+-    }
+-
+-    mdata->last_set = true;
+-
+-    return mdata->packet_send_fn(node);
+-}
+-
+-struct fs_persist_boolean_data {
+-    struct fs_persist_data base;
+-    bool last_value;
+-};
+-
+-static int
+-fs_persist_boolean_packet_data_get(const struct sol_flow_packet *packet,
+-    void *value_ptr)
+-{
+-    int r = sol_flow_packet_get_boolean(packet, value_ptr);
+-
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return r;
+-}
+-
+-static int
+-fs_persist_boolean_packet_send(struct sol_flow_node *node)
+-{
+-    struct fs_persist_data *mdata = sol_flow_node_get_private_data(node);
+-
+-    return sol_flow_send_boolean_packet
+-               (node, SOL_FLOW_NODE_TYPE_FS_PERSIST_BOOLEAN__OUT__OUT,
+-               *(bool *)mdata->value_ptr);
+-}
+-
+-static struct sol_flow_packet *
+-fs_persist_boolean_packet_new(const struct fs_persist_data *data)
+-{
+-    struct fs_persist_boolean_data *mdata =
+-        (struct fs_persist_boolean_data *)data;
+-
+-    return sol_flow_packet_new_boolean(mdata->last_value);
+-}
+-
+-static int
+-fs_persist_boolean_open(struct sol_flow_node *node,
+-    void *data,
+-    const struct sol_flow_node_options *options)
+-{
+-    struct fs_persist_boolean_data *mdata = data;
+-    const struct sol_flow_node_type_fs_persist_boolean_options *opts =
+-        (const struct sol_flow_node_type_fs_persist_boolean_options *)options;
+-
+-    mdata->base.packet_data_size = sizeof(bool);
+-    mdata->base.value_ptr = &mdata->last_value;
+-    mdata->base.packet_new_fn = fs_persist_boolean_packet_new;
+-    mdata->base.packet_data_get_fn = fs_persist_boolean_packet_data_get;
+-    mdata->base.packet_send_fn = fs_persist_boolean_packet_send;
+-
+-    return fs_persist_open(node, data, opts->path);
+-}
+-
+-struct fs_persist_byte_data {
+-    struct fs_persist_data base;
+-    unsigned char last_value;
+-};
+-
+-static int
+-fs_persist_byte_packet_data_get(const struct sol_flow_packet *packet,
+-    void *value_ptr)
+-{
+-    int r = sol_flow_packet_get_byte(packet, value_ptr);
+-
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return r;
+-}
+-
+-static int
+-fs_persist_byte_packet_send(struct sol_flow_node *node)
+-{
+-    struct fs_persist_data *mdata = sol_flow_node_get_private_data(node);
+-
+-    return sol_flow_send_byte_packet
+-               (node, SOL_FLOW_NODE_TYPE_FS_PERSIST_BYTE__OUT__OUT,
+-               *(unsigned char *)mdata->value_ptr);
+-}
+-
+-static struct sol_flow_packet *
+-fs_persist_byte_packet_new(const struct fs_persist_data *data)
+-{
+-    struct fs_persist_byte_data *mdata = (struct fs_persist_byte_data *)data;
+-
+-    return sol_flow_packet_new_byte(mdata->last_value);
+-}
+-
+-static int
+-fs_persist_byte_open(struct sol_flow_node *node,
+-    void *data,
+-    const struct sol_flow_node_options *options)
+-{
+-    struct fs_persist_byte_data *mdata = data;
+-    const struct sol_flow_node_type_fs_persist_byte_options *opts =
+-        (const struct sol_flow_node_type_fs_persist_byte_options *)options;
+-
+-    mdata->base.packet_data_size = sizeof(unsigned char);
+-    mdata->base.value_ptr = &mdata->last_value;
+-    mdata->base.packet_new_fn = fs_persist_byte_packet_new;
+-    mdata->base.packet_data_get_fn = fs_persist_byte_packet_data_get;
+-    mdata->base.packet_send_fn = fs_persist_byte_packet_send;
+-
+-    return fs_persist_open(node, data, opts->path);
+-}
+-
+-struct fs_persist_irange_data {
+-    struct fs_persist_data base;
+-    struct sol_irange last_value;
+-};
+-
+-static int
+-fs_persist_irange_packet_data_get(const struct sol_flow_packet *packet,
+-    void *value_ptr)
+-{
+-    int r = sol_flow_packet_get_irange(packet, value_ptr);
+-
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return r;
+-}
+-
+-static int
+-fs_persist_irange_packet_send(struct sol_flow_node *node)
+-{
+-    struct fs_persist_data *mdata = sol_flow_node_get_private_data(node);
+-
+-    return sol_flow_send_irange_packet
+-               (node, SOL_FLOW_NODE_TYPE_FS_PERSIST_INT__OUT__OUT,
+-               (struct sol_irange *)mdata->value_ptr);
+-}
+-
+-static struct sol_flow_packet *
+-fs_persist_irange_packet_new(const struct fs_persist_data *data)
+-{
+-    struct fs_persist_irange_data *mdata =
+-        (struct fs_persist_irange_data *)data;
+-
+-    return sol_flow_packet_new_irange(&mdata->last_value);
+-}
+-
+-static int
+-fs_persist_irange_open(struct sol_flow_node *node,
+-    void *data,
+-    const struct sol_flow_node_options *options)
+-{
+-    struct fs_persist_irange_data *mdata = data;
+-    const struct sol_flow_node_type_fs_persist_int_options *opts =
+-        (const struct sol_flow_node_type_fs_persist_int_options *)options;
+-
+-    mdata->base.packet_data_size = sizeof(struct sol_irange);
+-    mdata->base.value_ptr = &mdata->last_value;
+-    mdata->base.packet_new_fn = fs_persist_irange_packet_new;
+-    mdata->base.packet_data_get_fn = fs_persist_irange_packet_data_get;
+-    mdata->base.packet_send_fn = fs_persist_irange_packet_send;
+-
+-    return fs_persist_open(node, data, opts->path);
+-}
+-
+-struct fs_persist_drange_data {
+-    struct fs_persist_data base;
+-    struct sol_drange last_value;
+-};
+-
+-static int
+-fs_persist_drange_packet_data_get(const struct sol_flow_packet *packet,
+-    void *value_ptr)
+-{
+-    int r = sol_flow_packet_get_drange(packet, value_ptr);
+-
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return r;
+-}
+-
+-static int
+-fs_persist_drange_packet_send(struct sol_flow_node *node)
+-{
+-    struct fs_persist_data *mdata = sol_flow_node_get_private_data(node);
+-
+-    return sol_flow_send_drange_packet
+-               (node, SOL_FLOW_NODE_TYPE_FS_PERSIST_FLOAT__OUT__OUT,
+-               (struct sol_drange *)mdata->value_ptr);
+-}
+-
+-static struct sol_flow_packet *
+-fs_persist_drange_packet_new(const struct fs_persist_data *data)
+-{
+-    struct fs_persist_drange_data *mdata =
+-        (struct fs_persist_drange_data *)data;
+-
+-    return sol_flow_packet_new_drange(&mdata->last_value);
+-}
+-
+-static int
+-fs_persist_drange_open(struct sol_flow_node *node,
+-    void *data,
+-    const struct sol_flow_node_options *options)
+-{
+-    struct fs_persist_drange_data *mdata = data;
+-    const struct sol_flow_node_type_fs_persist_int_options *opts =
+-        (const struct sol_flow_node_type_fs_persist_int_options *)options;
+-
+-    mdata->base.packet_data_size = sizeof(struct sol_drange);
+-    mdata->base.value_ptr = &mdata->last_value;
+-    mdata->base.packet_new_fn = fs_persist_drange_packet_new;
+-    mdata->base.packet_data_get_fn = fs_persist_drange_packet_data_get;
+-    mdata->base.packet_send_fn = fs_persist_drange_packet_send;
+-
+-    return fs_persist_open(node, data, opts->path);
+-}
+-
+-struct fs_persist_string_data {
+-    struct fs_persist_data base;
+-    const char *last_value;
+-};
+-
+-static int
+-fs_persist_string_packet_data_get(const struct sol_flow_packet *packet,
+-    void *value_ptr)
+-{
+-    int r = sol_flow_packet_get_string(packet, value_ptr);
+-
+-    SOL_INT_CHECK(r, < 0, r);
+-
+-    return r;
+-}
+-
+-static int
+-fs_persist_string_packet_send(struct sol_flow_node *node)
+-{
+-    struct fs_persist_data *mdata = sol_flow_node_get_private_data(node);
+-
+-    return sol_flow_send_string_packet
+-               (node, SOL_FLOW_NODE_TYPE_FS_PERSIST_STRING__OUT__OUT,
+-               (const char *)mdata->value_ptr);
+-}
+-
+-static struct sol_flow_packet *
+-fs_persist_string_packet_new(const struct fs_persist_data *data)
+-{
+-    return sol_flow_packet_new_string(data->value_ptr);
+-}
+-
+-static int
+-fs_persist_string_open(struct sol_flow_node *node,
+-    void *data,
+-    const struct sol_flow_node_options *options)
+-{
+-    struct fs_persist_string_data *mdata = data;
+-    const struct sol_flow_node_type_fs_persist_int_options *opts =
+-        (const struct sol_flow_node_type_fs_persist_int_options *)options;
+-
+-    mdata->base.packet_new_fn = fs_persist_string_packet_new;
+-    mdata->base.packet_data_get_fn = fs_persist_string_packet_data_get;
+-    mdata->base.packet_send_fn = fs_persist_string_packet_send;
+-
+-    return fs_persist_open(node, data, opts->path);
+-}
+-
+-
+-#include "fs-gen.c"
+diff --git a/src/modules/flow/fs/fs.json b/src/modules/flow/fs/fs.json
+deleted file mode 100644
+index b0a553bc..00000000
+--- a/src/modules/flow/fs/fs.json
++++ /dev/null
+@@ -1,201 +0,0 @@
+-{
+-  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
+-  "name": "fs",
+-  "meta": {
+-    "author": "Intel Corporation",
+-    "license": "BSD 3-Clause",
+-    "version": "1"
+-  },
+-  "types": [
+-    {
+-      "category": "io/fs",
+-      "description": "Persists the last input packet's data it receives in a given file, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
+-      "methods": {
+-        "close": "fs_persist_close",
+-        "open": "fs_persist_boolean_open"
+-      },
+-      "name": "fs/persist-boolean",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "string",
+-            "description": "Path to file to persist a boolean packet in. The node won't create a new file, it must exist",
+-            "name": "path"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "in_ports": [
+-        {
+-          "data_type": "boolean",
+-          "description": "A boolean packet to persist (and repeat on output)",
+-          "methods": {
+-            "process": "fs_persist_process"
+-          },
+-          "name": "IN"
+-        }
+-      ],
+-      "out_ports": [
+-        {
+-          "data_type": "boolean",
+-          "description": "A boolean packet with the persisted value of the node",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "fs_persist_boolean_data",
+-      "url": "http://solettaproject.org/doc/latest/components/fs.html"
+-    },
+-    {
+-      "category": "io/fs",
+-      "description": "Persists the last input packet's data it receives in a given file, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
+-      "methods": {
+-        "close": "fs_persist_close",
+-        "open": "fs_persist_byte_open"
+-      },
+-      "name": "fs/persist-byte",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "string",
+-            "description": "Path to file to persist a byte packet in. The node won't create a new file, it must exist",
+-            "name": "path"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "in_ports": [
+-        {
+-          "data_type": "byte",
+-          "description": "A byte packet to persist (and repeat on output)",
+-          "methods": {
+-            "process": "fs_persist_process"
+-          },
+-          "name": "IN"
+-        }
+-      ],
+-      "out_ports": [
+-        {
+-          "data_type": "byte",
+-          "description": "A byte packet with the persisted value of the node",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "fs_persist_byte_data",
+-      "url": "http://solettaproject.org/doc/latest/components/fs.html"
+-    },
+-    {
+-      "category": "io/fs",
+-      "description": "Persists the last input packet's data it receives in a given file, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
+-      "methods": {
+-        "close": "fs_persist_close",
+-        "open": "fs_persist_drange_open"
+-      },
+-      "name": "fs/persist-float",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "string",
+-            "description": "Path to file to persist a float packet in. The node won't create a new file, it must exist",
+-            "name": "path"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "in_ports": [
+-        {
+-          "data_type": "float",
+-          "description": "An float packet to persist (and repeat on output)",
+-          "methods": {
+-            "process": "fs_persist_process"
+-          },
+-          "name": "IN"
+-        }
+-      ],
+-      "out_ports": [
+-        {
+-          "data_type": "float",
+-          "description": "A float packet with the persisted value of the node",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "fs_persist_drange_data",
+-      "url": "http://solettaproject.org/doc/latest/components/fs.html"
+-    },
+-    {
+-      "category": "io/fs",
+-      "description": "Persists the last input packet's data it receives in a given file, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
+-      "methods": {
+-        "close": "fs_persist_close",
+-        "open": "fs_persist_irange_open"
+-      },
+-      "name": "fs/persist-int",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "string",
+-            "description": "Path to file to persist a int packet in. The node won't create a new file, it must exist",
+-            "name": "path"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "in_ports": [
+-        {
+-          "data_type": "int",
+-          "description": "A int packet to persist (and repeat on output)",
+-          "methods": {
+-            "process": "fs_persist_process"
+-          },
+-          "name": "IN"
+-        }
+-      ],
+-      "out_ports": [
+-        {
+-          "data_type": "int",
+-          "description": "A int packet with the persisted value of the node",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "fs_persist_irange_data",
+-      "url": "http://solettaproject.org/doc/latest/components/fs.html"
+-    },
+-    {
+-      "category": "io/fs",
+-      "description": "Persists the last input packet's data it receives in a given file system file, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
+-      "methods": {
+-        "close": "fs_persist_close",
+-        "open": "fs_persist_string_open"
+-      },
+-      "name": "fs/persist-string",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "string",
+-            "description": "Path to file to persist a string packet in. The node won't create a new file, it must exist",
+-            "name": "path"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "in_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "A string packet to persist (and repeat on output)",
+-          "methods": {
+-            "process": "fs_persist_process"
+-          },
+-          "name": "IN"
+-        }
+-      ],
+-      "out_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "A string packet with the persisted value of the node",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "fs_persist_string_data",
+-      "url": "http://solettaproject.org/doc/latest/components/fs.html"
+-    }
+-  ]
+-}
+diff --git a/src/modules/flow/persistence/Kconfig b/src/modules/flow/persistence/Kconfig
+new file mode 100644
+index 00000000..14ab6c77
+--- /dev/null
++++ b/src/modules/flow/persistence/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_PERSISTENCE
++	tristate "Node type: persistence"
++	depends on PLATFORM_LINUX
++	default m
+diff --git a/src/modules/flow/persistence/Makefile b/src/modules/flow/persistence/Makefile
+new file mode 100644
+index 00000000..c2a94375
+--- /dev/null
++++ b/src/modules/flow/persistence/Makefile
+@@ -0,0 +1,5 @@
++obj-$(FLOW_NODE_TYPE_PERSISTENCE) += persistence.mod
++obj-persistence-$(FLOW_NODE_TYPE_PERSISTENCE) := persistence.json \
++	persistence.o \
++	fs-storage.o \
++	efivarfs-storage.o
+diff --git a/src/modules/flow/persistence/efivarfs-storage.c b/src/modules/flow/persistence/efivarfs-storage.c
+new file mode 100644
+index 00000000..c62685a2
+--- /dev/null
++++ b/src/modules/flow/persistence/efivarfs-storage.c
+@@ -0,0 +1,155 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "efivarfs-storage.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "sol-buffer.h"
++#include "sol-log.h"
++#include "sol-util.h"
++#include "sol-util-file.h"
++
++#define SOLETTA_EFIVARS_GUID "076027a8-c791-41d7-940f-3d465869f821"
++#define EFIVARFS_VAR_DIR "/sys/firmware/efi/efivars/"
++#define EFIVARFS_VAR_PATH EFIVARFS_VAR_DIR "%s-" SOLETTA_EFIVARS_GUID
++
++static const int EFIVARS_DEFAULT_ATTR = 0x7;
++
++static bool
++check_realpath(const char *path)
++{
++    char real_path[PATH_MAX];
++
++    if (realpath(path, real_path)) {
++        return strstartswith(real_path, EFIVARFS_VAR_DIR);
++    }
++
++    return false;
++}
++
++int
++efivars_write(const char *name, struct sol_buffer *buffer)
++{
++    FILE *file;
++    char path[PATH_MAX];
++    int r;
++
++    r = snprintf(path, sizeof(path), EFIVARFS_VAR_PATH, name);
++    if (r < 0 || r >= PATH_MAX) {
++        SOL_WRN("Could not create path for efivars persistence file [%s]", path);
++        return -EINVAL;
++    }
++    if (!check_realpath(path)) {
++        SOL_WRN("Invalid name for efivars persistence packet [%s]", name);
++        return -EINVAL;
++    }
++
++    file = fopen(path, "w+e");
++    if (!file) {
++        SOL_WRN("Could not open persistence file [%s]", path);
++        return -errno;
++    }
++
++    fwrite(&EFIVARS_DEFAULT_ATTR, sizeof(EFIVARS_DEFAULT_ATTR), 1, file);
++    if (ferror(file)) {
++        SOL_WRN("Coud not write peristence file [%s] attributes", path);
++        goto end;
++    }
++
++    fwrite(buffer->data, buffer->used, 1, file);
++
++end:
++    if (fclose(file)) {
++        SOL_WRN("Could not close persistence file [%s]", path);
++        return -errno;
++    }
++
++    return 0;
++}
++
++int
++efivars_read(const char *name, struct sol_buffer *buffer)
++{
++    int r, fd;
++    char path[PATH_MAX];
++    uint32_t b;
++    struct sol_buffer attr = SOL_BUFFER_INIT_FLAGS(&b, sizeof(uint32_t),
++        SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
++
++    r = snprintf(path, sizeof(path), EFIVARFS_VAR_PATH, name);
++    if (r < 0 || r >= PATH_MAX) {
++        SOL_WRN("Could not create path for efivars persistence file [%s]", path);
++        return -EINVAL;
++    }
++    if (!check_realpath(path)) {
++        SOL_WRN("Invalid name for efivars persistence packet [%s]", name);
++        return -EINVAL;
++    }
++
++    fd = open(path, O_RDONLY | O_CLOEXEC);
++    if (fd < 0) {
++        SOL_WRN("Could not open persistence file [%s]", path);
++        return -errno;
++    }
++
++    /* Read (to discard) the first uint32_t containing the attributes */
++    r = sol_util_fill_buffer(fd, &attr, sizeof(uint32_t));
++    if (r < 0) {
++        SOL_WRN("Could not read persistence file [%s] attributes", path);
++        goto end;
++    }
++
++    if (buffer->capacity) {
++        r = sol_util_fill_buffer(fd, buffer, buffer->capacity);
++    } else {
++        size_t size;
++        char *data = sol_util_load_file_fd_string(fd, &size);
++        if (data) {
++            buffer->capacity = size;
++            buffer->used = size;
++            buffer->data = data;
++            r = size;
++        } else
++            r = -errno;
++    }
++
++end:
++    close(fd);
++
++    return r;
++}
+diff --git a/src/modules/flow/persistence/efivarfs-storage.h b/src/modules/flow/persistence/efivarfs-storage.h
+new file mode 100644
+index 00000000..cd3f76c0
+--- /dev/null
++++ b/src/modules/flow/persistence/efivarfs-storage.h
+@@ -0,0 +1,38 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stddef.h>
++
++#include "sol-buffer.h"
++
++int efivars_write(const char *name, struct sol_buffer *buffer);
++int efivars_read(const char *name, struct sol_buffer *buffer);
+diff --git a/src/modules/flow/persistence/fs-storage.c b/src/modules/flow/persistence/fs-storage.c
+new file mode 100644
+index 00000000..df8dbfad
+--- /dev/null
++++ b/src/modules/flow/persistence/fs-storage.c
+@@ -0,0 +1,100 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "fs-storage.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "sol-buffer.h"
++#include "sol-log.h"
++#include "sol-util.h"
++#include "sol-util-file.h"
++
++int
++fs_write(const char *name, struct sol_buffer *buffer)
++{
++    FILE *file;
++
++    file = fopen(name, "w+e");
++    if (!file) {
++        SOL_WRN("Could not open persistence file [%s]", name);
++        return -errno;
++    }
++
++    fwrite(buffer->data, buffer->used, 1, file);
++    if (ferror(file)) {
++        SOL_WRN("Could not write to persistence file [%s]", name);
++        return -EIO;
++    }
++
++    if (fclose(file)) {
++        SOL_WRN("Could not close persistence file [%s]", name);
++        return -errno;
++    }
++
++    return 0;
++}
++
++int
++fs_read(const char *name, struct sol_buffer *buffer)
++{
++    int r, fd;
++
++    fd = open(name, O_RDONLY | O_CLOEXEC);
++    if (fd < 0) {
++        SOL_WRN("Could not open persistence file [%s]", name);
++        return -errno;
++    }
++
++    if (buffer->capacity) {
++        r = sol_util_fill_buffer(fd, buffer, buffer->capacity);
++    } else {
++        size_t size = 0;
++        char *data = sol_util_load_file_fd_string(fd, &size);
++        if (data) {
++            buffer->capacity = size;
++            buffer->used = size;
++            buffer->data = data;
++            r = size;
++        } else
++            r = -errno;
++    }
++
++    close(fd);
++
++    return r;
++}
+diff --git a/src/modules/flow/persistence/fs-storage.h b/src/modules/flow/persistence/fs-storage.h
+new file mode 100644
+index 00000000..5aeb3e00
+--- /dev/null
++++ b/src/modules/flow/persistence/fs-storage.h
+@@ -0,0 +1,38 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stddef.h>
++
++#include "sol-buffer.h"
++
++int fs_write(const char *name,  struct sol_buffer *buffer);
++int fs_read(const char *name, struct sol_buffer *buffer);
+diff --git a/src/modules/flow/persistence/persistence.c b/src/modules/flow/persistence/persistence.c
+new file mode 100644
+index 00000000..c79ef49c
+--- /dev/null
++++ b/src/modules/flow/persistence/persistence.c
+@@ -0,0 +1,560 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++
++#include "persistence-gen.h"
++
++#include "sol-buffer.h"
++#include "sol-flow.h"
++#include "sol-str-slice.h"
++#include "sol-str-table.h"
++#include "sol-util.h"
++
++#include "fs-storage.h"
++#include "efivarfs-storage.h"
++
++struct storage_fn {
++    int (*write)(const char *name, struct sol_buffer *buffer);
++    int (*read)(const char *name, struct sol_buffer *buffer);
++};
++
++struct persist_data {
++    void *value_ptr;
++
++    char *name;
++    char *fs_dir_path;
++
++    struct sol_flow_packet *(*packet_new_fn)(const struct persist_data *data);
++    int (*packet_data_get_fn)(const struct sol_flow_packet *packet, void *value_ptr);
++    int (*packet_send_fn)(struct sol_flow_node *node);
++    void *(*node_get_default_fn)(struct sol_flow_node *node);
++
++    const struct storage_fn *storage;
++
++    size_t packet_data_size;
++};
++
++static const struct storage_fn fs_fn = {
++    .write = fs_write,
++    .read = fs_read
++};
++
++static const struct storage_fn efivars_fn = {
++    .write = efivars_write,
++    .read = efivars_read
++};
++
++static const struct sol_str_table_ptr storage_fn_table[] = {
++    SOL_STR_TABLE_PTR_ITEM("fs", &fs_fn),
++    SOL_STR_TABLE_PTR_ITEM("efivars", &efivars_fn),
++    { }
++};
++
++static int
++storage_write(struct persist_data *mdata, void *data, size_t size)
++{
++    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(data, size,
++        SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
++
++    buf.used = size;
++
++    return mdata->storage->write(mdata->name, &buf);
++}
++
++static int
++storage_read(struct persist_data *mdata, struct sol_buffer *buf)
++{
++    return mdata->storage->read(mdata->name, buf);
++}
++
++static void
++persist_close(struct sol_flow_node *node, void *data)
++{
++    struct persist_data *mdata = data;
++
++    if (!mdata->packet_data_size)
++        free(mdata->value_ptr);
++
++    free(mdata->name);
++}
++
++static int
++persist_do(struct persist_data *mdata, struct sol_flow_node *node, void *value)
++{
++    size_t size = 0;
++    int r;
++
++    if (mdata->packet_data_size)
++        size = mdata->packet_data_size;
++    else
++        size = strlen(value) + 1;
++
++    r = storage_write(mdata, value, size);
++    SOL_INT_CHECK(r, < 0, r);
++
++    /* No packet_data_size means dynamic content (string). Let's reallocate if needed */
++    if (!mdata->packet_data_size) {
++        if (!mdata->value_ptr || strlen(mdata->value_ptr) + 1 < size) {
++            void *tmp = realloc(mdata->value_ptr, size);
++            SOL_NULL_CHECK(tmp, -ENOMEM);
++            mdata->value_ptr = tmp;
++        }
++    }
++    memcpy(mdata->value_ptr, value, size);
++
++    return mdata->packet_send_fn(node);
++}
++
++static int
++persist_reset(struct persist_data *mdata, struct sol_flow_node *node)
++{
++    void *value;
++
++    value = mdata->node_get_default_fn(node);
++
++    return persist_do(mdata, node, value);
++}
++
++static int
++persist_process(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct persist_data *mdata = data;
++    void *value;
++    int r;
++
++    if (mdata->packet_data_size) {
++        value = alloca(mdata->packet_data_size);
++        r = mdata->packet_data_get_fn(packet, value);
++    } else
++        r = mdata->packet_data_get_fn(packet, &value);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return persist_do(mdata, node, value);
++}
++
++static int
++reset_process(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct persist_data *mdata = data;
++
++    return persist_reset(mdata, node);
++}
++
++static int
++persist_open(struct sol_flow_node *node,
++    void *data,
++    const char *storage,
++    const char *name)
++{
++    struct persist_data *mdata = data;
++    struct sol_str_slice storage_slice;
++    int r;
++
++    if (!storage || *storage == '\0') {
++        SOL_WRN("Must define a storage type");
++        return -EINVAL;
++    }
++
++    storage_slice = sol_str_slice_from_str(storage);
++    if (!sol_str_table_ptr_lookup(storage_fn_table, storage_slice, &mdata->storage)) {
++        SOL_WRN("Invalid storage [%s]", storage);
++        return -EINVAL;
++    }
++
++    mdata->name = strdup(name);
++    SOL_NULL_CHECK(mdata->name, -ENOMEM);
++
++    /* a zero packet_data_size means dynamic size content */
++    if (mdata->packet_data_size) {
++        struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(mdata->value_ptr,
++            mdata->packet_data_size, SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
++
++        r = storage_read(mdata, &buf);
++    } else {
++        struct sol_buffer buf = SOL_BUFFER_INIT_EMPTY;
++
++        r = storage_read(mdata, &buf);
++        if (r >= 0)
++            mdata->value_ptr = sol_buffer_steal(&buf, NULL);
++        else
++            sol_buffer_fini(&buf);
++    }
++    if (r == -ENOENT) {
++        /* No file. Send default value */
++        return persist_reset(mdata, node);
++    }
++    SOL_INT_CHECK_GOTO(r, < 0, err);
++
++    return mdata->packet_send_fn(node);
++
++err:
++    persist_close(node, mdata);
++    return r;
++}
++
++struct persist_boolean_data {
++    struct persist_data base;
++    bool last_value;
++    bool default_value;
++};
++
++static void *
++persist_boolean_node_get_default(struct sol_flow_node *node)
++{
++    struct persist_boolean_data *mdata = sol_flow_node_get_private_data(node);
++
++    return &mdata->default_value;
++}
++
++static int
++persist_boolean_packet_data_get(const struct sol_flow_packet *packet,
++    void *value_ptr)
++{
++    int r = sol_flow_packet_get_boolean(packet, value_ptr);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return r;
++}
++
++static int
++persist_boolean_packet_send(struct sol_flow_node *node)
++{
++    struct persist_data *mdata = sol_flow_node_get_private_data(node);
++
++    return sol_flow_send_boolean_packet
++               (node, SOL_FLOW_NODE_TYPE_PERSISTENCE_BOOLEAN__OUT__OUT,
++               *(bool *)mdata->value_ptr);
++}
++
++static struct sol_flow_packet *
++persist_boolean_packet_new(const struct persist_data *data)
++{
++    struct persist_boolean_data *mdata =
++        (struct persist_boolean_data *)data;
++
++    return sol_flow_packet_new_boolean(mdata->last_value);
++}
++
++static int
++persist_boolean_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct persist_boolean_data *mdata = data;
++    const struct sol_flow_node_type_persistence_boolean_options *opts =
++        (const struct sol_flow_node_type_persistence_boolean_options *)options;
++
++    mdata->base.packet_data_size = sizeof(bool);
++    mdata->base.value_ptr = &mdata->last_value;
++    mdata->base.packet_new_fn = persist_boolean_packet_new;
++    mdata->base.packet_data_get_fn = persist_boolean_packet_data_get;
++    mdata->base.packet_send_fn = persist_boolean_packet_send;
++    mdata->base.node_get_default_fn = persist_boolean_node_get_default;
++    mdata->default_value = opts->default_value;
++
++    return persist_open(node, data, opts->storage, opts->name);
++}
++
++struct persist_byte_data {
++    struct persist_data base;
++    unsigned char last_value;
++    unsigned char default_value;
++};
++
++static void *
++persist_byte_node_get_default(struct sol_flow_node *node)
++{
++    struct persist_byte_data *mdata = sol_flow_node_get_private_data(node);
++
++    return &mdata->default_value;
++}
++
++static int
++persist_byte_packet_data_get(const struct sol_flow_packet *packet,
++    void *value_ptr)
++{
++    int r = sol_flow_packet_get_byte(packet, value_ptr);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return r;
++}
++
++static int
++persist_byte_packet_send(struct sol_flow_node *node)
++{
++    struct persist_data *mdata = sol_flow_node_get_private_data(node);
++
++    return sol_flow_send_byte_packet
++               (node, SOL_FLOW_NODE_TYPE_PERSISTENCE_BYTE__OUT__OUT,
++               *(unsigned char *)mdata->value_ptr);
++}
++
++static struct sol_flow_packet *
++persist_byte_packet_new(const struct persist_data *data)
++{
++    struct persist_byte_data *mdata = (struct persist_byte_data *)data;
++
++    return sol_flow_packet_new_byte(mdata->last_value);
++}
++
++static int
++persist_byte_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct persist_byte_data *mdata = data;
++    const struct sol_flow_node_type_persistence_byte_options *opts =
++        (const struct sol_flow_node_type_persistence_byte_options *)options;
++
++    mdata->base.packet_data_size = sizeof(unsigned char);
++    mdata->base.value_ptr = &mdata->last_value;
++    mdata->base.packet_new_fn = persist_byte_packet_new;
++    mdata->base.packet_data_get_fn = persist_byte_packet_data_get;
++    mdata->base.packet_send_fn = persist_byte_packet_send;
++    mdata->base.node_get_default_fn = persist_byte_node_get_default;
++    mdata->default_value = opts->default_value;
++
++    return persist_open(node, data, opts->storage, opts->name);
++}
++
++struct persist_irange_data {
++    struct persist_data base;
++    struct sol_irange last_value;
++    struct sol_irange default_value;
++};
++
++static void *
++persist_irange_node_get_default(struct sol_flow_node *node)
++{
++    struct persist_irange_data *mdata = sol_flow_node_get_private_data(node);
++
++    return &mdata->default_value.val;
++}
++
++static int
++persist_irange_packet_data_get(const struct sol_flow_packet *packet,
++    void *value_ptr)
++{
++    int r = sol_flow_packet_get_irange(packet, value_ptr);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return r;
++}
++
++static int
++persist_irange_packet_send(struct sol_flow_node *node)
++{
++    struct persist_data *mdata = sol_flow_node_get_private_data(node);
++
++    return sol_flow_send_irange_packet
++               (node, SOL_FLOW_NODE_TYPE_PERSISTENCE_INT__OUT__OUT,
++               (struct sol_irange *)mdata->value_ptr);
++}
++
++static struct sol_flow_packet *
++persist_irange_packet_new(const struct persist_data *data)
++{
++    struct persist_irange_data *mdata =
++        (struct persist_irange_data *)data;
++
++    return sol_flow_packet_new_irange(&mdata->last_value);
++}
++
++static int
++persist_irange_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct persist_irange_data *mdata = data;
++    const struct sol_flow_node_type_persistence_int_options *opts =
++        (const struct sol_flow_node_type_persistence_int_options *)options;
++
++    mdata->base.packet_data_size = sizeof(struct sol_irange);
++    mdata->base.value_ptr = &mdata->last_value;
++    mdata->base.packet_new_fn = persist_irange_packet_new;
++    mdata->base.packet_data_get_fn = persist_irange_packet_data_get;
++    mdata->base.packet_send_fn = persist_irange_packet_send;
++    mdata->base.node_get_default_fn = persist_irange_node_get_default;
++    mdata->default_value = opts->default_value;
++
++    return persist_open(node, data, opts->storage, opts->name);
++}
++
++struct persist_drange_data {
++    struct persist_data base;
++    struct sol_drange last_value;
++    struct sol_drange default_value;
++};
++
++static void *
++persist_drange_node_get_default(struct sol_flow_node *node)
++{
++    struct persist_drange_data *mdata = sol_flow_node_get_private_data(node);
++
++    return &mdata->default_value.val;
++}
++
++static int
++persist_drange_packet_data_get(const struct sol_flow_packet *packet,
++    void *value_ptr)
++{
++    int r = sol_flow_packet_get_drange(packet, value_ptr);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return r;
++}
++
++static int
++persist_drange_packet_send(struct sol_flow_node *node)
++{
++    struct persist_data *mdata = sol_flow_node_get_private_data(node);
++
++    return sol_flow_send_drange_packet
++               (node, SOL_FLOW_NODE_TYPE_PERSISTENCE_FLOAT__OUT__OUT,
++               (struct sol_drange *)mdata->value_ptr);
++}
++
++static struct sol_flow_packet *
++persist_drange_packet_new(const struct persist_data *data)
++{
++    struct persist_drange_data *mdata =
++        (struct persist_drange_data *)data;
++
++    return sol_flow_packet_new_drange(&mdata->last_value);
++}
++
++static int
++persist_drange_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct persist_drange_data *mdata = data;
++    const struct sol_flow_node_type_persistence_float_options *opts =
++        (const struct sol_flow_node_type_persistence_float_options *)options;
++
++    mdata->base.packet_data_size = sizeof(struct sol_drange);
++    mdata->base.value_ptr = &mdata->last_value;
++    mdata->base.packet_new_fn = persist_drange_packet_new;
++    mdata->base.packet_data_get_fn = persist_drange_packet_data_get;
++    mdata->base.packet_send_fn = persist_drange_packet_send;
++    mdata->base.node_get_default_fn = persist_drange_node_get_default;
++    mdata->default_value = opts->default_value;
++
++    return persist_open(node, data, opts->storage, opts->name);
++}
++
++struct persist_string_data {
++    struct persist_data base;
++    const char *last_value;
++    char *default_value;
++};
++
++static void *
++persist_string_node_get_default(struct sol_flow_node *node)
++{
++    struct persist_string_data *mdata = sol_flow_node_get_private_data(node);
++
++    return mdata->default_value;
++}
++
++static int
++persist_string_packet_data_get(const struct sol_flow_packet *packet,
++    void *value_ptr)
++{
++    int r = sol_flow_packet_get_string(packet, value_ptr);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return r;
++}
++
++static int
++persist_string_packet_send(struct sol_flow_node *node)
++{
++    struct persist_data *mdata = sol_flow_node_get_private_data(node);
++
++    return sol_flow_send_string_packet
++               (node, SOL_FLOW_NODE_TYPE_PERSISTENCE_STRING__OUT__OUT,
++               (const char *)mdata->value_ptr);
++}
++
++static struct sol_flow_packet *
++persist_string_packet_new(const struct persist_data *data)
++{
++    return sol_flow_packet_new_string(data->value_ptr);
++}
++
++static int
++persist_string_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct persist_string_data *mdata = data;
++    const struct sol_flow_node_type_persistence_string_options *opts =
++        (const struct sol_flow_node_type_persistence_string_options *)options;
++
++    mdata->base.packet_new_fn = persist_string_packet_new;
++    mdata->base.packet_data_get_fn = persist_string_packet_data_get;
++    mdata->base.packet_send_fn = persist_string_packet_send;
++    mdata->base.node_get_default_fn = persist_string_node_get_default;
++
++    if (opts->default_value)
++        mdata->default_value = strdup((char *)opts->default_value);
++
++    return persist_open(node, data, opts->storage, opts->name);
++}
++
++static void
++persist_string_close(struct sol_flow_node *node, void *data)
++{
++    struct persist_string_data *mdata = data;
++
++    free(mdata->default_value);
++
++    persist_close(node, mdata);
++}
++
++#include "persistence-gen.c"
+diff --git a/src/modules/flow/persistence/persistence.json b/src/modules/flow/persistence/persistence.json
+new file mode 100644
+index 00000000..3d20b883
+--- /dev/null
++++ b/src/modules/flow/persistence/persistence.json
+@@ -0,0 +1,296 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "persistence",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "BSD 3-Clause",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "io/persistence",
++      "description": "Persists the last input packet's data it receives to storage, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
++      "methods": {
++        "close": "persist_close",
++        "open": "persist_boolean_open"
++      },
++      "name": "persistence/boolean",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "description": "Name to persist a boolean packet. If 'storage' is 'fs', name can be a fully fledged path to the file where the value will be stored.",
++            "name": "name"
++          },
++          {
++            "data_type": "string",
++            "description": "Storage where data will be persisted. It can be of the following: fs, efivars",
++            "name": "storage"
++          },
++          {
++            "data_type": "boolean",
++            "default": false,
++            "description": "Default value for this node, when there's no previous value persisted",
++            "name": "default_value"
++          }
++        ],
++        "version": 1
++      },
++      "in_ports": [
++        {
++          "data_type": "boolean",
++          "description": "A boolean packet to persist (and repeat on output)",
++          "methods": {
++            "process": "persist_process"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "any",
++          "description": "Reset persist value to its default and send to output the new value",
++          "methods": {
++            "process": "reset_process"
++          },
++          "name": "RESET"
++        }
++      ],
++      "out_ports": [
++        {
++          "data_type": "boolean",
++          "description": "A boolean packet with the persisted value of the node",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "persist_boolean_data",
++      "url": "http://solettaproject.org/doc/latest/components/persistence.html"
++    },
++    {
++      "category": "io/persistence",
++      "description": "Persists the last input packet's data it receives to storage, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
++      "methods": {
++        "close": "persist_close",
++        "open": "persist_byte_open"
++      },
++      "name": "persistence/byte",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "description": "Name to persist a byte packet. If 'storage' is 'fs', name can be a fully fledged path to the file where the value will be stored.",
++            "name": "name"
++          },
++          {
++            "data_type": "string",
++            "description": "Storage where data will be persisted. It can be of the following: fs, efivars",
++            "name": "storage"
++          },
++          {
++            "data_type": "byte",
++            "default": 0,
++            "description": "Default value for this node, when there's no previous value persisted",
++            "name": "default_value"
++          }
++        ],
++        "version": 1
++      },
++      "in_ports": [
++        {
++          "data_type": "byte",
++          "description": "A byte packet to persist (and repeat on output)",
++          "methods": {
++            "process": "persist_process"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "any",
++          "description": "Reset persist value to its default and send to output the new value",
++          "methods": {
++            "process": "reset_process"
++          },
++          "name": "RESET"
++        }
++      ],
++      "out_ports": [
++        {
++          "data_type": "byte",
++          "description": "A byte packet with the persisted value of the node",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "persist_byte_data",
++      "url": "http://solettaproject.org/doc/latest/components/persistence.html"
++    },
++    {
++      "category": "io/persistence",
++      "description": "Persists the last input packet's data it receives to storage, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
++      "methods": {
++        "close": "persist_close",
++        "open": "persist_drange_open"
++      },
++      "name": "persistence/float",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "description": "Name to persist a float packet. If 'storage' is 'fs', name can be a fully fledged path to the file where the value will be stored.",
++            "name": "name"
++          },
++          {
++            "data_type": "string",
++            "description": "Storage where data will be persisted. It can be of the following: fs, efivars",
++            "name": "storage"
++          },
++          {
++            "data_type": "float",
++            "default": 0.0,
++            "description": "Default value for this node, when there's no previous value persisted",
++            "name": "default_value"
++          }
++        ],
++        "version": 1
++      },
++      "in_ports": [
++        {
++          "data_type": "float",
++          "description": "An float packet to persist (and repeat on output)",
++          "methods": {
++            "process": "persist_process"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "any",
++          "description": "Reset persist value to its default and send to output the new value",
++          "methods": {
++            "process": "reset_process"
++          },
++          "name": "RESET"
++        }
++      ],
++      "out_ports": [
++        {
++          "data_type": "float",
++          "description": "A float packet with the persisted value of the node",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "persist_drange_data",
++      "url": "http://solettaproject.org/doc/latest/components/persistence.html"
++    },
++    {
++      "category": "io/persistence",
++      "description": "Persists the last input packet's data it receives to storage, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
++      "methods": {
++        "close": "persist_close",
++        "open": "persist_irange_open"
++      },
++      "name": "persistence/int",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "description": "Name to persist a int packet. If 'storage' is 'fs', name can be a fully fledged path to the file where the value will be stored.",
++            "name": "name"
++          },
++          {
++            "data_type": "string",
++            "description": "Storage where data will be persisted. It can be of the following: fs, efivars",
++            "name": "storage"
++          },
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "Default value for this node, when there's no previous value persisted",
++            "name": "default_value"
++          }
++        ],
++        "version": 1
++      },
++      "in_ports": [
++        {
++          "data_type": "int",
++          "description": "A int packet to persist (and repeat on output)",
++          "methods": {
++            "process": "persist_process"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "any",
++          "description": "Reset persist value to its default and send to output the new value",
++          "methods": {
++            "process": "reset_process"
++          },
++          "name": "RESET"
++        }
++      ],
++      "out_ports": [
++        {
++          "data_type": "int",
++          "description": "A int packet with the persisted value of the node",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "persist_irange_data",
++      "url": "http://solettaproject.org/doc/latest/components/persistence.html"
++    },
++    {
++      "category": "io/persistence",
++      "description": "Persists the last input packet's data it receives to storage, also repeating that packet on output port. Note that upon a new connection on the unique output port, if a previous stored packet is found, it will already be sent.",
++      "methods": {
++        "close": "persist_string_close",
++        "open": "persist_string_open"
++      },
++      "name": "persistence/string",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "description": "Name to persist a string packet. If 'storage' is 'fs', name can be a fully fledged path to the file where the value will be stored.",
++            "name": "name"
++          },
++          {
++            "data_type": "string",
++            "description": "Storage where data will be persisted. It can be of the following: fs, efivars",
++            "name": "storage"
++          },
++          {
++            "data_type": "string",
++            "default": "",
++            "description": "Default value for this node, when there's no previous value persisted",
++            "name": "default_value"
++          }
++        ],
++        "version": 1
++      },
++      "in_ports": [
++        {
++          "data_type": "string",
++          "description": "A string packet to persist (and repeat on output)",
++          "methods": {
++            "process": "persist_process"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "any",
++          "description": "Reset persist value to its default and send to output the new value",
++          "methods": {
++            "process": "reset_process"
++          },
++          "name": "RESET"
++        }
++      ],
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "A string packet with the persisted value of the node",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "persist_string_data",
++      "url": "http://solettaproject.org/doc/latest/components/persistence.html"
++    }
++  ]
++}
+diff --git a/src/samples/flow/misc/fs-persitence.fbp b/src/samples/flow/misc/persistence.fbp
+similarity index 61%
+rename from src/samples/flow/misc/fs-persitence.fbp
+rename to src/samples/flow/misc/persistence.fbp
+index be83cb91..118b6b0c 100755
+--- a/src/samples/flow/misc/fs-persitence.fbp
++++ b/src/samples/flow/misc/persistence.fbp
+@@ -29,28 +29,26 @@
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+-# This file showcases the fs/persist-* node types. These types assume
+-# the file of that given type exist, thus one must create them before
+-# running this sample:
+-#
+-#    $ for i in bool byte int float string; do
+-#          touch /tmp/save_$i;
+-#      done
+-#
+-# The files are raw binary representation of the packet payload, thus
+-# no header, encoding or validation bits are added, the filesystem is
+-# trusted to grant those.
++# This file showcases the persistence/* node types.
++# Note that 'name' can contain a fully fledged file path only on 'fs'
++# storage. Other storage media, like 'efivars', don't.
++# If there was no previous value saved on some persistence file,
++# default_value will be sent to OUT port as soon as the node is created.
++# timer2 makes int_persist persist (and print) '-1' each five seconds,
++# by reseting it to its default.
+ 
+ timer(timer:interval=1000) OUT -> IN toggle(boolean/toggle)
+-toggle OUT -> IN bool_persist(fs/persist-boolean:path="/tmp/save_bool") OUT -> IN console_bool(console:prefix="persist bool: ")
++toggle OUT -> IN bool_persist(persistence/boolean:storage="fs",name="/tmp/save_bool") OUT -> IN console_bool(console:prefix="persist bool: ")
+ 
+ wallclock(wallclock/second) OUT -> IN map_byte(converter/int-to-byte)
+-map_byte OUT -> IN byte_persist(fs/persist-byte:path="/tmp/save_byte") OUT -> IN console_byte(console:prefix="persist byte: ")
++map_byte OUT -> IN byte_persist(persistence/byte:storage="fs",name="save_byte") OUT -> IN console_byte(console:prefix="persist byte: ")
+ 
+-wallclock OUT -> IN int_persist(fs/persist-int:path="/tmp/save_int") OUT -> IN console_int(console:prefix="persist int: ")
++wallclock OUT -> IN int_persist(persistence/int:storage="fs",name="save_int",default_value=-1) OUT -> IN console_int(console:prefix="persist int: ")
+ 
+ wallclock OUT -> IN map_float(converter/int-to-float)
+-map_float OUT -> IN float_persist(fs/persist-float:path="/tmp/save_float") OUT -> IN console_float(console:prefix="persist float: ")
++map_float OUT -> IN float_persist(persistence/float:storage="fs",name="save_float") OUT -> IN console_float(console:prefix="persist float: ")
+ 
+ wallclock OUT -> IN map_string(converter/int-to-string)
+-map_string OUT -> IN string_persist(fs/persist-string:path="/tmp/save_string") OUT -> IN console_string(console:prefix="persist string: ")
++map_string OUT -> IN string_persist(persistence/string:storage="fs",name="save_string") OUT -> IN console_string(console:prefix="persist string: ")
++
++timer2(timer:interval=5000) OUT -> RESET int_persist

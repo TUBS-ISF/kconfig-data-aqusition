@@ -1,0 +1,309 @@
+"2016-12-20 19:57:05 +0100"
+diff --git a/Makefile.in b/Makefile.in
+index 75428046d..28ca93b3e 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -39,6 +39,7 @@ include $(top_srcdir)librt/Makefile.in
+ include $(top_srcdir)libuargp/Makefile.in
+ include $(top_srcdir)libubacktrace/Makefile.in
+ include $(top_srcdir)libiconv/Makefile.in
++include $(top_srcdir)libintl/Makefile.in
+ 
+ # last included to catch all the objects added by others (locales/threads)
+ include $(top_srcdir)libc/Makefile.in
+@@ -280,6 +281,7 @@ HEADERS_RM-$(UCLIBC_HAS_GETOPT_LONG)         += getopt.h
+ HEADERS_RM-$(UCLIBC_HAS_IPV6)                += netinet/ip6.h netinet/icmp6.h
+ HEADERS_RM-$(UCLIBC_HAS_BACKTRACE)           += execinfo.h
+ HEADERS_RM-$(UCLIBC_HAS_LIBICONV)            += iconv.h
++HEADERS_RM-$(UCLIBC_HAS_LIBINTL)             += intl.h
+ HEADERS_RM-$(UCLIBC_HAS_LOCALE)              += iconv.h bits/uClibc_ctype.h
+ HEADERS_RM-$(UCLIBC_HAS_PTY)                 += pty.h
+ HEADERS_RM-$(UCLIBC_HAS_REALTIME)            += mqueue.h bits/mqueue.h sched.h \
+@@ -380,6 +382,9 @@ endif
+ ifeq ($(UCLIBC_HAS_LIBICONV),y)
+ EMPTY_LIB_NAMES += iconv
+ endif
++ifeq ($(UCLIBC_HAS_LIBINTL),y)
++EMPTY_LIB_NAMES += intl
++endif
+ EMPTY_LIBS = $(EMPTY_LIB_NAMES:%=lib/lib%.a)
+ 
+ $(EMPTY_LIBS):
+diff --git a/Makerules b/Makerules
+index b5dc4b45b..fd40e6c7b 100644
+--- a/Makerules
++++ b/Makerules
+@@ -47,17 +47,18 @@ $(eval $(call add_IS_IN_lib,libutil,$(libutil-a-y) $(libutil-so-y)))
+ $(eval $(call add_IS_IN_lib,libubacktrace,$(libubacktrace-a-y) $(libubacktrace-so-y)))
+ $(eval $(call add_IS_IN_lib,libuargp,$(libuargp-a-y) $(libuargp-so-y)))
+ $(eval $(call add_IS_IN_lib,libiconv,$(libiconv-a-y) $(libiconv-so-y)))
++$(eval $(call add_IS_IN_lib,libintl,$(libintl-a-y) $(libintl-so-y)))
+ 
+ shared_objs = $(libc-y:.o=.os) $(libc-shared-y) $(libc-nonshared-y) \
+ 	$(libcrypt-so-y) $(libdl-so-y) $(libm-so-y) \
+ 	$(libpthread-so-y) $(libpthread-nonshared-y) $(libthread_db-so-y) \
+ 	$(librt-so-y) $(ldso-y) $(libutil-so-y) $(libubacktrace-so-y) \
+-	$(libuargp-so-y) $(libiconv-so-y)
++	$(libuargp-so-y) $(libiconv-so-y) $(libintl-so-y)
+ 
+ ar_objs =  $(libc-y) $(libc-static-y) $(libcrypt-a-y) \
+ 	$(libdl-a-y) $(libm-a-y) $(libpthread-a-y) $(libthread_db-a-y) \
+ 	$(librt-a-y) $(libutil-a-y) $(libubacktrace-a-y) $(libuargp-a-y) \
+-	$(libiconv-a-y)
++	$(libiconv-a-y) $(libintl-a-y)
+ ifeq ($(DOPIC),y)
+ ar_objs := $(ar_objs:.o=.os)
+ endif
+@@ -480,7 +481,8 @@ files.dep := $(libc-a-y) $(libc-so-y) $(libc-nonshared-y) \
+ 	$(ldso-y) $(libdl-a-y) $(libdl-so-y) \
+ 	$(libubacktrace-a-y) $(libubacktrace-so-y) \
+ 	$(libuargp-so-y) $(libuargp-a-y) \
+-	$(libiconv-so-y) $(libiconv-a-y)
++	$(libiconv-so-y) $(libiconv-a-y) \
++	$(libintl-so-y) $(libintl-a-y)
+ .depends.dep := \
+ 	$(patsubst %.s,%.s.dep,$(filter %.s,$(files.dep))) \
+ 	$(patsubst %.o,%.o.dep,$(filter %.o,$(files.dep))) \
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 7c83d3004..ed16611dd 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1467,6 +1467,12 @@ config UCLIBC_HAS_LIBICONV
+ 	help
+ 	  Add tiny iconv support for charset conversion from and to UTF-8.
+ 
++config UCLIBC_HAS_LIBINTL
++	bool "Intl stubs support"
++	help
++	  If you enable this option you get stubs for the gettext family of
++	  functions.
++
+ config UCLIBC_HAS_LOCALE
+ 	bool "Locale Support"
+ 	select UCLIBC_HAS_WCHAR
+diff --git a/include/libintl.h b/include/libintl.h
+new file mode 100644
+index 000000000..b7123a963
+--- /dev/null
++++ b/include/libintl.h
+@@ -0,0 +1,61 @@
++#ifndef LIBINTL_H
++#define LIBINTL_H
++
++char *gettext(const char *msgid);
++char *dgettext(const char *domainname, const char *msgid);
++char *dcgettext(const char *domainname, const char *msgid, int category);
++char *ngettext(const char *msgid1, const char *msgid2, unsigned long n);
++char *dngettext(const char *domainname, const char *msgid1, const char *msgid2, unsigned long n);
++char *dcngettext(const char *domainname, const char *msgid1, const char *msgid2, unsigned long n, int category);
++
++char *textdomain(const char *domainname);
++char *bind_textdomain_codeset(const char *domainname, const char *codeset);
++char *bindtextdomain(const char *domainname, const char *dirname);
++
++#undef gettext_noop
++#define gettext_noop(X) X
++
++#ifndef LIBINTL_NO_MACROS
++/* if these macros are defined, configure checks will detect libintl as
++ * built into the libc because test programs will work without -lintl.
++ * for example:
++ * checking for ngettext in libc ... yes
++ * the consequence is that -lintl will not be added to the LDFLAGS.
++ * so if for some reason you want that libintl.a gets linked,
++ * add -DLIBINTL_NO_MACROS=1 to your CPPFLAGS. */
++
++#define gettext(X) ((char*) (X))
++#define dgettext(dom, X) ((void)(dom), (char*) (X))
++#define dcgettext(dom, X, cat) ((void)(dom), (void)(cat), (char*) (X))
++#define ngettext(X, Y, N) \
++	((char*) (((N) == 1) ? ((void)(Y), (X)) : ((void)(X), (Y))))
++#define dngettext(dom, X, Y, N) \
++	((dom), (char*) (((N) == 1) ? ((void)(Y), (X)) : ((void)(X), (Y))))
++#define dcngettext(dom, X, Y, N, cat) \
++	((dom), (cat), (char*) (((N) == 1) ? ((void)(Y), (X)) : ((void)(X), (Y))))
++#define bindtextdomain(X, Y) ((void)(X), (void)(Y), (char*) "/")
++#define bind_textdomain_codeset(dom, codeset) \
++	((void)(dom), (void)(codeset), (char*) 0)
++#define textdomain(X) ((void)(X), (char*) "messages")
++
++#undef ENABLE_NLS
++#undef DISABLE_NLS
++#define DISABLE_NLS 1
++
++#if __GNUC__ +0 > 3
++/* most ppl call bindtextdomain() without using its return value
++   thus we get tons of warnings about "statement with no effect" */
++#pragma GCC diagnostic ignored "-Wunused-value"
++#endif
++
++#endif
++
++#include <stdio.h>
++#define gettext_printf(args...) printf(args)
++
++/* to supply LC_MESSAGES and other stuff GNU expects to be exported when
++   including libintl.h */
++#include <locale.h>
++
++#endif
++
+diff --git a/libc/Makefile.in b/libc/Makefile.in
+index 97addedc5..31d067328 100644
+--- a/libc/Makefile.in
++++ b/libc/Makefile.in
+@@ -51,6 +51,7 @@ libc-a-$(UCLIBC_HAS_THREADS) += $(libpthread-a-y)
+ libc-a-$(UCLIBC_HAS_REALTIME) += $(librt-a-y)
+ libc-a-$(UCLIBC_HAS_BACKTRACE) += $(libubacktrace-a-y)
+ libc-a-$(UCLIBC_HAS_LIBICONV) += $(libiconv-a-y)
++libc-a-$(UCLIBC_HAS_LIBINTL) += $(libintl-a-y)
+ 
+ libc-so-y = $(libc-y:.o=.os) $(libc-shared-y)
+ 
+@@ -63,6 +64,7 @@ libc-so-$(UCLIBC_HAS_THREADS) += $(libpthread-so-y)
+ libc-so-$(UCLIBC_HAS_REALTIME) += $(librt-so-y)
+ libc-so-$(UCLIBC_HAS_BACKTRACE) += $(libubacktrace-so-y)
+ libc-so-$(UCLIBC_HAS_LIBICONV) += $(libiconv-so-y)
++libc-so-$(UCLIBC_HAS_LIBINTL) += $(libintl-so-y)
+ 
+ lib-a-y += $(top_builddir)lib/libc.a
+ lib-gdb-y += $(top_builddir)lib/libc.gdb
+diff --git a/libintl/Makefile b/libintl/Makefile
+new file mode 100644
+index 000000000..1ffc16ee3
+--- /dev/null
++++ b/libintl/Makefile
+@@ -0,0 +1,9 @@
++# Makefile for uClibc-ng
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++
++top_srcdir=../
++top_builddir=../
++include $(top_builddir)Rules.mak
++all: libs
++include Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libintl/Makefile.in b/libintl/Makefile.in
+new file mode 100644
+index 000000000..445a75853
+--- /dev/null
++++ b/libintl/Makefile.in
+@@ -0,0 +1,30 @@
++# Makefile for uClibc-ng
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++
++subdirs += libintl
++
++CFLAGS-libintl := -DNOT_IN_libc -DIS_IN_libintl $(SSP_ALL_CFLAGS)
++
++libintl_DIR := $(top_srcdir)libintl
++libintl_OUT := $(top_builddir)libintl
++
++libintl_SRC-$(UCLIBC_HAS_LIBINTL) := libintl.c
++
++libintl_SRC := $(addprefix $(libintl_DIR)/,$(libintl_SRC-y))
++libintl_OBJ := $(patsubst $(libintl_DIR)/%.c,$(libintl_OUT)/%.o,$(libintl_SRC))
++
++ifeq ($(DOPIC),y)
++libintl-a-y := $(libintl_OBJ:.o=.os)
++else
++libintl-a-y := $(libintl_OBJ)
++endif
++libintl-so-y := $(libintl_OBJ:.o=.os)
++
++objclean-y += CLEAN_libintl
++
++$(libintl_OUT)/libintl.oS: $(libintl_SRC)
++	$(Q)$(RM) $@
++	$(compile-m)
++
++CLEAN_libintl:
++	$(do_rm) $(addprefix $(libintl_OUT)/*., o os oS a)
+diff --git a/libintl/libintl.c b/libintl/libintl.c
+new file mode 100644
+index 000000000..0851fac1c
+--- /dev/null
++++ b/libintl/libintl.c
+@@ -0,0 +1,82 @@
++/* Copyright (C) 2003     Manuel Novoa III
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Trivial Stubs, Public Domain.
++ */
++
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++
++char *gettext(const char *msgid)
++{
++	return (char *) msgid;
++}
++
++char *dgettext(const char *domainname, const char *msgid)
++{
++	(void) domainname;
++	return (char *) msgid;
++}
++
++char *dcgettext(const char *domainname, const char *msgid, int category)
++{
++	(void) domainname;
++	(void) category;
++	return (char *) msgid;
++}
++
++char *ngettext(const char *msgid1, const char *msgid2, unsigned long n)
++{
++	return (char *) ((n == 1) ? msgid1 : msgid2);
++}
++
++char *dngettext(const char *domainname, const char *msgid1, const char *msgid2, unsigned long n)
++{
++	(void) domainname;
++	return (char *) ((n == 1) ? msgid1 : msgid2);
++}
++
++char *dcngettext(const char *domainname, const char *msgid1, const char *msgid2, unsigned long n, int category)
++{
++	(void) domainname;
++	(void) category;
++	return (char *) ((n == 1) ? msgid1 : msgid2);
++}
++
++char *textdomain(const char *domainname)
++{
++	static const char default_str[] = "messages";
++
++	if (domainname && *domainname && strcmp(domainname, default_str)) {
++		errno = EINVAL;
++		return NULL;
++	}
++	return (char *) default_str;
++}
++
++char *bindtextdomain(const char *domainname, const char *dirname)
++{
++	static const char dir[] = "/";
++
++	if (!domainname || !*domainname
++		|| (dirname && ((dirname[0] != '/') || dirname[1]))
++		) {
++		errno = EINVAL;
++		return NULL;
++	}
++
++	return (char *) dir;
++}
++
++char *bind_textdomain_codeset(const char *domainname, const char *codeset)
++{
++	if (!domainname || !*domainname || (codeset && strcasecmp(codeset, "UTF-8"))) {
++		errno = EINVAL;
++	}
++	return NULL;
++}
++
++/* trick configure tests checking for gnu libintl, as in the copy included in gdb */
++const char *_nl_expand_alias () { return NULL; }
++int _nl_msg_cat_cntr = 0;

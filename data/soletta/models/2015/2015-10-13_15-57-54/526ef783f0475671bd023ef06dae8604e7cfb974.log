@@ -1,0 +1,1885 @@
+"2015-10-13 15:57:54 -0300"
+diff --git a/Kconfig b/Kconfig
+index 58e2b4f2..d6546d2a 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -149,6 +149,10 @@ depends on FEATURE_FLOW
+ source "src/lib/flow/Kconfig"
+ endmenu
+ 
++menu "Cryptography and Signatures"
++source "src/lib/crypto/Kconfig"
++endmenu
++
+ menu "Networking"
+ depends on FEATURE_NETWORK
+ source "src/lib/comms/Kconfig"
+@@ -158,6 +162,7 @@ menu "Samples"
+ depends on FEATURE_RUNNABLE_PROGRAMS
+ source "src/samples/coap/Kconfig"
+ source "src/samples/common/Kconfig"
++source "src/samples/crypto/Kconfig"
+ source "src/samples/mqtt/Kconfig"
+ 
+ config FLOW_SAMPLES
+diff --git a/src/lib/common/sol-mainloop.c b/src/lib/common/sol-mainloop.c
+index 9c1ee7fd..aad1b2ea 100644
+--- a/src/lib/common/sol-mainloop.c
++++ b/src/lib/common/sol-mainloop.c
+@@ -75,6 +75,8 @@ extern int sol_platform_init(void);
+ extern void sol_platform_shutdown(void);
+ extern int sol_blob_init(void);
+ extern void sol_blob_shutdown(void);
++extern int sol_crypto_init(void);
++extern void sol_crypto_shutdown(void);
+ #ifdef FLOW_SUPPORT
+ extern int sol_flow_init(void);
+ extern void sol_flow_shutdown(void);
+@@ -121,6 +123,10 @@ sol_init(void)
+     if (r < 0)
+         goto blob_error;
+ 
++    r = sol_crypto_init();
++    if (r < 0)
++        goto crypto_error;
++
+ #ifdef FLOW_SUPPORT
+     r = sol_flow_init();
+     if (r < 0)
+@@ -146,6 +152,8 @@ comms_error:
+     sol_flow_shutdown();
+ flow_error:
+ #endif
++    sol_crypto_shutdown();
++crypto_error:
+     sol_blob_shutdown();
+ blob_error:
+     sol_pin_mux_shutdown();
+@@ -220,6 +228,7 @@ sol_shutdown(void)
+ #ifdef FLOW_SUPPORT
+     sol_flow_shutdown();
+ #endif
++    sol_crypto_shutdown();
+     sol_blob_shutdown();
+     sol_pin_mux_shutdown();
+     sol_platform_shutdown();
+diff --git a/src/lib/crypto/Kconfig b/src/lib/crypto/Kconfig
+new file mode 100644
+index 00000000..c31a43d6
+--- /dev/null
++++ b/src/lib/crypto/Kconfig
+@@ -0,0 +1,45 @@
++config CRYPTO_MESSAGE_DIGEST
++	bool
++
++choice
++	prompt "Message Digest (Hash)"
++	depends on FEATURE_CRYPTO_MESSAGE_DIGEST
++	default CRYPTO_MESSAGE_DIGEST_LINUX_KCAPI if LINUX
++	help
++            Message Digest algorithms will take a byte stream and
++            compute a hash that may be used to later validate the
++            identity. Even the smallest variation of the input data
++            will have an avalanche effect that drastically change the
++            output data.
++
++            Wikipedia says (https://en.wikipedia.org/wiki/Cryptographic_hash_function):
++            The ideal cryptographic hash function has four main properties:
++             - it is easy to compute the hash value for any given message
++             - it is infeasible to generate a message from its hash
++             - it is infeasible to modify a message without changing the hash
++             - it is infeasible to find two different messages with the same hash.
++
++            Common Message Digest algorithms are CRC32, MD5, SHA1,
++            SHA256 and SHA512. Most of these are already broken, such
++            as CRC32 and nowadays MD5 and even SHA1, then before
++            picking one for your application, check the one that is
++            more secure and hard to break, such as SHA512.
++
++
++config CRYPTO_MESSAGE_DIGEST_LINUX_KCAPI
++	bool "Linux Kernel Crypto API"
++	depends on LINUX && FEATURE_CRYPTO_MESSAGE_DIGEST
++	select CRYPTO_MESSAGE_DIGEST
++	help
++            This implementation will use the Kernel-Userspace interface
++            provided by Linux. Linux implementation are often very optimized
++            and in some case are hardware-accelerated.
++
++config CRYPTO_MESSAGE_DIGEST_NONE
++	bool "None"
++	depends on FEATURE_CRYPTO_MESSAGE_DIGEST
++	select CRYPTO_MESSAGE_DIGEST
++	help
++            No implementation is to be used, all functions will return error.
++
++endchoice
+diff --git a/src/lib/crypto/Makefile b/src/lib/crypto/Makefile
+new file mode 100644
+index 00000000..0b78dd38
+--- /dev/null
++++ b/src/lib/crypto/Makefile
+@@ -0,0 +1,13 @@
++obj-y += crypto.mod
++
++obj-crypto-y := \
++    sol-crypto.o
++
++obj-crypto-$(CRYPTO_MESSAGE_DIGEST_LINUX_KCAPI) += \
++   sol-message-digest-impl-linux-kcapi.o
++
++obj-crypto-$(CRYPTO_MESSAGE_DIGEST_NONE) += \
++   sol-message-digest-impl-none.o
++
++headers-y := \
++    include/sol-message-digest.h
+diff --git a/src/lib/crypto/include/sol-message-digest.h b/src/lib/crypto/include/sol-message-digest.h
+new file mode 100644
+index 00000000..7a93db64
+--- /dev/null
++++ b/src/lib/crypto/include/sol-message-digest.h
+@@ -0,0 +1,227 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <sol-types.h>
++#include <sol-str-slice.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief These routines are used to calculate message digest.
++ */
++
++/**
++ * @defgroup Crypto Cryptography And Signatures
++ *
++ * These routines are used for cryptography and signature of data
++ * using Soletta's API.
++ */
++
++/**
++ * @defgroup Message_Digest Message Digest (Hash)
++ * @ingroup Crypto
++ *
++ * Message Digest algorithms will take a byte stream and
++ * compute a hash that may be used to later validate the
++ * identity. Even the smallest variation of the input data
++ * will have an avalanche effect that drastically change the
++ * output data.
++ *
++ * Wikipedia says (https://en.wikipedia.org/wiki/Cryptographic_hash_function):
++ * The ideal cryptographic hash function has four main properties:
++ *  - it is easy to compute the hash value for any given message
++ *  - it is infeasible to generate a message from its hash
++ *  - it is infeasible to modify a message without changing the hash
++ *  - it is infeasible to find two different messages with the same hash.
++ *
++ * Common Message Digest algorithms are CRC32, MD5, SHA1,
++ * SHA256 and SHA512. Most of these are already broken, such
++ * as CRC32 and nowadays MD5 and even SHA1, then before
++ * picking one for your application, check the one that is
++ * more secure and hard to break, such as SHA512.
++ *
++ * @{
++ */
++
++struct sol_message_digest;
++
++/**
++ * The message digest configuration to use when creating a new handle.
++ *
++ * @see sol_message_digest_new()
++ */
++struct sol_message_digest_config {
++#define SOL_MESSAGE_DIGEST_CONFIG_API_VERSION (1)
++    /**
++     * api_version must match SOL_MESSAGE_DIGEST_CONFIG_API_VERSION
++     * at runtime.
++     */
++    uint16_t api_version;
++    /**
++     * Algorithm name.
++     *
++     * The name should match Linux kernel's names, such as:
++     *
++     * @li md5
++     * @li sha1
++     * @li hmac(sha1)
++     * @li crc32
++     *
++     * This pointer must @b NOT be @c NULL.
++     */
++    const char *algorithm;
++    /**
++     * If provided (length > 0), then is used by the message digest
++     * hash function.
++     *
++     * A slice is used so the key may contain null-bytes inside, the
++     * whole slice length will be used.
++     */
++    struct sol_str_slice key;
++    /**
++     * The mandatory callback function to report digest is ready.
++     *
++     * This pointer must @b NOT be @c NULL.
++     *
++     * The parameters are:
++     *
++     * @li @c data the context data given with this configuration.
++     * @li @c handle the handle used to push data.
++     * @li @c output the resulting digest (hash). It is binary and can
++     *     be encoded with tools such as
++     *     sol_buffer_append_as_base16(). The blob is valid while the
++     *     callback happens, if one wants it to live further increase
++     *     its reference with sol_blob_ref().
++     *
++     * @note it is safe to delete the message digest handle from
++     *       inside this callback.
++     */
++    void (*on_digest_ready)(void *data, struct sol_message_digest *handle, struct sol_blob *output);
++    /**
++     * The optional callback function to report digest consumed given data.
++     *
++     * This pointer may be @c NULL.
++     *
++     * This function may be used to report progress of the whole
++     * process or to control a possibly lengthy and costly feed
++     * pipeline, this way the pipeline will only feed data once its
++     * needed.
++     *
++     * The parameters are:
++     *
++     * @li @c data the context data given with this configuration.
++     * @li @c handle the handle used to push data.
++     * @li @c input the input data originally pushed/fed. There is no
++     *     need to sol_blob_unref() it is done automatically.
++     *
++     * @note it is safe to delete the message digest handle from
++     *       inside this callback.
++     */
++    void (*on_feed_done)(void *data, struct sol_message_digest *handle, struct sol_blob *input);
++    /**
++     * The context data to give to all callbacks.
++     */
++    const void *data;
++};
++
++/**
++ * Create a new handle to feed the message to digest.
++ *
++ * @param config the configuration (algorithm, callbacks) to use.
++ *
++ * @return a newly allocated handle on success or NULL on failure and
++ *         errno is set. For instance if the algorithm is not
++ *         supported, @c ENOTSUP if the algorithm is not supported.
++ *
++ * @see sol_message_digest_del()
++ * @see sol_message_digest_feed()
++ */
++struct sol_message_digest *sol_message_digest_new(const struct sol_message_digest_config *config);
++
++/**
++ * Delete a message digest handle.
++ *
++ * @param handle the handle previously created with
++ *        sol_message_digest_new().
++ */
++void sol_message_digest_del(struct sol_message_digest *handle);
++
++/**
++ * Feed message (data) to be digested (hashed).
++ *
++ * This is the core of the message digest as it will take chunks of
++ * data (message) to process and then produce the final hash (digest)
++ * at the end.
++ *
++ * The message digest implementation is asynchronous to allow to
++ * offload computation to another unit such as hardware acceleration
++ * or a thread, not blocking the main thread while it happens. Thus
++ * the lifetime of input and output data must be clear, and struct
++ * sol_blob is used to manage that.
++ *
++ * After a chunk is fed with this function, it is queued for
++ * processing. Once that chunk is done, @c on_feed_done() is called
++ * with that information. This may be used to feed more data.
++ *
++ * Once the last chunk is fed (@c is_last=true ), then the final
++ * digest is calculated and delivered by calling @on_digest_ready()
++ * function provided via @c sol_message_digest_config.
++ *
++ * @param handle the handle previously created with
++ *        sol_message_digest_new().
++ * @param input the input data to be consumed. The blob will be
++ *        referenced until data is processed and automatically
++ *        unreferenced after the user callback
++ *        @c config->on_feed_done() returns.
++ * @param is_last indicates whenever this is the last input data chunk
++ *        to be processed. Some algorithms operates on block size and
++ *        must use padding if there is remaining data that is not of
++ *        that size. After the last blob is processed,
++ *        @c config->on_digest_ready() is called with the resulting digest
++ *        as a blob.
++ *
++ * @return 0 on success, -errno otherwise. If error, then the input reference
++ *         is not taken.
++ */
++int sol_message_digest_feed(struct sol_message_digest *handle, struct sol_blob *input, bool is_last);
++
++#ifdef __cplusplus
++}
++#endif
++
+diff --git a/src/lib/crypto/sol-crypto.c b/src/lib/crypto/sol-crypto.c
+new file mode 100644
+index 00000000..afb584e6
+--- /dev/null
++++ b/src/lib/crypto/sol-crypto.c
+@@ -0,0 +1,61 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "sol-crypto.h"
++
++int sol_crypto_init(void);
++void sol_crypto_shutdown(void);
++
++#ifndef CRYPTO_MESSAGE_DIGEST
++int
++sol_message_digest_init(void)
++{
++    return 0;
++}
++
++void
++sol_message_digest_shutdown(void)
++{
++}
++#endif
++
++int
++sol_crypto_init(void)
++{
++    return sol_message_digest_init();
++}
++
++void
++sol_crypto_shutdown(void)
++{
++    sol_message_digest_shutdown();
++}
+diff --git a/src/lib/crypto/sol-crypto.h b/src/lib/crypto/sol-crypto.h
+new file mode 100644
+index 00000000..4910a5ab
+--- /dev/null
++++ b/src/lib/crypto/sol-crypto.h
+@@ -0,0 +1,34 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++int sol_message_digest_init(void);
++void sol_message_digest_shutdown(void);
+diff --git a/src/lib/crypto/sol-message-digest-impl-linux-kcapi.c b/src/lib/crypto/sol-message-digest-impl-linux-kcapi.c
+new file mode 100644
+index 00000000..6b3e7e55
+--- /dev/null
++++ b/src/lib/crypto/sol-message-digest-impl-linux-kcapi.c
+@@ -0,0 +1,957 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <assert.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <linux/if_alg.h>
++#include <linux/netlink.h>
++#include <linux/rtnetlink.h>
++#include <sys/socket.h>
++#include <unistd.h>
++
++#ifndef AF_ALG
++#define AF_ALG 38
++#endif
++#ifndef SOL_ALG
++#define SOL_ALG 279
++#endif
++
++#define SOL_LOG_DOMAIN &_log_domain
++#include "sol-log-internal.h"
++
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "message-digest");
++
++#include "sol-crypto.h"
++#include "sol-mainloop.h"
++#include "sol-message-digest.h"
++#include "sol-util.h"
++#include "sol-vector.h"
++
++/* BEGIN: these definitions come from kernel and are still not
++ * exported as an userspace header. libkcapi exports it as cryptouser.h
++ *
++ * See https://github.com/smuellerDD/libkcapi/blob/master/lib/cryptouser.h
++ */
++#define CRYPTO_MAX_ALG_NAME 64 /* from kernel */
++enum {
++    CRYPTO_MSG_BASE = 0x10,
++    CRYPTO_MSG_NEWALG = 0x10,
++    CRYPTO_MSG_DELALG,
++    CRYPTO_MSG_UPDATEALG,
++    CRYPTO_MSG_GETALG,
++    CRYPTO_MSG_DELRNG,
++    __CRYPTO_MSG_MAX
++#define CRYPTO_MSG_MAX (__CRYPTO_MSG_MAX - 1)
++};
++#define CR_RTA(x) ((struct rtattr *)(((char *)(x)) + NLMSG_ALIGN(sizeof(struct crypto_user_alg))))
++
++#define CRYPTO_MAX_NAME CRYPTO_MAX_ALG_NAME
++
++/* Netlink message attributes.  */
++enum crypto_attr_type_t {
++    CRYPTOCFGA_UNSPEC,
++    CRYPTOCFGA_PRIORITY_VAL,     /* __u32 */
++    CRYPTOCFGA_REPORT_LARVAL,    /* struct crypto_report_larval */
++    CRYPTOCFGA_REPORT_HASH,      /* struct crypto_report_hash */
++    CRYPTOCFGA_REPORT_BLKCIPHER, /* struct crypto_report_blkcipher */
++    CRYPTOCFGA_REPORT_AEAD,      /* struct crypto_report_aead */
++    CRYPTOCFGA_REPORT_COMPRESS,  /* struct crypto_report_comp */
++    CRYPTOCFGA_REPORT_RNG,       /* struct crypto_report_rng */
++    CRYPTOCFGA_REPORT_CIPHER,    /* struct crypto_report_cipher */
++    CRYPTOCFGA_REPORT_AKCIPHER,  /* struct crypto_report_akcipher */
++    __CRYPTOCFGA_MAX
++#define CRYPTOCFGA_MAX (__CRYPTOCFGA_MAX - 1)
++};
++
++struct crypto_user_alg {
++    char cru_name[CRYPTO_MAX_ALG_NAME];
++    char cru_driver_name[CRYPTO_MAX_ALG_NAME];
++    char cru_module_name[CRYPTO_MAX_ALG_NAME];
++    __u32 cru_type;
++    __u32 cru_mask;
++    __u32 cru_refcnt;
++    __u32 cru_flags;
++};
++
++struct crypto_report_hash {
++    char type[CRYPTO_MAX_NAME];
++    unsigned int blocksize;
++    unsigned int digestsize;
++};
++/* END */
++
++
++struct sol_message_digest_algorithm_info {
++    char name[CRYPTO_MAX_ALG_NAME];
++    size_t digest_size;
++};
++static struct sol_vector _algorithms_info = SOL_VECTOR_INIT(struct sol_message_digest_algorithm_info);
++
++int
++sol_message_digest_init(void)
++{
++    struct sockaddr_alg sa;
++
++    SOL_LOG_INTERNAL_INIT_ONCE;
++
++    assert(sizeof(sa.salg_name) == CRYPTO_MAX_ALG_NAME);
++
++    return 0;
++}
++
++void
++sol_message_digest_shutdown(void)
++{
++    sol_vector_clear(&_algorithms_info);
++}
++
++static bool
++_sol_message_digest_fill_algorithm_info(struct sol_message_digest_algorithm_info *info)
++{
++    struct {
++        struct nlmsghdr hdr;
++        struct crypto_user_alg cua;
++    } req;
++    struct sockaddr_nl snl = {
++        .nl_family = AF_NETLINK,
++    };
++    struct iovec iov;
++    struct msghdr msg;
++    bool ret = false;
++    int fd;
++
++    fd =  socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_CRYPTO);
++    if (fd < 0) {
++        SOL_WRN("socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_CRYPTO): %s",
++            sol_util_strerrora(errno));
++        return false;
++    }
++
++    if (bind(fd, (struct sockaddr *)&snl, sizeof(snl)) < 0) {
++        SOL_WRN("bind(%d, {AF_NETLINK}): %s",
++            fd, sol_util_strerrora(errno));
++        goto error_bind;
++    }
++
++    memset(&req, 0, sizeof(req));
++    req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(req.cua));
++    req.hdr.nlmsg_flags = NLM_F_REQUEST;
++    req.hdr.nlmsg_type = CRYPTO_MSG_GETALG;
++    memcpy(req.cua.cru_name, info->name, strlen(info->name));
++
++    iov.iov_base = (void *)&req.hdr;
++    iov.iov_len = req.hdr.nlmsg_len;
++
++    memset(&msg, 0, sizeof(msg));
++    msg.msg_name = &snl;
++    msg.msg_namelen = sizeof(snl);
++    msg.msg_iov = &iov;
++    msg.msg_iovlen = 1;
++    if (sendmsg(fd, &msg, 0) < 0) {
++        SOL_WRN("sendmsg(%d, {AF_NETLINK, iov=%p}): %s",
++            fd, &iov, sol_util_strerrora(errno));
++        goto error_sendmsg;
++    }
++
++    while (!ret) {
++        char buf[4096];
++        struct nlmsghdr *h = (struct nlmsghdr *)buf;
++        ssize_t len;
++
++        iov.iov_base = buf;
++        iov.iov_len = sizeof(buf);
++        len  = recvmsg(fd, &msg, 0);
++        if (len < 0) {
++            if (errno == EINTR || errno == EAGAIN)
++                continue;
++
++            SOL_WRN("recvmsg(%d, {AF_NETLINK, iov=%p}): %s",
++                fd, &iov, sol_util_strerrora(errno));
++            goto error_recvmsg;
++        } else if (len == 0) {
++            SOL_WRN("recvmsg(%d, {AF_NETLINK, iov=%p}): no data",
++                fd, &iov);
++            break;
++        }
++
++        len = h->nlmsg_len;
++        if (h->nlmsg_type == NLMSG_ERROR) {
++            SOL_WRN("read_netlink: Message is an error");
++            goto error_recvmsg;
++        }
++
++        if (h->nlmsg_type == CRYPTO_MSG_GETALG) {
++            struct crypto_user_alg *cua = NLMSG_DATA(h);
++            struct rtattr *rta;
++
++            len -= NLMSG_SPACE(sizeof(*cua));
++            if (len < 0) {
++                SOL_WRN("read_netlink: message is too small: %zd", len);
++                goto error_recvmsg;
++            }
++
++            for (rta = CR_RTA(cua);
++                RTA_OK(rta, len) && rta->rta_type <= CRYPTOCFGA_MAX;
++                rta = RTA_NEXT(rta, len)) {
++                struct crypto_report_hash *rsh = RTA_DATA(rta);
++
++                if (rta->rta_type == CRYPTOCFGA_REPORT_HASH) {
++                    info->digest_size = rsh->digestsize;
++                    SOL_DBG("message digest algorithm \"%s\" digest_size=%zd",
++                        info->name, info->digest_size);
++                    ret = true;
++                    break;
++                }
++            }
++        }
++    }
++
++error_sendmsg:
++error_recvmsg:
++error_bind:
++    close(fd);
++
++    return ret;
++}
++
++static const struct sol_message_digest_algorithm_info *
++_sol_message_digest_get_algorithm_info(const char *name)
++{
++    struct sol_message_digest_algorithm_info *info;
++    uint16_t i;
++    size_t namelen;
++
++    namelen = strlen(name);
++    SOL_INT_CHECK(namelen, >= CRYPTO_MAX_ALG_NAME, NULL);
++
++    SOL_VECTOR_FOREACH_IDX (&_algorithms_info, info, i) {
++        if (streq(info->name, name)) {
++            SOL_DBG("cached algorithm \"%s\" info digest_size=%zd",
++                info->name, info->digest_size);
++            return info;
++        }
++    }
++
++    info = sol_vector_append(&_algorithms_info);
++    SOL_NULL_CHECK(info, NULL);
++    memcpy(info->name, name, namelen + 1);
++
++    if (!_sol_message_digest_fill_algorithm_info(info)) {
++        sol_vector_del(&_algorithms_info, _algorithms_info.len - 1);
++        return NULL;
++    }
++
++    return info;
++}
++
++#if defined(PTHREAD) && defined(WORKER_THREAD)
++#define MESSAGE_DIGEST_USE_THREAD
++#endif
++
++#ifdef MESSAGE_DIGEST_USE_THREAD
++#include <pthread.h>
++#include "sol-worker-thread.h"
++#endif
++
++struct sol_message_digest_pending_feed {
++    struct sol_blob *blob;
++    size_t offset;
++    bool is_last;
++};
++
++#ifdef MESSAGE_DIGEST_USE_THREAD
++struct sol_message_digest_pending_dispatch {
++    struct sol_blob *blob;
++    bool is_digest;
++};
++#endif
++
++struct sol_message_digest {
++    void (*on_digest_ready)(void *data, struct sol_message_digest *handle, struct sol_blob *output);
++    void (*on_feed_done)(void *data, struct sol_message_digest *handle, struct sol_blob *input);
++    const void *data;
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    struct sol_worker_thread *thread; /* current kcapi is not poll() friendly, it won't report IN/OUT, thus we use a thread */
++    struct sol_vector pending_dispatch;
++    int thread_pipe[2];
++    pthread_mutex_t lock;
++#else
++    struct sol_timeout *timer; /* current kcapi is not poll() friendly, it won't report IN/OUT, thus we use a timer to poll */
++#endif
++    struct sol_vector pending_feed;
++    struct sol_blob *digest;
++    size_t digest_offset; /* allows partial digest receive */
++    size_t digest_size;
++    uint32_t refcnt;
++    int fd;
++    bool deleted;
++};
++
++static void
++_sol_message_digest_lock(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    pthread_mutex_lock(&handle->lock);
++#endif
++}
++
++static void
++_sol_message_digest_unlock(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    pthread_mutex_unlock(&handle->lock);
++#endif
++}
++
++#ifdef MESSAGE_DIGEST_USE_THREAD
++static void
++_sol_message_digest_thread_send(struct sol_message_digest *handle, char cmd)
++{
++    while (write(handle->thread_pipe[1], &cmd, 1) != 1) {
++        if (errno != EAGAIN && errno != EINTR) {
++            SOL_WRN("handle %p fd=%d couldn't send thread command %c: %s",
++                handle, handle->fd, cmd, sol_util_strerrora(errno));
++            return;
++        }
++    }
++}
++
++static char
++_sol_message_digest_thread_recv(struct sol_message_digest *handle)
++{
++    char cmd;
++
++    while (read(handle->thread_pipe[0], &cmd, 1) != 1) {
++        if (errno != EAGAIN && errno != EINTR) {
++            SOL_WRN("handle %p fd=%d couldn't receive thread command: %s",
++                handle, handle->fd, sol_util_strerrora(errno));
++            return 0;
++        }
++    }
++
++    return cmd;
++}
++#endif
++
++static int
++_sol_message_digest_thread_init(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    if (pipe2(handle->thread_pipe, O_CLOEXEC) < 0)
++        return errno;
++
++    sol_vector_init(&handle->pending_dispatch,
++        sizeof(struct sol_message_digest_pending_dispatch));
++    errno = pthread_mutex_init(&handle->lock, NULL);
++    if (errno) {
++        close(handle->thread_pipe[0]);
++        close(handle->thread_pipe[1]);
++    }
++    return errno;
++#else
++    return 0;
++#endif
++}
++
++static void
++_sol_message_digest_thread_fini(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    struct sol_message_digest_pending_dispatch *pd;
++    uint16_t i;
++
++    _sol_message_digest_thread_send(handle, 'c');
++    close(handle->thread_pipe[0]);
++    close(handle->thread_pipe[1]);
++
++    if (handle->thread)
++        sol_worker_thread_cancel(handle->thread);
++    pthread_mutex_destroy(&handle->lock);
++
++    SOL_VECTOR_FOREACH_IDX (&handle->pending_dispatch, pd, i) {
++        sol_blob_unref(pd->blob);
++    }
++    sol_vector_clear(&handle->pending_dispatch);
++#else
++    if (handle->timer)
++        sol_timeout_del(handle->timer);
++#endif
++}
++
++static void
++_sol_message_digest_thread_stop(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    _sol_message_digest_thread_send(handle, 'c');
++#endif
++}
++
++SOL_API struct sol_message_digest *
++sol_message_digest_new(const struct sol_message_digest_config *config)
++{
++    const struct sol_message_digest_algorithm_info *info;
++    struct sol_message_digest *handle;
++    struct sockaddr_alg sa;
++    int bfd, errno_bkp;
++
++    errno = EINVAL;
++    SOL_NULL_CHECK(config, NULL);
++    SOL_NULL_CHECK(config->on_digest_ready, NULL);
++    SOL_NULL_CHECK(config->algorithm, NULL);
++
++    if (config->api_version != SOL_MESSAGE_DIGEST_CONFIG_API_VERSION) {
++        SOL_WRN("sol_message_digest_config->api_version=%hu, "
++            "expected version is %hu.",
++            config->api_version, SOL_MESSAGE_DIGEST_CONFIG_API_VERSION);
++        return NULL;
++    }
++
++    if (strlen(config->algorithm) + 1 >= sizeof(sa.salg_name)) {
++        SOL_WRN("algorithm \"%s\" is too long\n", config->algorithm);
++        return NULL;
++    }
++    memset(&sa, 0, sizeof(sa));
++    memcpy(sa.salg_name, config->algorithm, strlen(config->algorithm) + 1);
++    memcpy(sa.salg_type, "hash", sizeof("hash"));
++    sa.salg_family = AF_ALG;
++
++    bfd = socket(AF_ALG, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
++    if (bfd < 0) {
++        SOL_WRN("socket(AF_ALG, SOCK_SEQPACKET): %s",
++            sol_util_strerrora(errno));
++        return NULL;
++    }
++
++    if (bind(bfd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
++        SOL_WRN("bind(%d, {AF_ALG, hash, \"%s\"}): %s",
++            bfd, config->algorithm, sol_util_strerrora(errno));
++        goto error_bfd;
++    }
++
++    if (config->key.len > 0) {
++        int r = setsockopt(bfd, SOL_ALG, ALG_SET_KEY,
++            config->key.data, config->key.len);
++        if (r < 0) {
++            SOL_WRN("algorithm \"%s\", failed to set key len=%zd \"%.*s\"",
++                config->algorithm, config->key.len,
++                SOL_STR_SLICE_PRINT(config->key));
++            goto error_bfd;
++        }
++    }
++
++    handle = calloc(1, sizeof(struct sol_message_digest));
++    SOL_NULL_CHECK_GOTO(handle, error_bfd);
++
++    handle->refcnt = 1;
++    handle->on_digest_ready = config->on_digest_ready;
++    handle->on_feed_done = config->on_feed_done;
++    handle->data = config->data;
++    sol_vector_init(&handle->pending_feed,
++        sizeof(struct sol_message_digest_pending_feed));
++
++    info = _sol_message_digest_get_algorithm_info(config->algorithm);
++    SOL_NULL_CHECK_GOTO(info, error_info);
++
++    handle->digest_size = info->digest_size;
++
++    handle->fd = accept4(bfd, NULL, 0, SOCK_CLOEXEC | SOCK_NONBLOCK);
++    if (handle->fd < 0) {
++        SOL_WRN("algorithm \"%s\" failed accept4(%d): %s",
++            config->algorithm, bfd, sol_util_strerrora(errno));
++        goto error_accept;
++    }
++
++    errno = _sol_message_digest_thread_init(handle);
++    if (errno)
++        goto error_thread_init;
++
++    SOL_DBG("handle %p fd=%d algorithm=\"%s\"",
++        handle, handle->fd, config->algorithm);
++
++    errno = 0;
++    return handle;
++
++error_thread_init:
++    errno_bkp = errno;
++    close(handle->fd);
++    errno = errno_bkp;
++
++error_accept:
++error_info:
++    errno_bkp = errno;
++    free(handle);
++    errno = errno_bkp;
++
++error_bfd:
++    errno_bkp = errno;
++    close(bfd);
++    errno = errno_bkp;
++    return NULL;
++}
++
++static void
++_sol_message_digest_free(struct sol_message_digest *handle)
++{
++    struct sol_message_digest_pending_feed *pf;
++    uint16_t i;
++
++    SOL_DBG("free handle %p fd=%d, pending_feed=%hu, digest=%p",
++        handle, handle->fd, handle->pending_feed.len, handle->digest);
++
++    _sol_message_digest_thread_fini(handle);
++
++    SOL_VECTOR_FOREACH_IDX (&handle->pending_feed, pf, i) {
++        sol_blob_unref(pf->blob);
++    }
++    sol_vector_clear(&handle->pending_feed);
++
++    if (handle->digest)
++        sol_blob_unref(handle->digest);
++
++    close(handle->fd);
++    free(handle);
++}
++
++static inline void
++_sol_message_digest_unref(struct sol_message_digest *handle)
++{
++    handle->refcnt--;
++    if (handle->refcnt == 0)
++        _sol_message_digest_free(handle);
++}
++
++static inline void
++_sol_message_digest_ref(struct sol_message_digest *handle)
++{
++    handle->refcnt++;
++}
++
++SOL_API void
++sol_message_digest_del(struct sol_message_digest *handle)
++{
++    SOL_NULL_CHECK(handle);
++    SOL_EXP_CHECK(handle->deleted);
++    SOL_INT_CHECK(handle->refcnt, < 1);
++
++    handle->deleted = true;
++
++    _sol_message_digest_thread_stop(handle);
++
++    SOL_DBG("del handle %p fd=%d, refcnt=%" PRIu32
++        ", pending_feed=%hu, digest=%p",
++        handle, handle->fd, handle->refcnt,
++        handle->pending_feed.len, handle->digest);
++    _sol_message_digest_unref(handle);
++}
++
++static void
++_sol_message_digest_setup_receive_digest(struct sol_message_digest *handle)
++{
++    void *mem;
++
++    if (handle->digest) {
++        SOL_WRN("handle %p fd=%d already have a digest to be received (%p).",
++            handle, handle->fd, handle->digest);
++        return;
++    }
++
++    mem = malloc(handle->digest_size);
++    SOL_NULL_CHECK(mem);
++
++    handle->digest = sol_blob_new(SOL_BLOB_TYPE_DEFAULT, NULL,
++        mem, handle->digest_size);
++    SOL_NULL_CHECK_GOTO(handle->digest, error);
++
++    handle->digest_offset = 0;
++
++    SOL_DBG("handle %p fd=%d to receive digest of %zd bytes at blob %p mem=%p",
++        handle, handle->fd, handle->digest_size,
++        handle->digest, handle->digest->mem);
++
++    return;
++
++error:
++    free(mem);
++}
++
++static void
++_sol_message_digest_report_feed_blob(struct sol_message_digest *handle, struct sol_blob *input)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    struct sol_message_digest_pending_dispatch *pd;
++
++    _sol_message_digest_lock(handle);
++
++    pd = sol_vector_append(&handle->pending_dispatch);
++    SOL_NULL_CHECK_GOTO(pd, error);
++    pd->blob = input;
++    pd->is_digest = false;
++
++    _sol_message_digest_unlock(handle);
++    sol_worker_thread_feedback(handle->thread);
++    return;
++
++error:
++    _sol_message_digest_unlock(handle);
++    sol_blob_unref(input); /* this may cause problems if main thread changes blob refcnt */
++
++#else
++    _sol_message_digest_ref(handle);
++
++    if (handle->on_feed_done)
++        handle->on_feed_done((void *)handle->data, handle, input);
++
++    sol_blob_unref(input);
++    _sol_message_digest_unref(handle);
++#endif
++}
++
++static void
++_sol_message_digest_report_digest_ready(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    struct sol_message_digest_pending_dispatch *pd;
++
++    _sol_message_digest_lock(handle);
++
++    pd = sol_vector_append(&handle->pending_dispatch);
++    SOL_NULL_CHECK_GOTO(pd, end);
++    pd->blob = handle->digest;
++    pd->is_digest = true;
++
++    handle->digest = NULL;
++    handle->digest_offset = 0;
++
++end:
++    _sol_message_digest_unlock(handle);
++    sol_worker_thread_feedback(handle->thread);
++
++#else
++    _sol_message_digest_ref(handle);
++
++    handle->on_digest_ready((void *)handle->data, handle, handle->digest);
++
++    sol_blob_unref(handle->digest);
++    handle->digest = NULL;
++    handle->digest_offset = 0;
++
++    _sol_message_digest_unref(handle);
++#endif
++}
++
++static void
++_sol_message_digest_feed_blob(struct sol_message_digest *handle)
++{
++    struct sol_message_digest_pending_feed *pf;
++    struct sol_blob *input;
++    const uint8_t *mem;
++    bool is_last;
++    size_t len;
++    ssize_t n;
++    int flags;
++
++    _sol_message_digest_lock(handle);
++    pf = sol_vector_get(&handle->pending_feed, 0);
++    SOL_NULL_CHECK_GOTO(pf, error);
++
++    input = pf->blob;
++    mem = input->mem;
++    mem += pf->offset;
++    len = input->size - pf->offset;
++    is_last = pf->is_last;
++    flags = is_last ? 0 : MSG_MORE;
++
++    _sol_message_digest_unlock(handle);
++
++    /* TODO: change this to sendmsg() using iov with all blobs.  then
++     * check the return to see which blobs were consumed (they may be
++     * partial), and adjust pending_feed accordingly.
++     */
++
++    n = send(handle->fd, mem, len, flags);
++    SOL_DBG("handle %p fd=%d sent mem=%p of %zd bytes (pending=%hu) flags=%#x:"
++        " %zd",
++        handle, handle->fd, mem, len, handle->pending_feed.len, flags, n);
++    if (n >= 0) {
++        if ((size_t)n < len) { /* not fully sent, need to try again later */
++            /* fetch first pending again as it's a sol_vector and
++             * calls to sol_message_digest_feed() may realloc() the vector,
++             * resulting in new pointer for the first element.
++             */
++            _sol_message_digest_lock(handle);
++            pf = sol_vector_get(&handle->pending_feed, 0);
++            SOL_NULL_CHECK_GOTO(pf, error);
++            pf->offset += n;
++            _sol_message_digest_unlock(handle);
++            return;
++        }
++
++        if (is_last)
++            _sol_message_digest_setup_receive_digest(handle);
++
++        _sol_message_digest_lock(handle);
++        sol_vector_del(&handle->pending_feed, 0);
++        _sol_message_digest_unlock(handle);
++
++        _sol_message_digest_report_feed_blob(handle, input);
++
++    } else if (errno != EAGAIN && errno != EINTR) {
++        SOL_WRN("couldn't feed handle %p fd=%d with %p of %zd bytes: %s",
++            handle, handle->fd, mem, len, sol_util_strerrora(errno));
++    }
++
++    return;
++
++error:
++    _sol_message_digest_unlock(handle);
++    SOL_WRN("no pending feed for handle %p fd=%d", handle, handle->fd);
++}
++
++static void
++_sol_message_digest_receive_digest(struct sol_message_digest *handle)
++{
++    uint8_t *mem;
++    size_t len;
++    ssize_t n;
++
++    mem = handle->digest->mem;
++    mem += handle->digest_offset;
++    len = handle->digest->size - handle->digest_offset;
++
++    n = recv(handle->fd, mem, len, 0);
++    SOL_DBG("handle %p fd=%d recv mem=%p of %zd bytes: %zd",
++        handle, handle->fd, mem, len, n);
++    if (n >= 0) {
++        handle->digest_offset += n;
++        if (handle->digest_offset < handle->digest->size) /* more to do... */
++            return;
++
++        _sol_message_digest_report_digest_ready(handle);
++
++    } else if (errno != EAGAIN && errno != EINTR) {
++        SOL_WRN("couldn't recv digest handle %p fd=%d with %p of %zd bytes: %s",
++            handle, handle->fd, mem, len, sol_util_strerrora(errno));
++    }
++}
++
++#ifdef MESSAGE_DIGEST_USE_THREAD
++
++static struct sol_blob *
++_sol_message_digest_peek_first_pending_blob(struct sol_message_digest *handle)
++{
++    struct sol_message_digest_pending_feed *pf;
++    struct sol_blob *blob = NULL;
++
++    _sol_message_digest_lock(handle);
++    if (handle->pending_feed.len) {
++        pf = sol_vector_get(&handle->pending_feed, 0);
++        if (pf)
++            blob = pf->blob;
++    }
++    _sol_message_digest_unlock(handle);
++
++    return blob;
++}
++
++static bool
++_sol_message_digest_thread_iterate(void *data)
++{
++    struct sol_message_digest *handle = data;
++    struct sol_blob *current = NULL;
++    char cmd;
++
++    cmd = _sol_message_digest_thread_recv(handle);
++    if (cmd == 'c' || cmd == 0)
++        return false;
++
++    current = _sol_message_digest_peek_first_pending_blob(handle);
++    while (current && !sol_worker_thread_cancel_check(handle->thread)) {
++        struct sol_blob *blob;
++
++        _sol_message_digest_feed_blob(handle);
++
++        blob = _sol_message_digest_peek_first_pending_blob(handle);
++        if (blob != current)
++            break;
++    }
++
++    while (handle->digest && !sol_worker_thread_cancel_check(handle->thread))
++        _sol_message_digest_receive_digest(handle);
++
++    return true;
++}
++
++static void
++_sol_message_digest_thread_finished(void *data)
++{
++    struct sol_message_digest *handle = data;
++
++    handle->thread = NULL;
++    _sol_message_digest_unref(handle);
++}
++
++static void
++_sol_message_digest_thread_feedback(void *data)
++{
++    struct sol_message_digest *handle = data;
++    struct sol_message_digest_pending_dispatch *pd;
++    struct sol_vector v;
++    uint16_t i;
++
++    _sol_message_digest_lock(handle);
++    v = handle->pending_dispatch;
++    sol_vector_init(&handle->pending_dispatch,
++        sizeof(struct sol_message_digest_pending_dispatch));
++    _sol_message_digest_unlock(handle);
++
++    _sol_message_digest_ref(handle);
++
++    SOL_VECTOR_FOREACH_IDX (&v, pd, i) {
++        if (!handle->deleted) {
++            if (pd->is_digest)
++                handle->on_digest_ready((void *)handle->data, handle, pd->blob);
++            else if (handle->on_feed_done)
++                handle->on_feed_done((void *)handle->data, handle, pd->blob);
++        }
++        sol_blob_unref(pd->blob);
++    }
++
++    _sol_message_digest_unref(handle);
++
++    sol_vector_clear(&v);
++}
++
++#else
++static bool
++_sol_message_digest_on_timer(void *data)
++{
++    struct sol_message_digest *handle = data;
++    bool ret;
++
++    SOL_DBG("handle %p fd=%d pending=%hu, digest=%p",
++        handle, handle->fd, handle->pending_feed.len, handle->digest);
++
++    _sol_message_digest_ref(handle);
++
++    if (handle->pending_feed.len > 0)
++        _sol_message_digest_feed_blob(handle);
++
++    if (handle->digest)
++        _sol_message_digest_receive_digest(handle);
++
++    ret = (handle->pending_feed.len > 0 || handle->digest);
++    if (!ret)
++        handle->timer = NULL;
++
++    _sol_message_digest_unref(handle);
++    return ret;
++}
++#endif
++
++static int
++_sol_message_digest_thread_start(struct sol_message_digest *handle)
++{
++#ifdef MESSAGE_DIGEST_USE_THREAD
++    struct sol_worker_thread_spec spec = {
++        .api_version = SOL_WORKER_THREAD_SPEC_API_VERSION,
++        .data = handle,
++        .iterate = _sol_message_digest_thread_iterate,
++        .finished = _sol_message_digest_thread_finished,
++        .feedback = _sol_message_digest_thread_feedback
++    };
++
++    if (handle->thread)
++        goto end;
++
++    _sol_message_digest_ref(handle);
++    handle->thread = sol_worker_thread_new(&spec);
++    SOL_NULL_CHECK_GOTO(handle->thread, error);
++
++end:
++    _sol_message_digest_thread_send(handle, 'a');
++
++    return 0;
++
++error:
++    _sol_message_digest_unref(handle);
++    return -ENOMEM;
++
++#else
++    if (handle->timer)
++        return 0;
++
++    handle->timer = sol_timeout_add(0, _sol_message_digest_on_timer, handle);
++    SOL_NULL_CHECK(handle->timer, -ENOMEM);
++
++    return 0;
++#endif
++}
++
++SOL_API int
++sol_message_digest_feed(struct sol_message_digest *handle, struct sol_blob *input, bool is_last)
++{
++    struct sol_message_digest_pending_feed *pf;
++    int r;
++
++    SOL_NULL_CHECK(handle, -EINVAL);
++    SOL_EXP_CHECK(handle->deleted, -EINVAL);
++    SOL_INT_CHECK(handle->refcnt, < 1, -EINVAL);
++    SOL_NULL_CHECK(input, -EINVAL);
++
++    _sol_message_digest_lock(handle);
++    pf = sol_vector_append(&handle->pending_feed);
++    SOL_NULL_CHECK_GOTO(pf, error_append);
++
++    pf->blob = sol_blob_ref(input);
++    pf->offset = 0;
++    pf->is_last = is_last;
++
++    r = _sol_message_digest_thread_start(handle);
++    SOL_INT_CHECK_GOTO(r, < 0, error);
++
++    _sol_message_digest_unlock(handle);
++
++    SOL_DBG("handle %p fd=%d blob=%p (%zd bytes), pending %hu",
++        handle, handle->fd, input, input->size, handle->pending_feed.len);
++
++    return 0;
++
++error:
++    sol_blob_unref(input);
++    sol_vector_del(&handle->pending_feed, handle->pending_feed.len - 1);
++
++error_append:
++    _sol_message_digest_unlock(handle);
++
++    return -ENOMEM;
++}
+diff --git a/src/lib/crypto/sol-message-digest-impl-none.c b/src/lib/crypto/sol-message-digest-impl-none.c
+new file mode 100644
+index 00000000..97305795
+--- /dev/null
++++ b/src/lib/crypto/sol-message-digest-impl-none.c
+@@ -0,0 +1,90 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++
++#define SOL_LOG_DOMAIN &_log_domain
++#include "sol-log-internal.h"
++
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "message-digest");
++
++#include "sol-crypto.h"
++#include "sol-message-digest.h"
++
++int
++sol_message_digest_init(void)
++{
++    SOL_LOG_INTERNAL_INIT_ONCE;
++    return 0;
++}
++
++void
++sol_message_digest_shutdown(void)
++{
++}
++
++SOL_API struct sol_message_digest *
++sol_message_digest_new(const struct sol_message_digest_config *config)
++{
++    errno = EINVAL;
++    SOL_NULL_CHECK(config, NULL);
++    SOL_NULL_CHECK(config->on_digest_ready, NULL);
++    SOL_NULL_CHECK(config->algorithm, NULL);
++
++    if (config->api_version != SOL_MESSAGE_DIGEST_CONFIG_API_VERSION) {
++        SOL_WRN("sol_message_digest_config->api_version=%hu, "
++            "expected version is %hu.",
++            config->api_version, SOL_MESSAGE_DIGEST_CONFIG_API_VERSION);
++        return NULL;
++    }
++
++    SOL_WRN("not implemented.");
++    errno = ENOTSUP;
++    return NULL;
++}
++
++SOL_API void
++sol_message_digest_del(struct sol_message_digest *handle)
++{
++    SOL_NULL_CHECK(handle);
++    SOL_WRN("not implemented.");
++    errno = ENOTSUP;
++}
++
++SOL_API int
++sol_message_digest_feed(struct sol_message_digest *handle, struct sol_blob *input, bool is_last)
++{
++    SOL_NULL_CHECK(handle, -EINVAL);
++    SOL_NULL_CHECK(input, -EINVAL);
++    SOL_WRN("not implemented.");
++    return -ENOTSUP;
++}
+diff --git a/src/samples/crypto/Kconfig b/src/samples/crypto/Kconfig
+new file mode 100644
+index 00000000..2f52236f
+--- /dev/null
++++ b/src/samples/crypto/Kconfig
+@@ -0,0 +1,8 @@
++config CRYPTO_SAMPLES
++	bool "Cryptography & Signatures Samples"
++	default y
++
++config MESSAGE_DIGEST_SAMPLE
++	bool "Message Digest (Hash) samples"
++	depends on CRYPTO_MESSAGE_DIGEST && CRYPTO_SAMPLES
++	default y
+diff --git a/src/samples/crypto/Makefile b/src/samples/crypto/Makefile
+new file mode 100644
+index 00000000..f7360e5b
+--- /dev/null
++++ b/src/samples/crypto/Makefile
+@@ -0,0 +1,2 @@
++sample-$(MESSAGE_DIGEST_SAMPLE) += message-digest
++sample-message-digest-$(MESSAGE_DIGEST_SAMPLE) := message-digest.c
+diff --git a/src/samples/crypto/message-digest.c b/src/samples/crypto/message-digest.c
+new file mode 100644
+index 00000000..812d5ee4
+--- /dev/null
++++ b/src/samples/crypto/message-digest.c
+@@ -0,0 +1,297 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/*
++ * This is a regular Soletta application, there are no linux-micro
++ * specific bits in it, just a timer, an optional gpio writer and some
++ * monitors for platform and service states. The purpose is to show
++ * that it can be considered a /init (PID1) binary if Soletta is
++ * compiled with linux-micro platform and if it runs as PID1, then
++ * /proc, /sys, /dev are all mounted as well as other bits of the
++ * system are configured.
++ */
++
++#include <stdio.h>
++#include <errno.h>
++
++#include "sol-buffer.h"
++#include "sol-file-reader.h"
++#include "sol-mainloop.h"
++#include "sol-message-digest.h"
++#include "sol-util.h"
++
++static uint32_t pending;
++
++struct feed_ctx {
++    const char *file;
++    struct timespec start;
++    size_t done;
++    size_t chunk_size;
++    uint32_t idx;
++};
++
++static void
++print_time(const struct feed_ctx *ctx, size_t amount, const char *prefix)
++{
++    struct timespec now = sol_util_timespec_get_current();
++    struct timespec elapsed;
++    double size, rate, seconds;
++    const char *s_unit, *r_unit;
++
++    sol_util_timespec_sub(&now, &ctx->start, &elapsed);
++    seconds = elapsed.tv_sec + (double)elapsed.tv_nsec / NSEC_PER_SEC;
++
++    size = amount;
++    if (size >= 1.0e9) {
++        s_unit = "Gb";
++        size /= 1.0e9;
++    } else if (size > 1.0e6) {
++        s_unit = "Mb";
++        size /= 1.0e6;
++    } else if (size > 1.0e3) {
++        s_unit = "Kb";
++        size /= 1.0e3;
++    } else {
++        s_unit = "b";
++    }
++
++    rate = amount / seconds;
++    if (rate >= 1.0e9) {
++        r_unit = "Gb";
++        rate /= 1.0e9;
++    } else if (rate > 1.0e6) {
++        r_unit = "Mb";
++        rate /= 1.0e6;
++    } else if (rate > 1.0e3) {
++        r_unit = "Kb";
++        rate /= 1.0e3;
++    } else {
++        r_unit = "b";
++    }
++
++    printf("%s chunk{#%zd, %zdb] %0.1f%s done in %0.3fseconds: %0.1f%s/s\n",
++        prefix, ctx->idx, ctx->chunk_size, size, s_unit, seconds, rate, r_unit);
++}
++
++static void
++on_feed_done(void *data, struct sol_message_digest *handle, struct sol_blob *input)
++{
++    struct feed_ctx *ctx = data;
++
++    ctx->done += input->size;
++    ctx->idx++;
++    print_time(ctx, ctx->done, "feed");
++}
++
++static void
++on_digest_ready(void *data, struct sol_message_digest *handle, struct sol_blob *digest)
++{
++    struct feed_ctx *ctx = data;
++    struct sol_buffer buf;
++    int r;
++
++    sol_buffer_init(&buf);
++    r = sol_buffer_append_as_base16(&buf, sol_str_slice_from_blob(digest), false);
++    if (r == 0) {
++        printf("%s\t%s\n", (char *)buf.data, ctx->file);
++    }
++
++    sol_buffer_fini(&buf);
++
++    print_time(ctx, ctx->done, "final");
++
++    sol_message_digest_del(handle);
++    free(ctx);
++
++    pending--;
++    if (pending == 0)
++        sol_quit();
++}
++
++static void
++startup(void)
++{
++    const char *algorithm = "md5";
++    const char *key = NULL;
++    char **argv = sol_argv();
++    int i, argc = sol_argc();
++    size_t chunk_size = -1;
++
++    if (argc < 2) {
++        fprintf(stderr,
++            "Usage:\n\t%s [-a <algorithm>] [-c chunk_size] [-k key] <file1> .. <fileN>\n", argv[0]);
++        sol_quit_with_code(EXIT_FAILURE);
++        return;
++    }
++
++    for (i = 1; i < argc; i++) {
++        struct feed_ctx *ctx;
++        struct sol_message_digest_config cfg = {
++            .api_version = SOL_MESSAGE_DIGEST_CONFIG_API_VERSION,
++            .algorithm = algorithm,
++            .on_feed_done = on_feed_done,
++            .on_digest_ready = on_digest_ready,
++        };
++        struct sol_file_reader *fr;
++        struct sol_blob *blob;
++        struct sol_message_digest *mdh;
++        int r;
++
++        if (argv[i][0] == '-') {
++            if (argv[i][1] == 'a') {
++                if (i + 1 < argc) {
++                    algorithm = argv[i + 1];
++                    i++;
++                    continue;
++                } else
++                    fputs("ERROR: argument -a missing value.\n", stderr);
++            } else if (argv[i][1] == 'k') {
++                if (i + 1 < argc) {
++                    key = argv[i + 1];
++                    i++;
++                    continue;
++                } else
++                    fputs("ERROR: argument -a missing value.\n", stderr);
++            } else if (argv[i][1] == 'c') {
++                if (i + 1 < argc) {
++                    chunk_size = atoi(argv[i + 1]);
++                    i++;
++                    continue;
++                } else
++                    fputs("ERROR: argument -c missing value.\n", stderr);
++            } else
++                fprintf(stderr, "ERROR: unknown option %s\n", argv[i]);
++            sol_quit_with_code(EXIT_FAILURE);
++            return;
++        }
++
++        fr = sol_file_reader_open(argv[i]);
++        if (!fr) {
++            fprintf(stderr, "ERROR: could not open file '%s': %s\n",
++                argv[i], sol_util_strerrora(errno));
++            continue;
++        }
++
++        blob = sol_file_reader_to_blob(fr);
++        if (!blob) {
++            fprintf(stderr, "ERROR: could not create blob for file '%s'\n",
++                argv[i]);
++            continue;
++        }
++
++        cfg.data = ctx = calloc(1, sizeof(struct feed_ctx));
++        if (!ctx) {
++            fprintf(stderr, "ERROR: could not allocate context memory "
++                "to process file '%s'\n", argv[i]);
++            sol_blob_unref(blob);
++            continue;
++        }
++
++        ctx->file = argv[i];
++        ctx->start = sol_util_timespec_get_current();
++        ctx->done = 0;
++        ctx->chunk_size = chunk_size;
++
++
++        if (key)
++            cfg.key = sol_str_slice_from_str(key);
++
++        mdh = sol_message_digest_new(&cfg);
++        if (!mdh) {
++            fprintf(stderr, "ERROR: could not create message digest for "
++                " algorithm \"%s\": %s\n",
++                algorithm, sol_util_strerrora(errno));
++            sol_blob_unref(blob);
++            free(ctx);
++            continue;
++        }
++
++        if (chunk_size <= 0) {
++            r = sol_message_digest_feed(mdh, blob, true);
++            if (r < 0) {
++                fprintf(stderr, "ERROR: could not feed message for "
++                    " algorithm \"%s\": %s\n",
++                    algorithm, sol_util_strerrora(-r));
++                sol_blob_unref(blob);
++                sol_message_digest_del(mdh);
++                free(ctx);
++                continue;
++            }
++        } else {
++            size_t offset = 0;
++            while (offset < blob->size) {
++                size_t remaining = blob->size - offset;
++                size_t clen = remaining > chunk_size ? chunk_size : remaining;
++                uint8_t *cmem = (uint8_t *)blob->mem + offset;
++                bool is_last = offset + clen == blob->size;
++                struct sol_blob *chunk = sol_blob_new(SOL_BLOB_TYPE_NOFREE,
++                    blob, cmem, clen);
++                if (!chunk) {
++                    fprintf(stderr, "ERROR: could not create chunk blob at "
++                        "mem %p, size=%zd\n", cmem, clen);
++                    sol_blob_unref(blob);
++                    sol_message_digest_del(mdh);
++                    free(ctx);
++                    continue;
++                }
++
++                r = sol_message_digest_feed(mdh, chunk, is_last);
++                if (r < 0) {
++                    fprintf(stderr, "ERROR: could not feed chunk for "
++                        " algorithm \"%s\": %s\n",
++                        algorithm, sol_util_strerrora(-r));
++                    sol_blob_unref(blob);
++                    sol_blob_unref(chunk);
++                    sol_message_digest_del(mdh);
++                    free(ctx);
++                    continue;
++                }
++
++                sol_blob_unref(chunk);
++                offset += clen;
++            }
++        }
++
++        sol_blob_unref(blob);
++        pending++;
++    }
++
++    if (pending == 0)
++        sol_quit_with_code(EXIT_FAILURE);
++}
++
++static void
++shutdown(void)
++{
++}
++
++SOL_MAIN_DEFAULT(startup, shutdown);
+diff --git a/tools/build/Kconfig.features b/tools/build/Kconfig.features
+index 3bd04a7a..bf87f2c2 100644
+--- a/tools/build/Kconfig.features
++++ b/tools/build/Kconfig.features
+@@ -10,6 +10,9 @@ config FEATURE_WORKER_THREADS
+ config FEATURE_UNIX_SOCKETS
+     bool
+ 
++config FEATURE_CRYPTO_MESSAGE_DIGEST
++    bool
++
+ config FEATURE_NETWORK
+     bool
+ 
+diff --git a/tools/build/Kconfig.linux b/tools/build/Kconfig.linux
+index 572fcb0f..d42d91af 100644
+--- a/tools/build/Kconfig.linux
++++ b/tools/build/Kconfig.linux
+@@ -10,6 +10,7 @@ config LINUX
+     select FEATURE_RUNNABLE_PROGRAMS
+     select FEATURE_WORKER_THREADS
+     select FEATURE_UNIX_SOCKETS
++    select FEATURE_CRYPTO_MESSAGE_DIGEST
+     select FEATURE_NETWORK
+     select FEATURE_COAP
+     select FEATURE_HTTP_CLIENT if HAVE_LIBCURL

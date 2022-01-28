@@ -1,0 +1,197 @@
+"2005-05-28 21:18:22 +0000"
+diff --git a/Rules.mak b/Rules.mak
+index 8d47f4eb9..03ed52ec0 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -91,6 +91,8 @@ endif
+ # A nifty macro to make testing gcc features easier
+ check_gcc=$(shell if $(CC) $(1) -S -o /dev/null -xc /dev/null > /dev/null 2>&1; \
+ 	then echo "$(1)"; else echo "$(2)"; fi)
++check_as=$(shell if $(CC) -Wa,$(1) -Wa,-Z -c -o /dev/null -xassembler /dev/null > /dev/null 2>&1; \
++	then echo "-Wa,$(1)"; fi)
+ 
+ # Make certain these contain a final "/", but no "//"s.
+ TARGET_ARCH:=$(shell grep -s ^TARGET_ARCH $(TOPDIR)/.config | sed -e 's/^TARGET_ARCH=//' -e 's/"//g')
+@@ -211,7 +213,6 @@ endif
+ ifeq ($(strip $(TARGET_ARCH)),frv)
+ 	CPU_LDFLAGS-$(CONFIG_FRV)+=-melf32frvfd
+ 	CPU_CFLAGS-$(CONFIG_FRV)+=-mfdpic
+-	PICFLAG=-fPIC -DPIC
+ 	# Using -pie causes the program to have an interpreter, which is
+ 	# forbidden, so we must make do with -shared.  Unfortunately,
+ 	# -shared by itself would get us global function descriptors
+@@ -251,27 +252,28 @@ PIEFLAG=
+ LDPIEFLAG=
+ endif
+ 
+-SSP_DISABLE_FLAGS=$(call check_gcc,-fno-stack-protector,)
++SSP_DISABLE_FLAGS:=$(call check_gcc,-fno-stack-protector,)
+ ifeq ($(UCLIBC_BUILD_SSP),y)
+-SSP_CFLAGS=$(call check_gcc,-fno-stack-protector-all,)
++SSP_CFLAGS:=$(call check_gcc,-fno-stack-protector-all,)
+ SSP_CFLAGS+=$(call check_gcc,-fstack-protector,)
+-SSP_ALL_CFLAGS=$(call check_gcc,-fstack-protector-all,)
++SSP_ALL_CFLAGS:=$(call check_gcc,-fstack-protector-all,)
+ else
+-SSP_CFLAGS=$(SSP_DISABLE_FLAGS)
++SSP_CFLAGS:=$(SSP_DISABLE_FLAGS)
+ endif
+ 
+ # Some nice CFLAGS to work with
+-CFLAGS=$(XWARNINGS) $(OPTIMIZATION) $(XARCH_CFLAGS) $(CPU_CFLAGS) $(SSP_CFLAGS) \
++CFLAGS:=$(XWARNINGS) $(CPU_CFLAGS) $(SSP_CFLAGS) \
+ 	-fno-builtin -nostdinc -D_LIBC -I$(TOPDIR)include -I.
++LDFLAGS_NOSTRIP:=$(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc -z defs
+ 
+ ifeq ($(DODEBUG),y)
+     #CFLAGS += -g3
+-    CFLAGS = $(XWARNINGS) -O0 -g3 $(CPU_CFLAGS) $(SSP_CFLAGS) \
+-	-fno-builtin -nostdinc -D_LIBC -I$(TOPDIR)include -I.
+-    LDFLAGS:= $(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc
++    CFLAGS += -O0 -g3
++    LDFLAGS := $(LDFLAGS_NOSTRIP)
+     STRIPTOOL:= true -Since_we_are_debugging
+ else
+-    LDFLAGS := $(CPU_LDFLAGS-y) -s -shared --warn-common --warn-once -z combreloc
++    CFLAGS += $(OPTIMIZATION) $(XARCH_CFLAGS)
++    LDFLAGS := $(LDFLAGS_NOSTRIP) -s
+ endif
+ 
+ ifeq ($(UCLIBC_BUILD_RELRO),y)
+@@ -307,8 +309,7 @@ endif
+ 
+ ASFLAGS = $(CFLAGS)
+ ifeq ($(UCLIBC_BUILD_NOEXECSTACK),y)
+-check_as_noexecstack=$(shell if $(LD) --help | grep -q "z noexecstack"; then echo "-Wa,--noexecstack"; fi)
+-ASFLAGS += $(check_as_noexecstack)
++ASFLAGS += $(call check_as,--noexecstack)
+ endif
+ 
+ LIBGCC_CFLAGS ?= $(CFLAGS) $(CPU_CFLAGS-y)
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 738ab9408..137d22797 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1231,6 +1231,7 @@ config CROSS_COMPILER_PREFIX
+ 
+ config DODEBUG
+ 	bool "Build uClibc with debugging symbols"
++	select PTHREADS_DEBUG_SUPPORT if UCLIBC_HAS_THREADS
+ 	default n
+ 	help
+ 	  Say Y here if you wish to compile uClibc with debugging symbols.
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index 3a382673c..e18b292f6 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -24,7 +24,7 @@ LDSO_FULLNAME=ld-uClibc-$(MAJOR_VERSION).$(MINOR_VERSION).$(SUBLEVEL).so
+ # reset to initial (disabling predefined CFLAGS)
+ ASFLAGS=
+ ifeq ($(UCLIBC_BUILD_NOEXECSTACK),y)
+-ASFLAGS+=$(check_as_noexecstack)
++ASFLAGS+=$(call check_as,--noexecstack)
+ endif
+ 
+ XXFLAGS=$(XWARNINGS) $(SSP_DISABLE_FLAGS)
+diff --git a/libpthread/Makefile b/libpthread/Makefile
+index 81979feb9..12411e6df 100644
+--- a/libpthread/Makefile
++++ b/libpthread/Makefile
+@@ -19,8 +19,6 @@
+ TOPDIR=../
+ include $(TOPDIR)Rules.mak
+ 
+-CFLAGS+=$(SSP_ALL_CFLAGS)
+-
+ #Adjust the soname version to avoid namespace collisions with glibc's libpthread
+ LIBPTHREAD=libpthread.a
+ LIBPTHREAD_SHARED=libpthread.so
+@@ -33,25 +31,8 @@ LIBTHREAD_DB_SHARED_FULLNAME=libthread_db-$(MAJOR_VERSION).$(MINOR_VERSION).$(SU
+ DIRS=
+ ifeq ($(strip $(UCLIBC_HAS_THREADS)),y)
+ 	DIRS+=linuxthreads
+-	LDFLAGS_THREAD:= $(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc -z defs
+-ifeq ($(UCLIBC_BUILD_RELRO),y)
+-	LDFLAGS_THREAD+=-z relro
+-endif
+-ifeq ($(UCLIBC_BUILD_NOW),y)
+-	LDFLAGS_THREAD+=-z now
+-endif
+ ifeq ($(strip $(PTHREADS_DEBUG_SUPPORT)),y)
+ 	DIRS+=linuxthreads_db
+-	LDFLAGS_THREAD_DB:= $(CPU_LDFLAGS-y) -shared --warn-common --warn-once -z combreloc
+-endif
+-ifeq ($(DODEBUG),n)
+-	LDFLAGS_THREAD_DB+=-s
+-ifeq ($(UCLIBC_BUILD_RELRO),y)
+-       LDFLAGS_THREAD_DB+=-z relro
+-endif
+-ifeq ($(UCLIBC_BUILD_NOW),y)
+-       LDFLAGS_THREAD_DB+=-z now
+-endif
+ endif
+ endif
+ 
+@@ -87,7 +68,7 @@ $(OBJ): Makefile
+ 
+ shared: all
+ ifeq ($(strip $(UCLIBC_HAS_THREADS)),y)
+-	$(LD) $(LDFLAGS_THREAD) -soname=$(LIBPTHREAD_SHARED).$(MAJOR_VERSION) \
++	$(LD) $(LDFLAGS_NOSTRIP) -soname=$(LIBPTHREAD_SHARED).$(MAJOR_VERSION) \
+ 		-o $(LIBPTHREAD_SHARED_FULLNAME) $(SHARED_START_FILES) --whole-archive $(LIBPTHREAD) \
+ 		--no-whole-archive $(TOPDIR)libc/misc/internals/interp.o \
+ 		-L$(TOPDIR)lib -lc $(LDADD_LIBFLOAT) $(LIBGCC) \
+@@ -102,7 +83,7 @@ ifeq ($(strip $(UCLIBC_HAS_THREADS)),y)
+ 		$(TOPDIR)lib/$(LIBPTHREAD_SHARED).$(MAJOR_VERSION)
+ endif
+ ifeq ($(strip $(PTHREADS_DEBUG_SUPPORT)),y)
+-	$(LD) $(LDFLAGS_THREAD_DB) -soname=$(LIBTHREAD_DB_SHARED).1 \
++	$(LD) $(LDFLAGS) --warn-unresolved-symbols -soname=$(LIBTHREAD_DB_SHARED).1 \
+ 		-o $(LIBTHREAD_DB_SHARED_FULLNAME) --whole-archive $(LIBTHREAD_DB) \
+ 		--no-whole-archive $(TOPDIR)libc/misc/internals/interp.o \
+ 		-L$(TOPDIR)lib -lc $(LDADD_LIBFLOAT) $(LIBGCC)
+diff --git a/libpthread/linuxthreads/Makefile b/libpthread/linuxthreads/Makefile
+index 50fc20cdf..cca65d51c 100644
+--- a/libpthread/linuxthreads/Makefile
++++ b/libpthread/linuxthreads/Makefile
+@@ -33,18 +33,15 @@ SYSDEPS_DIR:=$(TARGET_ARCH)/sparc32
+ else
+ SYSDEPS_DIR:=$(TARGET_ARCH)
+ endif
++CFLAGS += $(SSP_ALL_CFLAGS)
+ #This stuff will not compile without at least -O1
+ CFLAGS :=$(CFLAGS:-O0=-O1)
+ 
+ 
+ # set up system dependencies include dirs (NOTE: order matters!)
+ PTDIR = $(TOPDIR)libpthread/linuxthreads/
+-SYSDEPINC = -I$(PTDIR)sysdeps/unix/sysv/linux \
+-            -I$(PTDIR)sysdeps/pthread \
+-            -I$(PTDIR)sysdeps/unix/sysv \
+-            -I$(PTDIR)sysdeps/unix/unix \
++SYSDEPINC = -I$(PTDIR)sysdeps/pthread \
+             -I$(PTDIR)sysdeps/$(TARGET_ARCH) \
+-            -I$(PTDIR)sysdeps \
+             -I$(TOPDIR)libc/sysdeps/linux/$(TARGET_ARCH)
+ CFLAGS += $(SYSDEPINC)
+ 
+diff --git a/libpthread/linuxthreads_db/Makefile b/libpthread/linuxthreads_db/Makefile
+index 656275fa9..66015be12 100644
+--- a/libpthread/linuxthreads_db/Makefile
++++ b/libpthread/linuxthreads_db/Makefile
+@@ -30,13 +30,10 @@ endif
+ 
+ # set up system dependencies include dirs (NOTE: order matters!)
+ PTDIR = $(TOPDIR)libpthread/linuxthreads/
+-SYSDEPINC = -I$(PTDIR)sysdeps/unix/sysv/linux \
+-            -I$(PTDIR)sysdeps/pthread \
+-            -I$(PTDIR)sysdeps/unix/sysv \
+-            -I$(PTDIR)sysdeps/unix/unix \
++SYSDEPINC = -I$(PTDIR)sysdeps/pthread \
+             -I$(PTDIR)sysdeps/$(TARGET_ARCH) \
+-            -I$(PTDIR)sysdeps \
+             -I$(TOPDIR)libc/sysdeps/linux/$(TARGET_ARCH)
++#CFLAGS += $(SSP_ALL_CFLAGS)
+ CFLAGS += $(SYSDEPINC) -DLIBPTHREAD_SO="\"libpthread.so.$(MAJOR_VERSION)\""
+ 
+ CSRC=	td_init.c td_log.c td_ta_delete.c td_ta_get_nthreads.c		\

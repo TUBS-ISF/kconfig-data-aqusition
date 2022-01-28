@@ -1,0 +1,235 @@
+"2018-02-09 09:07:49 +0100"
+diff --git a/src/kern/arm/bsp/rcar3/Kconfig b/src/kern/arm/bsp/rcar3/Kconfig
+new file mode 100644
+index 0000000..413d87a
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/Kconfig
+@@ -0,0 +1,4 @@
++# PF: RCAR3
++# PFDESCR: Renesas R-Car Gen3
++# PFSELECT: CAN_ARM_CPU_CORTEX_A57 CAN_ARM_CPU_CORTEX_A53 HAS_ARM_PSCI
++# PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/rcar3/Modules b/src/kern/arm/bsp/rcar3/Modules
+new file mode 100644
+index 0000000..ea18517
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/Modules
+@@ -0,0 +1,20 @@
++# vim:set ft=make:
++
++SUBSYSTEMS            += LIBUART
++OBJECTS_LIBUART       += uart_sh.o
++PREPROCESS_PARTS      += libuart generic_tickless_idle \
++                         arm_generic_timer pic_gic psci
++INTERFACES_KERNEL     += gic generic_timer
++RAM_PHYS_BASE         := 0x50000000
++
++uart_IMPL             += uart-arm-rcar3
++config_IMPL           += config-arm-rcar3
++mem_layout_IMPL       += mem_layout-arm-rcar3
++pic_IMPL              += pic-gic pic-arm-rcar3
++bootstrap_IMPL        += bootstrap-arm-rcar3
++timer_IMPL            += timer-arm-generic timer-arm-generic-rcar3
++timer_tick_IMPL       += timer_tick-single-vector
++kernel_uart_IMPL      += kernel_uart-arm-rcar3
++reset_IMPL            += reset-arm-rcar3
++clock_IMPL            += clock-generic
++platform_control_IMPL += platform_control-arm-rcar3
+diff --git a/src/kern/arm/bsp/rcar3/bootstrap-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/bootstrap-arm-rcar3.cpp
+new file mode 100644
+index 0000000..929359e
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/bootstrap-arm-rcar3.cpp
+@@ -0,0 +1,7 @@
++INTERFACE [arm && pf_rcar3]:
++
++EXTENSION class Bootstrap
++{
++public:
++  enum { Cache_flush_area = 0 };
++};
+diff --git a/src/kern/arm/bsp/rcar3/config-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/config-arm-rcar3.cpp
+new file mode 100644
+index 0000000..f8c5f92
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/config-arm-rcar3.cpp
+@@ -0,0 +1,3 @@
++INTERFACE [arm && pf_rcar3]:
++
++#define TARGET_NAME "Renesas R-Car Gen3"
+diff --git a/src/kern/arm/bsp/rcar3/kernel_uart-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/kernel_uart-arm-rcar3.cpp
+new file mode 100644
+index 0000000..7d3fe1e
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/kernel_uart-arm-rcar3.cpp
+@@ -0,0 +1,12 @@
++INTERFACE [arm && pf_rcar3]:
++
++// On ARM the MMIO for the uart is accessible before the MMU is fully up
++EXTENSION class Kernel_uart { enum { Bsp_init_mode = Init_before_mmu }; };
++
++IMPLEMENTATION [arm && serial && pf_rcar3]:
++
++IMPLEMENT
++bool Kernel_uart::startup(unsigned, int)
++{
++  return Uart::startup();
++}
+diff --git a/src/kern/arm/bsp/rcar3/mem_layout-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/mem_layout-arm-rcar3.cpp
+new file mode 100644
+index 0000000..ea36160
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/mem_layout-arm-rcar3.cpp
+@@ -0,0 +1,13 @@
++INTERFACE [arm && pf_rcar3]: //--------------------------------------------
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Phys_layout_rcar3 : Address {
++    Uart_phys_base       = 0xe6e88000,
++    Gic_cpu_phys_base    = 0xf1020000,
++    Gic_dist_phys_base   = 0xf1010000,
++    Gic_h_phys_base      = 0xf1040000,
++    Gic_v_phys_base      = 0xf1060000,
++  };
++};
+diff --git a/src/kern/arm/bsp/rcar3/pic-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/pic-arm-rcar3.cpp
+new file mode 100644
+index 0000000..6bdf38f
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/pic-arm-rcar3.cpp
+@@ -0,0 +1,34 @@
++INTERFACE [arm && pic_gic && pf_rcar3]:
++
++#include "gic.h"
++#include "initcalls.h"
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && pic_gic && pf_rcar3]:
++
++#include "irq_mgr_multi_chip.h"
++#include "kmem.h"
++
++PUBLIC static FIASCO_INIT
++void
++Pic::init()
++{
++  typedef Irq_mgr_multi_chip<9> M;
++
++  M *m = new Boot_object<M>(1);
++
++  gic.construct(Kmem::mmio_remap(Mem_layout::Gic_cpu_phys_base),
++                Kmem::mmio_remap(Mem_layout::Gic_dist_phys_base));
++  m->add_chip(0, gic, gic->nr_irqs());
++
++  Irq_mgr::mgr = m;
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && pic_gic && mp && pf_rcar3]:
++
++PUBLIC static
++void Pic::init_ap(Cpu_number, bool resume)
++{
++  gic->init_ap(resume);
++}
+diff --git a/src/kern/arm/bsp/rcar3/platform_control-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/platform_control-arm-rcar3.cpp
+new file mode 100644
+index 0000000..053897f
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/platform_control-arm-rcar3.cpp
+@@ -0,0 +1,21 @@
++IMPLEMENTATION [arm && mp && pf_rcar3]:
++
++#include "mem.h"
++#include "mmio_register_block.h"
++#include "kmem.h"
++
++#include <cstdio>
++
++PUBLIC static
++void
++Platform_control::boot_ap_cpus(Address phys_tramp_mp_addr)
++{
++  for (int i = 1; i < 8; ++i)
++    {
++      unsigned coreid[8] = { 0x000, 0x001, 0x002, 0x003,
++                             0x100, 0x101, 0x102, 0x103 };
++      int r = cpu_on(coreid[i], phys_tramp_mp_addr);
++      if (r && r != -2) // Different SoC variants
++        printf("CPU%d boot-up error: %d\n", i, r);
++    }
++}
+diff --git a/src/kern/arm/bsp/rcar3/reset-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/reset-arm-rcar3.cpp
+new file mode 100644
+index 0000000..ad87744
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/reset-arm-rcar3.cpp
+@@ -0,0 +1,10 @@
++IMPLEMENTATION [arm && pf_rcar3]:
++
++void __attribute__ ((noreturn))
++platform_reset(void)
++{
++  Platform_control::system_reset();
++
++  for (;;)
++    ;
++}
+diff --git a/src/kern/arm/bsp/rcar3/timer-arm-generic-rcar3.cpp b/src/kern/arm/bsp/rcar3/timer-arm-generic-rcar3.cpp
+new file mode 100644
+index 0000000..789520c
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/timer-arm-generic-rcar3.cpp
+@@ -0,0 +1,18 @@
++IMPLEMENTATION [arm_generic_timer && pf_rcar3]:
++
++#include "mem_layout.h"
++
++PUBLIC static
++unsigned Timer::irq()
++{
++  switch (Gtimer::Type)
++    {
++    case Generic_timer::Physical: return 29;
++    case Generic_timer::Virtual:  return 27;
++    case Generic_timer::Hyp:      return 26;
++    };
++}
++
++IMPLEMENT
++void Timer::bsp_init(Cpu_number)
++{}
+diff --git a/src/kern/arm/bsp/rcar3/uart-arm-rcar3.cpp b/src/kern/arm/bsp/rcar3/uart-arm-rcar3.cpp
+new file mode 100644
+index 0000000..50873ac
+--- /dev/null
++++ b/src/kern/arm/bsp/rcar3/uart-arm-rcar3.cpp
+@@ -0,0 +1,16 @@
++IMPLEMENTATION [arm && pf_rcar3]:
++
++#include "koptions.h"
++#include "uart_sh.h"
++
++IMPLEMENT Address Uart::base() const
++{ return Koptions::o()->uart.base_address; }
++
++IMPLEMENT int Uart::irq() const
++{ return Koptions::o()->uart.irqno; }
++
++IMPLEMENT L4::Uart *Uart::uart()
++{
++  static L4::Uart_sh uart;
++  return &uart;
++}
+diff --git a/src/templates/globalconfig.out.arm64-rcar3 b/src/templates/globalconfig.out.arm64-rcar3
+new file mode 100644
+index 0000000..9f9dfe1
+--- /dev/null
++++ b/src/templates/globalconfig.out.arm64-rcar3
+@@ -0,0 +1,4 @@
++CONFIG_ARM=y
++CONFIG_PF_RCAR3=y
++CONFIG_ARM_CORTEX_A57=y
++CONFIG_MP=y

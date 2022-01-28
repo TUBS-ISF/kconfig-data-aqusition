@@ -1,0 +1,111 @@
+"2006-08-20 22:12:18 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index a8b480b80..0bb257b6d 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -219,6 +219,7 @@ USE_PRINTF(APPLET(printf, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_PS(APPLET(ps, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_PWD(APPLET(pwd, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_RDATE(APPLET(rdate, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
++USE_READAHEAD(APPLET(readahead, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_READLINK(APPLET(readlink, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_READPROFILE(APPLET(readprofile, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_REALPATH(APPLET(realpath, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 5bc82dc22..ced9f68c7 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2385,6 +2385,12 @@ USE_FEATURE_MDEV_CONFIG( \
+ 	"\t-s\tSet the system date and time (default)\n" \
+ 	"\t-p\tPrint the date and time"
+ 
++#define readahead_trivial_usage \
++	"[FILE]..."
++#define readahead_full_usage \
++	"Preloads FILE(s) in RAM cache so that subsequent reads for those" \
++	"files do not block on disk I/O."
++
+ #ifdef CONFIG_FEATURE_READLINK_FOLLOW
+ #define USAGE_READLINK_FOLLOW(a) a
+ #else
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 4296b54ea..9ad342151 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -276,6 +276,22 @@ config CONFIG_MT
+ 	  to advance or rewind a tape past a specified number of archive
+ 	  files on the tape.
+ 
++config CONFIG_READAHEAD
++        bool "readahead"
++	default n
++	help
++ 	  Preload the files listed on the command line into RAM cache so that
++	  subsequent reads on these files will not block on disk I/O.
++
++	  This applet just calls the readahead(2) system call on each file.
++	  It is mainly useful in system startup scripts to preload files
++	  or executables before they are used.  When used at the right time
++	  (in particular when a CPU boundprocess is running) it can
++	  significantly speed up system startup.
++
++	  As readahead(2) blocks until each file has been read, it is best to
++	  run this applet as a background job. 
++
+ config CONFIG_RUNLEVEL
+         bool "runlevel"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index a0b6b7233..25143c10b 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -24,6 +24,7 @@ MISCUTILS-${CONFIG_LESS}        += less.o
+ MISCUTILS-$(CONFIG_MAKEDEVS)    += makedevs.o
+ MISCUTILS-$(CONFIG_MOUNTPOINT)  += mountpoint.o
+ MISCUTILS-$(CONFIG_MT)          += mt.o
++MISCUTILS-$(CONFIG_READAHEAD)   += readahead.o
+ MISCUTILS-$(CONFIG_RUNLEVEL)    += runlevel.o
+ MISCUTILS-$(CONFIG_RX)          += rx.o
+ MISCUTILS-$(CONFIG_SETSID)      += setsid.o
+diff --git a/miscutils/readahead.c b/miscutils/readahead.c
+new file mode 100644
+index 000000000..9f1bb47be
+--- /dev/null
++++ b/miscutils/readahead.c
+@@ -0,0 +1,36 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * readahead implementation for busybox
++ *
++ * Preloads the given files in RAM, to reduce access time.
++ * Does this by calling the readahead(2) system call.
++ *
++ * Copyright (C) 2006  Michael Opdenacker <michael@free-electrons.com>
++ *
++ * Licensed under GPLv2 or later, see file License in this tarball for details.
++ */
++
++#include "busybox.h"
++
++int readahead_main(int argc, char **argv)
++{
++	FILE *f;
++	struct stat stat_buf;
++	int retval = EXIT_SUCCESS;
++
++	if (argc == 1) bb_show_usage();
++
++	while (*++argv) {
++		if ((f = bb_wfopen(*argv, "r")) != NULL) {
++			int r, fd=fileno(f);
++			
++			xstat(*argv, &stat_buf);
++			r = readahead(fd, 0, fdlength(fd));
++			fclose(f);
++			if (r >= 0) continue;
++		}
++		retval = EXIT_FAILURE;
++	}
++
++	return retval;
++}

@@ -1,0 +1,93 @@
+"2007-12-09 15:30:36 -0600"
+diff --git a/toys/Config.in b/toys/Config.in
+index ba2bbf32..8f2cf6c5 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -260,12 +260,13 @@ config ONEIT
+ 	bool "oneit"
+ 	default y
+ 	help
+-	  usage: oneit [-p] command [...]
++	  usage: oneit [-p] [-c /dev/tty0] command [...]
+ 
+ 	  A simple init program that runs a single supplied command line with a
+ 	  controlling tty (so CTRL-C can kill it).
+ 
+ 	  -p	Power off instead of rebooting when command exits.
++	  -c	Which console device to use.
+ 
+ 	  The oneit command runs the supplied command line as a child process
+ 	  (because PID 1 has signals blocked), attached to /dev/tty0, in its
+diff --git a/toys/oneit.c b/toys/oneit.c
+index 5fd61df1..8563ecb1 100644
+--- a/toys/oneit.c
++++ b/toys/oneit.c
+@@ -18,6 +18,8 @@
+ // PID 1 then reaps zombies until the child process it spawned exits, at which
+ // point it calls sync() and reboot().  I could stick a kill -1 in there.
+ 
++#define TT toy.oneit
++
+ void oneit_main(void)
+ {
+   int i;
+@@ -37,7 +39,7 @@ void oneit_main(void)
+   setsid();
+   for (i=0; i<3; i++) {
+     close(i);
+-    open("/dev/tty0",O_RDWR);
++    xopen(TT.console ? TT.console : "/dev/tty0",O_RDWR);
+   }
+ 
+   // Can't xexec() here, because we vforked so we don't want to error_exit().
+diff --git a/toys/toylist.h b/toys/toylist.h
+index f24266bb..9d040265 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -63,6 +63,10 @@ struct netcat_data {
+ 	long delay;            // -i delay between lines sent
+ };
+ 
++struct oneit_data {
++	char *console;
++};
++
+ struct sleep_data {
+ 	long seconds;
+ };
+@@ -87,6 +91,7 @@ extern union toy_union {
+ 	struct mke2fs_data mke2fs;
+ 	struct mkfifo_data mkfifo;
+ 	struct netcat_data netcat;
++	struct oneit_data oneit;
+ 	struct sleep_data sleep;
+ 	struct touch_data touch;
+ 	struct toysh_data toysh;
+@@ -117,10 +122,10 @@ NEWTOY(toybox, NULL, 0)
+ // The rest of these are alphabetical, for binary search.
+ 
+ USE_BASENAME(NEWTOY(basename, "<1>2", TOYFLAG_BIN))
+-USE_BZCAT(NEWTOY(bzcat, "", TOYFLAG_USR|TOYFLAG_BIN))
++USE_BZCAT(NEWTOY(bzcat, NULL, TOYFLAG_USR|TOYFLAG_BIN))
+ USE_CATV(NEWTOY(catv, "vte", TOYFLAG_USR|TOYFLAG_BIN))
+ USE_CHROOT(NEWTOY(chroot, "<1", TOYFLAG_USR|TOYFLAG_SBIN))
+-USE_COUNT(NEWTOY(count, "", TOYFLAG_USR|TOYFLAG_BIN))
++USE_COUNT(NEWTOY(count, NULL, TOYFLAG_USR|TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(cd, NULL, TOYFLAG_NOFORK))
+ USE_DF(NEWTOY(df, "Pkt*a", TOYFLAG_USR|TOYFLAG_SBIN))
+ USE_DIRNAME(NEWTOY(dirname, "<1>1", TOYFLAG_BIN))
+@@ -134,7 +139,7 @@ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))
+ USE_MKFIFO(NEWTOY(mkfifo, "<1m:", TOYFLAG_BIN))
+ USE_NETCAT(OLDTOY(nc, netcat, "i#w#l@p#s:q#f:e", TOYFLAG_BIN))
+ USE_NETCAT(NEWTOY(netcat, "i#w#l@p#s:q#f:e", TOYFLAG_BIN))
+-USE_ONEIT(NEWTOY(oneit, "+<1p", TOYFLAG_SBIN))
++USE_ONEIT(NEWTOY(oneit, "+<1c:p", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
+ USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))
+ USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
+@@ -146,4 +151,4 @@ USE_TOYSH(NEWTOY(toysh, "c:i", TOYFLAG_BIN))
+ USE_TRUE(NEWTOY(true, NULL, TOYFLAG_BIN))
+ USE_TTY(NEWTOY(tty, "s", TOYFLAG_BIN))
+ USE_WHICH(NEWTOY(which, "a", TOYFLAG_USR|TOYFLAG_BIN))
+-USE_YES(NEWTOY(yes, "", TOYFLAG_USR|TOYFLAG_BIN))
++USE_YES(NEWTOY(yes, NULL, TOYFLAG_USR|TOYFLAG_BIN))

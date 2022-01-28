@@ -1,0 +1,231 @@
+"2015-09-24 11:18:47 -0300"
+diff --git a/src/modules/flow/string/Kconfig b/src/modules/flow/string/Kconfig
+index c600a4d2..18a0fb75 100644
+--- a/src/modules/flow/string/Kconfig
++++ b/src/modules/flow/string/Kconfig
+@@ -8,6 +8,8 @@ config FLOW_NODE_TYPE_STRING
+ 
+ 		 - generate UUID strings
+ 		 - split a string in others
++		 - get a slice from a string
++		 - check if a string is empty
+ 		 - compare/concatenate two strings
+ 		 - replace a substring in a string
+ 		 - measure the lenght of the string
+diff --git a/src/modules/flow/string/Makefile b/src/modules/flow/string/Makefile
+index dcc91e04..4f6a1a61 100644
+--- a/src/modules/flow/string/Makefile
++++ b/src/modules/flow/string/Makefile
+@@ -22,7 +22,7 @@ warning-msg := "You're building the string nodes module without Perl regular exp
+ endif
+ 
+ obj-$(FLOW_NODE_TYPE_STRING) += string.mod
+-obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string-regexp.o string-uuid.o
++obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string-regexp.o string-uuid.o string-common.o
+ 
+ ifeq (y,$(USE_ICU))
+ obj-string-$(FLOW_NODE_TYPE_STRING) += string-icu.o string-replace-icu.o
+diff --git a/src/modules/flow/string/string-ascii.c b/src/modules/flow/string/string-ascii.c
+index 6ab2b383..774108c1 100644
+--- a/src/modules/flow/string/string-ascii.c
++++ b/src/modules/flow/string/string-ascii.c
+@@ -41,6 +41,7 @@
+ #include "sol-flow-internal.h"
+ 
+ #include "string-ascii.h"
++#include "string-common.h"
+ #include "string-regexp.h"
+ #include "string-uuid.h"
+ 
+diff --git a/src/modules/flow/string/string-common.c b/src/modules/flow/string/string-common.c
+new file mode 100644
+index 00000000..df5d47e7
+--- /dev/null
++++ b/src/modules/flow/string/string-common.c
+@@ -0,0 +1,53 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "sol-flow/string.h"
++#include "sol-flow-internal.h"
++
++#include "string-common.h"
++
++int
++string_is_empty(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    const char *in_value;
++    int r;
++
++    r = sol_flow_packet_get_string(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return sol_flow_send_boolean_packet(node,
++        SOL_FLOW_NODE_TYPE_STRING_IS_EMPTY__OUT__OUT, strlen(in_value) == 0);
++}
+diff --git a/src/modules/flow/string/string-common.h b/src/modules/flow/string/string-common.h
+new file mode 100644
+index 00000000..8d2ebb7d
+--- /dev/null
++++ b/src/modules/flow/string/string-common.h
+@@ -0,0 +1,37 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include "sol-flow.h"
++
++int string_is_empty(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+diff --git a/src/modules/flow/string/string-icu.c b/src/modules/flow/string/string-icu.c
+index 1291c33c..bb283014 100644
+--- a/src/modules/flow/string/string-icu.c
++++ b/src/modules/flow/string/string-icu.c
+@@ -36,6 +36,7 @@
+ #include "sol-flow/string.h"
+ #include "sol-flow-internal.h"
+ 
++#include "string-common.h"
+ #include "string-icu.h"
+ #include "string-regexp.h"
+ #include "string-uuid.h"
+diff --git a/src/modules/flow/string/string.json b/src/modules/flow/string/string.json
+index 275adbb7..d27ba700 100644
+--- a/src/modules/flow/string/string.json
++++ b/src/modules/flow/string/string.json
+@@ -758,6 +758,29 @@
+       ],
+       "private_data_type": "string_uuid_data",
+       "url": "http://solettaproject.org/doc/latest/node_types/string/uuid.html"
++    },
++    {
++      "category": "string",
++      "description": "Tells whether a given input string is empty (\"\") or not.",
++      "in_ports": [
++        {
++          "data_type": "string",
++          "description": "Input string to test for emptyness.",
++          "methods": {
++            "process": "string_is_empty"
++          },
++          "name": "IN"
++        }
++      ],
++      "name": "string/is-empty",
++      "out_ports": [
++        {
++          "data_type": "boolean",
++          "description": "True, if the input string is empty, false otherwise.",
++          "name": "OUT"
++        }
++      ],
++      "url": "http://solettaproject.org/doc/latest/node_types/string/is-empty.html"
+     }
+   ]
+ }
+diff --git a/src/test-fbp/string-is-empty.fbp b/src/test-fbp/string-is-empty.fbp
+new file mode 100644
+index 00000000..f9add416
+--- /dev/null
++++ b/src/test-fbp/string-is-empty.fbp
+@@ -0,0 +1,38 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++non_empty_string(constant/string:value=" ")
++empty_string(constant/string:value="")
++
++non_empty_string OUT -> IN test_non_empty(string/is-empty)
++test_non_empty OUT -> IN _(boolean/not) OUT -> RESULT _(test/result)
++
++empty_string OUT -> IN test_empty(string/is-empty)
++test_empty OUT -> RESULT _(test/result)

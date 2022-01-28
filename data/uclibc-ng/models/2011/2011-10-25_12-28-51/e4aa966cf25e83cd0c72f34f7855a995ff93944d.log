@@ -1,0 +1,111 @@
+"2011-10-25 12:28:51 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 9ff918efb..1e968063a 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -409,6 +409,17 @@ config LDSO_SEARCH_INTERP_PATH
+ 
+ 	  If unsure, simply say Y here.
+ 
++config LDSO_LD_LIBRARY_PATH
++	bool "Add LD_LIBRARY_PATH to lib search path"
++	depends on HAVE_SHARED
++	default y
++	help
++	  On hardened system it could be useful to disable the use of
++	  LD_LIBRARY_PATH environment variable (a colon-separated list of
++	  directories in which to search for ELF libraries at execution-time).
++
++	  If unsure, simply say Y here.
++
+ config LDSO_NO_CLEANUP
+ 	bool "Disable automatic unloading of dynamically loaded shared objects"
+ 	depends on HAVE_SHARED
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index db2872cd0..308a66c63 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -236,6 +236,7 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	}
+ #endif
+ 
++#ifdef __LDSO_LD_LIBRARY_PATH__
+ 	/* Check in LD_{ELF_}LIBRARY_PATH, if specified and allowed */
+ 	if (_dl_library_path) {
+ 		_dl_if_debug_dprint("\tsearching LD_LIBRARY_PATH='%s'\n", _dl_library_path);
+@@ -244,7 +245,7 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 			return tpnt1;
+ 		}
+ 	}
+-
++#endif
+ 	/*
+ 	 * The ABI specifies that RUNPATH is searched after LD_LIBRARY_PATH.
+ 	 */
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index 14f2f7663..fe463b75d 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -46,7 +46,9 @@
+ #include LDSO_ELFINTERP
+ 
+ /* Global variables used within the shared library loader */
++#ifdef __LDSO_LD_LIBRARY_PATH__
+ char *_dl_library_path         = NULL;	/* Where we look for libraries */
++#endif
+ #ifdef __LDSO_PRELOAD_ENV_SUPPORT__
+ char *_dl_preload              = NULL;	/* Things to be loaded before the libs */
+ #endif
+@@ -457,7 +459,9 @@ void *_dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ #ifdef __LDSO_PRELOAD_ENV_SUPPORT__
+ 		_dl_preload = _dl_getenv("LD_PRELOAD", envp);
+ #endif
++#ifdef __LDSO_LD_LIBRARY_PATH__
+ 		_dl_library_path = _dl_getenv("LD_LIBRARY_PATH", envp);
++#endif
+ 	} else {
+ 		static const char unsecure_envvars[] =
+ #ifdef EXTRA_UNSECURE_ENVVARS
+@@ -476,7 +480,9 @@ void *_dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ #ifdef __LDSO_PRELOAD_ENV_SUPPORT__
+ 		_dl_preload = NULL;
+ #endif
++#ifdef __LDSO_LD_LIBRARY_PATH__
+ 		_dl_library_path = NULL;
++#endif
+ 		/* SUID binaries can be exploited if they do LAZY relocation. */
+ 		unlazy = RTLD_NOW;
+ 	}
+@@ -494,7 +500,9 @@ void *_dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ 		tpnt->libname = argv[0];
+ 		while (argc > 1)
+ 			if (! _dl_strcmp (argv[1], "--library-path") && argc > 2) {
++#ifdef __LDSO_LD_LIBRARY_PATH__
+ 				_dl_library_path = argv[2];
++#endif
+ 				_dl_skip_args += 2;
+ 				argc -= 2;
+ 				argv += 2;
+diff --git a/ldso/libdl/libdl.c b/ldso/libdl/libdl.c
+index 5b519e6d0..c164ffbee 100644
+--- a/ldso/libdl/libdl.c
++++ b/ldso/libdl/libdl.c
+@@ -100,7 +100,9 @@ int   _dl_debug_file      = 2;
+ const char *_dl_progname       = "";        /* Program name */
+ void *(*_dl_malloc_function)(size_t);
+ void (*_dl_free_function) (void *p);
++#ifdef __LDSO_LD_LIBRARY_PATH__
+ char *_dl_library_path         = NULL;         /* Where we look for libraries */
++#endif
+ int _dl_errno                  = 0;         /* We can't use the real errno in ldso */
+ size_t _dl_pagesize            = PAGE_SIZE; /* Store the page size for use later */
+ /* This global variable is also to communicate with debuggers such as gdb. */
+@@ -368,7 +370,7 @@ void *dlopen(const char *libname, int flag)
+ 	if (getenv("LD_BIND_NOW"))
+ 		now_flag = RTLD_NOW;
+ 
+-#ifndef SHARED
++#if !defined SHARED && defined __LDSO_LIBRARY_PATH__
+ 	/* When statically linked, the _dl_library_path is not yet initialized */
+ 	_dl_library_path = getenv("LD_LIBRARY_PATH");
+ #endif

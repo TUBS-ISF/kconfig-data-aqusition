@@ -1,0 +1,57 @@
+"2006-02-08 18:50:17 +0000"
+diff --git a/Config.in b/Config.in
+index 0afc34a94..070085b94 100644
+--- a/Config.in
++++ b/Config.in
+@@ -80,10 +80,12 @@ config CONFIG_FEATURE_CLEAN_UP
+ 	bool "Clean up all memory before exiting (usually not needed)"
+ 	default n
+ 	help
+-	  As a size optimization, busybox by default does not cleanup memory
+-	  that is dynamically allocated or close files before exiting. This
+-	  saves space and is usually not needed since the OS will clean up for
+-	  us.  Don't enable this unless you have a really good reason to clean
++	  As a size optimization, busybox normally exits without explicitly
++	  freeing dynamically allocated memory or closing files.  This saves
++	  space since the OS will clean up for us, but it can confuse debuggers
++	  like valgrind, which report tons of memory and resource leaks.
++
++	  Don't enable this unless you have a really good reason to clean
+ 	  things up manually.
+ 
+ config CONFIG_FEATURE_SUID
+diff --git a/Makefile b/Makefile
+index 1177f147a..b69e5040f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -121,10 +121,10 @@ help:
+ 	@echo
+ 	@echo 'Configuration:'
+ 	@echo '  allnoconfig		- disable all symbols in .config'
+-	@echo '  allyesconfig		- enable (almost) all symbols in .config'
+-	@echo '  allbareconfig		- enable all basics without any features'
++	@echo '  allyesconfig		- enable all symbols in .config (see defconfig)'
++	@echo '  allbareconfig		- enable all applets without any sub-features'
+ 	@echo '  config		- text based configurator (of last resort)'
+-	@echo '  defconfig		- set .config to defaults'
++	@echo '  defconfig		- set .config to largest generic configuration'
+ 	@echo '  menuconfig		- interactive curses-based configurator'
+ 	@echo '  oldconfig		- resolve any unresolved symbols in .config'
+ 	@echo
+@@ -191,12 +191,13 @@ allyesconfig: scripts/config/conf
+ allnoconfig: scripts/config/conf
+ 	@./scripts/config/conf -n $(CONFIG_CONFIG_IN)
+ 
+-#defconfig: scripts/config/conf
+-#	@./scripts/config/conf -d $(CONFIG_CONFIG_IN)
++# defconfig is allyesconfig minus any features that are specialized enough
++# or cause enough behavior change that the user really should switch them on
++# manually if that's what they want.  Sort of "maximum sane config".
+ 
+ defconfig: scripts/config/conf
+ 	@./scripts/config/conf -y $(CONFIG_CONFIG_IN)
+-	sed -i -r -e "s/^(USING_CROSS_COMPILER|CONFIG_(DEBUG.*|STATIC|SELINUX|FEATURE_DEVFS|BUILD_AT_ONCE|BUILD_LIBBUSYBOX|FEATURE_FULL_LIBBUSYBOX|FEATURE_SHARED_BUSYBOX))=.*/# \1 is not set/" .config
++	sed -i -r -e "s/^(USING_CROSS_COMPILER|CONFIG_(DEBUG.*|STATIC|SELINUX|BUILD_(AT_ONCE|LIBBUSYBOX)|FEATURE_(DEVFS|FULL_LIBBUSYBOX|SHARED_BUSYBOX|MTAB_SUPPORT|CLEAN_UP)))=.*/# \1 is not set/" .config
+ 	@./scripts/config/conf -o $(CONFIG_CONFIG_IN)
+ 
+ 

@@ -1,0 +1,630 @@
+"2015-09-25 09:22:21 -0300"
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+index 07830b69..6f1d1b56 100644
+--- a/src/lib/io/Kconfig
++++ b/src/lib/io/Kconfig
+@@ -57,3 +57,18 @@ config USE_IIO
+ source "src/modules/pin-mux/intel-galileo-rev-d/Kconfig"
+ source "src/modules/pin-mux/intel-galileo-rev-g/Kconfig"
+ source "src/modules/pin-mux/intel-edison-rev-c/Kconfig"
++
++menuconfig USE_STORAGE
++    bool "Persistence Storage Support"
++    depends on LINUX
++    default y
++
++config USE_FILESYSTEM
++    bool "File system persistence storage"
++    depends on USE_STORAGE
++    default y
++
++config USE_EFIVARS
++    bool "EFI vars persistence storage"
++    depends on USE_STORAGE
++    default y
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index a0a439dc..4af54a88 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -19,6 +19,9 @@ obj-$(USE_SPI) += \
+ obj-$(USE_IIO) += \
+     io-iio.mod
+ 
++obj-$(USE_STORAGE) += \
++    io-storage.mod
++
+ obj-io-aio-$(USE_AIO) := \
+     sol-aio-common.o
+ obj-io-aio-$(PLATFORM_RIOTOS) += \
+@@ -62,6 +65,11 @@ obj-io-uart-$(PLATFORM_LINUX) := \
+ obj-io-iio-$(USE_IIO) := \
+     sol-iio.o
+ 
++obj-io-storage-$(USE_FILESYSTEM) += \
++    sol-fs-storage.o
++obj-io-storage-$(USE_EFIVARS) += \
++    sol-efivarfs-storage.o
++
+ headers-$(USE_AIO) += \
+     include/sol-aio.h
+ headers-$(USE_GPIO) += \
+@@ -74,5 +82,11 @@ headers-$(USE_SPI) += \
+     include/sol-spi.h
+ headers-$(USE_UART) += \
+     include/sol-uart.h
++
+ headers-$(USE_IIO) += \
+     include/sol-iio.h
++
++headers-$(USE_FILESYSTEM) += \
++    include/sol-fs-storage.h
++headers-$(USE_EFIVARS) += \
++    include/sol-efivarfs-storage.h
+diff --git a/src/modules/flow/persistence/fs-storage.h b/src/lib/io/include/sol-efivarfs-storage.h
+similarity index 61%
+rename from src/modules/flow/persistence/fs-storage.h
+rename to src/lib/io/include/sol-efivarfs-storage.h
+index 07313ec2..7f883adb 100644
+--- a/src/modules/flow/persistence/fs-storage.h
++++ b/src/lib/io/include/sol-efivarfs-storage.h
+@@ -30,124 +30,129 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#pragma once
++
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+ #include "sol-buffer.h"
+ #include "sol-types.h"
+ 
+-int fs_write_raw(const char *name, const struct sol_buffer *buffer);
+-int fs_read_raw(const char *name, struct sol_buffer *buffer);
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++int sol_efivars_write_raw(const char *name, const struct sol_buffer *buffer);
++int sol_efivars_read_raw(const char *name, struct sol_buffer *buffer);
+ 
+ #define CREATE_BUFFER(_val, _empty) \
+-    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(_val,\
+-        sizeof(*(_val)), SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED); \
+-    buf.capacity = sizeof(*(_val)); \
++    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(_val, \
++    sizeof(*(_val)), SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED); \
+     buf.used = (_empty) ? 0 : sizeof(*(_val));
+ 
+ static inline int
+-fs_read_uint8_t(const char *name, uint8_t *value)
++sol_efivars_read_uint8(const char *name, uint8_t *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return fs_read_raw(name, &buf);
++    return sol_efivars_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_write_uint8_t(const char *name, uint8_t value)
++sol_efivars_write_uint8(const char *name, uint8_t value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_read_bool(const char *name, bool *value)
++sol_efivars_read_bool(const char *name, bool *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return fs_read_raw(name, &buf);
++    return sol_efivars_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_write_bool(const char *name, bool value)
++sol_efivars_write_bool(const char *name, bool value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_read_int32_t(const char *name, int32_t *value)
++sol_efivars_read_int32(const char *name, int32_t *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return fs_read_raw(name, &buf);
++    return sol_efivars_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_write_int32_t(const char *name, int32_t value)
++sol_efivars_write_int32(const char *name, int32_t value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_read_irange(const char *name, struct sol_irange *value)
++sol_efivars_read_irange(const char *name, struct sol_irange *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return fs_read_raw(name, &buf);
++    return sol_efivars_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_write_irange(const char *name, struct sol_irange *value)
++sol_efivars_write_irange(const char *name, struct sol_irange *value)
+ {
+     CREATE_BUFFER(value, false);
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_read_drange(const char *name, struct sol_drange *value)
++sol_efivars_read_drange(const char *name, struct sol_drange *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return fs_read_raw(name, &buf);
++    return sol_efivars_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_write_drange(const char *name, struct sol_drange *value)
++sol_efivars_write_drange(const char *name, struct sol_drange *value)
+ {
+     CREATE_BUFFER(value, false);
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_read_double(const char *name, double *value)
++sol_efivars_read_double(const char *name, double *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return fs_read_raw(name, &buf);
++    return sol_efivars_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_write_double(const char *name, double value)
++sol_efivars_write_double(const char *name, double value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-fs_read_string(const char *name, char **value)
++sol_efivars_read_string(const char *name, char **value)
+ {
+     struct sol_buffer buf = SOL_BUFFER_INIT_EMPTY;
+     int r;
+ 
+-    r = fs_read_raw(name, &buf);
++    r = sol_efivars_read_raw(name, &buf);
+     if (r < 0) {
+         sol_buffer_fini(&buf);
+         return r;
+@@ -159,14 +164,18 @@ fs_read_string(const char *name, char **value)
+ }
+ 
+ static inline int
+-fs_write_string(const char *name, const char *value)
++sol_efivars_write_string(const char *name, const char *value)
+ {
+     struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS((void *)value, strlen(value),
+         SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
+ 
+     buf.used = buf.capacity;
+ 
+-    return fs_write_raw(name, &buf);
++    return sol_efivars_write_raw(name, &buf);
+ }
+ 
+ #undef CREATE_BUFFER
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/modules/flow/persistence/efivarfs-storage.h b/src/lib/io/include/sol-fs-storage.h
+similarity index 63%
+rename from src/modules/flow/persistence/efivarfs-storage.h
+rename to src/lib/io/include/sol-fs-storage.h
+index 4e69bade..caf2ee32 100644
+--- a/src/modules/flow/persistence/efivarfs-storage.h
++++ b/src/lib/io/include/sol-fs-storage.h
+@@ -30,124 +30,129 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#pragma once
++
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+ #include "sol-buffer.h"
+ #include "sol-types.h"
+ 
+-int efivars_write_raw(const char *name, const struct sol_buffer *buffer);
+-int efivars_read_raw(const char *name, struct sol_buffer *buffer);
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++int sol_fs_write_raw(const char *name, const struct sol_buffer *buffer);
++int sol_fs_read_raw(const char *name, struct sol_buffer *buffer);
+ 
+ #define CREATE_BUFFER(_val, _empty) \
+-    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(_val,\
+-        sizeof(*(_val)), SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED); \
+-    buf.capacity = sizeof(*(_val)); \
++    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(_val, \
++    sizeof(*(_val)), SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED); \
+     buf.used = (_empty) ? 0 : sizeof(*(_val));
+ 
+ static inline int
+-efivars_read_uint8_t(const char *name, uint8_t *value)
++sol_fs_read_uint8(const char *name, uint8_t *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return efivars_read_raw(name, &buf);
++    return sol_fs_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_write_uint8_t(const char *name, uint8_t value)
++sol_fs_write_uint8(const char *name, uint8_t value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_read_bool(const char *name, bool *value)
++sol_fs_read_bool(const char *name, bool *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return efivars_read_raw(name, &buf);
++    return sol_fs_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_write_bool(const char *name, bool value)
++sol_fs_write_bool(const char *name, bool value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_read_int32_t(const char *name, int32_t *value)
++sol_fs_read_int32(const char *name, int32_t *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return efivars_read_raw(name, &buf);
++    return sol_fs_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_write_int32_t(const char *name, int32_t value)
++sol_fs_write_int32(const char *name, int32_t value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_read_irange(const char *name, struct sol_irange *value)
++sol_fs_read_irange(const char *name, struct sol_irange *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return efivars_read_raw(name, &buf);
++    return sol_fs_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_write_irange(const char *name, struct sol_irange *value)
++sol_fs_write_irange(const char *name, struct sol_irange *value)
+ {
+     CREATE_BUFFER(value, false);
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_read_drange(const char *name, struct sol_drange *value)
++sol_fs_read_drange(const char *name, struct sol_drange *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return efivars_read_raw(name, &buf);
++    return sol_fs_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_write_drange(const char *name, struct sol_drange *value)
++sol_fs_write_drange(const char *name, struct sol_drange *value)
+ {
+     CREATE_BUFFER(value, false);
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_read_double(const char *name, double *value)
++sol_fs_read_double(const char *name, double *value)
+ {
+     CREATE_BUFFER(value, true);
+ 
+-    return efivars_read_raw(name, &buf);
++    return sol_fs_read_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_write_double(const char *name, double value)
++sol_fs_write_double(const char *name, double value)
+ {
+     CREATE_BUFFER(&value, false);
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ static inline int
+-efivars_read_string(const char *name, char **value)
++sol_fs_read_string(const char *name, char **value)
+ {
+     struct sol_buffer buf = SOL_BUFFER_INIT_EMPTY;
+     int r;
+ 
+-    r = efivars_read_raw(name, &buf);
++    r = sol_fs_read_raw(name, &buf);
+     if (r < 0) {
+         sol_buffer_fini(&buf);
+         return r;
+@@ -159,14 +164,18 @@ efivars_read_string(const char *name, char **value)
+ }
+ 
+ static inline int
+-efivars_write_string(const char *name, const char *value)
++sol_fs_write_string(const char *name, const char *value)
+ {
+     struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS((void *)value, strlen(value),
+         SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
+ 
+     buf.used = buf.capacity;
+ 
+-    return efivars_write_raw(name, &buf);
++    return sol_fs_write_raw(name, &buf);
+ }
+ 
+ #undef CREATE_BUFFER
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/modules/flow/persistence/efivarfs-storage.c b/src/lib/io/sol-efivarfs-storage.c
+similarity index 93%
+rename from src/modules/flow/persistence/efivarfs-storage.c
+rename to src/lib/io/sol-efivarfs-storage.c
+index 3c40497c..878334c2 100644
+--- a/src/modules/flow/persistence/efivarfs-storage.c
++++ b/src/lib/io/sol-efivarfs-storage.c
+@@ -30,7 +30,7 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include "efivarfs-storage.h"
++#include "sol-efivarfs-storage.h"
+ 
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -62,13 +62,16 @@ check_realpath(const char *path)
+     return false;
+ }
+ 
+-int
+-efivars_write_raw(const char *name, const struct sol_buffer *buffer)
++SOL_API int
++sol_efivars_write_raw(const char *name, const struct sol_buffer *buffer)
+ {
+     FILE *file;
+     char path[PATH_MAX];
+     int r;
+ 
++    SOL_NULL_CHECK(name, -EINVAL);
++    SOL_NULL_CHECK(buffer, -EINVAL);
++
+     r = snprintf(path, sizeof(path), EFIVARFS_VAR_PATH, name);
+     if (r < 0 || r >= PATH_MAX) {
+         SOL_WRN("Could not create path for efivars persistence file [%s]", path);
+@@ -107,8 +110,8 @@ end:
+     return r;
+ }
+ 
+-int
+-efivars_read_raw(const char *name, struct sol_buffer *buffer)
++SOL_API int
++sol_efivars_read_raw(const char *name, struct sol_buffer *buffer)
+ {
+     int r, fd;
+     char path[PATH_MAX];
+@@ -116,6 +119,9 @@ efivars_read_raw(const char *name, struct sol_buffer *buffer)
+     struct sol_buffer attr = SOL_BUFFER_INIT_FLAGS(&b, sizeof(uint32_t),
+         SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED | SOL_BUFFER_FLAGS_NO_NUL_BYTE);
+ 
++    SOL_NULL_CHECK(name, -EINVAL);
++    SOL_NULL_CHECK(buffer, -EINVAL);
++
+     r = snprintf(path, sizeof(path), EFIVARFS_VAR_PATH, name);
+     if (r < 0 || r >= PATH_MAX) {
+         SOL_WRN("Could not create path for efivars persistence file [%s]", path);
+diff --git a/src/modules/flow/persistence/fs-storage.c b/src/lib/io/sol-fs-storage.c
+similarity index 89%
+rename from src/modules/flow/persistence/fs-storage.c
+rename to src/lib/io/sol-fs-storage.c
+index 47a5254f..86a9289a 100644
+--- a/src/modules/flow/persistence/fs-storage.c
++++ b/src/lib/io/sol-fs-storage.c
+@@ -30,7 +30,7 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include "fs-storage.h"
++#include "sol-fs-storage.h"
+ 
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -44,12 +44,15 @@
+ #include "sol-util.h"
+ #include "sol-util-file.h"
+ 
+-int
+-fs_write_raw(const char *name, const struct sol_buffer *buffer)
++SOL_API int
++sol_fs_write_raw(const char *name, const struct sol_buffer *buffer)
+ {
+     FILE *file;
+     int ret = 0;
+ 
++    SOL_NULL_CHECK(name, -EINVAL);
++    SOL_NULL_CHECK(buffer, -EINVAL);
++
+     file = fopen(name, "w+e");
+     if (!file) {
+         SOL_WRN("Could not open persistence file [%s]", name);
+@@ -70,11 +73,14 @@ fs_write_raw(const char *name, const struct sol_buffer *buffer)
+     return ret;
+ }
+ 
+-int
+-fs_read_raw(const char *name, struct sol_buffer *buffer)
++SOL_API int
++sol_fs_read_raw(const char *name, struct sol_buffer *buffer)
+ {
+     int r, fd;
+ 
++    SOL_NULL_CHECK(name, -EINVAL);
++    SOL_NULL_CHECK(buffer, -EINVAL);
++
+     fd = open(name, O_RDONLY | O_CLOEXEC);
+     if (fd < 0) {
+         SOL_WRN("Could not open persistence file [%s]", name);
+diff --git a/src/modules/flow/persistence/Kconfig b/src/modules/flow/persistence/Kconfig
+index 14ab6c77..4d025747 100644
+--- a/src/modules/flow/persistence/Kconfig
++++ b/src/modules/flow/persistence/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_PERSISTENCE
+ 	tristate "Node type: persistence"
+-	depends on PLATFORM_LINUX
++	depends on PLATFORM_LINUX && (USE_EFIVARS || USE_FILESYSTEM)
+ 	default m
+diff --git a/src/modules/flow/persistence/Makefile b/src/modules/flow/persistence/Makefile
+index 05c7ce7d..86fe2999 100644
+--- a/src/modules/flow/persistence/Makefile
++++ b/src/modules/flow/persistence/Makefile
+@@ -1,6 +1,4 @@
+ obj-$(FLOW_NODE_TYPE_PERSISTENCE) += persistence.mod
+ obj-persistence-$(FLOW_NODE_TYPE_PERSISTENCE) := persistence.json \
+-	persistence.o \
+-	fs-storage.o \
+-	efivarfs-storage.o
++	persistence.o
+ obj-persistence-$(FLOW_NODE_TYPE_PERSISTENCE)-type := flow
+diff --git a/src/modules/flow/persistence/persistence.c b/src/modules/flow/persistence/persistence.c
+index 2c0402e7..2b26bc97 100644
+--- a/src/modules/flow/persistence/persistence.c
++++ b/src/modules/flow/persistence/persistence.c
+@@ -40,8 +40,13 @@
+ #include "sol-str-table.h"
+ #include "sol-util.h"
+ 
+-#include "fs-storage.h"
+-#include "efivarfs-storage.h"
++#ifdef USE_FILESYSTEM
++#include "sol-fs-storage.h"
++#endif
++
++#ifdef USE_EFIVARS
++#include "sol-efivarfs-storage.h"
++#endif
+ 
+ struct storage_fn {
+     int (*write)(const char *name, const struct sol_buffer *buffer);
+@@ -64,19 +69,27 @@ struct persist_data {
+     size_t packet_data_size;
+ };
+ 
++#ifdef USE_FILESYSTEM
+ static const struct storage_fn fs_fn = {
+-    .write = fs_write_raw,
+-    .read = fs_read_raw
++    .write = sol_fs_write_raw,
++    .read = sol_fs_read_raw
+ };
++#endif
+ 
++#ifdef USE_EFIVARS
+ static const struct storage_fn efivars_fn = {
+-    .write = efivars_write_raw,
+-    .read = efivars_read_raw
++    .write = sol_efivars_write_raw,
++    .read = sol_efivars_read_raw
+ };
++#endif
+ 
+ static const struct sol_str_table_ptr storage_fn_table[] = {
++#ifdef USE_FILESYSTEM
+     SOL_STR_TABLE_PTR_ITEM("fs", &fs_fn),
++#endif
++#ifdef USE_EFIVARS
+     SOL_STR_TABLE_PTR_ITEM("efivars", &efivars_fn),
++#endif
+     { }
+ };
+ 
+@@ -117,7 +130,7 @@ persist_do(struct persist_data *mdata, struct sol_flow_node *node, void *value)
+     if (mdata->packet_data_size)
+         size = mdata->packet_data_size;
+     else
+-        size = strlen(value) + 1;
++        size = strlen(value);
+ 
+     r = storage_write(mdata, value, size);
+     SOL_INT_CHECK(r, < 0, r);

@@ -1,0 +1,109 @@
+"2003-10-31 00:35:59 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 54bdc6868..90f681c04 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -420,11 +420,12 @@ config CONFIG_TAIL
+ 	  from files.
+ 
+ config CONFIG_FEATURE_FANCY_TAIL
+-	bool "  Enable extra tail options (-c, -q, -s, and -v)"
++	bool "  Enable extra tail options (-q, -s, and -v)"
+ 	default y
+ 	depends on CONFIG_TAIL
+ 	help
+-	  Enable tail options (-c, -q, -s, and -v).
++	  The options (-q, -s, and -v) are provided by GNU tail, but
++	  are not specific in the SUSv3 standard.
+ 
+ config CONFIG_TEE
+ 	bool "tee"
+diff --git a/coreutils/tail.c b/coreutils/tail.c
+index 10b5cd7a7..d588ccdd1 100644
+--- a/coreutils/tail.c
++++ b/coreutils/tail.c
+@@ -89,9 +89,9 @@ static ssize_t tail_read(int fd, char *buf, size_t count)
+ }
+ 
+ static const char tail_opts[] =
+-	"fn:"
++	"fn:c:"
+ #ifdef CONFIG_FEATURE_FANCY_TAIL
+-	"c:qs:v"
++	"qs:v"
+ #endif
+ 	;
+ 
+@@ -104,9 +104,7 @@ int tail_main(int argc, char **argv)
+ 	int from_top = 0;
+ 	int follow = 0;
+ 	int header_threshhold = 1;
+-#ifdef CONFIG_FEATURE_FANCY_TAIL
+ 	int count_bytes = 0;
+-#endif
+ 
+ 	char *tailbuf;
+ 	size_t tailbufsize;
+@@ -132,11 +130,9 @@ int tail_main(int argc, char **argv)
+ 			case 'f':
+ 				follow = 1;
+ 				break;
+-#ifdef CONFIG_FEATURE_FANCY_TAIL
+ 			case 'c':
+ 				count_bytes = 1;
+ 				/* FALLS THROUGH */
+-#endif
+ 			case 'n':
+ 			GET_COUNT:
+ 				count = bb_xgetlarg10_sfx(optarg, tail_suffixes);
+@@ -201,7 +197,7 @@ int tail_main(int argc, char **argv)
+ 	}
+ 
+ 	tailbufsize = BUFSIZ;
+-#ifdef CONFIG_FEATURE_FANCY_TAIL
++
+ 	/* tail the files */
+ 	if (from_top < count_bytes) {	/* Each is 0 or 1, so true iff 0 < 1. */
+ 		/* Hence, !from_top && count_bytes */
+@@ -209,7 +205,7 @@ int tail_main(int argc, char **argv)
+ 			tailbufsize = count + BUFSIZ;
+ 		}
+ 	}
+-#endif
++
+ 	buf = tailbuf = xmalloc(tailbufsize);
+ 
+ 	fmt = header_fmt + 1;	/* Skip header leading newline on first output. */
+@@ -237,13 +233,10 @@ int tail_main(int argc, char **argv)
+ 			if (from_top) {
+ 				nwrite = nread;
+ 				if (seen < count) {
+-#ifdef CONFIG_FEATURE_FANCY_TAIL
+ 					if (count_bytes) {
+ 						nwrite -= (count - seen);
+ 						seen = count;
+-					} else
+-#endif
+-					{
++					} else {
+ 						s = buf;
+ 						do {
+ 							--nwrite;
+@@ -255,16 +248,13 @@ int tail_main(int argc, char **argv)
+ 				}
+ 				tail_xbb_full_write(buf + nread - nwrite, nwrite);
+ 			} else if (count) {
+-#ifdef CONFIG_FEATURE_FANCY_TAIL
+ 				if (count_bytes) {
+ 					taillen += nread;
+ 					if (taillen > count) {
+ 						memmove(tailbuf, tailbuf + taillen - count, count);
+ 						taillen = count;
+ 					}
+-				} else
+-#endif
+-				{
++				} else {
+ 					int k = nread;
+ 					int nbuf = 0;
+ 

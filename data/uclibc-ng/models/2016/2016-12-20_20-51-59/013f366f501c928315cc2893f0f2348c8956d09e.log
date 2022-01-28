@@ -1,0 +1,84 @@
+"2016-12-20 20:51:59 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index ed16611dd..05610aee2 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -610,23 +610,6 @@ config MALLOC_STANDARD
+ 
+ endchoice
+ 
+-config MALLOC_GLIBC_COMPAT
+-	bool "Malloc returns live pointer for malloc(0)"
+-	help
+-	  The behavior of malloc(0) is listed as implementation-defined by
+-	  SuSv3.  Glibc returns a valid pointer to something, while uClibc
+-	  normally returns NULL.  I personally feel glibc's behavior is
+-	  not particularly safe, and allows buggy applications to hide very
+-	  serious problems.
+-
+-	  When this option is enabled, uClibc will act just like glibc, and
+-	  return a live pointer when someone calls malloc(0).  This pointer
+-	  provides a malloc'ed area with a size of 1 byte.  This feature is
+-	  mostly useful when dealing with applications using autoconf's broken
+-	  AC_FUNC_MALLOC macro (which redefines malloc as rpl_malloc if it
+-	  does not detect glibc style returning-a-valid-pointer-for-malloc(0)
+-	  behavior).  Most people can safely answer N.
+-
+ config UCLIBC_HAS_OBSTACK
+ 	bool "Obstack Support (gnu extension)"
+ 	help
+diff --git a/libc/stdlib/malloc-simple/alloc.c b/libc/stdlib/malloc-simple/alloc.c
+index a3c068a5b..3baf75fdd 100644
+--- a/libc/stdlib/malloc-simple/alloc.c
++++ b/libc/stdlib/malloc-simple/alloc.c
+@@ -25,13 +25,7 @@ void *malloc(size_t size)
+ 	void *result;
+ 
+ 	if (unlikely(size == 0)) {
+-#if defined(__MALLOC_GLIBC_COMPAT__)
+ 		size++;
+-#else
+-		/* Some programs will call malloc (0).  Lets be strict and return NULL */
+-		__set_errno(ENOMEM);
+-		return NULL;
+-#endif
+ 	}
+ 
+ #ifdef __ARCH_USE_MMU__
+diff --git a/libc/stdlib/malloc-standard/malloc.c b/libc/stdlib/malloc-standard/malloc.c
+index fd33b50c7..309f52859 100644
+--- a/libc/stdlib/malloc-standard/malloc.c
++++ b/libc/stdlib/malloc-standard/malloc.c
+@@ -825,13 +825,6 @@ void* malloc(size_t bytes)
+     void *          sysmem;
+     void *          retval;
+ 
+-#if !defined(__MALLOC_GLIBC_COMPAT__)
+-    if (!bytes) {
+-        __set_errno(ENOMEM);
+-        return NULL;
+-    }
+-#endif
+-
+     /*
+        Convert request size to internal form by adding (sizeof(size_t)) bytes
+        overhead plus possibly more to obtain necessary alignment and/or
+diff --git a/libc/stdlib/malloc/malloc.c b/libc/stdlib/malloc/malloc.c
+index f6bf10a93..8d8ac7ffc 100644
+--- a/libc/stdlib/malloc/malloc.c
++++ b/libc/stdlib/malloc/malloc.c
+@@ -208,14 +208,8 @@ malloc (size_t size)
+     __heap_check (__malloc_heap, "malloc");
+ #endif
+ 
+-#ifdef __MALLOC_GLIBC_COMPAT__
+   if (unlikely (size == 0))
+     size++;
+-#else
+-  /* Some programs will call malloc (0).  Lets be strict and return NULL */
+-  if (unlikely (size == 0))
+-    goto oom;
+-#endif
+ 
+   /* Check if they are doing something dumb like malloc(-1) */
+   if (unlikely(((unsigned long)size > (unsigned long)(MALLOC_HEADER_SIZE*-2))))

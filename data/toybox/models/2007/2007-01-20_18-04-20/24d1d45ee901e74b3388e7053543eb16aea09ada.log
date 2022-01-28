@@ -1,0 +1,132 @@
+"2007-01-20 18:04:20 -0500"
+diff --git a/lib/functions.c b/lib/functions.c
+index ce3edccc..b8c122e0 100644
+--- a/lib/functions.c
++++ b/lib/functions.c
+@@ -138,6 +138,25 @@ char *xmsprintf(char *format, ...)
+ 	return ret;
+ }
+ 
++void xprintf(char *format, ...)
++{
++	va_list va;
++	va_start(va, format);
++
++	vprintf(format, va);
++	if (ferror(stdout)) perror_exit("write");
++}
++
++void xputc(char c)
++{
++	if (EOF == fputc(c, stdout)) perror_exit("write");
++}
++
++void xflush(void)
++{
++	if (fflush(stdout)) perror_exit("write");;
++}
++
+ // Die unless we can exec argv[] (or run builtin command).  Note that anything
+ // with a path isn't a builtin, so /bin/sh won't match the builtin sh.
+ void xexec(char **argv)
+@@ -149,14 +168,14 @@ void xexec(char **argv)
+ 
+ void xaccess(char *path, int flags)
+ {
+-	if (access(path, flags)) error_exit("Can't access '%s'\n", path);
++	if (access(path, flags)) perror_exit("Can't access '%s'\n", path);
+ }
+ 
+ // Die unless we can open/create a file, returning file descriptor.
+ int xcreate(char *path, int flags, int mode)
+ {
+ 	int fd = open(path, flags, mode);
+-	if (fd == -1) error_exit("No file %s\n", path);
++	if (fd == -1) perror_exit("No file %s\n", path);
+ 	return fd;
+ }
+ 
+@@ -170,7 +189,7 @@ int xopen(char *path, int flags)
+ FILE *xfopen(char *path, char *mode)
+ {
+ 	FILE *f = fopen(path, mode);
+-	if (!f) error_exit("No file %s\n", path);
++	if (!f) perror_exit("No file %s\n", path);
+ 	return f;
+ }
+ 
+@@ -227,7 +246,7 @@ void xwrite(int fd, void *buf, size_t len)
+ char *xgetcwd(void)
+ {
+ 	char *buf = getcwd(NULL, 0);
+-	if (!buf) error_exit("xgetcwd");
++	if (!buf) perror_exit("xgetcwd");
+ 
+ 	return buf;
+ }
+@@ -439,7 +458,7 @@ char *readfile(char *name)
+ char *xreadfile(char *name)
+ {
+ 	char *buf = readfile(name);
+-	if (!buf) error_exit("xreadfile %s", name);
++	if (!buf) perror_exit("xreadfile %s", name);
+ 	return buf;
+ }
+ 
+diff --git a/lib/lib.h b/lib/lib.h
+index 5ac8e10c..e343fd13 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -38,6 +38,9 @@ void xrealloc(void **ptr, size_t size);
+ void *xstrndup(char *s, size_t n);
+ void *xstrdup(char *s);
+ char *xmsprintf(char *format, ...);
++void xprintf(char *format, ...);
++void xputc(char c);
++void xflush(void);
+ void xexec(char **argv);
+ void xaccess(char *path, int flags);
+ int xcreate(char *path, int flags, int mode);
+diff --git a/toys/Config.in b/toys/Config.in
+index 570ad4cc..438785cd 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -57,6 +57,26 @@ config DF_PEDANTIC
+ 
+ 	  -k	Sets units back to 1024 bytes (the default without -P)
+ 
++config ECHO
++	bool "echo"
++	default n
++	help
++	  usage: echo [-ne] [args...]
++
++	  Write each argument to stdout, with one space between each, followed
++	  by a newline.
++
++	  -n	No trailing newline.
++	  -e	Process the following escape sequences:
++		\\	backslash
++		\a	alert (beep/flash)
++		\b	backspace
++		\c	Stop output here (avoids trailing newline)
++		\f	form feed
++		\n	newline
++		\r	carriage return
++		\t	horizontal tab
++		\v	vertical tab
+ config HELLO
+ 	bool "hello"
+ 	default n
+diff --git a/toys/toylist.h b/toys/toylist.h
+index f20b4f88..4e45924e 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -72,6 +72,7 @@ USE_CATV(NEWTOY(catv, "vte", TOYFLAG_USR|TOYFLAG_BIN))
+ USE_COUNT(NEWTOY(count, "", TOYFLAG_USR|TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(cd, NULL, TOYFLAG_NOFORK))
+ USE_DF(NEWTOY(df, "Pkt*a", TOYFLAG_USR|TOYFLAG_SBIN))
++USE_ECHO(NEWTOY(echo, "en", TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(exit, NULL, TOYFLAG_NOFORK))
+ USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_USR))
+ USE_MKE2FS(NEWTOY(mke2fs, MKE2FS_OPTSTRING, TOYFLAG_SBIN))

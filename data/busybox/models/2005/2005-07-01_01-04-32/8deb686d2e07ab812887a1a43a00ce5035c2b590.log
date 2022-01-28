@@ -1,0 +1,203 @@
+"2005-07-01 01:04:32 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 6d19909a8..79081e5f7 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -597,7 +597,7 @@ config CONFIG_WC
+ config CONFIG_WHO
+ 	bool "who"
+ 	default n
+-	select CONFIG_FEATURE_U_W_TMP
++	select CONFIG_FEATURE_UTMP
+ 	help
+ 	  who is used to show who is logged on.
+ 
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index 5619aa9af..12c208c64 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -57,14 +57,21 @@ config CONFIG_GETTY
+ 	help
+ 	  getty lets you log in on a tty, it is normally invoked by init.
+ 
+-config CONFIG_FEATURE_U_W_TMP
+-	bool "  Support utmp and wtmp files"
+-	depends on CONFIG_GETTY || CONFIG_LOGIN || CONFIG_SU || CONFIG_WHO || CONFIG_LAST
++config CONFIG_FEATURE_UTMP
++	bool "  Support utmp file"
++	depends on CONFIG_GETTY || CONFIG_LOGIN || CONFIG_SU || CONFIG_WHO 
+ 	default n
+ 	help
+-	  The files /var/run/utmp and /var/run/wtmp can be used to track when
+-	  user's have logged into and logged out of the system, allowing programs
+-	  such as 'who' and 'last' to list who is currently logged in.
++	  The file /var/run/utmp is used to track who is currently logged in.
++
++config CONFIG_FEATURE_WTMP
++	bool "  Support wtmp file"
++	depends on CONFIG_GETTY || CONFIG_LOGIN || CONFIG_SU || CONFIG_LAST
++	default n
++	select CONFIG_FEATURE_UTMP
++	help
++	  The file /var/run/wtmp is used to track when user's have logged into 
++	  and logged out of the system.
+ 
+ config CONFIG_LOGIN
+ 	bool "login"
+diff --git a/loginutils/getty.c b/loginutils/getty.c
+index 3dd6258c5..9950988f4 100644
+--- a/loginutils/getty.c
++++ b/loginutils/getty.c
+@@ -47,7 +47,7 @@
+ 
+ #ifdef LOGIN_PROCESS			/* defined in System V utmp.h */
+ #define	SYSV_STYLE				/* select System V style getty */
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_WTMP
+ extern void updwtmp(const char *filename, const struct utmp *ut);
+ #endif
+ #endif  /* LOGIN_PROCESS */
+@@ -231,7 +231,7 @@ static int caps_lock(const char *s);
+ static int bcode(char *s);
+ static void error(const char *fmt, ...) __attribute__ ((noreturn));
+ 
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ static void update_utmp(char *line);
+ #endif
+ 
+@@ -289,7 +289,7 @@ int getty_main(int argc, char **argv)
+ 
+ 
+ #ifdef	SYSV_STYLE
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 	update_utmp(options.tty);
+ #endif
+ #endif
+@@ -482,7 +482,7 @@ static void parse_speeds(struct options *op, char *arg)
+ }
+ 
+ #ifdef	SYSV_STYLE
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 
+ /* update_utmp - update our utmp entry */
+ static void update_utmp(char *line)
+@@ -533,15 +533,14 @@ static void update_utmp(char *line)
+ 	pututline(&ut);
+ 	endutent();
+ 
+-	{
+-		if (access(_PATH_WTMP, R_OK|W_OK) == -1) {
+-			close(creat(_PATH_WTMP, 0664));
+-		}
+-		updwtmp(_PATH_WTMP, &ut);
+-	}
++#ifdef CONFIG_FEATURE_WTMP
++	if (access(_PATH_WTMP, R_OK|W_OK) == -1) 
++		close(creat(_PATH_WTMP, 0664));
++	updwtmp(_PATH_WTMP, &ut);
++#endif
+ }
+ 
+-#endif /* CONFIG_FEATURE_U_W_TMP */
++#endif /* CONFIG_FEATURE_UTMP */
+ #endif /* SYSV_STYLE */
+ 
+ /* open_tty - set up tty as standard { input, output, error } */
+diff --git a/loginutils/login.c b/loginutils/login.c
+index 5186e2369..6632a7665 100644
+--- a/loginutils/login.c
++++ b/loginutils/login.c
+@@ -23,7 +23,7 @@
+ #include <errno.h>
+ #endif
+ 
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ // import from utmp.c
+ static void checkutmp(int picky);
+ static void setutmp(const char *name, const char *line);
+@@ -121,7 +121,7 @@ extern int login_main(int argc, char **argv)
+ 	if ( !isatty ( 0 ) || !isatty ( 1 ) || !isatty ( 2 ))
+ 		return EXIT_FAILURE;		/* Must be a terminal */
+ 
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 	checkutmp ( !amroot );
+ #endif
+ 
+@@ -133,13 +133,13 @@ extern int login_main(int argc, char **argv)
+ 	else
+ 		safe_strncpy ( tty, "UNKNOWN", sizeof( tty ));
+ 
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 	if ( amroot )
+ 		memset ( utent.ut_host, 0, sizeof utent.ut_host );
+ #endif
+ 
+ 	if ( opt_host ) {
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 		safe_strncpy ( utent.ut_host, opt_host, sizeof( utent. ut_host ));
+ #endif
+ 		snprintf ( fromhost, sizeof( fromhost ) - 1, " on `%.100s' from `%.200s'", tty, opt_host );
+@@ -221,7 +221,7 @@ auth_ok:
+ 	if ( check_nologin ( pw-> pw_uid == 0 ))
+ 		return EXIT_FAILURE;
+ 
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 	setutmp ( username, tty );
+ #endif
+ 
+@@ -402,7 +402,7 @@ static void motd (void)
+ }
+ 
+ 
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ // vv  Taken from tinylogin utmp.c  vv
+ 
+ #define	NO_UTENT \
+@@ -480,9 +480,11 @@ static void setutmp(const char *name, const char *line)
+ 	setutent();
+ 	pututline(&utent);
+ 	endutent();
++#ifdef CONFIG_FEATURE_WTMP
+ 	if (access(_PATH_WTMP, R_OK|W_OK) == -1) {
+ 		close(creat(_PATH_WTMP, 0664));
+ 	}
+ 	updwtmp(_PATH_WTMP, &utent);
++#endif
+ }
+-#endif /* CONFIG_FEATURE_U_W_TMP */
++#endif /* CONFIG_FEATURE_UTMP */
+diff --git a/loginutils/su.c b/loginutils/su.c
+index 5f6140917..3e82d2428 100644
+--- a/loginutils/su.c
++++ b/loginutils/su.c
+@@ -91,7 +91,7 @@ int su_main ( int argc, char **argv )
+ 		opt_args = argv + optind;
+ 
+ #if defined( SYSLOG_SUCCESS ) || defined( SYSLOG_FAILURE )
+-#ifdef CONFIG_FEATURE_U_W_TMP
++#ifdef CONFIG_FEATURE_UTMP
+ 	/* The utmp entry (via getlogin) is probably the best way to identify
+ 	   the user, especially if someone su's from a su-shell.  */
+ 	old_user = getlogin ( );
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index b02def60c..79f44274f 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -93,7 +93,7 @@ config CONFIG_EJECT
+ config CONFIG_LAST
+ 	bool "last"
+ 	default n
+-	select CONFIG_FEATURE_U_W_TMP
++	select CONFIG_FEATURE_WTMP
+ 	help
+ 	  'last' displays a list of the last users that logged into the system.
+ 

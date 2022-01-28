@@ -1,0 +1,169 @@
+"2007-04-10 23:32:37 +0000"
+diff --git a/TODO_config_nommu b/TODO_config_nommu
+index e6f6d9314..bffe4f4f5 100644
+--- a/TODO_config_nommu
++++ b/TODO_config_nommu
+@@ -5,7 +5,7 @@
+ #
+ # Automatically generated make config: don't edit
+ # Busybox version: 1.6.0.svn
+-# Mon Mar 26 18:36:12 2007
++# Wed Apr 11 01:29:04 2007
+ #
+ CONFIG_HAVE_DOT_CONFIG=y
+ 
+@@ -23,19 +23,20 @@ CONFIG_HAVE_DOT_CONFIG=y
+ # CONFIG_FEATURE_BUFFERS_GO_IN_BSS is not set
+ CONFIG_SHOW_USAGE=y
+ CONFIG_FEATURE_VERBOSE_USAGE=y
+-# CONFIG_FEATURE_COMPRESS_USAGE is not set
++CONFIG_FEATURE_COMPRESS_USAGE=y
+ CONFIG_FEATURE_INSTALLER=y
+ # CONFIG_LOCALE_SUPPORT is not set
+ CONFIG_GETOPT_LONG=y
+ CONFIG_FEATURE_DEVPTS=y
+ # CONFIG_FEATURE_CLEAN_UP is not set
++CONFIG_FEATURE_PIDFILE=y
+ CONFIG_FEATURE_SUID=y
+ CONFIG_FEATURE_SYSLOG=y
+ # CONFIG_FEATURE_SUID_CONFIG is not set
+ # CONFIG_FEATURE_SUID_CONFIG_QUIET is not set
+ # CONFIG_FEATURE_HAVE_RPC is not set
+ # CONFIG_SELINUX is not set
+-# CONFIG_FEATURE_PREFER_APPLETS is not set
++CONFIG_FEATURE_PREFER_APPLETS=y
+ CONFIG_BUSYBOX_EXEC_PATH="/proc/self/exe"
+ 
+ #
+@@ -53,7 +54,7 @@ CONFIG_LFS=y
+ #
+ # CONFIG_DEBUG is not set
+ CONFIG_WERROR=y
+-# CONFIG_NO_DEBUG_LIB is not set
++CONFIG_NO_DEBUG_LIB=y
+ # CONFIG_DMALLOC is not set
+ # CONFIG_EFENCE is not set
+ CONFIG_INCLUDE_SUSv2=y
+@@ -203,6 +204,7 @@ CONFIG_FEATURE_FANCY_SLEEP=y
+ CONFIG_SORT=y
+ CONFIG_FEATURE_SORT_BIG=y
+ CONFIG_SPLIT=y
++CONFIG_FEATURE_SPLIT_FANCY=y
+ CONFIG_STAT=y
+ CONFIG_FEATURE_STAT_FORMAT=y
+ CONFIG_STTY=y
+@@ -279,6 +281,7 @@ CONFIG_READLINK=y
+ CONFIG_FEATURE_READLINK_FOLLOW=y
+ CONFIG_RUN_PARTS=y
+ CONFIG_FEATURE_RUN_PARTS_LONG_OPTIONS=y
++CONFIG_FEATURE_RUN_PARTS_FANCY=y
+ # CONFIG_START_STOP_DAEMON is not set
+ # CONFIG_FEATURE_START_STOP_DAEMON_FANCY is not set
+ # CONFIG_FEATURE_START_STOP_DAEMON_LONG_OPTIONS is not set
+@@ -319,7 +322,12 @@ CONFIG_FEATURE_FIND_NEWER=y
+ CONFIG_FEATURE_FIND_INUM=y
+ CONFIG_FEATURE_FIND_EXEC=y
+ CONFIG_FEATURE_FIND_USER=y
++CONFIG_FEATURE_FIND_GROUP=y
+ CONFIG_FEATURE_FIND_NOT=y
++CONFIG_FEATURE_FIND_DEPTH=y
++CONFIG_FEATURE_FIND_PAREN=y
++CONFIG_FEATURE_FIND_SIZE=y
++CONFIG_FEATURE_FIND_PRUNE=y
+ CONFIG_GREP=y
+ CONFIG_FEATURE_GREP_EGREP_ALIAS=y
+ CONFIG_FEATURE_GREP_FGREP_ALIAS=y
+@@ -351,6 +359,7 @@ CONFIG_FEATURE_SHADOWPASSWDS=y
+ CONFIG_USE_BB_SHADOW=y
+ CONFIG_USE_BB_PWD_GRP=y
+ CONFIG_ADDGROUP=y
++CONFIG_FEATURE_ADDUSER_TO_GROUP=y
+ CONFIG_DELGROUP=y
+ CONFIG_ADDUSER=y
+ CONFIG_DELUSER=y
+@@ -657,7 +666,7 @@ CONFIG_MSH=y
+ # Bourne Shell Options
+ #
+ CONFIG_FEATURE_SH_EXTRA_QUIET=y
+-# CONFIG_FEATURE_SH_STANDALONE is not set
++CONFIG_FEATURE_SH_STANDALONE=y
+ 
+ #
+ # System Logging Utilities
+@@ -694,3 +703,9 @@ CONFIG_SOFTLIMIT=y
+ # CONFIG_FEATURE_RUNCON_LONG_OPTIONS is not set
+ # CONFIG_SELINUXENABLED is not set
+ # CONFIG_SETENFORCE is not set
++
++#
++# ipsvd utilities
++#
++# CONFIG_TCPSVD is not set
++# CONFIG_UDPSVD is not set
+diff --git a/applets/applets.c b/applets/applets.c
+index 2f677372d..56e0d2ccc 100644
+--- a/applets/applets.c
++++ b/applets/applets.c
+@@ -612,14 +612,14 @@ int main(int argc, char **argv)
+ {
+ 	const char *s;
+ 
+-	applet_name = argv[0];
+ #ifdef BB_NOMMU
+ 	/* NOMMU re-exec trick sets high-order bit in first byte of name */
+-	if (applet_name[0] & 0x80) {
++	if (argv[0][0] & 0x80) {
+ 		re_execed = 1;
+-		applet_name[0] &= 0x7f;
++		argv[0][0] &= 0x7f;
+ 	}
+ #endif
++	applet_name = argv[0];
+ 	if (applet_name[0] == '-')
+ 		applet_name++;
+ 	s = strrchr(applet_name, '/');
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index 4a5710de6..f82d4ce13 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -85,7 +85,7 @@ config SETCONSOLE
+ config FEATURE_SETCONSOLE_LONG_OPTIONS
+ 	bool "Enable long options"
+ 	default n
+-	depends on SET_CONSOLE && GETOPT_LONG
++	depends on SETCONSOLE && GETOPT_LONG
+ 	help
+ 	  Support long options for the setconsole applet.
+ 
+diff --git a/console-tools/setconsole.c b/console-tools/setconsole.c
+index 7ddef697c..31ee1fc63 100644
+--- a/console-tools/setconsole.c
++++ b/console-tools/setconsole.c
+@@ -7,6 +7,7 @@
+  * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  */
+ 
++#include <getopt.h>
+ #include "busybox.h"
+ 
+ #if ENABLE_FEATURE_SETCONSOLE_LONG_OPTIONS
+diff --git a/libbb/vfork_daemon_rexec.c b/libbb/vfork_daemon_rexec.c
+index 214b645c5..64952225d 100644
+--- a/libbb/vfork_daemon_rexec.c
++++ b/libbb/vfork_daemon_rexec.c
+@@ -158,12 +158,15 @@ int spawn_and_wait(char **argv)
+ 		if (rc)
+ 			goto w;
+ 		/* child */
++		xfunc_error_retval = EXIT_FAILURE;
+ 		current_applet = a;
+ 		run_current_applet_and_exit(argc, argv);
+ #endif
+ 	}
+ 	rc = spawn(argv);
++#ifndef BB_NOMMU
+  w:
++#endif
+ 	return wait4pid(rc);
+ #else /* !FEATURE_PREFER_APPLETS */
+ 	return wait4pid(spawn(argv));

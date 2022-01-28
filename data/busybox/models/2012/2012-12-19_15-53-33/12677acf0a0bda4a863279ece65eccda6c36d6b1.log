@@ -1,0 +1,182 @@
+"2012-12-19 15:53:33 -0500"
+diff --git a/Config.in b/Config.in
+index 17bdc895a..b3fd65bd9 100644
+--- a/Config.in
++++ b/Config.in
+@@ -310,7 +310,18 @@ config FEATURE_PIDFILE
+ 	default y
+ 	help
+ 	  This option makes some applets (e.g. crond, syslogd, inetd) write
+-	  a pidfile in /var/run. Some applications rely on them.
++	  a pidfile at the configured PID_FILE_PATH.  It has no effect
++	  on applets which require pidfiles to run.
++
++config PID_FILE_PATH
++	string "Path to directory for pidfile"
++	default "/var/run"
++	depends on FEATURE_PIDFILE
++	help
++	  This is the default path where pidfiles are created.  Applets which
++	  allow you to set the pidfile path on the command line will override
++	  this value.  The option has no effect on applets that require you to
++	  specify a pidfile path.
+ 
+ config FEATURE_SUID
+ 	bool "Support for SUID/SGID handling"
+diff --git a/miscutils/crond.c b/miscutils/crond.c
+index a0b73c774..582dc991a 100644
+--- a/miscutils/crond.c
++++ b/miscutils/crond.c
+@@ -885,7 +885,7 @@ int crond_main(int argc UNUSED_PARAM, char **argv)
+ 	xsetenv("SHELL", DEFAULT_SHELL); /* once, for all future children */
+ 	crondlog(LVL8 "crond (busybox "BB_VER") started, log level %d", G.log_level);
+ 	rescan_crontab_dir();
+-	write_pidfile("/var/run/crond.pid");
++	write_pidfile(CONFIG_PID_FILE_PATH "/crond.pid");
+ 
+ 	/* Main loop */
+ 	t2 = time(NULL);
+diff --git a/miscutils/watchdog.c b/miscutils/watchdog.c
+index ee28dc30d..d3a76edf0 100644
+--- a/miscutils/watchdog.c
++++ b/miscutils/watchdog.c
+@@ -31,6 +31,7 @@ static void watchdog_shutdown(int sig UNUSED_PARAM)
+ {
+ 	static const char V = 'V';
+ 
++	remove_pidfile(CONFIG_PID_FILE_PATH "/watchdog.pid");
+ 	write(3, &V, 1);  /* Magic, see watchdog-api.txt in kernel */
+ 	if (ENABLE_FEATURE_CLEAN_UP)
+ 		close(3);
+@@ -95,6 +96,8 @@ int watchdog_main(int argc, char **argv)
+ 		stimer_duration, htimer_duration * 1000);
+ #endif
+ 
++	write_pidfile(CONFIG_PID_FILE_PATH "/watchdog.pid");
++
+ 	while (1) {
+ 		/*
+ 		 * Make sure we clear the counter before sleeping,
+diff --git a/networking/ifplugd.c b/networking/ifplugd.c
+index 88bf448fa..86586f0fe 100644
+--- a/networking/ifplugd.c
++++ b/networking/ifplugd.c
+@@ -551,7 +551,7 @@ int ifplugd_main(int argc UNUSED_PARAM, char **argv)
+ 	applet_name = xasprintf("ifplugd(%s)", G.iface);
+ 
+ #if ENABLE_FEATURE_PIDFILE
+-	pidfile_name = xasprintf(_PATH_VARRUN"ifplugd.%s.pid", G.iface);
++	pidfile_name = xasprintf(CONFIG_PID_FILE_PATH "/ifplugd.%s.pid", G.iface);
+ 	pid_from_pidfile = read_pid(pidfile_name);
+ 
+ 	if (opts & FLAG_KILL) {
+diff --git a/networking/inetd.c b/networking/inetd.c
+index 00baf6971..584c5e5e4 100644
+--- a/networking/inetd.c
++++ b/networking/inetd.c
+@@ -186,8 +186,6 @@
+ #define ENABLE_FEATURE_INETD_SUPPORT_BUILTIN_CHARGEN 0
+ #endif
+ 
+-#define _PATH_INETDPID  "/var/run/inetd.pid"
+-
+ #define CNT_INTERVAL    60      /* servers in CNT_INTERVAL sec. */
+ #define RETRYTIME       60      /* retry after bind or server fail */
+ 
+@@ -1132,7 +1130,7 @@ static void clean_up_and_exit(int sig UNUSED_PARAM)
+ 		if (ENABLE_FEATURE_CLEAN_UP)
+ 			close(sep->se_fd);
+ 	}
+-	remove_pidfile(_PATH_INETDPID);
++	remove_pidfile(CONFIG_PID_FILE_PATH "/inetd.pid");
+ 	exit(EXIT_SUCCESS);
+ }
+ 
+@@ -1181,7 +1179,7 @@ int inetd_main(int argc UNUSED_PARAM, char **argv)
+ 		setgroups(1, &gid);
+ 	}
+ 
+-	write_pidfile(_PATH_INETDPID);
++	write_pidfile(CONFIG_PID_FILE_PATH "/inetd.pid");
+ 
+ 	/* never fails under Linux (except if you pass it bad arguments) */
+ 	getrlimit(RLIMIT_NOFILE, &rlim_ofile);
+diff --git a/networking/ntpd.c b/networking/ntpd.c
+index 5b92db6f6..7facf9484 100644
+--- a/networking/ntpd.c
++++ b/networking/ntpd.c
+@@ -2080,6 +2080,8 @@ int ntpd_main(int argc UNUSED_PARAM, char **argv)
+ 	 */
+ 	cnt = G.peer_cnt * (INITIAL_SAMPLES + 1);
+ 
++	write_pidfile(CONFIG_PID_FILE_PATH "/ntpd.pid");
++
+ 	while (!bb_got_signal) {
+ 		llist_t *item;
+ 		unsigned i, j;
+@@ -2195,6 +2197,7 @@ int ntpd_main(int argc UNUSED_PARAM, char **argv)
+ 		}
+ 	} /* while (!bb_got_signal) */
+ 
++	remove_pidfile(CONFIG_PID_FILE_PATH "/ntpd.pid");
+ 	kill_myself_with_sig(bb_got_signal);
+ }
+ 
+diff --git a/sysklogd/klogd.c b/sysklogd/klogd.c
+index efa0e537a..f59a155b4 100644
+--- a/sysklogd/klogd.c
++++ b/sysklogd/klogd.c
+@@ -195,6 +195,8 @@ int klogd_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 	syslog(LOG_NOTICE, "klogd started: %s", bb_banner);
+ 
++	write_pidfile(CONFIG_PID_FILE_PATH "/klogd.pid");
++
+ 	used = 0;
+ 	while (!bb_got_signal) {
+ 		int n;
+@@ -258,6 +260,7 @@ int klogd_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 	klogd_close();
+ 	syslog(LOG_NOTICE, "klogd: exiting");
++	remove_pidfile(CONFIG_PID_FILE_PATH "/klogd.pid");
+ 	if (bb_got_signal)
+ 		kill_myself_with_sig(bb_got_signal);
+ 	return EXIT_FAILURE;
+diff --git a/sysklogd/syslogd.c b/sysklogd/syslogd.c
+index fc380d9f9..5854bcd0f 100644
+--- a/sysklogd/syslogd.c
++++ b/sysklogd/syslogd.c
+@@ -916,6 +916,7 @@ static void do_syslogd(void)
+ 
+ 	timestamp_and_log_internal("syslogd exiting");
+ 	puts("syslogd exiting");
++	remove_pidfile(CONFIG_PID_FILE_PATH "/syslogd.pid");
+ 	if (ENABLE_FEATURE_IPC_SYSLOG)
+ 		ipcsyslog_cleanup();
+ 	kill_myself_with_sig(bb_got_signal);
+@@ -979,8 +980,10 @@ int syslogd_main(int argc UNUSED_PARAM, char **argv)
+ 	if (!(opts & OPT_nofork)) {
+ 		bb_daemonize_or_rexec(DAEMON_CHDIR_ROOT, argv);
+ 	}
++
+ 	//umask(0); - why??
+-	write_pidfile("/var/run/syslogd.pid");
++	write_pidfile(CONFIG_PID_FILE_PATH "/syslogd.pid");
++
+ 	do_syslogd();
+ 	/* return EXIT_SUCCESS; */
+ }
+diff --git a/util-linux/acpid.c b/util-linux/acpid.c
+index 5d2792948..38421c2d7 100644
+--- a/util-linux/acpid.c
++++ b/util-linux/acpid.c
+@@ -235,7 +235,7 @@ int acpid_main(int argc UNUSED_PARAM, char **argv)
+ 	const char *opt_action = "/etc/acpid.conf";
+ 	const char *opt_map = "/etc/acpi.map";
+ #if ENABLE_FEATURE_PIDFILE
+-	const char *opt_pidfile = "/var/run/acpid.pid";
++	const char *opt_pidfile = CONFIG_PID_FILE_PATH "/acpid.pid";
+ #endif
+ 
+ 	INIT_G();

@@ -1,0 +1,606 @@
+"2015-07-02 11:02:35 -0300"
+diff --git a/Kconfig b/Kconfig
+index c39feac8..f7c8f8b0 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -21,8 +21,9 @@ endmenu
+ 
+ menu "Core library"
+ source "src/lib/common/Kconfig"
+-source "src/lib/flow/Kconfig"
+ source "src/lib/coap/Kconfig"
++source "src/lib/datatypes/Kconfig"
++source "src/lib/flow/Kconfig"
+ source "src/shared/Kconfig"
+ endmenu
+ 
+diff --git a/src/lib/datatypes/Kconfig b/src/lib/datatypes/Kconfig
+new file mode 100644
+index 00000000..63185a28
+--- /dev/null
++++ b/src/lib/datatypes/Kconfig
+@@ -0,0 +1,3 @@
++config DATATYPES
++	bool
++	default y
+diff --git a/src/lib/datatypes/Makefile b/src/lib/datatypes/Makefile
+new file mode 100644
+index 00000000..742024ec
+--- /dev/null
++++ b/src/lib/datatypes/Makefile
+@@ -0,0 +1,8 @@
++obj-$(DATATYPES) += datatypes.mod
++
++obj-datatypes-$(DATATYPES) := \
++    sol-arena.o \
++    sol-buffer.o \
++    sol-str-slice.o \
++    sol-str-table.o\
++    sol-vector.o
+diff --git a/src/shared/sol-arena.h b/src/lib/datatypes/include/sol-arena.h
+similarity index 95%
+rename from src/shared/sol-arena.h
+rename to src/lib/datatypes/include/sol-arena.h
+index ffa81497..7d4b22c5 100644
+--- a/src/shared/sol-arena.h
++++ b/src/lib/datatypes/include/sol-arena.h
+@@ -32,8 +32,12 @@
+ 
+ #pragma once
+ 
+-#include "sol-str-slice.h"
+-#include "sol-vector.h"
++#include <sol-str-slice.h>
++#include <sol-vector.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ /* A sol_arena is an object that does allocation on user behalf and can
+  * deallocate all at once.
+@@ -54,3 +58,7 @@ int sol_arena_slice_sprintf(struct sol_arena *arena, struct sol_str_slice *dst,
+ char *sol_arena_strdup(struct sol_arena *arena, const char *str);
+ char *sol_arena_strndup(struct sol_arena *arena, const char *str, size_t n);
+ char *sol_arena_strdup_slice(struct sol_arena *arena, const struct sol_str_slice slice);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-buffer.h b/src/lib/datatypes/include/sol-buffer.h
+similarity index 96%
+rename from src/shared/sol-buffer.h
+rename to src/lib/datatypes/include/sol-buffer.h
+index 11c9f766..0cd0aa8d 100644
+--- a/src/shared/sol-buffer.h
++++ b/src/lib/datatypes/include/sol-buffer.h
+@@ -34,7 +34,11 @@
+ 
+ #include <assert.h>
+ 
+-#include "sol-str-slice.h"
++#include <sol-str-slice.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ /* A sol_buffer is a dynamic array, that can be resized if needed. It
+  * grows exponentially but also supports setting a specific size.
+@@ -80,3 +84,7 @@ int sol_buffer_ensure(struct sol_buffer *buf, unsigned int min_size);
+ /* Copy the 'slice' into 'buf', ensuring that it will fit, including
+  * an extra NUL byte so the buffer can be used as a cstr. */
+ int sol_buffer_copy_slice(struct sol_buffer *buf, struct sol_str_slice slice);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-list.h b/src/lib/datatypes/include/sol-list.h
+similarity index 97%
+rename from src/shared/sol-list.h
+rename to src/lib/datatypes/include/sol-list.h
+index 05b943ea..6f2c78d8 100644
+--- a/src/shared/sol-list.h
++++ b/src/lib/datatypes/include/sol-list.h
+@@ -32,6 +32,10 @@
+ 
+ #pragma once
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ struct sol_list {
+     struct sol_list *next, *prev;
+ };
+@@ -87,3 +91,7 @@ sol_list_steal(struct sol_list *list, struct sol_list *new_head)
+     new_head->prev = list->prev;
+     sol_list_init(list);
+ }
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-str-slice.h b/src/lib/datatypes/include/sol-str-slice.h
+similarity index 85%
+rename from src/shared/sol-str-slice.h
+rename to src/lib/datatypes/include/sol-str-slice.h
+index 36799ab9..70300817 100644
+--- a/src/shared/sol-str-slice.h
++++ b/src/lib/datatypes/include/sol-str-slice.h
+@@ -36,13 +36,21 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-#include "sol-macros.h"
++#include <sol-macros.h>
+ 
+-// Slice of a string with explicit length. It doesn't necessarily ends with NUL byte like C
+-// strings. This representation is convenient for referencing to substrings of a larger string
+-// without having to duplicate them.
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+-#define SOL_STR_SLICE_LITERAL(_s) { sizeof(STATIC_ASSERT_LITERAL(_s)) - 1, _s }
++/* Slice of a string with explicit length.
++ * It doesn't necessarily ends with NUL byte like C strings.
++ * This representation is convenient for referencing to substrings
++ * of a larger string without having to duplicate them.
++ */
++
++#define SOL_STR_STATIC_ASSERT_LITERAL(_s) ("" _s)
++
++#define SOL_STR_SLICE_LITERAL(_s) { sizeof(SOL_STR_STATIC_ASSERT_LITERAL(_s)) - 1, _s }
+ 
+ #define SOL_STR_SLICE_STR(_s, _len) (struct sol_str_slice){.len = _len, .data = _s }
+ 
+@@ -82,3 +90,7 @@ sol_str_slice_from_str(const char *s)
+ }
+ 
+ int sol_str_slice_to_int(const struct sol_str_slice s, int *value);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-str-table.h b/src/lib/datatypes/include/sol-str-table.h
+similarity index 55%
+rename from src/shared/sol-str-table.h
+rename to src/lib/datatypes/include/sol-str-table.h
+index c4272273..08ed1ccb 100644
+--- a/src/shared/sol-str-table.h
++++ b/src/lib/datatypes/include/sol-str-table.h
+@@ -34,8 +34,11 @@
+ 
+ #include <inttypes.h>
+ 
+-#include "sol-util.h"
+-#include "sol-str-slice.h"
++#include <sol-str-slice.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ struct sol_str_table {
+     const char *key;
+@@ -43,20 +46,20 @@ struct sol_str_table {
+     int16_t val;
+ };
+ 
+-#define SOL_STR_TABLE_ITEM(_key, _val)                                   \
+-    { STATIC_ASSERT_LITERAL(_key), sizeof(_key) - 1, _val }
++#define SOL_STR_TABLE_ITEM(_key, _val) \
++    { SOL_STR_STATIC_ASSERT_LITERAL(_key), sizeof(_key) - 1, _val }
+ 
+ int16_t sol_str_table_lookup_fallback(const struct sol_str_table *table,
+     const struct sol_str_slice key,
+     int16_t fallback) SOL_ATTR_NONNULL(1);
+ 
+ #define SOL_STR_TABLE_NOT_FOUND INT16_MAX
+-#define sol_str_table_lookup(_table, _key, _pval) ({                     \
+-                                                       int16_t _v = sol_str_table_lookup_fallback(_table, _key, INT16_MAX); \
+-                                                       if (_v != INT16_MAX)                                                \
+-                                                           *_pval = _v;                                                    \
+-                                                       _v != INT16_MAX;                                                    \
+-                                                   })
++#define sol_str_table_lookup(_table, _key, _pval) ({ \
++    int16_t _v = sol_str_table_lookup_fallback(_table, _key, INT16_MAX); \
++    if (_v != INT16_MAX) \
++        *_pval = _v; \
++    _v != INT16_MAX; \
++})
+ 
+ 
+ struct sol_str_table_ptr {
+@@ -65,19 +68,23 @@ struct sol_str_table_ptr {
+     size_t len;
+ };
+ 
+-#define SOL_STR_TABLE_PTR_ITEM(_key, _val)                       \
+-    { .key = STATIC_ASSERT_LITERAL(_key),                       \
+-      .len = sizeof(_key) - 1,                                  \
++#define SOL_STR_TABLE_PTR_ITEM(_key, _val) \
++    { .key = SOL_STR_STATIC_ASSERT_LITERAL(_key), \
++      .len = sizeof(_key) - 1, \
+       .val = _val }
+ 
+ const void *sol_str_table_ptr_lookup_fallback(const struct sol_str_table_ptr *table_ptr,
+     const struct sol_str_slice key,
+     const void *fallback) SOL_ATTR_NONNULL(1);
+ 
+-#define sol_str_table_ptr_lookup(_table_ptr, _key, _pval) ({             \
+-                                                               const void *_v = sol_str_table_ptr_lookup_fallback          \
+-                                                                                    (_table_ptr, _key, NULL);                               \
+-                                                               if (_v != NULL)                                             \
+-                                                                   *_pval = _v;                                            \
+-                                                               _v != NULL;                                                 \
+-                                                           })
++#define sol_str_table_ptr_lookup(_table_ptr, _key, _pval) ({ \
++    const void *_v = sol_str_table_ptr_lookup_fallback(_table_ptr, \
++        _key, NULL); \
++    if (_v != NULL) \
++        *_pval = _v; \
++    _v != NULL; \
++})
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-vector.h b/src/lib/datatypes/include/sol-vector.h
+similarity index 83%
+rename from src/shared/sol-vector.h
+rename to src/lib/datatypes/include/sol-vector.h
+index 5daf807d..5b94e802 100644
+--- a/src/shared/sol-vector.h
++++ b/src/lib/datatypes/include/sol-vector.h
+@@ -36,11 +36,18 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+-// sol_vector is an array that grows dynamically. It's suited for storing a small set of contiguous
+-// data. Dynamic resize might shuffle the data around, so pointers returned from _get() and
+-// _append() should be considered invalid after the vector size is modified.
+-//
+-// For storing pointers, see sol_ptr_vector below.
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* sol_vector is an array that grows dynamically.
++ * It's suited for storing a small set of contiguous data.
++ * Dynamic resize might shuffle the data around,
++ * so pointers returned from _get() and _append() should be
++ * considered invalid after the vector size is modified.
++ *
++ * For storing pointers, see sol_ptr_vector below.
++ */
+ 
+ struct sol_vector {
+     void *data;
+@@ -62,7 +69,7 @@ sol_vector_get(const struct sol_vector *v, uint16_t i)
+ 
+     if (i >= v->len)
+         return NULL;
+-    data = v->data;
++    data = (const unsigned char *)v->data;
+ 
+     return (void *)&data[v->elem_size * i];
+ }
+@@ -109,7 +116,7 @@ sol_ptr_vector_get(const struct sol_ptr_vector *pv, uint16_t i)
+ {
+     void **data;
+ 
+-    data = sol_vector_get(&pv->base, i);
++    data = (void **)sol_vector_get(&pv->base, i);
+     if (!data)
+         return NULL;
+     return *data;
+@@ -141,12 +148,18 @@ sol_ptr_vector_clear(struct sol_ptr_vector *pv)
+ }
+ 
+ 
+-#define SOL_PTR_VECTOR_FOREACH_IDX(vector, itrvar, idx)                  \
+-    for (idx = 0;                                                       \
+-         idx < (vector)->base.len && ((itrvar = *(((void **)(vector)->base.data) + idx)), true); \
++#define SOL_PTR_VECTOR_FOREACH_IDX(vector, itrvar, idx) \
++    for (idx = 0; \
++         idx < (vector)->base.len && \
++            ((itrvar = *(((void **)(vector)->base.data) + idx)), true); \
+          idx++)
+ 
+-#define SOL_PTR_VECTOR_FOREACH_REVERSE_IDX(vector, itrvar, idx)  \
+-    for (idx = (vector)->base.len - 1;                                  \
+-         idx != ((typeof(idx)) - 1) && (itrvar = *(((void **)(vector)->base.data) + idx), true); \
++#define SOL_PTR_VECTOR_FOREACH_REVERSE_IDX(vector, itrvar, idx) \
++    for (idx = (vector)->base.len - 1; \
++         idx != ((typeof(idx)) - 1) && \
++            (itrvar = *(((void **)(vector)->base.data) + idx), true); \
+          idx--)
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-arena.c b/src/lib/datatypes/sol-arena.c
+similarity index 97%
+rename from src/shared/sol-arena.c
+rename to src/lib/datatypes/sol-arena.c
+index 3f9d0723..19eaa16d 100644
+--- a/src/shared/sol-arena.c
++++ b/src/lib/datatypes/sol-arena.c
+@@ -44,7 +44,7 @@ struct sol_arena {
+     struct sol_ptr_vector str_vector;
+ };
+ 
+-struct sol_arena *
++SOL_API struct sol_arena *
+ sol_arena_new(void)
+ {
+     struct sol_arena *arena;
+@@ -56,7 +56,7 @@ sol_arena_new(void)
+     return arena;
+ }
+ 
+-void
++SOL_API void
+ sol_arena_del(struct sol_arena *arena)
+ {
+     char *s;
+@@ -71,7 +71,7 @@ sol_arena_del(struct sol_arena *arena)
+     free(arena);
+ }
+ 
+-int
++SOL_API int
+ sol_arena_slice_dup_str_n(struct sol_arena *arena, struct sol_str_slice *dst, const char *str, size_t n)
+ {
+     struct sol_str_slice slice;
+@@ -96,20 +96,20 @@ sol_arena_slice_dup_str_n(struct sol_arena *arena, struct sol_str_slice *dst, co
+     return 0;
+ }
+ 
+-int
++SOL_API int
+ sol_arena_slice_dup_str(struct sol_arena *arena, struct sol_str_slice *dst, const char *str)
+ {
+     SOL_NULL_CHECK(str, -EINVAL);
+     return sol_arena_slice_dup_str_n(arena, dst, str, strlen(str));
+ }
+ 
+-int
++SOL_API int
+ sol_arena_slice_dup(struct sol_arena *arena, struct sol_str_slice *dst, struct sol_str_slice slice)
+ {
+     return sol_arena_slice_dup_str_n(arena, dst, slice.data, slice.len);
+ }
+ 
+-int
++SOL_API int
+ sol_arena_slice_sprintf(struct sol_arena *arena, struct sol_str_slice *dst, const char *fmt, ...)
+ {
+     va_list ap;
+@@ -133,14 +133,14 @@ sol_arena_slice_sprintf(struct sol_arena *arena, struct sol_str_slice *dst, cons
+     return 0;
+ }
+ 
+-char *
++SOL_API char *
+ sol_arena_strdup(struct sol_arena *arena, const char *str)
+ {
+     SOL_NULL_CHECK(str, NULL);
+     return sol_arena_strndup(arena, str, strlen(str));
+ }
+ 
+-char *
++SOL_API char *
+ sol_arena_strndup(struct sol_arena *arena, const char *str, size_t n)
+ {
+     char *result;
+@@ -162,7 +162,7 @@ sol_arena_strndup(struct sol_arena *arena, const char *str, size_t n)
+     return result;
+ }
+ 
+-char *
++SOL_API char *
+ sol_arena_strdup_slice(struct sol_arena *arena, const struct sol_str_slice slice)
+ {
+     return sol_arena_strndup(arena, slice.data, slice.len);
+diff --git a/src/shared/sol-buffer.c b/src/lib/datatypes/sol-buffer.c
+similarity index 98%
+rename from src/shared/sol-buffer.c
+rename to src/lib/datatypes/sol-buffer.c
+index 9b503936..0bbca517 100644
+--- a/src/shared/sol-buffer.c
++++ b/src/lib/datatypes/sol-buffer.c
+@@ -37,7 +37,7 @@
+ #include "sol-buffer.h"
+ #include "sol-util.h"
+ 
+-int
++SOL_API int
+ sol_buffer_resize(struct sol_buffer *buf, unsigned int new_size)
+ {
+     char *new_data;
+@@ -56,7 +56,7 @@ sol_buffer_resize(struct sol_buffer *buf, unsigned int new_size)
+     return 0;
+ }
+ 
+-int
++SOL_API int
+ sol_buffer_ensure(struct sol_buffer *buf, unsigned int min_size)
+ {
+     assert(buf);
+@@ -67,7 +67,7 @@ sol_buffer_ensure(struct sol_buffer *buf, unsigned int min_size)
+     return sol_buffer_resize(buf, align_power2(min_size + 1));
+ }
+ 
+-int
++SOL_API int
+ sol_buffer_copy_slice(struct sol_buffer *buf, struct sol_str_slice slice)
+ {
+     int err;
+diff --git a/src/shared/sol-str-slice.c b/src/lib/datatypes/sol-str-slice.c
+similarity index 99%
+rename from src/shared/sol-str-slice.c
+rename to src/lib/datatypes/sol-str-slice.c
+index 4c2284dc..19eaa4c6 100644
+--- a/src/shared/sol-str-slice.c
++++ b/src/lib/datatypes/sol-str-slice.c
+@@ -37,7 +37,7 @@
+ #include "sol-str-slice.h"
+ #include "sol-missing.h"
+ 
+-int
++SOL_API int
+ sol_str_slice_to_int(const struct sol_str_slice s, int *value)
+ {
+     const char *tmp;
+diff --git a/src/shared/sol-str-table.c b/src/lib/datatypes/sol-str-table.c
+similarity index 97%
+rename from src/shared/sol-str-table.c
+rename to src/lib/datatypes/sol-str-table.c
+index ab4a9d32..a6767aa2 100644
+--- a/src/shared/sol-str-table.c
++++ b/src/lib/datatypes/sol-str-table.c
+@@ -33,8 +33,9 @@
+ #include <inttypes.h>
+ 
+ #include "sol-str-table.h"
++#include "sol-util.h"
+ 
+-int16_t
++SOL_API int16_t
+ sol_str_table_lookup_fallback(const struct sol_str_table *table,
+     const struct sol_str_slice key,
+     int16_t fallback)
+@@ -55,7 +56,7 @@ sol_str_table_lookup_fallback(const struct sol_str_table *table,
+     return fallback;
+ }
+ 
+-const void *
++SOL_API const void *
+ sol_str_table_ptr_lookup_fallback(const struct sol_str_table_ptr *table,
+     const struct sol_str_slice key,
+     const void *fallback)
+diff --git a/src/shared/sol-vector.c b/src/lib/datatypes/sol-vector.c
+similarity index 98%
+rename from src/shared/sol-vector.c
+rename to src/lib/datatypes/sol-vector.c
+index f68416a2..e84bb36a 100644
+--- a/src/shared/sol-vector.c
++++ b/src/lib/datatypes/sol-vector.c
+@@ -37,7 +37,7 @@
+ #include "sol-util.h"
+ #include "sol-vector.h"
+ 
+-void
++SOL_API void
+ sol_vector_init(struct sol_vector *v, uint16_t elem_size)
+ {
+     v->data = NULL;
+@@ -64,7 +64,7 @@ sol_vector_grow(struct sol_vector *v)
+     return 0;
+ }
+ 
+-void *
++SOL_API void *
+ sol_vector_append(struct sol_vector *v)
+ {
+     unsigned char *data;
+@@ -103,7 +103,7 @@ sol_vector_shrink(struct sol_vector *v)
+     v->data = data;
+ }
+ 
+-int
++SOL_API int
+ sol_vector_del(struct sol_vector *v, uint16_t i)
+ {
+     size_t tail_len;
+@@ -126,7 +126,7 @@ sol_vector_del(struct sol_vector *v, uint16_t i)
+     return 0;
+ }
+ 
+-void
++SOL_API void
+ sol_vector_clear(struct sol_vector *v)
+ {
+     free(v->data);
+@@ -178,7 +178,7 @@ ptr_vector_insert_at(struct sol_ptr_vector *pv, void *ptr, unsigned int index, i
+     return 0;
+ }
+ 
+-int
++SOL_API int
+ sol_ptr_vector_insert_sorted(struct sol_ptr_vector *pv, void *ptr, int (*compare)(const void *data1, const void *data2))
+ {
+     int dir;
+@@ -192,7 +192,7 @@ sol_ptr_vector_insert_sorted(struct sol_ptr_vector *pv, void *ptr, int (*compare
+     return ptr_vector_insert_at(pv, ptr, index, dir);
+ }
+ 
+-int
++SOL_API int
+ sol_ptr_vector_append(struct sol_ptr_vector *pv, void *ptr)
+ {
+     void **data;
+@@ -204,7 +204,7 @@ sol_ptr_vector_append(struct sol_ptr_vector *pv, void *ptr)
+     return 0;
+ }
+ 
+-int
++SOL_API int
+ sol_ptr_vector_set(struct sol_ptr_vector *pv, uint16_t i, void *ptr)
+ {
+     void **data;
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+index 09bf243b..0695ef3d 100644
+--- a/src/shared/Makefile
++++ b/src/shared/Makefile
+@@ -1,10 +1,9 @@
+ obj-$(INTERNAL_SHARED) += libshared.mod
+ obj-libshared-static := yes
+ 
+-obj-libshared-$(INTERNAL_SHARED)   := sol-arena.o sol-fbp-graph.o sol-fbp-internal-log.o
++obj-libshared-$(INTERNAL_SHARED)   := sol-fbp-graph.o sol-fbp-internal-log.o
+ obj-libshared-$(INTERNAL_SHARED)   += sol-fbp-internal-scanner.o sol-util.o
+-obj-libshared-$(INTERNAL_SHARED)   += sol-monitors.o sol-str-slice.o sol-str-table.o
+-obj-libshared-$(INTERNAL_SHARED)   += sol-vector.o sol-json.o sol-buffer.o
++obj-libshared-$(INTERNAL_SHARED)   += sol-monitors.o sol-json.o
+ obj-libshared-$(INTERNAL_SHARED)   += sol-pwm-common.o sol-gpio-common.o
+ obj-libshared-$(INTERNAL_SHARED)   += sol-i2c-common.o
+ 
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index db4447fd..9544672a 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -117,7 +117,7 @@ src_modulesdir := $(top_srcdir)src/modules/
+ SCRIPTDIR := $(top_srcdir)data/scripts/
+ 
+ # sub-modules and deps
+-SUBDIRS := $(addprefix $(top_srcdir)src/lib/,common coap flow) $(top_srcdir)src/shared
++SUBDIRS := $(addprefix $(top_srcdir)src/lib/,common coap datatypes flow) $(top_srcdir)src/shared
+ SUBDIRS := $(dir $(filter-out $(SUBDIRS),$(shell find $(top_srcdir)src/ -name 'Makefile')))
+ 
+ DEPENDENCY_FILES := Makefile.gen Kconfig.gen
+@@ -267,8 +267,20 @@ PRE_GEN += $(NODE_TYPE_GEN_SCRIPT)
+ 
+ CLEANUP_GEN := $(FLOW_OIC_GEN) $(HEADER_GEN)
+ 
++EXTRA_HEADERS :=
++
++LIB_DATATYPES_HEADERS := \
++    sol-arena.h \
++    sol-list.h \
++    sol-str-table.h \
++    sol-buffer.h \
++    sol-str-slice.h \
++    sol-vector.h
++
++EXTRA_HEADERS += $(addprefix $(top_srcdir)src/lib/datatypes/include/, $(LIB_DATATYPES_HEADERS))
++
+ LIB_COMMON_HEADERS := sol-blob.h sol-log.h sol-macros.h sol-mainloop.h sol-missing.h sol-platform.h sol-types.h
+-EXTRA_HEADERS := $(addprefix $(top_srcdir)src/lib/include/, $(LIB_COMMON_HEADERS))
++EXTRA_HEADERS += $(addprefix $(top_srcdir)src/lib/include/, $(LIB_COMMON_HEADERS))
+ 
+ LIB_FLOW_HEADERS := sol-flow-builder.h sol-flow.h sol-flow-inspector.h sol-flow-packet.h
+ LIB_FLOW_HEADERS += sol-flow-parser.h sol-flow-resolver.h

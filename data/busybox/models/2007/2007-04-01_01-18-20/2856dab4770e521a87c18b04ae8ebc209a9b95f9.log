@@ -1,0 +1,1037 @@
+"2007-04-01 01:18:20 +0000"
+diff --git a/Config.in b/Config.in
+index 6192833c0..fea408148 100644
+--- a/Config.in
++++ b/Config.in
+@@ -500,3 +500,4 @@ source shell/Config.in
+ source sysklogd/Config.in
+ source runit/Config.in
+ source selinux/Config.in
++source ipsvd/Config.in
+diff --git a/Makefile b/Makefile
+index 4f45ae822..5b507d9f0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -434,6 +434,7 @@ libs-y		:= \
+ 		editors/ \
+ 		findutils/ \
+ 		init/ \
++		ipsvd/ \
+ 		libbb/ \
+ 		libpwdgrp/ \
+ 		loginutils/ \
+diff --git a/include/applets.h b/include/applets.h
+index 77258be42..8073c15e1 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -293,6 +293,7 @@ USE_SYSLOGD(APPLET(syslogd, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_TAIL(APPLET(tail, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TAR(APPLET(tar, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_TASKSET(APPLET(taskset, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_TCPSVD(APPLET(tcpsvd, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TEE(APPLET(tee, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TELNET(APPLET(telnet, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TELNETD(APPLET(telnetd, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+diff --git a/include/libbb.h b/include/libbb.h
+index 7f0ad2c25..794049df9 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -266,6 +266,7 @@ char *xrealloc_getcwd_or_warn(char *cwd);
+ char *xmalloc_readlink_or_warn(const char *path);
+ char *xmalloc_realpath(const char *path);
+ extern void xstat(const char *filename, struct stat *buf);
++
+ /* Unlike waitpid, waits ONLY for one process,
+  * It's safe to pass negative 'pids' from failed [v]fork -
+  * wait4pid will return -1 and ECHILD in errno.
+@@ -274,6 +275,24 @@ extern void xstat(const char *filename, struct stat *buf);
+  *      if (rc > 0) bb_error_msg("exit code: %d", rc);
+  */
+ extern int wait4pid(int pid);
++extern int wait_pid(int *wstat, int pid);
++extern int wait_nohang(int *wstat);
++//TODO: signal(sid, f) is the same? then why?
++extern void sig_catch(int,void (*)(int));
++//#define sig_ignore(s) (sig_catch((s), SIG_IGN))
++//#define sig_uncatch(s) (sig_catch((s), SIG_DFL))
++extern void sig_block(int);
++extern void sig_unblock(int);
++/* UNUSED: extern void sig_blocknone(void);*/
++extern void sig_pause(void);
++
++#define wait_crashed(w) ((w) & 127)
++#define wait_exitcode(w) ((w) >> 8)
++#define wait_stopsig(w) ((w) >> 8)
++#define wait_stopped(w) (((w) & 127) == 127)
++
++
++
+ extern void xsetgid(gid_t gid);
+ extern void xsetuid(uid_t uid);
+ extern void xchdir(const char *path);
+@@ -340,7 +359,7 @@ len_and_sockaddr* xhost_and_af2sockaddr(const char *host, int port, sa_family_t
+  * NB: does NOT do htons() internally, just direct assignment. */
+ void set_nport(len_and_sockaddr *lsa, unsigned port);
+ /* Retrieve sin[6]_port or return -1 for non-INET[6] lsa's */
+-int get_nport(const len_and_sockaddr *lsa);
++int get_nport(const struct sockaddr *sa);
+ /* Reverse DNS. Returns NULL on failure. */
+ char* xmalloc_sockaddr2host(const struct sockaddr *sa, socklen_t salen);
+ /* This one doesn't append :PORTNUM */
+diff --git a/include/usage.h b/include/usage.h
+index a19bcf7c2..09b6908f9 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -3325,6 +3325,11 @@ USE_FEATURE_RUN_PARTS_FANCY("\n	-l	Prints names of all matching files even when
+        "$ echo $?\n" \
+        "1\n"
+ 
++#define tcpsvd_trivial_usage \
++       "TODO"
++#define tcpsvd_full_usage \
++       "TODO"
++
+ #define tftp_trivial_usage \
+        "[OPTION]... HOST [PORT]"
+ #define tftp_full_usage \
+diff --git a/ipsvd/Config.in b/ipsvd/Config.in
+new file mode 100644
+index 000000000..fb2931d07
+--- /dev/null
++++ b/ipsvd/Config.in
+@@ -0,0 +1,14 @@
++#
++# For a description of the syntax of this configuration file,
++# see scripts/kbuild/config-language.txt.
++#
++
++menu "ipsvd utilities"
++
++config TCPSVD
++	bool "tcpsvd"
++	default n
++	help
++	  tcpsvd listens on a port and runs a program for each new connection
++
++endmenu
+diff --git a/ipsvd/Kbuild b/ipsvd/Kbuild
+new file mode 100644
+index 000000000..8050921b0
+--- /dev/null
++++ b/ipsvd/Kbuild
+@@ -0,0 +1,8 @@
++# Makefile for busybox
++#
++# Copyright (C) 1999-2005 by Erik Andersen <andersen@codepoet.org>
++#
++# Licensed under the GPL v2, see the file LICENSE in this tarball.
++
++lib-y:=
++lib-$(CONFIG_TCPSVD) += tcpsvd.o ipsvd_perhost.o
+diff --git a/ipsvd/ipsvd_perhost.c b/ipsvd/ipsvd_perhost.c
+new file mode 100644
+index 000000000..c6f7de339
+--- /dev/null
++++ b/ipsvd/ipsvd_perhost.c
+@@ -0,0 +1,55 @@
++#include "busybox.h"
++#include "ipsvd_perhost.h"
++
++static struct hcc *cc;
++static unsigned cclen;
++
++/* to be optimized */
++
++void ipsvd_perhost_init(unsigned c)
++{
++//	free(cc);
++	cc = xzalloc(c * sizeof(*cc));
++	cclen = c;
++}
++
++unsigned ipsvd_perhost_add(const char *ip, unsigned maxconn, struct hcc **hccpp)
++{
++	unsigned i;
++	unsigned conn = 1;
++	int p = -1;
++
++	for (i = 0; i < cclen; ++i) {
++		if (cc[i].ip[0] == 0) {
++			if (p == -1) p = i;
++    			continue;
++		}
++		if (strncmp(cc[i].ip, ip, sizeof(cc[i].ip)) == 0) {
++			conn++;
++			continue;
++		}
++	}
++	if (p == -1) return 0;
++	if (conn <= maxconn) {
++		strcpy(cc[p].ip, ip);
++		*hccpp = &cc[p];
++	}
++	return conn;
++}
++
++void ipsvd_perhost_remove(int pid)
++{
++	unsigned i;
++	for (i = 0; i < cclen; ++i) {
++		if (cc[i].pid == pid) {
++			cc[i].ip[0] = 0;
++			cc[i].pid = 0;
++			return;
++		}
++	}
++}
++
++//void ipsvd_perhost_free(void)
++//{
++//	free(cc);
++//}
+diff --git a/ipsvd/ipsvd_perhost.h b/ipsvd/ipsvd_perhost.h
+new file mode 100644
+index 000000000..05c939d89
+--- /dev/null
++++ b/ipsvd/ipsvd_perhost.h
+@@ -0,0 +1,10 @@
++struct hcc {
++        char ip[32 - sizeof(int)];
++        int pid;
++};
++
++void ipsvd_perhost_init(unsigned);
++unsigned ipsvd_perhost_add(const char *ip, unsigned maxconn, struct hcc **hccpp);
++void ipsvd_perhost_remove(int pid);
++//unsigned ipsvd_perhost_setpid(int pid);
++//void ipsvd_perhost_free(void);
+diff --git a/ipsvd/tcpsvd.c b/ipsvd/tcpsvd.c
+new file mode 100644
+index 000000000..9a0a348de
+--- /dev/null
++++ b/ipsvd/tcpsvd.c
+@@ -0,0 +1,514 @@
++/*
++# /usr/bin/tcpsvd -v 0 1234 true
++tcpsvd: info: pid 24916 from 127.0.0.1
++tcpsvd: info: start 24916 localhost:127.0.0.1 ::127.0.0.1:47905
++tcpsvd: info: pid 24918 from 127.0.0.1
++tcpsvd: info: start 24918 localhost:127.0.0.1 ::127.0.0.1:47906
++# ./busybox tcpsvd -v 0 1234 true
++tcpsvd: info: pid 24924 from 127.0.0.1
++tcpsvd: info: start 24924 localhost:1234:127.0.0.1:1234 ::127.0.0.1:47908
++tcpsvd: info: pid 24926 from 127.0.0.1
++tcpsvd: info: start 24926 localhost:1234:127.0.0.1:1234 ::127.0.0.1:47909
++*/
++
++#include "busybox.h"
++#include "ipsvd_perhost.h"
++
++#ifdef SSLSVD
++#include "matrixSsl.h"
++#include "ssl_io.h"
++#endif
++
++
++static unsigned max_per_host; /* originally in ipsvd_check.c */
++static unsigned cur_per_host;
++static unsigned verbose;
++static unsigned cnum;
++static unsigned cmax = 30;
++
++/* Must match getopt32 in main! */
++enum {
++	OPT_c = (1 << 0),
++	OPT_C = (1 << 1),
++	OPT_i = (1 << 2),
++	OPT_x = (1 << 3),
++	OPT_u = (1 << 4),
++	OPT_l = (1 << 5),
++	OPT_E = (1 << 6),
++	OPT_b = (1 << 7),
++	OPT_h = (1 << 8),
++	OPT_p = (1 << 9),
++	OPT_t = (1 << 10),
++	OPT_v = (1 << 11),
++	OPT_V = (1 << 12),
++	OPT_U = (1 << 13),
++	OPT_slash = (1 << 14),
++	OPT_Z = (1 << 15),
++	OPT_K = (1 << 16),
++};
++
++static void connection_status(void)
++{
++	printf("%s: info: status %u/%u\n", applet_name, cnum, cmax);
++}
++
++static void sig_term_handler(int sig)
++{
++	if (verbose)
++		printf("%s: info: sigterm received, exit\n", applet_name);
++	exit(0);
++}
++
++static void sig_child_handler(int sig)
++{
++	int wstat;
++	int pid;
++
++	while ((pid = wait_nohang(&wstat)) > 0) {
++		if (max_per_host)
++			ipsvd_perhost_remove(pid);
++		if (cnum)
++			cnum--;
++		if (verbose) {
++			/* Little bloated, but tries to give accurate info
++			 * how child exited. Makes easier to spot segfaulting
++			 * children etc... */
++			unsigned e = 0;
++			const char *cause = "?exit";
++			if (WIFEXITED(wstat)) {
++				cause++;
++				e = WEXITSTATUS(wstat);
++			} else if (WIFSIGNALED(wstat)) {
++				cause = "signal";
++				e = WTERMSIG(wstat);
++			}
++			printf("%s: info: end %d %s %d\n",
++					applet_name, pid, cause, e);
++		}
++	}
++	if (verbose)
++		connection_status();
++}
++
++int tcpsvd_main(int argc, char **argv);
++int tcpsvd_main(int argc, char **argv)
++{
++	char *str_c, *str_C, *str_b, *str_t;
++	char *user;
++	struct hcc *hccp;
++	const char *instructs;
++	char *msg_per_host = NULL;
++	unsigned len_per_host = len_per_host; /* gcc */
++	int need_addresses;
++	int pid;
++	int sock;
++	int conn;
++	unsigned backlog = 20;
++	union {
++		struct sockaddr sa;
++		struct sockaddr_in sin;
++		USE_FEATURE_IPV6(struct sockaddr_in6 sin6;)
++	} sock_adr;
++	socklen_t sockadr_size;
++	uint16_t local_port = local_port;
++	uint16_t remote_port;
++	unsigned port;
++	char *local_hostname = NULL;
++	char *remote_hostname = (char*)""; /* "" used if no -h */
++	char *local_ip = local_ip;
++	char *remote_ip = NULL;
++	//unsigned iscdb = 0;		/* = option_mask32 & OPT_x (TODO) */
++	//unsigned long timeout = 0;
++#ifndef SSLSVD
++	struct bb_uidgid_t ugid;
++#endif
++
++	/* 3+ args, -i at most once, -p implies -h, -v is counter */
++	opt_complementary = "-3:?:i--i:ph:vv";
++#ifdef SSLSVD
++	getopt32(argc, argv, "c:C:i:x:u:l:Eb:hpt:vU:/:Z:K:",
++		&str_c, &str_C, &instructs, &instructs, &user, &local_hostname,
++		&str_b, &str_t, &ssluser, &root, &cert, &key, &verbose
++	);
++#else
++	getopt32(argc, argv, "c:C:i:x:u:l:Eb:hpt:v",
++		&str_c, &str_C, &instructs, &instructs, &user, &local_hostname,
++		&str_b, &str_t, &verbose
++	);
++#endif
++	if (option_mask32 & OPT_c)
++		cmax = xatou_range(str_c, 1, INT_MAX);
++	if (option_mask32 & OPT_C) { /* -C n[:message] */
++		max_per_host = bb_strtou(str_C, &str_C, 10);
++		if (str_C[0]) {
++			if (str_C[0] != ':')
++				bb_show_usage();
++			msg_per_host = str_C + 1;
++			len_per_host = strlen(msg_per_host);
++		}
++	}
++	if (max_per_host > cmax)
++		max_per_host = cmax;
++	if (option_mask32 & OPT_u) {
++		if (!get_uidgid(&ugid, user, 1))
++			bb_error_msg_and_die("unknown user/group: %s", user);
++	}
++	if (option_mask32 & OPT_b)
++		backlog = xatou(str_b);
++//	if (option_mask32 & OPT_t) timeout = xatou(str_t);
++#ifdef SSLSVD
++	if (option_mask32 & OPT_U) ssluser = (char*)optarg; break;
++	if (option_mask32 & OPT_slash) root = (char*)optarg; break;
++	if (option_mask32 & OPT_Z) cert = (char*)optarg; break;
++	if (option_mask32 & OPT_K) key = (char*)optarg; break;
++#endif
++	argv += optind;
++	if (!argv[0][0] || LONE_CHAR(argv[0], '0'))
++		argv[0] = (char*)"0.0.0.0";
++
++	need_addresses = verbose || !(option_mask32 & OPT_E);
++
++#ifdef SSLSVD
++	sslser = user;
++	client = 0;
++	if ((getuid() == 0) && !(option_mask32 & OPT_u)) {
++		xfunc_exitcode = 100;
++		bb_error_msg_and_die("fatal: -U ssluser must be set when running as root");
++	}
++	if (option_mask32 & OPT_u)
++		if (!uidgid_get(&sslugid, ssluser, 1)) {
++			if (errno) {
++				xfunc_exitcode = 100;
++				bb_perror_msg_and_die("fatal: cannot get user/group: %s", ssluser);
++			}
++			xfunc_exitcode = 111;
++			bb_error_msg_and_die("fatal: unknown user/group '%s'", ssluser);
++		}
++	if (!cert) cert = "./cert.pem";
++	if (!key) key = cert;
++	if (matrixSslOpen() < 0)
++		fatal("cannot initialize ssl");
++	if (matrixSslReadKeys(&keys, cert, key, 0, ca) < 0) {
++		if (client)
++			fatal("cannot read cert, key, or ca file");
++		fatal("cannot read cert or key file");
++	}
++	if (matrixSslNewSession(&ssl, keys, 0, SSL_FLAGS_SERVER) < 0)
++		fatal("cannot create ssl session");
++#endif
++
++	sig_block(SIGCHLD);
++	signal(SIGCHLD, sig_child_handler);
++	signal(SIGTERM, sig_term_handler);
++	signal(SIGPIPE, SIG_IGN);
++
++	if (max_per_host)
++		ipsvd_perhost_init(cmax);
++
++	port = bb_lookup_port(argv[1], "tcp", 0);
++	sock = create_and_bind_stream_or_die(argv[0], port);
++	xlisten(sock, backlog);
++	/* ndelay_off(sock); - it is the default I think? */
++
++#ifndef SSLSVD
++	if (option_mask32 & OPT_u) {
++		/* drop permissions */
++		xsetgid(ugid.gid);
++		xsetuid(ugid.uid);
++	}
++#endif
++	bb_sanitize_stdio(); /* fd# 1,2 must be opened */
++	close(0);
++
++	if (verbose) {
++		/* we do it only for ":port" cosmetics... oh well */
++		len_and_sockaddr *lsa = xhost2sockaddr(argv[0], port);
++		char *addr = xmalloc_sockaddr2dotted(&lsa->sa, lsa->len);
++
++		printf("%s: info: listening on %s", applet_name, addr);
++		free(addr);
++#ifndef SSLSVD
++		if (option_mask32 & OPT_u)
++			printf(", uid %u, gid %u",
++				(unsigned)ugid.uid, (unsigned)ugid.uid);
++#endif
++		puts(", starting");
++	}
++
++	/* The rest is a main accept() loop */
++
++ again:
++	hccp = NULL;
++
++	while (cnum >= cmax)
++		sig_pause(); /* wait for any signal (expecting SIGCHLD) */
++
++	sockadr_size = sizeof(sock_adr);
++	sig_unblock(SIGCHLD);
++	conn = accept(sock, &sock_adr.sa, &sockadr_size);
++	sig_block(SIGCHLD);
++	if (conn == -1) {
++		if (errno != EINTR)
++			bb_perror_msg("accept");
++		goto again;
++	}
++
++	if (max_per_host) {
++		/* we drop connection immediately if cur_per_host > max_per_host
++		 * (minimizing load under SYN flood) */
++		free(remote_ip);
++		remote_ip = xmalloc_sockaddr2dotted_noport(&sock_adr.sa, sockadr_size);
++		cur_per_host = ipsvd_perhost_add(remote_ip, max_per_host, &hccp);
++		if (cur_per_host > max_per_host) {
++			/* ipsvd_perhost_add detected that max is exceeded
++			 * (and did not store us in connection table) */
++			if (msg_per_host) {
++				ndelay_on(conn);
++				/* don't test for errors */
++				write(conn, msg_per_host, len_per_host);
++			}
++			close(conn);
++			goto again;
++		}
++	}
++
++	cnum++;
++	if (verbose)
++		connection_status();
++
++	pid = fork();
++	if (pid == -1) {
++		bb_perror_msg("fork");
++		close(conn);
++		goto again;
++	}
++	if (pid != 0) {
++		/* parent */
++		close(conn);
++		if (hccp)
++			hccp->pid = pid;
++		goto again;
++	}
++
++	/* Child: prepare env, log, and exec prog */
++
++	close(sock);
++
++	if (!max_per_host)
++		remote_ip = xmalloc_sockaddr2dotted_noport(&sock_adr.sa, sizeof(sock_adr));
++	/* else it is already done */
++	
++	remote_port = get_nport(&sock_adr.sa);
++	remote_port = ntohs(remote_port);
++	
++	if (verbose) {
++		pid = getpid();
++		printf("%s: info: pid %d from %s\n", applet_name, pid, remote_ip);
++	}
++	
++	if (need_addresses && (option_mask32 & OPT_h)) {
++		remote_hostname = xmalloc_sockaddr2host(&sock_adr.sa, sizeof(sock_adr));
++		if (!remote_hostname) {
++			bb_error_msg("warning: cannot look up hostname for %s", remote_ip);
++			remote_hostname = (char*)"";
++		}
++	}
++	
++	sockadr_size = sizeof(sock_adr);
++	/* Errors ignored (I'm not paranoid enough to imagine kernel
++	 * which doesn't know local ip) */
++	getsockname(conn, &sock_adr.sa, &sockadr_size);
++
++	if (need_addresses) {
++		local_ip = xmalloc_sockaddr2dotted_noport(&sock_adr.sa, sockadr_size);
++		local_port = get_nport(&sock_adr.sa);
++		local_port = ntohs(local_port);
++		if (!local_hostname) {
++			local_hostname = xmalloc_sockaddr2host_noport(&sock_adr.sa, sockadr_size);
++			if (!local_hostname)
++				bb_error_msg_and_die("cannot look up local hostname for %s", local_ip);
++		}
++	}
++	
++	if (!(option_mask32 & OPT_E)) {
++		/* setup ucspi env */
++		xsetenv("PROTO", "TCP");
++		xsetenv("TCPLOCALIP", local_ip);
++		xsetenv("TCPLOCALPORT", utoa(local_port));
++		xsetenv("TCPLOCALHOST", local_hostname);
++		xsetenv("TCPREMOTEIP", remote_ip);
++		xsetenv("TCPREMOTEPORT", utoa(remote_port));
++		if (option_mask32 & OPT_h) {
++			xsetenv("TCPREMOTEHOST", remote_hostname);
++		}
++		xsetenv("TCPREMOTEINFO", "");
++		/* additional */
++		if (cur_per_host > 0)
++			xsetenv("TCPCONCURRENCY", utoa(cur_per_host));
++	}
++	
++#if 0
++	if (instructs) {
++		ac = ipsvd_check(iscdb, &inst, &match, (char*)instructs,
++							remote_ip, remote_hostname, timeout);
++		if (ac == -1) drop2("cannot check inst", remote_ip);
++		if (ac == IPSVD_ERR) drop2("cannot read", (char*)instructs);
++	} else
++		ac = IPSVD_DEFAULT;
++#endif
++	
++	if (max_per_host && verbose)
++		printf("%s: info: concurrency %u %s %u/%u\n",
++			applet_name, pid, remote_ip, cur_per_host, max_per_host);
++	
++	if (verbose) {
++		printf("%s: info: start %u %s:%s :%s:%s:%u\n",
++			applet_name, pid,
++			local_hostname, local_ip,
++			remote_hostname, remote_ip, (unsigned)remote_port);
++#if 0
++		switch(ac) {
++		case IPSVD_DENY:
++			printf("deny "); break;
++		case IPSVD_DEFAULT:
++		case IPSVD_INSTRUCT:
++			printf("start "); break;
++		case IPSVD_EXEC:
++			printf("exec "); break;
++		}
++		...
++		if (instructs) {
++			printf(" ");
++			if (iscdb) {
++				printf((char*)instructs);
++				printf("/");
++			}
++			outfix(match.s);
++			if(inst.s && inst.len && (verbose > 1)) {
++				printf(": ");
++				printf(&inst);
++			}
++		}
++		printf("\n");
++#endif
++	}
++
++#if 0
++	if (ac == IPSVD_DENY) {
++		close(conn);
++		_exit(100);
++	}
++	if (ac == IPSVD_EXEC) {
++		args[0] = "/bin/sh";
++		args[1] = "-c";
++		args[2] = inst.s;
++		args[3] = 0;
++		run = args;
++	} else
++		run = argv + 2; /* below: we use argv+2 (was using run) */
++#endif
++
++	xmove_fd(conn, 0);
++	dup2(0, 1);
++	signal(SIGTERM, SIG_DFL);
++	signal(SIGPIPE, SIG_DFL);
++	signal(SIGCHLD, SIG_DFL);
++	sig_unblock(SIGCHLD);
++
++	argv += 2;
++#ifdef SSLSVD
++	strcpy(id, utoa(pid);
++	ssl_io(0, argv);
++#else
++	BB_EXECVP(argv[0], argv);
++#endif
++	bb_perror_msg_and_die("exec '%s'", argv[0]);
++}
++
++/*
++tcpsvd [-hpEvv] [-c n] [-C n:msg] [-b n] [-u user] [-l name] [-i dir|-x cdb] [ -t sec] host port prog
++
++tcpsvd creates a TCP/IP socket, binds it to the address host:port,
++and listens on the socket for incoming connections.
++
++On each incoming connection, tcpsvd conditionally runs a program,
++with standard input reading from the socket, and standard output
++writing to the socket, to handle this connection. tcpsvd keeps
++listening on the socket for new connections, and can handle
++multiple connections simultaneously.
++
++tcpsvd optionally checks for special instructions depending
++on the IP address or hostname of the client that initiated
++the connection, see ipsvd-instruct(5).
++
++host
++    host either is a hostname, or a dotted-decimal IP address,
++    or 0. If host is 0, tcpsvd accepts connections to any local
++    IP address.
++port
++    tcpsvd accepts connections to host:port. port may be a name
++    from /etc/services or a number.
++prog
++    prog consists of one or more arguments. For each connection,
++    tcpsvd normally runs prog, with file descriptor 0 reading from
++    the network, and file descriptor 1 writing to the network.
++    By default it also sets up TCP-related environment variables,
++    see tcp-environ(5) 
++-i dir
++    read instructions for handling new connections from the instructions
++    directory dir. See ipsvd-instruct(5) for details. 
++-x cdb
++    read instructions for handling new connections from the constant database
++    cdb. The constant database normally is created from an instructions
++    directory by running ipsvd-cdb(8). 
++-t sec
++    timeout. This option only takes effect if the -i option is given.
++    While checking the instructions directory, check the time of last access
++    of the file that matches the clients address or hostname if any, discard
++    and remove the file if it wasn't accessed within the last sec seconds;
++    tcpsvd does not discard or remove a file if the user's write permission
++    is not set, for those files the timeout is disabled. Default is 0,
++    which means that the timeout is disabled. 
++-l name
++    local hostname. Do not look up the local hostname in DNS, but use name
++    as hostname. This option must be set if tcpsvd listens on port 53
++    to avoid loops. 
++-u user[:group]
++    drop permissions. Switch user ID to user's UID, and group ID to user's
++    primary GID after creating and binding to the socket. If user is followed
++    by a colon and a group name, the group ID is switched to the GID of group
++    instead. All supplementary groups are removed. 
++-c n
++    concurrency. Handle up to n connections simultaneously. Default is 30.
++    If there are n connections active, tcpsvd defers acceptance of a new
++    connection until an active connection is closed. 
++-C n[:msg]
++    per host concurrency. Allow only up to n connections from the same IP
++    address simultaneously. If there are n active connections from one IP	
++    address, new incoming connections from this IP address are closed
++    immediately. If n is followed by :msg, the message msg is written	
++    to the client if possible, before closing the connection. By default
++    msg is empty. See ipsvd-instruct(5) for supported escape sequences in msg.
++
++    For each accepted connection, the current per host concurrency is
++    available through the environment variable TCPCONCURRENCY. n and msg
++    can be overwritten by ipsvd(7) instructions, see ipsvd-instruct(5).
++    By default tcpsvd doesn't keep track of connections. 
++-h
++    Look up the client's hostname in DNS. 
++-p
++    paranoid. After looking up the client's hostname in DNS, look up the IP
++    addresses in DNS for that hostname, and forget about the hostname
++    if none of the addresses match the client's IP address. You should
++    set this option if you use hostname based instructions. The -p option
++    implies the -h option. 
++-b n
++    backlog. Allow a backlog of approximately n TCP SYNs. On some systems n
++    is silently limited. Default is 20. 
++-E
++    no special environment. Do not set up TCP-related environment variables. 
++-v
++    verbose. Print verbose messsages to standard output. 
++-vv
++    more verbose. Print more verbose messages to standard output. 
++*/
+diff --git a/libbb/xconnect.c b/libbb/xconnect.c
+index 118fe3e75..a331e6bc4 100644
+--- a/libbb/xconnect.c
++++ b/libbb/xconnect.c
+@@ -82,15 +82,15 @@ int xconnect_tcp_v4(struct sockaddr_in *s_addr)
+ /* "New" networking API */
+ 
+ 
+-int get_nport(const len_and_sockaddr *lsa)
++int get_nport(const struct sockaddr *sa)
+ {
+ #if ENABLE_FEATURE_IPV6
+-	if (lsa->sa.sa_family == AF_INET6) {
+-		return lsa->sin6.sin6_port;
++	if (sa->sa_family == AF_INET6) {
++		return ((struct sockaddr_in6*)sa)->sin6_port;
+ 	}
+ #endif
+-	if (lsa->sa.sa_family == AF_INET) {
+-		return lsa->sin.sin_port;
++	if (sa->sa_family == AF_INET) {
++		return ((struct sockaddr_in*)sa)->sin_port;
+ 	}
+ 	/* What? UNIX socket? IPX?? :) */
+ 	return -1;
+@@ -308,12 +308,10 @@ char* xmalloc_sockaddr2host(const struct sockaddr *sa, socklen_t salen)
+ 	return sockaddr2str(sa, salen, 0);
+ }
+ 
+-/* Unused
+ char* xmalloc_sockaddr2host_noport(const struct sockaddr *sa, socklen_t salen)
+ {
+ 	return sockaddr2str(sa, salen, IGNORE_PORT);
+ }
+-*/
+ 
+ char* xmalloc_sockaddr2hostonly_noport(const struct sockaddr *sa, socklen_t salen)
+ {
+diff --git a/libbb/xfuncs.c b/libbb/xfuncs.c
+index 68ad3dec4..b08f92d81 100644
+--- a/libbb/xfuncs.c
++++ b/libbb/xfuncs.c
+@@ -205,6 +205,63 @@ int wait4pid(int pid)
+ 	return 0;
+ }
+ 
++int wait_nohang(int *wstat)
++{
++	return waitpid(-1, wstat, WNOHANG);
++}
++
++int wait_pid(int *wstat, int pid)
++{
++	int r;
++
++	do
++		r = waitpid(pid, wstat, 0);
++	while ((r == -1) && (errno == EINTR));
++	return r;
++}
++
++void sig_block(int sig)
++{
++	sigset_t ss;
++	sigemptyset(&ss);
++	sigaddset(&ss, sig);
++	sigprocmask(SIG_BLOCK, &ss, NULL);
++}
++
++void sig_unblock(int sig)
++{
++	sigset_t ss;
++	sigemptyset(&ss);
++	sigaddset(&ss, sig);
++	sigprocmask(SIG_UNBLOCK, &ss, NULL);
++}
++
++#if 0
++void sig_blocknone(void)
++{
++	sigset_t ss;
++	sigemptyset(&ss);
++	sigprocmask(SIG_SETMASK, &ss, NULL);
++}
++#endif
++
++void sig_catch(int sig, void (*f)(int))
++{
++	struct sigaction sa;
++	sa.sa_handler = f;
++	sa.sa_flags = 0;
++	sigemptyset(&sa.sa_mask);
++	sigaction(sig, &sa, NULL);
++}
++
++void sig_pause(void)
++{
++	sigset_t ss;
++	sigemptyset(&ss);
++	sigsuspend(&ss);
++}
++
++
+ void xsetenv(const char *key, const char *value)
+ {
+ 	if (setenv(key, value, 1))
+diff --git a/networking/nc.c b/networking/nc.c
+index 1bdecaf5e..bc7c701fe 100644
+--- a/networking/nc.c
++++ b/networking/nc.c
+@@ -106,7 +106,7 @@ int nc_main(int argc, char **argv)
+ 			if (!lport) {
+ 				socklen_t addrlen = lsa->len;
+ 				getsockname(sfd, &lsa->sa, &addrlen);
+-				lport = get_nport(lsa);
++				lport = get_nport(&lsa->sa);
+ 				fdprintf(2, "%d\n", ntohs(lport));
+ 			}
+ 			fcntl(sfd, F_SETFD, FD_CLOEXEC);
+diff --git a/networking/tftp.c b/networking/tftp.c
+index bbed9ac78..ea415e5fe 100644
+--- a/networking/tftp.c
++++ b/networking/tftp.c
+@@ -287,7 +287,7 @@ static int tftp(
+ 					bb_perror_msg("recvfrom");
+ 					break;
+ 				}
+-				from_port = get_nport(from);
++				from_port = get_nport(&from->sa);
+ 				if (port == org_port) {
+ 					/* Our first query went to port 69
+ 					 * but reply will come from different one.
+diff --git a/runit/runit_lib.c b/runit/runit_lib.c
+index 4762096b4..fcb66c3db 100644
+--- a/runit/runit_lib.c
++++ b/runit/runit_lib.c
+@@ -385,56 +385,9 @@ int seek_set(int fd,seek_pos pos)
+ #endif
+ 
+ 
+-/*** sig_block.c ***/
+-
+-void sig_block(int sig)
+-{
+-	sigset_t ss;
+-	sigemptyset(&ss);
+-	sigaddset(&ss, sig);
+-	sigprocmask(SIG_BLOCK, &ss, NULL);
+-}
+-
+-void sig_unblock(int sig)
+-{
+-	sigset_t ss;
+-	sigemptyset(&ss);
+-	sigaddset(&ss, sig);
+-	sigprocmask(SIG_UNBLOCK, &ss, NULL);
+-}
+-
+-void sig_blocknone(void)
+-{
+-	sigset_t ss;
+-	sigemptyset(&ss);
+-	sigprocmask(SIG_SETMASK, &ss, NULL);
+-}
+-
+-
+-/*** sig_catch.c ***/
+-
+-void sig_catch(int sig,void (*f)(int))
+-{
+-	struct sigaction sa;
+-	sa.sa_handler = f;
+-	sa.sa_flags = 0;
+-	sigemptyset(&sa.sa_mask);
+-	sigaction(sig,&sa, NULL);
+-}
+-
+-
+-/*** sig_pause.c ***/
+-
+-void sig_pause(void)
+-{
+-	sigset_t ss;
+-	sigemptyset(&ss);
+-	sigsuspend(&ss);
+-}
+-
+-
+ /*** str_chr.c ***/
+ 
++// strchrnul?
+ unsigned str_chr(const char *s,int c)
+ {
+ 	char ch;
+@@ -449,24 +402,3 @@ unsigned str_chr(const char *s,int c)
+ 	}
+ 	return t - s;
+ }
+-
+-
+-/*** wait_nohang.c ***/
+-
+-int wait_nohang(int *wstat)
+-{
+-	return waitpid(-1, wstat, WNOHANG);
+-}
+-
+-
+-/*** wait_pid.c ***/
+-
+-int wait_pid(int *wstat, int pid)
+-{
+-	int r;
+-
+-	do
+-		r = waitpid(pid, wstat, 0);
+-	while ((r == -1) && (errno == EINTR));
+-	return r;
+-}
+diff --git a/runit/runit_lib.h b/runit/runit_lib.h
+index 9fe4166bc..25aeeaf70 100644
+--- a/runit/runit_lib.h
++++ b/runit/runit_lib.h
+@@ -123,32 +123,9 @@ extern int open_write(const char *);
+ extern unsigned pmatch(const char *, const char *, unsigned);
+ 
+ 
+-/*** sig.h ***/
+-
+-extern void sig_catch(int,void (*)(int));
+-#define sig_ignore(s) (sig_catch((s), SIG_IGN))
+-#define sig_uncatch(s) (sig_catch((s), SIG_DFL))
+-
+-extern void sig_block(int);
+-extern void sig_unblock(int);
+-extern void sig_blocknone(void);
+-extern void sig_pause(void);
+-
+-
+ /*** str.h ***/
+ 
+ extern unsigned str_chr(const char *,int);  /* never returns NULL */
+ 
+ #define str_diff(s,t) strcmp((s), (t))
+ #define str_equal(s,t) (!strcmp((s), (t)))
+-
+-
+-/*** wait.h ***/
+-
+-extern int wait_pid(int *wstat, int pid);
+-extern int wait_nohang(int *wstat);
+-
+-#define wait_crashed(w) ((w) & 127)
+-#define wait_exitcode(w) ((w) >> 8)
+-#define wait_stopsig(w) ((w) >> 8)
+-#define wait_stopped(w) (((w) & 127) == 127)
+diff --git a/runit/runsv.c b/runit/runsv.c
+index 018456847..61eb02e64 100644
+--- a/runit/runsv.c
++++ b/runit/runsv.c
+@@ -323,11 +323,11 @@ static void startservice(struct svdir *s)
+ 				close(logpipe[0]);
+ 			}
+ 		}
+-		sig_uncatch(SIGCHLD);
++		signal(SIGCHLD, SIG_DFL);
++		signal(SIGTERM, SIG_DFL);
+ 		sig_unblock(SIGCHLD);
+-		sig_uncatch(SIGTERM);
+ 		sig_unblock(SIGTERM);
+-		execve(*run, run, environ);
++		execvp(*run, run);
+ 		fatal2_cannot(s->islog ? "start log/" : "start ", *run);
+ 	}
+ 	if (s->state != S_FINISH) {
+diff --git a/runit/runsvdir.c b/runit/runsvdir.c
+index cce2c5d9c..39929fc49 100644
+--- a/runit/runsvdir.c
++++ b/runit/runsvdir.c
+@@ -97,9 +97,10 @@ static void runsv(int no, const char *name)
+ 		prog[0] = (char*)"runsv";
+ 		prog[1] = (char*)name;
+ 		prog[2] = NULL;
+-		sig_uncatch(SIGHUP);
+-		sig_uncatch(SIGTERM);
+-		if (pgrp) setsid();
++		if (pgrp)
++			setsid();
++		signal(SIGHUP, SIG_DFL);
++		signal(SIGTERM, SIG_DFL);
+ 		BB_EXECVP(prog[0], prog);
+ 		//pathexec_run(*prog, prog, (char* const*)environ);
+ 		fatal2_cannot("start runsv ", name);
+diff --git a/runit/svlogd.c b/runit/svlogd.c
+index fb834a403..1d6625561 100644
+--- a/runit/svlogd.c
++++ b/runit/svlogd.c
+@@ -143,9 +143,9 @@ static unsigned processorstart(struct logdir *ld)
+ 		int fd;
+ 
+ 		/* child */
+-		sig_uncatch(SIGTERM);
+-		sig_uncatch(SIGALRM);
+-		sig_uncatch(SIGHUP);
++		signal(SIGTERM, SIG_DFL);
++		signal(SIGALRM, SIG_DFL);
++		signal(SIGHUP, SIG_DFL);
+ 		sig_unblock(SIGTERM);
+ 		sig_unblock(SIGALRM);
+ 		sig_unblock(SIGHUP);

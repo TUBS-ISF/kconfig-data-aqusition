@@ -1,0 +1,735 @@
+"2015-09-25 09:22:21 -0300"
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+index 6f1d1b56..1dcfda9f 100644
+--- a/src/lib/io/Kconfig
++++ b/src/lib/io/Kconfig
+@@ -72,3 +72,13 @@ config USE_EFIVARS
+     bool "EFI vars persistence storage"
+     depends on USE_STORAGE
+     default y
++
++config USE_MEMMAP
++    bool "Memory map persistence storage"
++    depends on USE_STORAGE
++    default y
++    help
++        Provide persistence storage based on memory maps.
++        Users must provide a mapping - for instance, using a JSON
++        file - that will be used to define where on memory
++        entries will be saved. Examples of memory are NVRAM or EEPROM.
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index 4af54a88..15079d21 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -69,6 +69,8 @@ obj-io-storage-$(USE_FILESYSTEM) += \
+     sol-fs-storage.o
+ obj-io-storage-$(USE_EFIVARS) += \
+     sol-efivarfs-storage.o
++obj-io-storage-$(USE_MEMMAP) += \
++    sol-memmap-storage.o
+ 
+ headers-$(USE_AIO) += \
+     include/sol-aio.h
+@@ -90,3 +92,5 @@ headers-$(USE_FILESYSTEM) += \
+     include/sol-fs-storage.h
+ headers-$(USE_EFIVARS) += \
+     include/sol-efivarfs-storage.h
++headers-$(USE_MEMMAP) += \
++    include/sol-memmap-storage.h
+diff --git a/src/lib/io/include/sol-memmap-storage.h b/src/lib/io/include/sol-memmap-storage.h
+new file mode 100644
+index 00000000..88f4b401
+--- /dev/null
++++ b/src/lib/io/include/sol-memmap-storage.h
+@@ -0,0 +1,276 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include "sol-buffer.h"
++#include "sol-str-table.h"
++#include "sol-types.h"
++#include "sol-log.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief Routines to save values to memory mapped persistent storage
++ */
++
++/**
++ * @defgroup Memmap Memmap
++ * @ingroup IO
++ *
++ * Memory mapped persistence storage (like NVRAM or EEPROM) API on Soletta.
++ *
++ * A map must be provided, either directly via @c sol_memmap_add_map or by
++ * informing a JSON file to Soletta runner or generator.
++ * This map needs to contain a property @c _version (@c MEMMAP_VERSION_ENTRY),
++ * which will store version of map stored. This API will refuse to work if
++ * stored map is different from map version. Note that @c _version field
++ * is a @c uint8_t and that versions should start on 1, so Soletta will know
++ * if dealing with a totally new storage.
++ *
++ * @{
++ */
++
++#define MEMMAP_VERSION_ENTRY "_version" /**< Name of property which contains stored map version */
++
++#define SOL_MEMMAP_ENTRY(_name, _offset, _size) \
++    SOL_STR_TABLE_PTR_ITEM(_name, &((struct sol_memmap_entry){.offset = (_offset), .size = (_size) }))
++
++#define SOL_MEMMAP_BOOL_ENTRY(_name, _offset, _bit_offset) \
++    SOL_STR_TABLE_PTR_ITEM(_name, &((struct sol_memmap_entry){.offset = (_offset), .size = 1, .bit_offset = (_bit_offset), .bit_size = 1 }))
++
++#define SOL_MEMMAP_ENTRY_BIT_SIZE(_name, _offset, _size, _bit_offset, _bit_size) \
++    SOL_STR_TABLE_PTR_ITEM(_name, &((struct sol_memmap_entry){.offset = (_offset), .size = (_size), .bit_offset = (_bit_offset), .bit_size = (_bit_size) }))
++
++struct sol_memmap_map {
++    uint8_t version; /**< Version of map. Functions will refuse to read/write on storage if this version and the one storad differs */
++    char *path; /**< Where to find the storage. Under Linux, it is the file mapping the storage, like @c /dev/nvram */
++    struct sol_str_table_ptr entries[]; /**< Entries on map, containing name, offset and size */
++};
++
++struct sol_memmap_entry {
++    size_t offset; /**< Offset of this entry on storage, in bytes. If zero, it will be calculated from previous entry on @c entries array */
++    size_t size; /**< Total size of this entry on storage, in bytes. */
++    uint32_t bit_size; /**< Total size of this entry on storage, in bits. Must be up to <tt>size * 8</tt>. If zero, it will be assumed as <tt>size * 8</tt>. Note that this will be ignored if @c size is greater than 8. */
++    uint8_t bit_offset; /**< Bit offset on first byte. Note that this will be ignored if @c size is greater than 8. */
++};
++
++/**
++ * Writes buffer contents to storage.
++ *
++ * @param name name of property. must be present in one of maps previoulsy
++ * added via @c sol_memmap_add_map (if present in more than one,
++ * behaviour is undefined)
++ * @param buffer buffer that will be written, according to its entry on map.
++ *
++ * return 0 on success, a negative number on failure
++ */
++int sol_memmap_write_raw(const char *name, const struct sol_buffer *buffer);
++
++/**
++ * Read storage contents to buffer.
++ *
++ * @param name name of property. must be present in one of maps previoulsy
++ * added via @c sol_memmap_add_map (if present in more than one,
++ * behaviour is undefined)
++ * @param buffer buffer where result will be read into, according to its entry
++ * on map.
++ *
++ * return 0 on success, a negative number on failure
++ */
++int sol_memmap_read_raw(const char *name, struct sol_buffer *buffer);
++
++/**
++ * Add a map to internal list of available maps.
++ *
++ * As Soletta will keep a reference to this map, it should be kept alive
++ * during memmap usage.
++ *
++ * @param map map to be add.
++ *
++ * @return 0 on success, a negative number on failure.
++ */
++int sol_memmap_add_map(const struct sol_memmap_map *map);
++
++/**
++ * Removes a previously added map from internal list of available maps.
++ *
++ * @param map map to be removed.
++ *
++ * @return 0 on success, a negative number on failure.
++ */
++int sol_memmap_remove_map(const struct sol_memmap_map *map);
++
++#define CREATE_BUFFER(_val, _empty) \
++    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(_val, \
++    sizeof(*(_val)), SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED | SOL_BUFFER_FLAGS_NO_NUL_BYTE); \
++    buf.used = (_empty) ? 0 : sizeof(*(_val));
++
++static inline int
++sol_memmap_read_uint8(const char *name, uint8_t *value)
++{
++    CREATE_BUFFER(value, true);
++
++    return sol_memmap_read_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_write_uint8(const char *name, uint8_t value)
++{
++    CREATE_BUFFER(&value, false);
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_read_bool(const char *name, bool *value)
++{
++    CREATE_BUFFER(value, true);
++
++    return sol_memmap_read_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_write_bool(const char *name, bool value)
++{
++    CREATE_BUFFER(&value, false);
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_read_int32(const char *name, int32_t *value)
++{
++    CREATE_BUFFER(value, true);
++
++    return sol_memmap_read_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_write_int32(const char *name, int32_t value)
++{
++    CREATE_BUFFER(&value, false);
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_read_irange(const char *name, struct sol_irange *value)
++{
++    CREATE_BUFFER(value, true);
++
++    return sol_memmap_read_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_write_irange(const char *name, struct sol_irange *value)
++{
++    CREATE_BUFFER(value, false);
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_read_drange(const char *name, struct sol_drange *value)
++{
++    CREATE_BUFFER(value, true);
++
++    return sol_memmap_read_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_write_drange(const char *name, struct sol_drange *value)
++{
++    CREATE_BUFFER(value, false);
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_read_double(const char *name, double *value)
++{
++    CREATE_BUFFER(value, true);
++
++    return sol_memmap_read_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_write_double(const char *name, double value)
++{
++    CREATE_BUFFER(&value, false);
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++static inline int
++sol_memmap_read_string(const char *name, char **value)
++{
++    struct sol_buffer buf = SOL_BUFFER_INIT_EMPTY;
++    int r;
++
++    r = sol_memmap_read_raw(name, &buf);
++    if (r < 0) {
++        sol_buffer_fini(&buf);
++        return r;
++    }
++
++    *value = sol_buffer_steal(&buf, NULL);
++
++    return 0;
++}
++
++static inline int
++sol_memmap_write_string(const char *name, const char *value)
++{
++    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS((void *)value, strlen(value),
++        SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
++
++    buf.used = buf.capacity;
++
++    return sol_memmap_write_raw(name, &buf);
++}
++
++/**
++ * @}
++ */
++
++#undef CREATE_BUFFER
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/io/sol-memmap-storage.c b/src/lib/io/sol-memmap-storage.c
+new file mode 100644
+index 00000000..28d24ac7
+--- /dev/null
++++ b/src/lib/io/sol-memmap-storage.c
+@@ -0,0 +1,361 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "sol-memmap-storage.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "sol-buffer.h"
++#include "sol-log.h"
++#include "sol-str-slice.h"
++#include "sol-str-table.h"
++#include "sol-util.h"
++#include "sol-util-file.h"
++
++#define MIN(a, b) (((a) < (b)) ? (a) : (b))
++
++static struct sol_ptr_vector memory_maps = SOL_PTR_VECTOR_INIT;
++static struct sol_ptr_vector checked_maps = SOL_PTR_VECTOR_INIT;
++
++static bool
++get_entry_metadata_on_map(const char *name, const struct sol_memmap_map *map, const struct sol_memmap_entry **entry, uint64_t *mask)
++{
++    uint32_t bit_size;
++
++    if (sol_str_table_ptr_lookup(map->entries, sol_str_slice_from_str(name), entry)) {
++        bit_size = (*entry)->bit_size;
++        /* No mask if bit_size equal or greater than 64. Such data should not be read as an int */
++        if (bit_size && (bit_size != (*entry)->size * 8) && bit_size < 64)
++            *mask = (((uint64_t)1 << bit_size) - 1) << (*entry)->bit_offset;
++        else
++            *mask = 0;
++
++        return true;
++    }
++
++    return false;
++}
++
++static bool
++get_entry_metadata(const char *name, const struct sol_memmap_map **map, const struct sol_memmap_entry **entry, uint64_t *mask)
++{
++    int i;
++
++    SOL_PTR_VECTOR_FOREACH_IDX (&memory_maps, *map, i) {
++        if (get_entry_metadata_on_map(name, *map, entry, mask))
++            return true;
++    }
++
++    entry = NULL;
++    map = NULL;
++
++    return false;
++}
++
++static int
++sol_memmap_read_raw_do(const char *path, const struct sol_memmap_entry *entry, uint64_t mask, struct sol_buffer *buffer)
++{
++    int fd, ret = 0;
++    uint64_t value = 0;
++    uint32_t i, j;
++
++    fd = open(path, O_RDWR | O_CLOEXEC);
++    if (fd < 0) {
++        SOL_WRN("Could not open memory file [%s]", path);
++        return -errno;
++    }
++
++    if (lseek(fd, entry->offset, SEEK_SET) < 0)
++        goto error;
++
++    if (sol_util_fill_buffer(fd, buffer, entry->size) < 0)
++        goto error;
++
++    if (mask) {
++        for (i = 0, j = 0; i < entry->size; i++, j += 8)
++            value |= (uint64_t)((uint8_t *)buffer->data)[i] << j;
++
++        value &= mask;
++        value >>= entry->bit_offset;
++
++        memset(buffer->data, 0, buffer->capacity);
++        for (i = 0; i < entry->size; i++, value >>= 8)
++            ((uint8_t *)buffer->data)[i] = value & 0xff;
++    }
++
++    if (close(fd) < 0)
++        return -errno;
++
++    return 0;
++
++error:
++    ret = -errno;
++    close(fd);
++
++    return ret;
++}
++
++static int
++sol_memmap_write_raw_do(const char *path, const struct sol_memmap_entry *entry, uint64_t mask, const struct sol_buffer *buffer)
++{
++    FILE *file;
++    int ret = 0;
++
++    file = fopen(path, "r+e");
++    if (!file) {
++        SOL_WRN("Could not open memory file [%s]", path);
++        return -errno;
++    }
++
++    if (fseek(file, entry->offset, SEEK_SET) < 0)
++        goto error;
++
++    if (mask) {
++        uint64_t value = 0, old_value;
++        uint32_t i, j;
++
++        for (i = 0, j = 0; i < entry->size; i++, j += 8)
++            value |= (uint64_t)((uint8_t *)buffer->data)[i] << j;
++
++        ret = fread(&old_value, entry->size, 1, file);
++        if (!ret || ferror(file) || feof(file)) {
++            errno = EIO;
++            goto error;
++        }
++
++        /* We just read from file, let's rewind */
++        if (fseek(file, entry->offset, SEEK_SET) < 0)
++            goto error;
++
++        value <<= entry->bit_offset;
++        value &= mask;
++        value |= (old_value & ~mask);
++        fwrite(&value, entry->size, 1, file);
++    } else {
++        fwrite(buffer->data, MIN(entry->size, buffer->used), 1, file);
++    }
++
++    if (ferror(file)) {
++        errno = EIO;
++        goto error;
++    }
++
++    if (fclose(file) != 0)
++        return -errno;
++
++    return 0;
++
++error:
++    ret = -errno;
++    fclose(file);
++
++    return ret;
++}
++
++static bool
++check_version(const struct sol_memmap_map *map)
++{
++    uint8_t version = 0;
++    struct sol_buffer buf = SOL_BUFFER_INIT_FLAGS(&version, sizeof(uint8_t),
++        SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED | SOL_BUFFER_FLAGS_NO_NUL_BYTE);
++    struct sol_memmap_map *iter;
++    const struct sol_memmap_entry *entry;
++    int ret, i;
++    uint64_t mask;
++
++    if (!map->version) {
++        SOL_WRN("Invalid memory_map_version. Should not be zero");
++        return false;
++    }
++
++    /* Check if already checked.
++     * TODO Maybe have a hash on soletta?*/
++    SOL_PTR_VECTOR_FOREACH_IDX (&checked_maps, iter, i)
++        if (iter == map) return true;
++
++    if (!get_entry_metadata_on_map(MEMMAP_VERSION_ENTRY, map, &entry, &mask)) {
++        SOL_WRN("No entry on memory map to property [%s]", MEMMAP_VERSION_ENTRY);
++        return false;
++    }
++
++    ret = sol_memmap_read_raw_do(map->path, entry, mask, &buf);
++    if (ret >= 0 && version == 0) {
++        /* No version on file, we should be initialising it */
++        version = map->version;
++        if (sol_memmap_write_raw_do(map->path, entry, mask, &buf) < 0) {
++            SOL_WRN("Could not write current map version to file");
++            return false;
++        }
++    } else if (ret < 0) {
++        SOL_WRN("Could not read current map version");
++        return false;
++    }
++
++    if (version != map->version) {
++        SOL_WRN("Memory map version mismatch. Expected %d but found %d",
++            map->version, version);
++        return false;
++    }
++
++    return sol_ptr_vector_append(&checked_maps, (void *)map) == 0;
++}
++
++SOL_API int
++sol_memmap_write_raw(const char *name, const struct sol_buffer *buffer)
++{
++    const struct sol_memmap_map *map;
++    const struct sol_memmap_entry *entry;
++    uint64_t mask;
++
++    SOL_NULL_CHECK(name, -EINVAL);
++    SOL_NULL_CHECK(buffer, -EINVAL);
++
++    if (!get_entry_metadata(name, &map, &entry, &mask)) {
++        SOL_WRN("No entry on memory map to property [%s]", name);
++        return -ENOENT;
++    }
++
++    if (!check_version(map))
++        return -EINVAL;
++
++    if (buffer->used > entry->size)
++        SOL_INF("Mapped size for [%s] is %ld, smaller than buffer contents: %ld",
++            name, entry->size, buffer->used);
++
++    return sol_memmap_write_raw_do(map->path, entry, mask, buffer);
++}
++
++SOL_API int
++sol_memmap_read_raw(const char *name, struct sol_buffer *buffer)
++{
++    uint64_t mask;
++    const struct sol_memmap_map *map;
++    const struct sol_memmap_entry *entry;
++
++    SOL_NULL_CHECK(name, -EINVAL);
++    SOL_NULL_CHECK(buffer, -EINVAL);
++
++    if (!get_entry_metadata(name, &map, &entry, &mask)) {
++        SOL_WRN("No entry on memory map to property [%s]", name);
++        return -ENOENT;
++    }
++
++    if (!check_version(map))
++        return -EINVAL;
++
++    return sol_memmap_read_raw_do(map->path, entry, mask, buffer);
++}
++
++static bool
++check_entry(const struct sol_memmap_map *map,
++    const struct sol_memmap_entry *entry,
++    const char **failed_entry)
++{
++    int32_t bit_start, bit_end, other_start, other_end;
++    const struct sol_str_table_ptr *iter;
++    const struct sol_memmap_entry *other;
++
++    bit_start = (entry->offset * 8) + entry->bit_offset;
++    bit_end = bit_start + (entry->bit_size ? : entry->size * 8) - 1;
++
++    for (iter = map->entries; iter->key; iter++) {
++        if (iter->val == entry) continue;
++        other = iter->val;
++
++        other_start = (other->offset * 8) + other->bit_offset;
++        other_end = other_start + (other->bit_size ? : other->size * 8) - 1;
++
++        if (!((bit_start > other_end) || (bit_end < other_start))) {
++            *failed_entry = iter->key;
++            return false;
++        }
++    }
++
++    return true;
++}
++
++static bool
++check_map(const struct sol_memmap_map *map)
++{
++    const struct sol_str_table_ptr *iter;
++    const char *failed_entry;
++    struct sol_memmap_entry *entry;
++    uint32_t last_offset = 0;
++
++    /* First, calculate any offset that was not set */
++    for (iter = map->entries; iter->key; iter++) {
++        entry = (void *)iter->val;
++        if (entry->bit_offset > 7) {
++            SOL_WRN("Entry [%s] bit_offset greater than 7, found: %d",
++                iter->key, entry->bit_offset);
++            return false;
++        }
++        if (!entry->offset)
++            entry->offset = last_offset;
++        last_offset = entry->offset + entry->size;
++
++        SOL_DBG("Entry [%s] starting on offset [%lu] with size [%lu]", iter->key,
++            entry->offset, entry->size);
++    }
++
++    /* Now check for overlaps */
++    for (iter = map->entries; iter->key; iter++) {
++        if (!check_entry(map, iter->val, &failed_entry)) {
++            SOL_WRN("Entry [%s] overlaps entry [%s] on map", iter->key,
++                failed_entry);
++            return false;
++        }
++    }
++
++    return true;
++}
++
++SOL_API int
++sol_memmap_add_map(const struct sol_memmap_map *map)
++{
++    if (!check_map(map)) {
++        SOL_WRN("Invalid memory map. Map->path: [%s]", map->path);
++        return -EINVAL;
++    }
++
++    return sol_ptr_vector_append(&memory_maps, (void *)map);
++}
++
++SOL_API int
++sol_memmap_remove_map(const struct sol_memmap_map *map)
++{
++    return sol_ptr_vector_remove(&memory_maps, map);
++}
+diff --git a/src/modules/flow/persistence/Kconfig b/src/modules/flow/persistence/Kconfig
+index 4d025747..2d4f5005 100644
+--- a/src/modules/flow/persistence/Kconfig
++++ b/src/modules/flow/persistence/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_PERSISTENCE
+ 	tristate "Node type: persistence"
+-	depends on PLATFORM_LINUX && (USE_EFIVARS || USE_FILESYSTEM)
++	depends on PLATFORM_LINUX && (USE_EFIVARS || USE_FILESYSTEM || USE_MEMMAP)
+ 	default m
+diff --git a/src/modules/flow/persistence/persistence.c b/src/modules/flow/persistence/persistence.c
+index 2b26bc97..b8f74a9a 100644
+--- a/src/modules/flow/persistence/persistence.c
++++ b/src/modules/flow/persistence/persistence.c
+@@ -48,6 +48,10 @@
+ #include "sol-efivarfs-storage.h"
+ #endif
+ 
++#ifdef USE_MEMMAP
++#include "sol-memmap-storage.h"
++#endif
++
+ struct storage_fn {
+     int (*write)(const char *name, const struct sol_buffer *buffer);
+     int (*read)(const char *name, struct sol_buffer *buffer);
+@@ -83,12 +87,22 @@ static const struct storage_fn efivars_fn = {
+ };
+ #endif
+ 
++#ifdef USE_MEMMAP
++static const struct storage_fn memmap_fn = {
++    .write = sol_memmap_write_raw,
++    .read = sol_memmap_read_raw
++};
++#endif
++
+ static const struct sol_str_table_ptr storage_fn_table[] = {
+ #ifdef USE_FILESYSTEM
+     SOL_STR_TABLE_PTR_ITEM("fs", &fs_fn),
+ #endif
+ #ifdef USE_EFIVARS
+     SOL_STR_TABLE_PTR_ITEM("efivars", &efivars_fn),
++#endif
++#ifdef USE_MEMMAP
++    SOL_STR_TABLE_PTR_ITEM("memmap", &memmap_fn),
+ #endif
+     { }
+ };

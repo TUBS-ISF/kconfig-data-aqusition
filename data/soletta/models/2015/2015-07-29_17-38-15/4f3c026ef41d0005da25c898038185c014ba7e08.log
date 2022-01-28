@@ -1,0 +1,168 @@
+"2015-07-29 17:38:15 -0300"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 7b37b953..b18bdb19 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -317,8 +317,11 @@ config USE_PWM
+ config USE_SPI
+ 	bool "SPI Support"
+ 	default y
+-endmenu
+ 
++config USE_UART
++	bool "UART Support"
++	default y
++endmenu
+ 
+ config SOCKET_LINUX
+ 	bool "Linux sockets"
+diff --git a/src/lib/common/sol-interrupt_scheduler_riot.c b/src/lib/common/sol-interrupt_scheduler_riot.c
+index af64d7e9..1609a36c 100644
+--- a/src/lib/common/sol-interrupt_scheduler_riot.c
++++ b/src/lib/common/sol-interrupt_scheduler_riot.c
+@@ -40,8 +40,10 @@ static kernel_pid_t pid;
+ 
+ enum interrupt_type {
+     GPIO,
++#ifdef USE_UART
+     UART_RX,
+     UART_TX
++#endif
+ };
+ 
+ struct interrupt_data_base {
+@@ -54,6 +56,7 @@ struct interrupt_data {
+     void *data;
+ };
+ 
++#ifdef USE_UART
+ struct uart_interrupt_data {
+     struct interrupt_data_base base;
+     uart_t uart_id;
+@@ -66,6 +69,7 @@ struct uart_rx_interrupt_data {
+     char char_read;
+     struct uart_interrupt_data *uart_int;
+ };
++#endif
+ 
+ void
+ sol_interrupt_scheduler_set_pid(kernel_pid_t p)
+@@ -136,6 +140,7 @@ sol_interrupt_scheduler_gpio_stop(gpio_t dev, void *handler)
+ }
+ 
+ /* Run in interrupt context */
++#ifdef USE_UART
+ static void
+ uart_rx_cb(void *data, char char_read)
+ {
+@@ -203,6 +208,7 @@ sol_interrupt_scheduler_uart_stop(uart_t uart, void *handler)
+     uart_init_blocking(uart, 9600);
+     interrupt_scheduler_handler_free(handler);
+ }
++#endif
+ 
+ void
+ sol_interrupt_scheduler_process(msg_t *msg)
+@@ -216,6 +222,7 @@ sol_interrupt_scheduler_process(msg_t *msg)
+         interrupt_data_base_unref(&int_data->base);
+         break;
+     }
++#ifdef USE_UART
+     case UART_RX: {
+         struct uart_rx_interrupt_data *rx_data = (void *)msg->content.ptr;
+         uart_rx_cb_t cb = rx_data->uart_int->rx_cb;
+@@ -235,5 +242,6 @@ sol_interrupt_scheduler_process(msg_t *msg)
+         interrupt_data_base_unref(&int_data->base);
+         break;
+     }
++#endif
+     }
+ }
+diff --git a/src/lib/common/sol-interrupt_scheduler_riot.h b/src/lib/common/sol-interrupt_scheduler_riot.h
+index 3d4a2617..afe9516c 100644
+--- a/src/lib/common/sol-interrupt_scheduler_riot.h
++++ b/src/lib/common/sol-interrupt_scheduler_riot.h
+@@ -33,14 +33,19 @@
+ #include "kernel_types.h"
+ #include "msg.h"
+ #include "periph/gpio.h"
++
++#ifdef USE_UART
+ #include "periph/uart.h"
++#endif
+ 
+ void sol_interrupt_scheduler_set_pid(kernel_pid_t pid);
+ 
+ int sol_interrupt_scheduler_gpio_init_int(gpio_t dev, gpio_pp_t pullup, gpio_flank_t flank, gpio_cb_t cb, void *arg, void **handler);
+ void sol_interrupt_scheduler_gpio_stop(gpio_t dev, void *handler);
+ 
++#ifdef USE_UART
+ int sol_interrupt_scheduler_uart_init_int(uart_t uart, uint32_t baudrate, uart_rx_cb_t rx_cb, uart_tx_cb_t tx_cb, void *arg, void **handler);
+ void sol_interrupt_scheduler_uart_stop(uart_t uart, void *handler);
++#endif
+ 
+ void sol_interrupt_scheduler_process(msg_t *msg);
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index 5c8c5202..a1bedf5a 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -12,8 +12,7 @@ endif
+ ifeq (y,$(PLATFORM_RIOTOS))
+ obj-io-$(IO) += \
+     sol-gpio-riot.o \
+-    sol-i2c-riot.o \
+-    sol-uart-riot.o
++    sol-i2c-riot.o
+ 
+ ifeq (y, $(USE_PWM))
+ obj-io-$(IO) += \
+@@ -24,6 +23,11 @@ ifeq (y, $(USE_SPI))
+ obj-io-$(IO) += \
+     sol-spi-riot.o
+ endif # USE_SPI
++
++ifeq (y, $(USE_UART))
++obj-io-$(IO) += \
++    sol-uart-riot.o
++endif # USE_UART
+ endif
+ 
+ ifeq (y,$(PLATFORM_CONTIKI))
+@@ -34,8 +38,7 @@ endif
+ ifeq (y,$(SOL_PLATFORM_LINUX))
+ obj-io-$(IO) += \
+     sol-gpio-linux.o \
+-    sol-i2c-linux.o \
+-    sol-uart-linux.o
++    sol-i2c-linux.o
+ 
+ ifeq (y, $(USE_PWM))
+ obj-io-$(IO) += \
+@@ -46,12 +49,16 @@ ifeq (y, $(USE_SPI))
+ obj-io-$(IO) += \
+     sol-spi-linux.o
+ endif # USE_SPI
++
++ifeq (y, $(USE_UART))
++obj-io-$(IO) += \
++    sol-uart-linux.o
++endif # USE_UART
+ endif
+ 
+ headers-$(IO) := \
+     include/sol-gpio.h \
+-    include/sol-i2c.h \
+-    include/sol-uart.h
++    include/sol-i2c.h
+ 
+ ifeq (y, $(USE_PWM))
+ headers-$(IO) += \
+@@ -62,3 +69,8 @@ ifeq (y, $(USE_SPI))
+ headers-$(IO) += \
+     include/sol-spi.h
+ endif
++
++ifeq (y, $(USE_UART))
++headers-$(IO) += \
++    include/sol-uart.h
++endif

@@ -1,0 +1,257 @@
+"2004-12-20 00:10:51 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 56f794912..6969bdb5e 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -526,6 +526,16 @@ config UCLIBC_TZ_FILE_PATH
+ 
+ 	  Most people will use the default of '/etc/TZ'.
+ 
++config UCLIBC_XATTR
++	bool "Extended Attributes"
++	default n
++	help
++	  Extended attributes are name:value pairs associated with inodes (files, 
++	  directories, symlinks, etc).  They are extensions to the normal attributes 
++	  which are associated with all inodes in the system.
++	  Most people should answer N.
++	  Selinux users will want to say Y here.
++
+ endmenu
+ 
+ menu "Networking Support"
+diff --git a/include/sys/xattr.h b/include/sys/xattr.h
+new file mode 100644
+index 000000000..2737f90bd
+--- /dev/null
++++ b/include/sys/xattr.h
+@@ -0,0 +1,104 @@
++/* Copyright (C) 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_XATTR_H
++#define _SYS_XATTR_H	1
++
++#include <features.h>
++#include <sys/types.h>
++
++
++__BEGIN_DECLS
++
++/* The following constants should be used for the fifth parameter of
++   `*setxattr'.  */
++enum
++{
++  XATTR_CREATE = 1,	/* set value, fail if attr already exists.  */
++#define XATTR_CREATE	XATTR_CREATE
++  XATTR_REPLACE = 2	/* set value, fail if attr does not exist.  */
++#define XATTR_REPLACE	XATTR_REPLACE
++};
++
++/* Set the attribute NAME of the file pointed to by PATH to VALUE (which
++   is SIZE bytes long).  Return 0 on success, -1 for errors.  */
++extern int setxattr (__const char *__path, __const char *__name,
++		     __const void *__value, size_t __size, int __flags)
++	__THROW;
++
++/* Set the attribute NAME of the file pointed to by PATH to VALUE (which is
++   SIZE bytes long), not following symlinks for the last pathname component.
++   Return 0 on success, -1 for errors.  */
++extern int lsetxattr (__const char *__path, __const char *__name,
++		      __const void *__value, size_t __size, int __flags)
++	__THROW;
++
++/* Set the attribute NAME of the file descriptor FD to VALUE (which is SIZE
++   bytes long).  Return 0 on success, -1 for errors.  */
++extern int fsetxattr (int __fd, __const char *__name, __const void *__value,
++		      size_t __size, int __flags) __THROW;
++
++/* Get the attribute NAME of the file pointed to by PATH to VALUE (which is
++   SIZE bytes long).  Return 0 on success, -1 for errors.  */
++extern ssize_t getxattr (__const char *__path, __const char *__name,
++			 void *__value, size_t __size) __THROW;
++
++/* Get the attribute NAME of the file pointed to by PATH to VALUE (which is
++   SIZE bytes long), not following symlinks for the last pathname component.
++   Return 0 on success, -1 for errors.  */
++extern ssize_t lgetxattr (__const char *__path, __const char *__name,
++			  void *__value, size_t __size) __THROW;
++
++/* Get the attribute NAME of the file descriptor FD to VALUE (which is SIZE
++   bytes long).  Return 0 on success, -1 for errors.  */
++extern ssize_t fgetxattr (int __fd, __const char *__name, void *__value,
++			  size_t __size) __THROW;
++
++/* List attributes of the file pointed to by PATH into the user-supplied
++   buffer LIST (which is SIZE bytes big).  Return 0 on success, -1 for
++   errors.  */
++extern ssize_t listxattr (__const char *__path, char *__list, size_t __size)
++	__THROW;
++
++/* List attributes of the file pointed to by PATH into the user-supplied
++   buffer LIST (which is SIZE bytes big), not following symlinks for the
++   last pathname component.  Return 0 on success, -1 for errors.  */
++extern ssize_t llistxattr (__const char *__path, char *__list, size_t __size)
++	__THROW;
++
++/* List attributes of the file descriptor FD into the user-supplied buffer
++   LIST (which is SIZE bytes big).  Return 0 on success, -1 for errors.  */
++extern ssize_t flistxattr (int __fd, char *__list, size_t __size)
++	__THROW;
++
++/* Remove the attribute NAME from the file pointed to by PATH.  Return 0
++   on success, -1 for errors.  */
++extern int removexattr (__const char *__path, __const char *__name) __THROW;
++
++/* Remove the attribute NAME from the file pointed to by PATH, not
++   following symlinks for the last pathname component.  Return 0 on
++   success, -1 for errors.  */
++extern int lremovexattr (__const char *__path, __const char *__name) __THROW;
++
++/* Remove the attribute NAME from the file descriptor FD.  Return 0 on
++   success, -1 for errors.  */
++extern int fremovexattr (int __fd, __const char *__name) __THROW;
++
++__END_DECLS
++
++#endif	/* sys/xattr.h  */
+diff --git a/libc/sysdeps/linux/common/Makefile b/libc/sysdeps/linux/common/Makefile
+index a6be4307e..ddd015f7c 100644
+--- a/libc/sysdeps/linux/common/Makefile
++++ b/libc/sysdeps/linux/common/Makefile
+@@ -32,8 +32,8 @@ CSRC=	__rt_sigtimedwait.c __socketcall.c __syscall_fcntl.c \
+ 	getpgid.c getpgrp.c getpid.c getppid.c getpriority.c getresgid.c \
+ 	getresuid.c getrlimit.c getrlimit64.c getrusage.c getsid.c \
+ 	gettimeofday.c getuid.c init_module.c ioctl.c ioperm.c iopl.c \
+-	kill.c klogctl.c lchown.c link.c llseek.c longjmp.c lseek.c \
+-	lstat.c lstat64.c madvise.c mkdir.c mkfifo.c mknod.c mlock.c \
++	kill.c klogctl.c lchown.c link.c llseek.c longjmp.c lseek.c lstat.c \
++	lstat64.c madvise.c mkdir.c mkfifo.c mincore.c mknod.c mlock.c \
+ 	mlockall.c mmap.c mmap64.c modify_ldt.c mount.c mprotect.c \
+ 	mremap.c msync.c munlock.c munlockall.c munmap.c nanosleep.c \
+ 	nice.c noophooks.c ntp_gettime.c open.c open64.c pause.c \
+@@ -60,6 +60,11 @@ endif
+ ifeq ($(strip $(UCLIBC_PROPOLICE)),y)
+ CSRC+=ssp.c
+ endif
++
++ifeq ($(strip $(UCLIBC_XATTR)),y)
++CSRC+=xattr.c
++endif
++
+ COBJS=$(patsubst %.c,%.o, $(CSRC))
+ 
+ OBJ=$(COBJS) $(MOBJ)
+diff --git a/libc/sysdeps/linux/common/mincore.c b/libc/sysdeps/linux/common/mincore.c
+new file mode 100644
+index 000000000..ecae441a5
+--- /dev/null
++++ b/libc/sysdeps/linux/common/mincore.c
+@@ -0,0 +1,15 @@
++/* 
++ * Distributed under the terms of the GNU General Public License v2
++ * $Header: /var/cvs/uClibc/libc/sysdeps/linux/common/mincore.c,v 1.1 2004/12/20 00:10:51 solar Exp $
++ *
++ * This file provides the mincore() system call to uClibc.
++ * 20041215 - <solar@gentoo.org>
++ *
++ */
++
++#include "syscalls.h"
++#include <unistd.h>
++
++#ifdef __NR_mincore
++_syscall3(int, mincore, void *, start, size_t, length, unsigned char *, vec);
++#endif
+diff --git a/libc/sysdeps/linux/common/xattr.c b/libc/sysdeps/linux/common/xattr.c
+new file mode 100644
+index 000000000..c5aa69be3
+--- /dev/null
++++ b/libc/sysdeps/linux/common/xattr.c
+@@ -0,0 +1,71 @@
++/* 
++ * Distributed under the terms of the GNU General Public License v2
++ * $Header: /var/cvs/uClibc/libc/sysdeps/linux/common/xattr.c,v 1.1 2004/12/20 00:10:51 solar Exp $
++ *
++ * This file provides the following Extended Attribute system calls to uClibc.
++ *
++ *	setxattr(), lsetxattr(), fsetxattr(),
++ *	getxattr(), lgetxattr(), fgetxattr(),
++ *	listxattr(), llistxattr(), flistxattr(),
++ *	removexattr(), lremovexattr(), fremovexattr()
++ *
++ * 20041215 - <solar@gentoo.org>
++ */
++
++#include "syscalls.h"
++#include <unistd.h>
++
++#ifdef __NR_setxattr
++_syscall5(int, setxattr, const char *, path, const char *, name, const void *,
++		  value, size_t, size, int, flags);
++#endif
++
++#ifdef __NR_lsetxattr
++_syscall5(int, lsetxattr, const char *, path, const char *, name, const void *,
++		  value, size_t, size, int, flags);
++#endif
++
++#ifdef __NR_fsetxattr
++_syscall5(int, fsetxattr, int, filedes, const char *, name, const void *,
++		  value, size_t, size, int, flags);
++#endif
++
++#ifdef __NR_getxattr
++_syscall4(ssize_t, getxattr, const char *, path, const char *, name,
++		  void *, value, size_t, size);
++#endif
++
++#ifdef __NR_lgetxattr
++_syscall4(ssize_t, lgetxattr, const char *, path, const char *, name, void *,
++		  value, size_t, size);
++#endif
++
++#ifdef __NR_fgetxattr
++_syscall4(ssize_t, fgetxattr, int, filedes, const char *, name, void *, value,
++		  size_t, size);
++#endif
++
++#ifdef __NR_listxattr
++_syscall3(ssize_t, listxattr, const char *, path, char *, list, size_t, size);
++#endif
++
++#ifdef __NR_llistxattr
++_syscall3(ssize_t, llistxattr, const char *, path, char *, list, size_t,
++		  size);
++#endif
++
++#ifdef __NR_flistxattr
++_syscall3(size_t, flistxattr, int, filedes, char *, list, size_t, size);
++#endif
++
++#ifdef __NR_removexattr
++_syscall2(int, removexattr, const char *, path, const char *, name);
++#endif
++
++#ifdef __NR_lremovexattr
++_syscall2(int, lremovexattr, const char *, path, const char *, name);
++#endif
++
++#ifdef __NR_fremovexattr
++_syscall2(int, fremovexattr, int, filedes, const char *, name);
++#endif

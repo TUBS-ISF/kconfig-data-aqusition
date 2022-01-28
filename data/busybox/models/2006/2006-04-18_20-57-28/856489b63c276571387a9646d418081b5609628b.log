@@ -1,0 +1,120 @@
+"2006-04-18 20:57:28 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index c77a1c90f..5d2965b47 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -52,6 +52,12 @@ config CONFIG_CHROOT
+ 	  chroot is used to change the root directory and run a command.
+ 	  The default command is `/bin/sh'.
+ 
++config CONFIG_CKSUM
++	bool "cksum"
++	default n
++	help
++	  cksum is used to calculate the CRC32 checksum of a file.
++
+ config CONFIG_CMP
+ 	bool "cmp"
+ 	default n
+diff --git a/coreutils/Makefile.in b/coreutils/Makefile.in
+index ff0e89b4d..24eee0b91 100644
+--- a/coreutils/Makefile.in
++++ b/coreutils/Makefile.in
+@@ -18,6 +18,7 @@ COREUTILS-$(CONFIG_CHGRP)     += chgrp.o
+ COREUTILS-$(CONFIG_CHMOD)     += chmod.o
+ COREUTILS-$(CONFIG_CHOWN)     += chown.o
+ COREUTILS-$(CONFIG_CHROOT)    += chroot.o
++COREUTILS-$(CONFIG_CKSUM)     += cksum.o
+ COREUTILS-$(CONFIG_CMP)       += cmp.o
+ COREUTILS-$(CONFIG_COMM)      += comm.o
+ COREUTILS-$(CONFIG_CP)        += cp.o
+diff --git a/coreutils/cksum.c b/coreutils/cksum.c
+new file mode 100644
+index 000000000..194ea7d2a
+--- /dev/null
++++ b/coreutils/cksum.c
+@@ -0,0 +1,56 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * cksum - calculate the CRC32 checksum of a file
++ *
++ * Copyright (C) 2006 by Rob Sullivan, with ideas from code by Walter Harms
++ * 
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details. */
++
++#include <stdio.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <inttypes.h>
++#include "busybox.h"
++
++int cksum_main(int argc, char **argv) {
++	
++	uint32_t *crc32_table = bb_crc32_filltable(1);
++
++	FILE *fp;
++	uint32_t crc;
++	long length, filesize;
++	int bytes_read;
++	char *cp;
++	RESERVE_CONFIG_BUFFER(buf, BUFSIZ);
++	int inp_stdin = (argc == optind) ? 1 : 0;
++	
++	do {
++		fp = bb_wfopen_input((inp_stdin) ? bb_msg_standard_input : *++argv);
++			
++		crc = 0;
++		length = 0;
++		
++		while ((bytes_read = fread(buf, 1, BUFSIZ, fp)) > 0) {
++			cp = buf;
++			length += bytes_read;
++			while (bytes_read--)
++				crc = (crc << 8) ^ crc32_table[((crc >> 24) ^ (*cp++)) & 0xffL];
++		}
++		
++		filesize = length;
++		
++		for (; length; length >>= 8)
++			crc = (crc << 8) ^ crc32_table[((crc >> 24) ^ length) & 0xffL];
++		crc ^= 0xffffffffL;
++
++		if (inp_stdin) {
++			printf("%"PRIu32" %li\n", crc, filesize);
++			break;
++		}
++		
++		printf("%"PRIu32" %li %s\n", crc, filesize, *argv);	
++		fclose(fp);
++	} while (*(argv+1));
++	
++	return EXIT_SUCCESS;
++}
+diff --git a/include/applets.h b/include/applets.h
+index 12d438cea..059472248 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -70,6 +70,7 @@ USE_CHMOD(APPLET(chmod, chmod_main, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CHOWN(APPLET(chown, chown_main, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CHROOT(APPLET(chroot, chroot_main, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_CHVT(APPLET(chvt, chvt_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_CKSUM(APPLET(cksum, cksum_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_CLEAR(APPLET(clear, clear_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_CMP(APPLET(cmp, cmp_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_COMM(APPLET(comm, comm_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index d458936ca..3edb0f7ca 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -224,6 +224,11 @@
+ #define chvt_full_usage \
+ 	"Changes the foreground virtual terminal to /dev/ttyN"
+ 
++#define cksum_trivial_usage \
++	"FILES..."
++#define cksum_full_usage \
++	"Calculates the CRC32 checksums of FILES."
++
+ #define clear_trivial_usage \
+ 	""
+ #define clear_full_usage \

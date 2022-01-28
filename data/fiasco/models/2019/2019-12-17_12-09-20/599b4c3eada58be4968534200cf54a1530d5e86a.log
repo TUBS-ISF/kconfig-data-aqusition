@@ -1,0 +1,757 @@
+"2019-12-17 12:09:20 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index e54fcef..16be9e1 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -328,6 +328,15 @@ config KERNEL_ISOLATION
+ 	  Intel CPUs during speculative execution. However, there is the
+ 	  extra TLB penalty for each system call.
+ 
++config IA32_PCID
++	bool "Enable usage of Intel PCID feature"
++	depends on AMD64
++	depends on KERNEL_ISOLATION
++	help
++	  Use Intel PCID to implement address space IDs on x86. This should
++	  reduce the amount of TLB flushes needed during address space switches
++	  or user/kernel switches with kernel page table isolation.
++
+ config CPU_LOCAL_MAP
+ 	bool "Enable CPU local page-tables for kernel mappings" if AMD64 && !KERNEL_ISOLATION
+ 	depends on AMD64
+diff --git a/src/boot/amd64/boot_cpu.cc b/src/boot/amd64/boot_cpu.cc
+index c233116..80f0e19 100644
+--- a/src/boot/amd64/boot_cpu.cc
++++ b/src/boot/amd64/boot_cpu.cc
+@@ -53,7 +53,9 @@ enum
+   INTEL_PML4E_WRITE	= 0x0000000000000002LL,
+   INTEL_PML4E_USER	= 0x0000000000000004LL,
+   INTEL_PML4E_PFN	= 0x000ffffffffff000LL,
+- 
++
++  CPUF_EXT_PCID         = 1 << 17,
++
+   BASE_TSS		= 0x08,
+   KERNEL_DS		= 0x18,
+   KERNEL_CS_64		= 0x20, // XXX
+@@ -143,7 +145,8 @@ struct trap_state
+   Unsigned64 rip, cs, rflags, rsp, ss;
+ };
+ 
+-static Unsigned64       cpu_feature_flags;
++static Unsigned32       cpu_feature_flags;
++static Unsigned32       cpu_ext_feature_flags;
+ static Address          base_pml4_pa;
+ static struct x86_tss   base_tss;
+ static struct x86_desc  base_gdt[GDTSZ];
+@@ -257,6 +260,11 @@ paging_enable(Address pml4)
+   /* Enable Physical Address Extension (PAE). */
+   set_cr4(get_cr4() | CR4_PAE);
+ 
++  /* We need to check for the CPU feature otherwise setting the PCID bit may
++   * trigger a #GP, see Intel manual. If needed we will complain later. */
++  if (Config::Pcid_enabled && (cpu_ext_feature_flags & CPUF_EXT_PCID))
++    set_cr4(get_cr4() | CR4_PCID);
++
+   /* Load the page map level 4.  */
+   set_cr3(pml4);
+ 
+@@ -287,11 +295,12 @@ cpuid()
+ 
+ 	  if (highest_val >= 1)
+ 	    {
+-	      asm volatile("cpuid"
+-		           : "=a" (dummy),
+-      			     "=d" (cpu_feature_flags)
+-			     : "a" (1)
+-			     : "ebx", "ecx");
++              asm volatile("cpuid"
++                           : "=a" (dummy),
++                             "=c" (cpu_ext_feature_flags),
++                             "=d" (cpu_feature_flags)
++                           : "a" (1)
++                           : "ebx");
+ 	    }
+ 	}
+     }
+diff --git a/src/boot/bootstrap.cc b/src/boot/bootstrap.cc
+index 48fc486..e4bbb02 100644
+--- a/src/boot/bootstrap.cc
++++ b/src/boot/bootstrap.cc
+@@ -100,7 +100,7 @@ bootstrap()
+ 
+   base_map_physical_memory_for_kernel();
+ 
+-  Mem_unit::tlb_flush();
++  Mem_unit::tlb_flush_early();
+ 
+   start = (Start)_start;
+ 
+diff --git a/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp b/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp
+index 7366d8b..5c5b248 100644
+--- a/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp
++++ b/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp
+@@ -37,6 +37,10 @@ Jdb_kern_info_bench::get_time_now()
+   asm volatile ("mov %%cr3,%0; mov %0,%%cr3"				\
+ 		: "=r"(dummy))
+ 
++#define inst_reload_cr3_no_flush					\
++  asm volatile ("mov %%cr3,%0; bts $63, %0; mov %0,%%cr3"		\
++		: "=r"(dummy))
++
+ #define inst_clts							\
+   asm volatile ("clts")
+ 
+@@ -109,6 +113,8 @@ Jdb_kern_info_bench::show_arch()
+   BENCH("read CR3",		inst_read_cr3,     200000);
+   BENCH("reload CR3",		inst_reload_cr3,   200000);
+   time_reload_cr3 = time;
++  if (Config::Pcid_enabled)
++    BENCH("reload CR3/nf",	inst_reload_cr3_no_flush, 200000);
+   cr0 = Cpu::get_cr0();
+   BENCH("clts",			inst_clts,         200000);
+   BENCH("cli + sti",		inst_cli_sti,      200000);
+diff --git a/src/jdb/ia32/jdb_kern_info-ia32-ux.cpp b/src/jdb/ia32/jdb_kern_info-ia32-ux.cpp
+index 42e2b8e..fd7ef65 100644
+--- a/src/jdb/ia32/jdb_kern_info-ia32-ux.cpp
++++ b/src/jdb/ia32/jdb_kern_info-ia32-ux.cpp
+@@ -84,9 +84,12 @@ Jdb_kern_info_cpu::show_features()
+     NULL, NULL,
+     "cmpxchg16b",
+     "xtpr (send task priority messages)",
+-    NULL, NULL, NULL, NULL,
+-    "sse41", "sse42",
+     NULL, NULL,
++    "pcid",
++    NULL,
++    "sse41", "sse42",
++    "x2apic",
++    NULL,
+     "popcnt", NULL,
+     "aes", "xsave", "osxsave",
+     "avx", "f16c",
+diff --git a/src/kern/ia32/64/entry-native.S b/src/kern/ia32/64/entry-native.S
+index bfca673..e1af940 100644
+--- a/src/kern/ia32/64/entry-native.S
++++ b/src/kern/ia32/64/entry-native.S
+@@ -271,8 +271,7 @@ safe_iret:
+ 	mov	64(%rsp), %r13
+ 	mov	%r13, CPUE_STACK(48, %r14)
+ 	lea	CPUE_STACK(0, %r14), %rsp
+-	mov	CPUE_CR3(%r14), %r13
+-	or	$0x1000, %r13
++	mov	CPUE_CR3U(%r14), %r13
+ 	mov	%r13, %cr3
+ 	pop	%r13
+ 	pop	%r14
+diff --git a/src/kern/ia32/64/low_level.h b/src/kern/ia32/64/low_level.h
+index c2ea9c1..5d26743 100644
+--- a/src/kern/ia32/64/low_level.h
++++ b/src/kern/ia32/64/low_level.h
+@@ -9,12 +9,14 @@
+ 
+ #define REGISTER_SIZE 8
+ 
++/* Layout of Kentry_cpu_page */
+ #define CPUE_STACK(x, reg) (x + 0x20)(reg)
+ #define CPUE_CR3_OFS 0
+ #define CPUE_KSP_OFS 8
+ #define CPUE_KSP(reg) 8(reg)
+ #define CPUE_CR3(reg) 0(reg)
+ #define CPUE_EXIT(reg) 16(reg)
++#define CPUE_CR3U(reg) 24(reg)
+ #define CPUE_EXIT_NEED_IBPB 1
+ 
+ #if defined(CONFIG_KERNEL_ISOLATION) && defined(CONFIG_INTEL_IA32_BRANCH_BARRIERS)
+@@ -58,7 +60,7 @@
+ 	sar     $16, %rcx
+ #ifdef CONFIG_KERNEL_ISOLATION
+ 	mov	$0xffff817fffffc000, %r15
+-#ifdef CONFIG_INTEL_IA32_BRANCH_BARRIERS
++# ifdef CONFIG_INTEL_IA32_BRANCH_BARRIERS
+ 	mov	CPUE_EXIT(%r15), %r11
+ 	test	$(CPUE_EXIT_NEED_IBPB), %r11
+ 	jz	333f
+@@ -66,9 +68,8 @@
+ 	mov	%r11, CPUE_EXIT(%r15)
+ 	IA32_IBPB
+ 333:
+-#endif
+-	mov	CPUE_CR3(%r15), %r15
+-	or	$0x1000, %r15
++# endif
++	mov	CPUE_CR3U(%r15), %r15
+ #endif
+ 	mov	32(%rsp), %r11				/* load user rflags */
+ 	mov	40(%rsp), %rsp				/* load user rsp */
+diff --git a/src/kern/ia32/64/thread-ia32-64.cpp b/src/kern/ia32/64/thread-ia32-64.cpp
+index 7011170..e91e370 100644
+--- a/src/kern/ia32/64/thread-ia32-64.cpp
++++ b/src/kern/ia32/64/thread-ia32-64.cpp
+@@ -47,7 +47,11 @@ Thread::fast_return_to_user(Mword ip, Mword sp, T arg)
+      "mov %[flags], %%r11 \t\n"
+      "jmp safe_sysret \t\n"
+      :
+-     : [cr3] "a" (p[0] | 0x1000),
++     // p[0] = CPU dir pa (if PCID: + bit63 + ASID 0)
++     // p[1] = KSP
++     // p[2] = EXIT flags
++     // p[3] = CPU dir pa + 0x1000 (if PCID: + bit63 + ASID)
++     : [cr3] "a" (p[3]),
+        [flags] "i" (EFLAGS_IF), "c" (ip), [sp] "r" (sp), "D"(arg)
+     );
+   __builtin_trap();
+diff --git a/src/kern/ia32/config-ia32.cpp b/src/kern/ia32/config-ia32.cpp
+index b69be39..33e4e6f 100644
+--- a/src/kern/ia32/config-ia32.cpp
++++ b/src/kern/ia32/config-ia32.cpp
+@@ -15,6 +15,11 @@ public:
+     // can access user memory directly
+     Access_user_mem = Access_user_mem_direct,
+ #endif
++#ifdef CONFIG_IA32_PCID
++    Pcid_enabled = true,
++#else
++    Pcid_enabled = false,
++#endif
+ 
+     /// Timer vector used with APIC timer or IOAPIC
+     Apic_timer_vector = APIC_IRQ_BASE + 0,
+diff --git a/src/kern/ia32/cpu-ia32.cpp b/src/kern/ia32/cpu-ia32.cpp
+index 9f8d791..2abd0ec 100644
+--- a/src/kern/ia32/cpu-ia32.cpp
++++ b/src/kern/ia32/cpu-ia32.cpp
+@@ -145,10 +145,14 @@ public:
+   unsigned ext_features() const { return _ext_features; }
+   bool has_monitor_mwait() const { return _ext_features & FEATX_MONITOR; }
+   bool has_monitor_mwait_irq() const { return _monitor_mwait_ecx & 3; }
++  bool has_pcid() const { return _ext_features & FEATX_PCID; }
+ 
+   bool __attribute__((const)) has_smep() const
+   { return _ext_07_ebx & FEATX_SMEP; }
+ 
++  bool __attribute__((const)) has_invpcid() const
++  { return _ext_07_ebx & FEATX_INVPCID; }
++
+   bool __attribute__((const)) has_l1d_flush() const
+   { return (_ext_07_edx & FEATX_L1D_FLUSH); }
+ 
+@@ -1913,12 +1917,19 @@ Cpu::init()
+   if (features() & FEAT_SSE)
+     cr4 |= CR4_OSXMMEXCPT;
+ 
+-  // enable SMEP if available
+   if (has_smep())
+     cr4 |= CR4_SMEP;
+ 
+   set_cr4 (cr4);
+ 
++  if (Config::Pcid_enabled)
++    {
++     if (!has_pcid())
++       panic("CONFIG_IA32_PCID enabled but CPU lacks this feature");
++     if (!has_invpcid())
++       panic("CONFIG_IA32_PCID enabled but CPU lacks 'invpcid' instruction");
++    }
++
+   if ((features() & FEAT_TSC) && can_wrmsr())
+     {
+       if (_ext_07_ebx & FEATX_IA32_TSC_ADJUST)
+diff --git a/src/kern/ia32/idt.cpp b/src/kern/ia32/idt.cpp
+index 2b1995e..ab6d1b6 100644
+--- a/src/kern/ia32/idt.cpp
++++ b/src/kern/ia32/idt.cpp
+@@ -55,7 +55,7 @@ Idt::set_writable(bool writable)
+   else
+     e.del_attribs(Pt_entry::Writable); // Make read-only
+ 
+-  Mem_unit::tlb_flush (_idt);
++  Mem_unit::tlb_flush_kernel(_idt);
+ }
+ 
+ PUBLIC static FIASCO_INIT
+diff --git a/src/kern/ia32/kernel_thread-ia32.cpp b/src/kern/ia32/kernel_thread-ia32.cpp
+index e50d729..e5f04a7 100644
+--- a/src/kern/ia32/kernel_thread-ia32.cpp
++++ b/src/kern/ia32/kernel_thread-ia32.cpp
+@@ -123,7 +123,14 @@ Kernel_thread::boot_app_cpus()
+   Address tramp_page;
+ 
+   _realmode_startup_pdbr = Kmem::get_realmode_startup_pdbr();
+-  _tramp_mp_startup_cr4 = Cpu::get_cr4();
++
++  Unsigned32 cr4 = Cpu::get_cr4();
++  // Do not enable PCID as it raises a page fault while booting up.
++  // PCID is enabled later in boot_ap_cpu().
++  if (Config::Pcid_enabled)
++    cr4 &= ~CR4_PCID;
++
++  _tramp_mp_startup_cr4 = cr4;
+   _tramp_mp_startup_cr0 = Cpu::get_cr0();
+   _tramp_mp_startup_gdt_pdesc
+     = Pseudo_descriptor((Address)Cpu::boot_cpu()->get_gdt(), Gdt::gdt_max -1);
+diff --git a/src/kern/ia32/kmem-ia32.cpp b/src/kern/ia32/kmem-ia32.cpp
+index ef19e67..ff03d26 100644
+--- a/src/kern/ia32/kmem-ia32.cpp
++++ b/src/kern/ia32/kmem-ia32.cpp
+@@ -302,7 +302,7 @@ Kmem::map_phys_page(Address phys, Address virt,
+   i.set_page(pte, Pt_entry::Writable | Pt_entry::Referenced | Pt_entry::Dirty
+                   | (cached ? 0 : (Pt_entry::Write_through | Pt_entry::Noncacheable))
+                   | (global ? Pt_entry::global() : 0));
+-  Mem_unit::tlb_flush(virt);
++  Mem_unit::tlb_flush_kernel(virt);
+ 
+   if (offs)
+     *offs = phys - pte;
+@@ -897,11 +897,17 @@ Kmem::init_cpu(Cpu &cpu)
+   Cpu::set_pdbr(cpu_dir_pa);
+ 
+   cxx::Simple_alloc cpu_m(Kentry_cpu_page, Config::PAGE_SIZE);
+-  // [0] = CPU dir pa
++  // [0] = CPU dir pa (PCID: + bit63 + ASID 0)
+   // [1] = KSP
+   // [2] = EXIT flags
+-  // [3] = reserved
+-  write_now(cpu_m.alloc<Mword>(4), cpu_dir_pa);
++  // [3] = CPU dir pa + 0x1000 (PCID: + bit63 + ASID)
++  Mword *p = cpu_m.alloc<Mword>(4);
++  // With PCID enabled set bit 63 to prevent flushing of any TLB entries or
++  // paging-structure caches during the page table switch. In that case TLB
++  // flushes are exclusively done by Mem_unit::tlb_flush() calls.
++  Mword const flush_tlb_bit = Config::Pcid_enabled ? 1UL << 63 : 0;
++  write_now(&p[0], cpu_dir_pa | flush_tlb_bit);
++  write_now(&p[3], cpu_dir_pa | flush_tlb_bit |  0x1000);
+   setup_cpu_structures_isolation(cpu, cpu_dir, &cpu_m);
+ 
+   auto *pte_map = cpu_m.alloc<Bitmap<260> >(1, 0x20);
+diff --git a/src/kern/ia32/main-ia32.cpp b/src/kern/ia32/main-ia32.cpp
+index 1c204ea..25b2769 100644
+--- a/src/kern/ia32/main-ia32.cpp
++++ b/src/kern/ia32/main-ia32.cpp
+@@ -119,6 +119,9 @@ int FIASCO_FASTCALL boot_ap_cpu()
+ {
+   Apic::activate_by_msr();
+ 
++  if (Config::Pcid_enabled)
++    Cpu::set_cr4(Cpu::get_cr4() | CR4_PCID);
++
+   Unsigned32 apic_id = Apic::get_id();
+   Cpu_number _cpu = Apic::find_cpu(apic_id);
+   bool cpu_is_new = false;
+diff --git a/src/kern/ia32/mem_space-ia32.cpp b/src/kern/ia32/mem_space-ia32.cpp
+index a51f8df..bd92b1b 100644
+--- a/src/kern/ia32/mem_space-ia32.cpp
++++ b/src/kern/ia32/mem_space-ia32.cpp
+@@ -61,6 +61,57 @@ protected:
+   Dir_type *_dir;
+ };
+ 
++//----------------------------------------------------------------------------
++INTERFACE[amd64 && ia32_pcid]:
++
++#include "id_alloc.h"
++#include "types.h"
++#include "mem_unit.h"
++
++EXTENSION class Mem_space
++{
++public:
++  enum
++  {
++    Asid_num = (1 << 12) - 1,
++    Asid_base = 1
++  };
++
++private:
++  typedef Per_cpu_array<unsigned long> Asid_array;
++  Asid_array _asid;
++
++  struct Asid_ops
++  {
++    enum { Id_offset = Asid_base };
++
++    static bool valid(Mem_space *o, Cpu_number cpu)
++    { return o->_asid[cpu] != Mem_unit::Asid_invalid; }
++
++    static unsigned long get_id(Mem_space *o, Cpu_number cpu)
++    { return o->_asid[cpu]; }
++
++    static bool can_replace(Mem_space *v, Cpu_number cpu)
++    { return v != current_mem_space(cpu); }
++
++    static void set_id(Mem_space *o, Cpu_number cpu, unsigned long id)
++    {
++      write_now(&o->_asid[cpu], id);
++      Mem_unit::tlb_flush(id);
++    }
++
++    static void reset_id(Mem_space *o, Cpu_number cpu)
++    { write_now(&o->_asid[cpu], (unsigned long)Mem_unit::Asid_invalid); }
++  };
++
++  struct Asid_alloc : Id_alloc<unsigned char, Mem_space, Asid_ops>
++  {
++    Asid_alloc() : Id_alloc<unsigned char, Mem_space, Asid_ops>(Asid_num) {}
++  };
++
++  static Per_cpu<Asid_alloc> _asid_alloc;
++};
++
+ //----------------------------------------------------------------------------
+ IMPLEMENTATION [ia32 || ux || amd64]:
+ 
+@@ -72,12 +123,6 @@ IMPLEMENTATION [ia32 || ux || amd64]:
+ #include "paging.h"
+ #include "std_macros.h"
+ 
+-
+-
+-
+-PUBLIC explicit inline
+-Mem_space::Mem_space(Ram_quota *q) : _quota(q), _dir(0) {}
+-
+ PROTECTED inline
+ bool
+ Mem_space::initialize()
+@@ -114,16 +159,6 @@ Mem_space::has_superpages()
+   return Cpu::have_superpages();
+ }
+ 
+-
+-IMPLEMENT inline NEEDS["mem_unit.h"]
+-void
+-Mem_space::tlb_flush(bool = false)
+-{
+-  if (_current.current() == this)
+-    Mem_unit::tlb_flush();
+-}
+-
+-
+ IMPLEMENT inline
+ Mem_space *
+ Mem_space::current_mem_space(Cpu_number cpu) /// XXX: do not fix, deprecated, remove!
+@@ -144,7 +179,6 @@ Mem_space::set_attributes(Virt_addr virt, Attr page_attribs)
+   return true;
+ }
+ 
+-
+ PROTECTED inline
+ void
+ Mem_space::destroy()
+@@ -346,6 +380,7 @@ Mem_space::dir_shutdown()
+ PUBLIC
+ Mem_space::~Mem_space()
+ {
++  reset_asid();
+   if (_dir)
+     {
+       dir_shutdown();
+@@ -442,7 +477,6 @@ Mem_space::sync_kernel()
+                     Kmem_alloc::q_allocator(_quota));
+ }
+ 
+-
+ // --------------------------------------------------------------------
+ IMPLEMENTATION [(amd64 || ia32) && cpu_local_map]:
+ 
+@@ -474,11 +508,20 @@ Mem_space::make_current()
+   Address pd_pa = access_once(reinterpret_cast<Address *>(Mem_layout::Kentry_cpu_page));
+   Cpu::set_pdbr(pd_pa);
+ #else
+-#ifdef CONFIG_INTEL_IA32_BRANCH_BARRIERS
++# ifdef CONFIG_INTEL_IA32_BRANCH_BARRIERS
+   Address *ca = reinterpret_cast<Address *>(Mem_layout::Kentry_cpu_page);
+   // set EXIT flags NEEDS IBPB
+   ca[2] |= 1;
+-#endif
++# endif
++# ifdef CONFIG_IA32_PCID
++  // [0]: CPU pdir pa + (if PCID: + bit 63 + ASID 0) -- not relevant here
++  // [3]: CPU pdir pa + (if PCID: + bit 63 + ASID)
++  Mword *p = reinterpret_cast<Mword *>(Mem_layout::Kentry_cpu_page);
++  Mword pd_pa = p[3];
++  pd_pa &= ~0xfffUL;
++  pd_pa |= asid();
++  p[3] = pd_pa;
++# endif
+ #endif
+   _current.cpu(current_cpu()) = this;
+ }
+@@ -536,3 +579,74 @@ Mem_space::init_page_sizes()
+   if (Cpu::cpus.cpu(Cpu_number::boot_cpu()).superpages())
+     add_page_size(Page_order(22)); // 4MB
+ }
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [!ia32_pcid]:
++
++PUBLIC explicit inline
++Mem_space::Mem_space(Ram_quota *q) : _quota(q), _dir(0) {}
++
++IMPLEMENT inline NEEDS["mem_unit.h"]
++void
++Mem_space::tlb_flush(bool = false)
++{
++  if (_current.current() == this)
++    Mem_unit::tlb_flush();
++}
++
++PRIVATE inline
++void
++Mem_space::init_asid() {}
++
++PRIVATE inline
++void
++Mem_space::reset_asid() {}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [amd64 && ia32_pcid]:
++
++DEFINE_PER_CPU Per_cpu<Mem_space::Asid_alloc> Mem_space::_asid_alloc;
++
++PUBLIC explicit inline NEEDS[Mem_space::asid]
++Mem_space::Mem_space(Ram_quota *q) : _quota(q), _dir(0)
++{
++  asid(Mem_unit::Asid_invalid);
++}
++
++PRIVATE inline
++void
++Mem_space::asid(unsigned long a)
++{
++  for (Asid_array::iterator i = _asid.begin(); i != _asid.end(); ++i)
++    *i = a;
++}
++
++PUBLIC inline
++unsigned long
++Mem_space::c_asid() const
++{ return _asid[current_cpu()]; }
++
++PRIVATE inline
++unsigned long
++Mem_space::asid()
++{
++  Cpu_number cpu = current_cpu();
++  return _asid_alloc.cpu(cpu).alloc(this, cpu);
++};
++
++PRIVATE inline
++void
++Mem_space::reset_asid()
++{
++  for (Cpu_number i = Cpu_number::first(); i < Config::max_num_cpus(); ++i)
++    _asid_alloc.cpu(i).free(this, i);
++}
++
++IMPLEMENT inline NEEDS["mem_unit.h"]
++void
++Mem_space::tlb_flush(bool = false)
++{
++  auto asid = c_asid();
++  if (asid != Mem_unit::Asid_invalid)
++    Mem_unit::tlb_flush(asid);
++}
+diff --git a/src/kern/ia32/mem_unit-ia32.cpp b/src/kern/ia32/mem_unit-ia32.cpp
+index 6d8113a..2c3fa7d 100644
+--- a/src/kern/ia32/mem_unit-ia32.cpp
++++ b/src/kern/ia32/mem_unit-ia32.cpp
+@@ -4,6 +4,17 @@ INTERFACE[ia32 || amd64]:
+ 
+ class Mem_unit
+ {
++public:
++  enum { Asid_invalid = 1 << 12 };
++};
++
++/** INVPCID types */
++enum
++{
++  Invpcid_single_address = 0,           /**< Individual address */
++  Invpcid_single_context = 1,           /**< Single-context */
++  Invpcid_all_context_global = 2,       /**< All-context, including globals */
++  Invpcid_all_context = 3,              /**< All-context */
+ };
+ 
+ 
+@@ -14,6 +25,32 @@ void
+ Mem_unit::make_coherent_to_pou(void const *)
+ {}
+ 
++PUBLIC static inline ALWAYS_INLINE
++void
++Mem_unit::clean_dcache()
++{ asm volatile ("wbinvd"); }
++
++PUBLIC static inline ALWAYS_INLINE
++void
++Mem_unit::clean_dcache(void const *addr)
++{ asm volatile ("clflush %0" : : "m" (*(char const *)addr)); }
++
++PUBLIC static inline ALWAYS_INLINE
++void
++Mem_unit::clean_dcache(void const *start, void const *end)
++{
++  enum { Cl_size = 64 };
++  if (((Address)end) - ((Address)start) >= 8192)
++    clean_dcache();
++  else
++    for (char const *s = (char const *)start; s < (char const *)end;
++         s += Cl_size)
++      clean_dcache(s);
++}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION[ia32 || (amd64 && !ia32_pcid)]:
++
+ /** Flush the whole TLB.
+  */
+ PUBLIC static inline ALWAYS_INLINE
+@@ -24,6 +61,14 @@ Mem_unit::tlb_flush()
+   __asm__ __volatile__ ("mov %%cr3,%0; mov %0,%%cr3 " : "=r"(dummy) : : "memory");
+ }
+ 
++/** Flush the whole TLB during early boot when PCID is not yet enabled.
++ */
++PUBLIC static inline ALWAYS_INLINE
++void
++Mem_unit::tlb_flush_early()
++{
++  tlb_flush();
++}
+ 
+ /** Flush TLB at virtual address.
+  */
+@@ -36,23 +81,84 @@ Mem_unit::tlb_flush(Address addr)
+ 
+ PUBLIC static inline ALWAYS_INLINE
+ void
+-Mem_unit::clean_dcache()
+-{ asm volatile ("wbinvd"); }
++Mem_unit::tlb_flush_kernel(Address addr)
++{
++  return tlb_flush(addr);
++}
+ 
+-PUBLIC static inline ALWAYS_INLINE
++//----------------------------------------------------------------------------
++IMPLEMENTATION[amd64 && ia32_pcid]:
++
++#include "context.h"
++
++/**
++ * Flush the TLB, either at a virtual address or flush all mappings associated
++ * with a PCID.
++ */
++PRIVATE static inline ALWAYS_INLINE
+ void
+-Mem_unit::clean_dcache(void const *addr)
+-{ asm volatile ("clflush %0" : : "m" (*(char const *)addr)); }
++Mem_unit::_invalidate_pcid(unsigned pcid, Address  address, unsigned type)
++{
++  struct
++  {
++    unsigned long pcid, address;
++  } descriptor = { pcid, address };
++  __asm__ __volatile__ ("invpcid %0, %1\n" : : "m" (descriptor),
++                                               "r" ((unsigned long)type)
++                                             : "memory");
++}
+ 
++/** Flush the whole TLB.
++ */
++PUBLIC static inline ALWAYS_INLINE NEEDS[Mem_unit::_invalidate_pcid]
++void
++Mem_unit::tlb_flush()
++{
++  _invalidate_pcid(0, 0, Invpcid_all_context_global);
++}
++
++/** Flush the whole TLB during early boot when PCID is not yet enabled.
++ */
+ PUBLIC static inline ALWAYS_INLINE
+ void
+-Mem_unit::clean_dcache(void const *start, void const *end)
++Mem_unit::tlb_flush_early()
+ {
+-  enum { Cl_size = 64 };
+-  if (((Address)end) - ((Address)start) >= 8192)
+-    clean_dcache();
+-  else
+-    for (char const *s = (char const *)start; s < (char const *)end;
+-         s += Cl_size)
+-      clean_dcache(s);
++  Mword dummy;
++  __asm__ __volatile__ ("mov %%cr3,%0; mov %0,%%cr3 " : "=r"(dummy) : : "memory");
++}
++
++/** Flush the whole TLB for the given PCID.
++ */
++PUBLIC static inline ALWAYS_INLINE NEEDS[Mem_unit::_invalidate_pcid]
++void
++Mem_unit::tlb_flush(unsigned pcid)
++{
++  _invalidate_pcid(pcid, 0, Invpcid_single_context);
++}
++
++/** Flush TLB at virtual address of the given PCID.
++ */
++PUBLIC static inline ALWAYS_INLINE NEEDS[Mem_unit::_invalidate_pcid]
++void
++Mem_unit::tlb_flush(unsigned pcid, Address addr)
++{
++  _invalidate_pcid(pcid, addr, Invpcid_single_address);
++}
++
++/** Flush the whole TLB for the kernel PCID 0.
++ */
++PUBLIC static inline ALWAYS_INLINE NEEDS[Mem_unit::_invalidate_pcid]
++void
++Mem_unit::tlb_flush_kernel()
++{
++  _invalidate_pcid(0, 0, Invpcid_single_context);
++}
++
++/** Flush TLB at virtual address.
++ */
++PUBLIC static inline ALWAYS_INLINE NEEDS[Mem_unit::_invalidate_pcid]
++void
++Mem_unit::tlb_flush_kernel(Address addr)
++{
++  _invalidate_pcid(0, addr, Invpcid_single_address);
+ }
+diff --git a/src/kern/ia32/regdefs.h b/src/kern/ia32/regdefs.h
+index a3fdaf4..0b03e67 100644
+--- a/src/kern/ia32/regdefs.h
++++ b/src/kern/ia32/regdefs.h
+@@ -32,6 +32,7 @@
+ #define CR4_OSFXSR      0x00000200      // OS Supports FXSAVE/FXRSTOR
+ #define CR4_OSXMMEXCPT  0x00000400      // OS Supports SIMD Exceptions
+ #define CR4_VMXE        0x00002000      // VMX enable
++#define CR4_PCID        0x00020000      // Enable PCID
+ #define CR4_OSXSAVE     0x00040000      // OS Support XSAVE
+ #define CR4_SMEP        0x00100000      // Supervisor-Mode Execution Prevention
+ 
+@@ -108,6 +109,7 @@
+ 
+ #define FEATX_IA32_TSC_ADJUST 0x00000002 // IA32 TSC Adjust available
+ #define FEATX_SMEP      0x00000080      // Supervisor-Mode Execution Prevention
++#define FEATX_INVPCID   0x00000400      // INVPCID
+ 
+ #define FEATX_IBRS_IBPB 0x04000000      // IBRS and IBPB supported
+ #define FEATX_STIBP     0x08000000      // STIBP supported
+diff --git a/src/kern/ux/mem_unit-ux.cpp b/src/kern/ux/mem_unit-ux.cpp
+index 4748531..e262a66 100644
+--- a/src/kern/ux/mem_unit-ux.cpp
++++ b/src/kern/ux/mem_unit-ux.cpp
+@@ -8,7 +8,8 @@ class Mem_unit
+ 
+ IMPLEMENTATION:
+ 
+-PUBLIC static inline void Mem_unit::tlb_flush () {}
+-PUBLIC static inline void Mem_unit::tlb_flush (Address) {}
++PUBLIC static inline void Mem_unit::tlb_flush() {}
++PUBLIC static inline void Mem_unit::tlb_flush(Address) {}
++PUBLIC static inline void Mem_unit::tlb_flush_kernel(Address) {}
+ PUBLIC static inline void Mem_unit::clean_dcache(void *) {}
+ PUBLIC static inline ALWAYS_INLINE void Mem_unit::make_coherent_to_pou(void const *) {}

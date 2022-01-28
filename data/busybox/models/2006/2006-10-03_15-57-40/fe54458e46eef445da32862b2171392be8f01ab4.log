@@ -1,0 +1,266 @@
+"2006-10-03 15:57:40 +0000"
+diff --git a/Config.in b/Config.in
+index cb41f46ae..d61b6ff89 100644
+--- a/Config.in
++++ b/Config.in
+@@ -470,3 +470,4 @@ source networking/Config.in
+ source procps/Config.in
+ source shell/Config.in
+ source sysklogd/Config.in
++source runit/Config.in
+diff --git a/Makefile b/Makefile
+index cc223478b..83da80c47 100644
+--- a/Makefile
++++ b/Makefile
+@@ -34,7 +34,8 @@ vpath %/Config.in $(srctree)
+ DIRS:=applets archival archival/libunarchive coreutils console-tools \
+ 	debianutils editors findutils init miscutils modutils networking \
+ 	networking/libiproute networking/udhcp procps loginutils shell \
+-	sysklogd util-linux e2fsprogs libpwdgrp coreutils/libcoreutils libbb
++	sysklogd util-linux e2fsprogs libpwdgrp coreutils/libcoreutils \
++	runit libbb
+ 
+ SRC_DIRS:=$(patsubst %,$(top_srcdir)/%,$(DIRS))
+ 
+diff --git a/coreutils/env.c b/coreutils/env.c
+index 4cdbeae6a..b42d90435 100644
+--- a/coreutils/env.c
++++ b/coreutils/env.c
+@@ -63,10 +63,10 @@ int env_main(int argc, char** argv)
+ 		++argv;
+ 	}
+ 
+-	if(opt & 1)
++	if (opt & 1)
+ 		environ = cleanenv;
+-	else if(opt & 2) {
+-		while(unset_env) {
++	else if (opt & 2) {
++		while (unset_env) {
+ 			unsetenv(unset_env->data);
+ 			unset_env = unset_env->link;
+ 		}
+diff --git a/include/applets.h b/include/applets.h
+index e12f6027c..328848478 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -70,6 +70,7 @@ USE_CHATTR(APPLET(chattr, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CHGRP(APPLET(chgrp, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CHMOD(APPLET(chmod, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CHOWN(APPLET(chown, _BB_DIR_BIN, _BB_SUID_NEVER))
++USE_CHPST(APPLET(chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_CHROOT(APPLET(chroot, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_CHVT(APPLET(chvt, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_CKSUM(APPLET(cksum, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+@@ -106,6 +107,8 @@ USE_ED(APPLET(ed, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_GREP_EGREP_ALIAS(APPLET_NOUSAGE(egrep, grep, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_EJECT(APPLET(eject, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_ENV(APPLET(env, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_ENVDIR(APPLET_ODDNAME(envdir, chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER, envdir))
++USE_ENVUIDGID(APPLET_ODDNAME(envuidgid, chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER, envuidgid))
+ USE_ETHER_WAKE(APPLET_ODDNAME(ether-wake, ether_wake, _BB_DIR_USR_BIN, _BB_SUID_NEVER, ether_wake))
+ USE_EXPR(APPLET(expr, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_FAKEIDENTD(APPLET(fakeidentd, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+@@ -244,12 +247,14 @@ USE_SETCONSOLE(APPLET(setconsole, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_SETKEYCODES(APPLET(setkeycodes, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SETLOGCONS(APPLET(setlogcons, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_SETSID(APPLET(setsid, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_SETUIDGID(APPLET_ODDNAME(setuidgid, chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER, setuidgid))
+ USE_FEATURE_SH_IS_ASH(APPLET_NOUSAGE(sh, ash, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_HUSH(APPLET_NOUSAGE(sh, hush, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_LASH(APPLET_NOUSAGE(sh, lash, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_FEATURE_SH_IS_MSH(APPLET_NOUSAGE(sh, msh, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SHA1SUM(APPLET_ODDNAME(sha1sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_NEVER, sha1sum))
+ USE_SLEEP(APPLET(sleep, _BB_DIR_BIN, _BB_SUID_NEVER))
++USE_SOFTLIMIT(APPLET_ODDNAME(softlimit, chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER, softlimit))
+ USE_SORT(APPLET(sort, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_START_STOP_DAEMON(APPLET_ODDNAME(start-stop-daemon, start_stop_daemon, _BB_DIR_SBIN, _BB_SUID_NEVER, start_stop_daemon))
+ USE_STAT(APPLET(stat, _BB_DIR_BIN, _BB_SUID_NEVER))
+diff --git a/include/libbb.h b/include/libbb.h
+index b4516e99a..222b4acec 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -488,12 +488,13 @@ extern void renew_current_security_context(void);
+ extern void set_current_security_context(security_context_t sid);
+ #endif
+ extern int run_parts(char **args, const unsigned char test_mode, char **env);
+-extern int restricted_shell ( const char *shell );
+-extern void setup_environment ( const char *shell, int loginshell, int changeenv, const struct passwd *pw );
+-extern int correct_password ( const struct passwd *pw );
++extern int restricted_shell(const char *shell);
++extern void setup_environment(const char *shell, int loginshell, int changeenv, const struct passwd *pw);
++extern int correct_password(const struct passwd *pw);
+ extern char *pw_encrypt(const char *clear, const char *salt);
+ extern int obscure(const char *old, const char *newval, const struct passwd *pwdp);
+ 
++extern void xsetenv(const char *key, const char *value);
+ extern int xopen(const char *pathname, int flags);
+ extern int xopen3(const char *pathname, int flags, int mode);
+ extern void xread(int fd, void *buf, size_t count);
+diff --git a/include/usage.h b/include/usage.h
+index 40676c113..34b0566cd 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -215,6 +215,70 @@
+ 	"ls -l /tmp/foo\n" \
+ 	"-r--r--r--    1 root     root            0 Apr 12 18:25 /tmp/foo\n"
+ 
++#define chpst_trivial_usage \
++	"[-vP012] [-u user[:group]] [-U user[:group]] [-e dir] " \
++	"[-/ dir] [-n nice] [-m bytes] [-d bytes] [-o files] " \
++	"[-p processes] [-f bytes] [-c bytes] prog args"
++#define chpst_full_usage \
++       "Change the process state and run specified program.\n\n" \
++       "-u user[:grp]	set uid and gid\n" \
++       "-U user[:grp] 	set environment variables UID and GID\n" \
++       "-e dir		set environment variables as specified by files\n" \
++       "		in the directory: file=1st_line_of_file\n" \
++       "-/ dir		chroot to dir\n" \
++       "-n inc		add inc to nice value\n" \
++       "-m bytes	limit data segment, stack segment, locked physical pages,\n" \
++       "		and total of all segment per process to bytes bytes each\n" \
++       "-d bytes	limit data segment\n" \
++       "-o n		limit the number of open file descriptors per process to n\n" \
++       "-p n		limit number of processes per uid to n\n" \
++       "-f bytes	limit output file size to bytes bytes\n" \
++       "-c bytes	limit core file size to bytes bytes\n" \
++       "-v		verbose\n" \
++       "-P		run prog in a new process group\n" \
++       "-0		close standard input\n" \
++       "-1		close standard output\n" \
++       "-2		close standard error"
++#define setuidgid_trivial_usage \
++	"account prog args"
++#define setuidgid_full_usage \
++	"Sets uid and gid to account's uid and gid, removing all supplementary\n" \
++	"groups, then runs prog"
++#define envuidgid_trivial_usage \
++	"account prog args"
++#define envuidgid_full_usage \
++	"Sets $UID to account's uid and $GID to account's gid, then runs prog"
++#define envdir_trivial_usage \
++	"dir prog args"
++#define envdir_full_usage \
++	"Sets various environment variables as specified by files\n" \
++	"in the directory dir, then runs prog"
++#define softlimit_trivial_usage \
++	"[-a allbytes] [-c corebytes] [-d databytes] [-f filebytes] " \
++	"[-l lockbytes] [-m membytes] [-o openfiles] [-p processes] " \
++	"[-r residentbytes] [-s stackbytes] [-t cpusecs] prog args"
++#define softlimit_full_usage \
++	"Sets soft resource limits as specified by options, then runs prog\n" \
++	"\n" \
++	"-m n	Same as -d n -s n -l n -a n\n" \
++	"-d n	Limit the data segment per process to n bytes\n" \
++	"-s n	Limit the stack segment per process to n bytes\n" \
++	"-l n	Limit the locked physical pages per process to n bytes\n" \
++	"-a n	Limit the total of all segments per process to n bytes\n" \
++	"-o n	Limit  the number of open file descriptors per process to n\n" \
++	"-p n	Limit the number of processes per uid to n\n" \
++	"Options controlling file sizes:\n" \
++	"-f n	Limit output file sizes to n bytes\n" \
++	"-c n	Limit core file sizes to n bytes\n" \
++	"Efficiency opts:\n" \
++	"-r n	Limit the resident set size to n bytes. This limit is not\n" \
++	"	enforced unless physical memory is full\n" \
++	"-t n	Limit the CPU time to n seconds. This limit is not enforced\n" \
++	"	except that the process receives a SIGXCPU signal after n seconds\n" \
++	"\n" \
++	"Some options may have no effect on some operating systems\n" \
++	"n may be =, indicating that soft limit should be set equal to hard limit"
++
+ #define chroot_trivial_usage \
+ 	"NEWROOT [COMMAND...]"
+ #define chroot_full_usage \
+diff --git a/libbb/setup_environment.c b/libbb/setup_environment.c
+index a14649625..874a58efa 100644
+--- a/libbb/setup_environment.c
++++ b/libbb/setup_environment.c
+@@ -42,15 +42,9 @@
+ #define DEFAULT_LOGIN_PATH      "/bin:/usr/bin"
+ #define DEFAULT_ROOT_LOGIN_PATH "/usr/sbin:/bin:/usr/bin:/sbin"
+ 
+-static void xsetenv ( const char *key, const char *value )
++void setup_environment(const char *shell, int loginshell, int changeenv, const struct passwd *pw)
+ {
+-	    if ( setenv ( key, value, 1 ))
+-				bb_error_msg_and_die (bb_msg_memory_exhausted);
+-}
+-
+-void setup_environment ( const char *shell, int loginshell, int changeenv, const struct passwd *pw )
+-{
+-	if ( loginshell ) {
++	if (loginshell) {
+ 		const char *term;
+ 
+ 		/* Change the current working directory to be the home directory
+@@ -59,32 +53,31 @@ void setup_environment ( const char *shell, int loginshell, int changeenv, const
+ 		 * directory.
+ 		 * Some systems default to HOME=/
+ 		 */
+-		if ( chdir ( pw-> pw_dir )) {
+-			xchdir ( "/" );
+-			fputs ( "warning: cannot change to home directory\n", stderr );
++		if (chdir(pw->pw_dir)) {
++			xchdir("/");
++			fputs("warning: cannot change to home directory\n", stderr);
+ 		}
+ 
+ 		/* Leave TERM unchanged.  Set HOME, SHELL, USER, LOGNAME, PATH.
+ 		   Unset all other environment variables.  */
+-		term = getenv ("TERM");
+-		clearenv ( );
+-		if ( term )
+-			xsetenv ( "TERM", term );
+-		xsetenv ( "HOME",    pw-> pw_dir );
+-		xsetenv ( "SHELL",   shell );
+-		xsetenv ( "USER",    pw-> pw_name );
+-		xsetenv ( "LOGNAME", pw-> pw_name );
+-		xsetenv ( "PATH",    ( pw-> pw_uid ? DEFAULT_LOGIN_PATH : DEFAULT_ROOT_LOGIN_PATH ));
++		term = getenv("TERM");
++		clearenv();
++		if (term)
++			xsetenv("TERM", term);
++		xsetenv("HOME",    pw->pw_dir);
++		xsetenv("SHELL",   shell);
++		xsetenv("USER",    pw->pw_name);
++		xsetenv("LOGNAME", pw->pw_name);
++		xsetenv("PATH",   (pw->pw_uid ? DEFAULT_LOGIN_PATH : DEFAULT_ROOT_LOGIN_PATH));
+ 	}
+-	else if ( changeenv ) {
++	else if (changeenv) {
+ 		/* Set HOME, SHELL, and if not becoming a super-user,
+ 		   USER and LOGNAME.  */
+-		xsetenv ( "HOME",  pw-> pw_dir );
+-		xsetenv ( "SHELL", shell );
+-		if  ( pw-> pw_uid ) {
+-			xsetenv ( "USER",    pw-> pw_name );
+-			xsetenv ( "LOGNAME", pw-> pw_name );
++		xsetenv("HOME",  pw->pw_dir);
++		xsetenv("SHELL", shell);
++		if (pw->pw_uid) {
++			xsetenv("USER",    pw->pw_name);
++			xsetenv("LOGNAME", pw->pw_name);
+ 		}
+ 	}
+ }
+-
+diff --git a/libbb/xfuncs.c b/libbb/xfuncs.c
+index 92091e555..7b95e49f1 100644
+--- a/libbb/xfuncs.c
++++ b/libbb/xfuncs.c
+@@ -255,6 +255,14 @@ int wait4pid(int pid)
+ }
+ #endif
+ 
++#ifdef L_xsetenv
++void xsetenv(const char *key, const char *value)
++{
++	if(setenv(key, value, 1))
++		bb_error_msg_and_die(bb_msg_memory_exhausted);
++}
++#endif
++
+ #ifdef L_itoa
+ // Convert unsigned integer to ascii, writing into supplied buffer.  A
+ // truncated result is always null terminated (unless buflen is 0), and

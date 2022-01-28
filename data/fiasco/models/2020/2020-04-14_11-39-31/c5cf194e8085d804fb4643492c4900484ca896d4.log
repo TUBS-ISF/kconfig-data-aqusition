@@ -1,0 +1,2227 @@
+"2020-04-14 11:39:31 +0200"
+diff --git a/src/Modules.arm b/src/Modules.arm
+index a46b2a1..eb02b11 100644
+--- a/src/Modules.arm
++++ b/src/Modules.arm
+@@ -132,6 +132,7 @@ INTERFACES_KERNEL-$(CONFIG_SERIAL) += uart_console
+ INTERFACES_KERNEL-$(CONFIG_ARM_EM_TZ) += vm
+ INTERFACES_KERNEL-$(CONFIG_CPU_VIRT) += hyp_vm_state vgic
+ INTERFACES_KERNEL-$(CONFIG_ARM_SMC_USER) += smc_user
++INTERFACES_KERNEL-$(CONFIG_ARM_GICV3) += gic_redist
+ INTERFACES_KERNEL-$(CONFIG_ARM_GIC) += gic_cpu gic_dist gic
+ INTERFACES_KERNEL += boot_infos
+ 
+@@ -152,6 +153,13 @@ else
+   entry_frame_IMPL	:= entry_frame entry_frame-arm
+ endif
+ fpu_IMPL		:= fpu fpu-arm
++gic_IMPL			:= gic
++gic_IMPL-y			:= gic-v2
++gic_IMPL-$(CONFIG_ARM_GICV3)	:= gic-v3
++gic_IMPL			+= $(gic_IMPL-y)
++gic_cpu_IMPL-y		:= gic_cpu-v2
++gic_cpu_IMPL-$(CONFIG_ARM_GICV3) := gic_cpu-v3 gic_cpu-v3-$(BITS)
++gic_cpu_IMPL		+= $(gic_cpu_IMPL-y)
+ gic_dist_IMPL		:= gic_dist
+ hyp_vm_state_IMPL	:= hyp_vm_state hyp_vm_state-$(BITS)
+ ipi_IMPL		:= ipi ipi-arm
+@@ -192,6 +200,7 @@ timer_IMPL		:= timer timer-arm
+ timer_tick_IMPL		:= timer_tick timer_tick-arm
+ utcb_init_IMPL		:= utcb_init utcb_init-arm
+ utcb_support_IMPL       := utcb_support utcb_support-arm
++vgic_IMPL		:= vgic $(if $(CONFIG_ARM_GICV3),vgic-v3 vgic-v3-$(BITS),vgic-v2)
+ vmem_alloc_IMPL	  	:= vmem_alloc vmem_alloc-arch
+ tb_entry_IMPL		:= tb_entry tb_entry-arm
+ 
+diff --git a/src/jdb/arm/jdb-arm.cpp b/src/jdb/arm/jdb-arm.cpp
+index d77a26c..0e48878 100644
+--- a/src/jdb/arm/jdb-arm.cpp
++++ b/src/jdb/arm/jdb-arm.cpp
+@@ -78,10 +78,10 @@ Jdb::wfi_enter()
+   Timer_tick *tt = Timer_tick::boot_cpu_timer_tick();
+   Gic *g = static_cast<Gic*>(tt->chip());
+ 
+-  wfi_gic.orig_tt_prio = g->irq_prio(tt->pin());
+-  wfi_gic.orig_pmr     = g->pmr();
+-  g->pmr(0x90);
+-  g->irq_prio(tt->pin(), 0x00);
++  wfi_gic.orig_tt_prio = g->irq_prio_bootcpu(tt->pin());
++  wfi_gic.orig_pmr     = g->_cpu.pmr();
++  g->_cpu.pmr(0x90);
++  g->irq_prio_bootcpu(tt->pin(), 0x00);
+ 
+   Timer_tick::enable(Cpu_number::boot_cpu());
+ }
+@@ -92,8 +92,8 @@ Jdb::wfi_leave()
+ {
+   Timer_tick *tt = Timer_tick::boot_cpu_timer_tick();
+   Gic *g = static_cast<Gic*>(tt->chip());
+-  g->irq_prio(tt->pin(), wfi_gic.orig_tt_prio);
+-  g->pmr(wfi_gic.orig_pmr);
++  g->irq_prio_bootcpu(tt->pin(), wfi_gic.orig_tt_prio);
++  g->_cpu.pmr(wfi_gic.orig_pmr);
+ }
+ 
+ PRIVATE static
+diff --git a/src/kern/arm/32/gic_cpu-v3-32.cpp b/src/kern/arm/32/gic_cpu-v3-32.cpp
+new file mode 100644
+index 0000000..baba2d9
+--- /dev/null
++++ b/src/kern/arm/32/gic_cpu-v3-32.cpp
+@@ -0,0 +1,96 @@
++IMPLEMENTATION [cpu_virt]:
++
++PRIVATE inline
++void Gic_cpu::_enable_sre_set()
++{
++  asm volatile("mcr p15, 4, %0, c12, c9, 5" // ICC_HSRE
++               : : "r" (  ICC_SRE_SRE | ICC_SRE_DFB | ICC_SRE_DIB
++                        | ICC_SRE_Enable_lower));
++}
++
++//-------------------------------------------------------------------
++IMPLEMENTATION [!cpu_virt]:
++
++PRIVATE inline
++void Gic_cpu::_enable_sre_set()
++{
++  asm volatile("mcr p15, 0, %0, c12, c12, 5" // ICC_SRE
++               : : "r" (ICC_SRE_SRE | ICC_SRE_DFB | ICC_SRE_DIB));
++}
++
++//-------------------------------------------------------------------
++IMPLEMENTATION:
++
++PUBLIC inline
++void
++Gic_cpu::pmr(unsigned prio)
++{
++  asm volatile("mcr p15, 0, %0, c4, c6, 0" : : "r"(prio));
++}
++
++PUBLIC inline NEEDS[Gic_cpu::_enable_sre_set]
++void
++Gic_cpu::enable()
++{
++  _enable_sre_set();
++
++  asm volatile("mcr p15, 0, %0, c12, c12, 7" : : "r" (1)); // ICC_IGRPEN1
++
++  pmr(Cpu_prio_val);
++}
++
++PUBLIC inline
++void
++Gic_cpu::ack(Unsigned32 irq)
++{
++  asm volatile("mcr p15, 0, %0, c12, c12, 1" : : "r"(irq));
++}
++
++PUBLIC inline
++Unsigned32
++Gic_cpu::iar()
++{
++  Unsigned32 v;
++  asm volatile("mrc p15, 0, %0, c12, c12, 0" : "=r"(v));
++  return v;
++}
++
++PUBLIC inline
++unsigned
++Gic_cpu::pmr()
++{
++  Unsigned32 pmr;
++  asm volatile("mrc p15, 0, %0, c4, c6, 0" : "=r"(pmr));
++  return pmr;
++}
++
++PUBLIC inline
++void
++Gic_cpu::softint_cpu(Unsigned64 sgi_target, unsigned m)
++{
++  asm volatile("mcrr p15, 0, %Q0, %R0, c12"
++               : : "r"(sgi_target | (m << 24)));
++}
++
++PUBLIC inline
++void
++Gic_cpu::softint_bcast(unsigned m)
++{
++  asm volatile("mcrr p15, 0, %Q0, %R0, c12"
++               : : "r"((1ull << 40) | (m << 24)));
++}
++
++PUBLIC static inline
++Unsigned64
++Gic_cpu::pcpu_to_sgi(Cpu_phys_id cpu)
++{
++  Mword mpidr = cxx::int_value<Cpu_phys_id>(cpu);
++
++  Unsigned8 aff0 = (mpidr >>  0) & 0xff;
++  Unsigned8 aff1 = (mpidr >>  8) & 0xff;
++  Unsigned8 aff2 = (mpidr >> 16) & 0xff;
++
++  return ((Unsigned64)aff2 << 32) | (aff1 << 16) | (1u << aff0);
++}
++
++
+diff --git a/src/kern/arm/32/vgic-v3-32.cpp b/src/kern/arm/32/vgic-v3-32.cpp
+new file mode 100644
+index 0000000..4292f63
+--- /dev/null
++++ b/src/kern/arm/32/vgic-v3-32.cpp
+@@ -0,0 +1,169 @@
++IMPLEMENTATION  [cpu_virt && vgic]:
++
++PUBLIC static inline Gic_h::Hcr
++Gic_h::hcr()
++{
++  Unsigned32 v;
++  asm volatile ("mrc p15, 4, %0, c12, c11, 0" : "=r"(v));
++  return Hcr(v);
++}
++
++PUBLIC static inline void
++Gic_h::hcr(Gic_h::Hcr hcr)
++{
++  asm volatile ("mcr p15, 4, %0, c12, c11, 0" : : "r"(hcr.raw));
++}
++
++PUBLIC static inline Gic_h::Vtr
++Gic_h::vtr()
++{
++  Unsigned32 v;
++  asm volatile ("mrc p15, 4, %0, c12, c11, 1" : "=r"(v));
++  return Vtr(v);
++}
++
++PUBLIC static inline Gic_h::Vmcr
++Gic_h::vmcr()
++{
++  Unsigned32 v;
++  asm volatile ("mrc p15, 4, %0, c12, c11, 7" : "=r"(v));
++  return Vmcr(v);
++}
++
++PUBLIC static inline void
++Gic_h::vmcr(Gic_h::Vmcr vmcr)
++{
++  asm volatile ("mcr p15, 4, %0, c12, c11, 7" : : "r"(vmcr.raw));
++}
++
++PUBLIC static inline Gic_h::Misr
++Gic_h::misr()
++{
++  Unsigned32 v;
++  asm volatile ("mrc p15, 4, %0, c12, c11, 2" : "=r"(v));
++  return Misr(v);
++}
++
++PUBLIC static inline Unsigned32
++Gic_h::eisr(unsigned n)
++{
++  (void)n; // n must be 0
++  Unsigned32 v;
++  asm volatile ("mrc p15, 4, %0, c12, c11, 3" : "=r"(v));
++  return v;
++}
++
++PUBLIC static inline Unsigned32
++Gic_h::elsr(unsigned n)
++{
++  (void)n; // n must be 0
++  Unsigned32 v;
++  asm volatile ("mrc p15, 4, %0, c12, c11, 5" : "=r"(v));
++  return v;
++}
++
++PUBLIC static inline void
++Gic_h::save_aprs(Gic_h::Aprs *a)
++{
++  // NOTE: we should use ASM patching to do this and just
++  // replace instructions with NOPs
++  asm ("mrc p15, 4, %0, c12, c8, 0" : "=r"(a->ap0r[0]));
++  if (n_aprs > 1)
++    asm ("mrc p15, 4, %0, c12, c8, 1" : "=r"(a->ap0r[1]));
++  if (n_aprs > 2)
++    {
++      asm ("mrc p15, 4, %0, c12, c8, 2" : "=r"(a->ap0r[2]));
++      asm ("mrc p15, 4, %0, c12, c8, 3" : "=r"(a->ap0r[3]));
++    }
++
++  asm ("mrc p15, 4, %0, c12, c9, 0" : "=r"(a->ap1r[0]));
++  if (n_aprs > 1)
++    asm ("mrc p15, 4, %0, c12, c9, 1" : "=r"(a->ap1r[1]));
++  if (n_aprs > 2)
++    {
++      asm ("mrc p15, 4, %0, c12, c9, 2" : "=r"(a->ap1r[2]));
++      asm ("mrc p15, 4, %0, c12, c9, 3" : "=r"(a->ap1r[3]));
++    }
++}
++
++PUBLIC static inline void
++Gic_h::load_aprs(Gic_h::Aprs const *a)
++{
++  // NOTE: we should use ASM patching to do this and just
++  // replace instructions with NOPs
++  asm ("mcr p15, 4, %0, c12, c8, 0" : : "r"(a->ap0r[0]));
++  if (n_aprs > 1)
++    asm ("mcr p15, 4, %0, c12, c8, 1" : : "r"(a->ap0r[1]));
++  if (n_aprs > 2)
++    {
++      asm ("mcr p15, 4, %0, c12, c8, 2" : : "r"(a->ap0r[2]));
++      asm ("mcr p15, 4, %0, c12, c8, 3" : : "r"(a->ap0r[3]));
++    }
++
++  asm ("mcr p15, 4, %0, c12, c9, 0" : : "r"(a->ap1r[0]));
++  if (n_aprs > 1)
++    asm ("mcr p15, 4, %0, c12, c9, 1" : : "r"(a->ap1r[1]));
++  if (n_aprs > 2)
++    {
++      asm ("mcr p15, 4, %0, c12, c9, 2" : : "r"(a->ap1r[2]));
++      asm ("mcr p15, 4, %0, c12, c9, 3" : : "r"(a->ap1r[3]));
++    }
++}
++
++PUBLIC static inline void ALWAYS_INLINE
++Gic_h::save_lrs(Gic_h::Lr *lr, unsigned n)
++{
++  Unsigned32 l, h;
++
++#define READ_LR(ul,uh,v,x) \
++  asm ("mrc p15, 4, %0, c12, " #ul", " #v : "=r"(l)); \
++  asm ("mrc p15, 4, %0, c12, " #uh", " #v : "=r"(h)); \
++  lr[x].raw = (((Unsigned64)h) << 32) | l; \
++  if (n <= x + 1) return
++
++  READ_LR(c12, c14, 0, 0);
++  READ_LR(c12, c14, 1, 1);
++  READ_LR(c12, c14, 2, 2);
++  READ_LR(c12, c14, 3, 3);
++  READ_LR(c12, c14, 4, 4);
++  READ_LR(c12, c14, 5, 5);
++  READ_LR(c12, c14, 6, 6);
++  READ_LR(c12, c14, 7, 7);
++  READ_LR(c13, c15, 0, 8);
++  READ_LR(c13, c15, 1, 9);
++  READ_LR(c13, c15, 2, 10);
++  READ_LR(c13, c15, 3, 11);
++  READ_LR(c13, c15, 4, 12);
++  READ_LR(c13, c15, 5, 13);
++  READ_LR(c13, c15, 6, 14);
++  READ_LR(c13, c15, 7, 15);
++#undef READ_LR
++}
++
++PUBLIC static inline void ALWAYS_INLINE
++Gic_h::load_lrs(Gic_h::Lr const *lr, unsigned n)
++{
++#define READ_LR(ul,uh,v,x) \
++  asm ("mcr p15, 4, %0, c12, " #ul", " #v : : "r"((Unsigned32)lr[x].raw)); \
++  asm ("mcr p15, 4, %0, c12, " #uh", " #v : : "r"((Unsigned32)(lr[x].raw >> 32))); \
++  if (n <= x + 1) return
++
++  READ_LR(c12, c14, 0, 0);
++  READ_LR(c12, c14, 1, 1);
++  READ_LR(c12, c14, 2, 2);
++  READ_LR(c12, c14, 3, 3);
++  READ_LR(c12, c14, 4, 4);
++  READ_LR(c12, c14, 5, 5);
++  READ_LR(c12, c14, 6, 6);
++  READ_LR(c12, c14, 7, 7);
++  READ_LR(c13, c15, 0, 8);
++  READ_LR(c13, c15, 1, 9);
++  READ_LR(c13, c15, 2, 10);
++  READ_LR(c13, c15, 3, 11);
++  READ_LR(c13, c15, 4, 12);
++  READ_LR(c13, c15, 5, 13);
++  READ_LR(c13, c15, 6, 14);
++  READ_LR(c13, c15, 7, 15);
++#undef READ_LR
++}
++
+diff --git a/src/kern/arm/64/bootstrap-arm-64.cpp b/src/kern/arm/64/bootstrap-arm-64.cpp
+index 660f4f6..3c5948b 100644
+--- a/src/kern/arm/64/bootstrap-arm-64.cpp
++++ b/src/kern/arm/64/bootstrap-arm-64.cpp
+@@ -122,7 +122,7 @@ Bootstrap::map_ram(Kpdir *kd, Bs_alloc &alloc)
+ }
+ 
+ 
+-IMPLEMENTATION [arm && pic_gic]:
++IMPLEMENTATION [arm && pic_gic && !arm_gicv3]:
+ 
+ PUBLIC static void
+ Bootstrap::config_gic_ns()
+@@ -139,7 +139,7 @@ Bootstrap::config_gic_ns()
+   Mmu<Bootstrap::Cache_flush_area, true>::flush_cache();
+ }
+ 
+-IMPLEMENTATION [arm && !pic_gic]:
++IMPLEMENTATION [arm && (!pic_gic || arm_gicv3)]:
+ 
+ PUBLIC static inline void
+ Bootstrap::config_gic_ns() {}
+diff --git a/src/kern/arm/64/gic_cpu-v3-64.cpp b/src/kern/arm/64/gic_cpu-v3-64.cpp
+new file mode 100644
+index 0000000..0ccc603
+--- /dev/null
++++ b/src/kern/arm/64/gic_cpu-v3-64.cpp
+@@ -0,0 +1,106 @@
++IMPLEMENTATION [cpu_virt]:
++
++PRIVATE inline
++void Gic_cpu::_enable_sre_set()
++{
++  asm volatile("msr S3_4_C12_C9_5, %0" // ICC_SRE_EL2
++               : : "r" (  ICC_SRE_SRE | ICC_SRE_DFB | ICC_SRE_DIB
++                        | ICC_SRE_Enable_lower));
++}
++
++//-------------------------------------------------------------------
++IMPLEMENTATION [!cpu_virt]:
++
++PRIVATE inline
++void Gic_cpu::_enable_sre_set()
++{
++  asm volatile("msr S3_0_C12_C12_5, %0" // ICC_SRE_EL1
++               : : "r" (ICC_SRE_SRE | ICC_SRE_DFB | ICC_SRE_DIB));
++}
++
++
++//-------------------------------------------------------------------
++IMPLEMENTATION:
++
++#include "mem_unit.h"
++
++PUBLIC inline
++void
++Gic_cpu::pmr(unsigned prio)
++{
++  asm volatile("msr S3_0_C4_C6_0, %0" : : "r" (prio)); // ICC_PMR_EL1
++}
++
++PUBLIC inline NEEDS[Gic_cpu::_enable_sre_set, "mem_unit.h"]
++void
++Gic_cpu::enable()
++{
++  _enable_sre_set();
++  Mem::isb();
++
++  asm volatile("msr S3_0_C12_C12_7, %0" : : "r" (1)); // ICC_IGRPEN1_EL1
++
++  pmr(Cpu_prio_val);
++}
++
++PUBLIC inline NEEDS["mem_unit.h"]
++void
++Gic_cpu::ack(Unsigned32 irq)
++{
++  asm volatile("msr S3_0_C12_C12_1, %0" : : "r"(irq)); // ICC_EOIR1_EL1
++  Mem::isb();
++}
++
++PUBLIC inline NEEDS["mem_unit.h"]
++Unsigned32
++Gic_cpu::iar()
++{
++  Unsigned32 v;
++  asm volatile("mrs %0, S3_0_C12_C12_0" : "=r"(v)); // ICC_IAR1_EL1
++  Mem::dsb();
++  return v;
++}
++
++PUBLIC inline
++unsigned
++Gic_cpu::pmr()
++{
++  Unsigned32 pmr;
++  asm volatile("mrs %0, S3_0_C4_C6_0" : "=r"(pmr)); // ICC_PMR_EL1
++  return pmr;
++}
++
++
++PUBLIC inline
++void
++Gic_cpu::softint_cpu(Unsigned64 sgi_target, unsigned m)
++{
++  asm volatile("msr S3_0_C12_C11_5, %0" // ICC_SGI1R_EL1
++               : : "r"(sgi_target | (m << 24)));
++}
++
++PUBLIC inline
++void
++Gic_cpu::softint_bcast(unsigned m)
++{
++  asm volatile("msr S3_0_C12_C11_5, %0" // ICC_SGI1R_EL1
++               : : "r"((1ull << 40) | (m << 24)));
++}
++
++PUBLIC static inline
++Unsigned64
++Gic_cpu::pcpu_to_sgi(Cpu_phys_id cpu)
++{
++  Mword mpidr = cxx::int_value<Cpu_phys_id>(cpu);
++
++  Unsigned8 aff0 = (mpidr >>  0) & 0xff;
++  Unsigned8 aff1 = (mpidr >>  8) & 0xff;
++  Unsigned8 aff2 = (mpidr >> 16) & 0xff;
++  Unsigned8 aff3 = (mpidr >> 32) & 0xff;
++
++  return    ((Unsigned64)aff3 << 48)
++          | ((Unsigned64)aff2 << 32)
++          | ((Unsigned64)aff1 << 16)
++          | (1u << aff0);
++}
++
+diff --git a/src/kern/arm/64/kernel_thread-arm-64.cpp b/src/kern/arm/64/kernel_thread-arm-64.cpp
+index e2d5365..7848541 100644
+--- a/src/kern/arm/64/kernel_thread-arm-64.cpp
++++ b/src/kern/arm/64/kernel_thread-arm-64.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [arm && mp && pic_gic]:
++IMPLEMENTATION [arm && mp && pic_gic && !arm_gicv3]:
+ 
+ PRIVATE static inline NOEXPORT
+ void
+@@ -8,6 +8,16 @@ Kernel_thread::boot_app_cpu_gic(Mp_boot_info volatile *inf)
+   inf->gic_cpu_base = Mem_layout::Gic_cpu_phys_base;
+ }
+ 
++IMPLEMENTATION [arm && mp && pic_gic && arm_gicv3]:
++
++PRIVATE static inline NOEXPORT
++void
++Kernel_thread::boot_app_cpu_gic(Mp_boot_info volatile *inf)
++{
++  inf->gic_dist_base = Mem_layout::Gic_redist_phys_base;
++  inf->gic_cpu_base = 0;
++}
++
+ IMPLEMENTATION [arm && mp && !pic_gic]:
+ 
+ PRIVATE static inline NOEXPORT
+@@ -33,7 +43,7 @@ EXTENSION class Kernel_thread
+     Mword mair;
+     Mword ttbr_kern;
+     Mword ttbr_usr;
+-    Mword gic_dist_base;
++    Mword gic_dist_base; // only needed for IGROUPR0
+     Mword gic_cpu_base;
+   };
+ };
+diff --git a/src/kern/arm/64/vgic-v3-64.cpp b/src/kern/arm/64/vgic-v3-64.cpp
+new file mode 100644
+index 0000000..e64f4df
+--- /dev/null
++++ b/src/kern/arm/64/vgic-v3-64.cpp
+@@ -0,0 +1,156 @@
++IMPLEMENTATION  [cpu_virt && vgic]:
++
++PUBLIC static inline Gic_h::Hcr
++Gic_h::hcr()
++{
++  Unsigned32 v;
++  asm volatile ("mrs %0, S3_4_C12_C11_0" : "=r"(v));
++  return Hcr(v);
++}
++
++PUBLIC static inline void
++Gic_h::hcr(Gic_h::Hcr hcr)
++{
++  asm volatile ("msr S3_4_C12_C11_0, %0" : : "r"(hcr.raw));
++}
++
++PUBLIC static inline Gic_h::Vtr
++Gic_h::vtr()
++{
++  Unsigned32 v;
++  asm volatile ("mrs %0, S3_4_C12_C11_1" : "=r"(v));
++  return Vtr(v);
++}
++
++PUBLIC static inline Gic_h::Vmcr
++Gic_h::vmcr()
++{
++  Unsigned32 v;
++  asm volatile ("mrs %0, S3_4_C12_C11_7" : "=r"(v));
++  return Vmcr(v);
++}
++
++PUBLIC static inline void
++Gic_h::vmcr(Gic_h::Vmcr vmcr)
++{
++  asm volatile ("msr S3_4_C12_C11_7, %0" : : "r"(vmcr.raw));
++}
++
++PUBLIC static inline Gic_h::Misr
++Gic_h::misr()
++{
++  Unsigned32 v;
++  asm volatile ("mrs %0, S3_4_C12_C11_2" : "=r"(v));
++  return Misr(v);
++}
++
++PUBLIC static inline Unsigned32
++Gic_h::eisr(unsigned n)
++{
++  (void)n; // n must be 0
++  Unsigned32 v;
++  asm volatile ("mrs %0, S3_4_C12_C11_3" : "=r"(v));
++  return v;
++}
++
++PUBLIC static inline Unsigned32
++Gic_h::elsr(unsigned n)
++{
++  (void)n; // n must be 0
++  Unsigned32 v;
++  asm volatile ("mrs %0, S3_4_C12_C11_5" : "=r"(v));
++  return v;
++}
++
++
++PUBLIC static inline void
++Gic_h::save_aprs(Gic_h::Aprs *a)
++{
++  // NOTE: we should use ASM patching to do this and just
++  // replace instructions with NOPs
++#define READ_APR(x) do { \
++  asm ("mrs %0, S3_4_C12_C8_" #x : "=r"(a->ap0r[x])); \
++  asm ("mrs %0, S3_4_C12_C9_" #x : "=r"(a->ap1r[x])); } while (0)
++
++  READ_APR(0);
++  if (n_aprs > 1)
++    READ_APR(1);
++  if (n_aprs > 2)
++    {
++      READ_APR(2);
++      READ_APR(3);
++    }
++#undef READ_APR
++}
++
++PUBLIC static inline void
++Gic_h::load_aprs(Gic_h::Aprs const *a)
++{
++  // NOTE: we should use ASM patching to do this and just
++  // replace instructions with NOPs
++#define READ_APR(x) do { \
++  asm ("msr S3_4_C12_C8_" #x ", %0" : : "r"(a->ap0r[x])); \
++  asm ("msr S3_4_C12_C9_" #x ", %0" : : "r"(a->ap1r[x])); } while(0)
++
++  READ_APR(0);
++  if (n_aprs > 1)
++    READ_APR(1);
++  if (n_aprs > 2)
++    {
++      READ_APR(2);
++      READ_APR(3);
++    }
++#undef READ_APR
++}
++
++PUBLIC static inline void ALWAYS_INLINE
++Gic_h::save_lrs(Gic_h::Lr *lr, unsigned n)
++{
++#define READ_LR(ul,v,x) \
++  asm ("mrs %0, S3_4_C12_" #ul "_" #v : "=r"(lr[x].raw)); \
++  if (n <= x + 1) return
++
++  READ_LR(c12, 0, 0);
++  READ_LR(c12, 1, 1);
++  READ_LR(c12, 2, 2);
++  READ_LR(c12, 3, 3);
++  READ_LR(c12, 4, 4);
++  READ_LR(c12, 5, 5);
++  READ_LR(c12, 6, 6);
++  READ_LR(c12, 7, 7);
++  READ_LR(c13, 0, 8);
++  READ_LR(c13, 1, 9);
++  READ_LR(c13, 2, 10);
++  READ_LR(c13, 3, 11);
++  READ_LR(c13, 4, 12);
++  READ_LR(c13, 5, 13);
++  READ_LR(c13, 6, 14);
++  READ_LR(c13, 7, 15);
++#undef READ_LR
++}
++
++PUBLIC static inline void ALWAYS_INLINE
++Gic_h::load_lrs(Gic_h::Lr const *lr, unsigned n)
++{
++#define READ_LR(ul,v,x) \
++  asm ("msr S3_4_C12_" #ul "_" #v ", %0" : : "r"(lr[x].raw)); \
++  if (n <= x + 1) return
++
++  READ_LR(c12, 0, 0);
++  READ_LR(c12, 1, 1);
++  READ_LR(c12, 2, 2);
++  READ_LR(c12, 3, 3);
++  READ_LR(c12, 4, 4);
++  READ_LR(c12, 5, 5);
++  READ_LR(c12, 6, 6);
++  READ_LR(c12, 7, 7);
++  READ_LR(c13, 0, 8);
++  READ_LR(c13, 1, 9);
++  READ_LR(c13, 2, 10);
++  READ_LR(c13, 3, 11);
++  READ_LR(c13, 4, 12);
++  READ_LR(c13, 5, 13);
++  READ_LR(c13, 6, 14);
++  READ_LR(c13, 7, 15);
++#undef READ_LR
++}
+diff --git a/src/kern/arm/Kconfig b/src/kern/arm/Kconfig
+index 62df7c1..0791ff2 100644
+--- a/src/kern/arm/Kconfig
++++ b/src/kern/arm/Kconfig
+@@ -94,6 +94,12 @@ config ARM_V8
+ config ARM_GIC
+ 	bool
+ 
++config HAVE_ARM_GICV2
++        bool
++
++config HAVE_ARM_GICV3
++        bool
++
+ # SECTION: CPU
+ 
+ choice
+@@ -321,6 +327,24 @@ config ARM_PSCI_HVC
+ 
+ endchoice
+ 
++choice
++        prompt "ARM GIC version"
++        depends on ARM_GIC
++
++config ARM_GICV2
++        bool "Use ARM GICv2 interface"
++        depends on HAVE_ARM_GICV2
++        help
++          Use GIC version 2 as interrupt controller.
++
++config ARM_GICV3
++        bool "Use ARM GICv3 interface"
++        depends on HAVE_ARM_GICV3
++        help
++          Use GIC version 3 interface.
++
++endchoice
++
+ config ARM_1176_CACHE_ALIAS_FIX
+ 	bool "Use cache restriction to supress aliasing issue on ARM1176"
+ 	depends on ARM_1176
+diff --git a/src/kern/arm/bsp/armada38x/Kconfig b/src/kern/arm/bsp/armada38x/Kconfig
+index 1b85b53..f6bda49 100644
+--- a/src/kern/arm/bsp/armada38x/Kconfig
++++ b/src/kern/arm/bsp/armada38x/Kconfig
+@@ -1,4 +1,4 @@
+ # PF: ARMADA38X
+ # PFDESCR: Marvell Armada 38x
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC
++# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/exynos/Kconfig b/src/kern/arm/bsp/exynos/Kconfig
+index 03034e8..32b1a0d 100644
+--- a/src/kern/arm/bsp/exynos/Kconfig
++++ b/src/kern/arm/bsp/exynos/Kconfig
+@@ -2,7 +2,7 @@
+ # PFDESCR: Samsung Exynos
+ # PFDEPENDS: ARM
+ # PFSELECT: HAVE_ARM_SECMONIF_NONE HAVE_ARM_SECMONIF_MC
+-# PFSELECT: ARM_GIC
++# PFSELECT: ARM_GIC HAVE_ARM_GICV2
+ 
+ config PF_EXYNOS4
+         bool
+diff --git a/src/kern/arm/bsp/imx/Kconfig b/src/kern/arm/bsp/imx/Kconfig
+index 41db26a..566a33a 100644
+--- a/src/kern/arm/bsp/imx/Kconfig
++++ b/src/kern/arm/bsp/imx/Kconfig
+@@ -32,6 +32,7 @@ config PF_IMX_51
+ 	depends on PF_IMX
+ 	select CAN_ARM_CPU_CORTEX_A8
+ 	select ARM_GIC
++	select HAVE_ARM_GICV2
+ 	help
+ 	  Choose for i.MX51.
+ 
+@@ -49,6 +50,7 @@ config PF_IMX_6
+         select CAN_ARM_CPU_CORTEX_A9
+ 	select CAN_ARM_CACHE_L2CXX0
+ 	select ARM_GIC
++	select HAVE_ARM_GICV2
+         help
+           Choose for i.MX6 platform.
+ 
+@@ -58,6 +60,7 @@ config PF_IMX_6UL
+         select CAN_ARM_CPU_CORTEX_A7
+         select HAS_CPU_VIRT
+ 	select ARM_GIC
++	select HAVE_ARM_GICV2
+         help
+           Choose for i.MX6UL platform.
+ 
+@@ -68,6 +71,7 @@ config PF_IMX_7
+         select HAS_CPU_VIRT
+         select HAS_ARM_PSCI
+ 	select ARM_GIC
++	select HAVE_ARM_GICV2
+         help
+           Choose for i.MX7 platform.
+ 
+diff --git a/src/kern/arm/bsp/layerscape/Kconfig b/src/kern/arm/bsp/layerscape/Kconfig
+index b99f7c9..13f4a03 100644
+--- a/src/kern/arm/bsp/layerscape/Kconfig
++++ b/src/kern/arm/bsp/layerscape/Kconfig
+@@ -1,6 +1,6 @@
+ # PF: LAYERSCAPE
+ # PFDESCR: NXP/Freescale Layerscape
+-# PFSELECT: HAS_CPU_VIRT HAS_ARM_PSCI ARM_GIC
++# PFSELECT: HAS_CPU_VIRT HAS_ARM_PSCI ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+ 
+ choice
+diff --git a/src/kern/arm/bsp/omap/Kconfig b/src/kern/arm/bsp/omap/Kconfig
+index 9f7f2f7..747206e 100644
+--- a/src/kern/arm/bsp/omap/Kconfig
++++ b/src/kern/arm/bsp/omap/Kconfig
+@@ -31,6 +31,7 @@ config PF_OMAP4_PANDABOARD
+ 	select CAN_ARM_CPU_CORTEX_A9
+ 	select CAN_ARM_CACHE_L2CXX0
+ 	select ARM_GIC
++	select HAVE_ARM_GICV2
+ 	help
+ 	  Choose for Pandaboard.
+ 
+@@ -40,6 +41,7 @@ config PF_OMAP5_5432EVM
+ 	select HAS_CPU_VIRT
+ 	select DEFAULT_ARM_EM_NS if CPU_VIRT
+ 	select ARM_GIC
++	select HAVE_ARM_GICV2
+         help
+           Choose for OMAP5432EVM.
+ 
+diff --git a/src/kern/arm/bsp/rcar3/Kconfig b/src/kern/arm/bsp/rcar3/Kconfig
+index ca0b080..b235522 100644
+--- a/src/kern/arm/bsp/rcar3/Kconfig
++++ b/src/kern/arm/bsp/rcar3/Kconfig
+@@ -1,5 +1,5 @@
+ # PF: RCAR3
+ # PFDESCR: Renesas R-Car Gen3
+ # PFSELECT: CAN_ARM_CPU_CORTEX_A57 CAN_ARM_CPU_CORTEX_A53 HAS_ARM_PSCI
+-# PFSELECT: ARM_PSCI ARM_GIC
++# PFSELECT: ARM_PSCI ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/realview/Kconfig b/src/kern/arm/bsp/realview/Kconfig
+index 2af25e7..766b536 100644
+--- a/src/kern/arm/bsp/realview/Kconfig
++++ b/src/kern/arm/bsp/realview/Kconfig
+@@ -1,7 +1,7 @@
+ # PF: REALVIEW
+ # PFDESCR: ARM RealView Platform
+ # PFDEPENDS: ARM
+-# PFSELECT: ARM_GIC
++# PFSELECT: ARM_GIC HAVE_ARM_GICV2
+ 
+ choice
+ 	prompt "Realview Platform"
+diff --git a/src/kern/arm/bsp/sunxi/Kconfig b/src/kern/arm/bsp/sunxi/Kconfig
+index 05cd0a9..c6d7af7 100644
+--- a/src/kern/arm/bsp/sunxi/Kconfig
++++ b/src/kern/arm/bsp/sunxi/Kconfig
+@@ -1,4 +1,4 @@
+ # PF: SUNXI
+ # PFDESCR: Allwinner (sunxi)
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A7 ARM_GIC
++# PFSELECT: CAN_ARM_CPU_CORTEX_A7 ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/tegra/Kconfig b/src/kern/arm/bsp/tegra/Kconfig
+index a97506b..2fbdd0d 100644
+--- a/src/kern/arm/bsp/tegra/Kconfig
++++ b/src/kern/arm/bsp/tegra/Kconfig
+@@ -1,6 +1,6 @@
+ # PF: TEGRA
+ # PFDESCR: NVIDIA Tegra platform
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC
++# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+ 
+ choice
+diff --git a/src/kern/arm/bsp/virt/Kconfig b/src/kern/arm/bsp/virt/Kconfig
+index 7097a10..427c15a 100644
+--- a/src/kern/arm/bsp/virt/Kconfig
++++ b/src/kern/arm/bsp/virt/Kconfig
+@@ -1,5 +1,6 @@
+ # PF: ARM_VIRT
+ # PFDESCR: QEMU ARM Virtual Platform
+ # PFSELECT: CAN_ARM_CPU_CORTEX_A15 CAN_ARM_CPU_CORTEX_A57 HAS_ARM_PSCI
+-# PFSELECT: ARM_PSCI FORCE_ARM_PSCI_HVC ARM_GIC
++# PFSELECT: ARM_PSCI FORCE_ARM_PSCI_HVC ARM_GIC HAVE_ARM_GICV2 HAVE_ARM_GICV3
+ # PFDEPENDS: ARM
++
+diff --git a/src/kern/arm/bsp/virt/mem_layout-arm-virt.cpp b/src/kern/arm/bsp/virt/mem_layout-arm-virt.cpp
+index d10aaed..3497437 100644
+--- a/src/kern/arm/bsp/virt/mem_layout-arm-virt.cpp
++++ b/src/kern/arm/bsp/virt/mem_layout-arm-virt.cpp
+@@ -8,5 +8,6 @@ public:
+     Gic_cpu_phys_base    = 0x08010000,
+     Gic_h_phys_base      = 0x08030000,
+     Gic_v_phys_base      = 0x08040000,
++    Gic_redist_phys_base = 0x080A0000,
+   };
+ };
+diff --git a/src/kern/arm/bsp/zynq/Kconfig b/src/kern/arm/bsp/zynq/Kconfig
+index fda8f53..4e61542 100644
+--- a/src/kern/arm/bsp/zynq/Kconfig
++++ b/src/kern/arm/bsp/zynq/Kconfig
+@@ -1,4 +1,4 @@
+ # PF: ZYNQ
+ # PFDESCR: Xilinx Zynq
+-# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC
++# PFSELECT: CAN_ARM_CPU_CORTEX_A9 CAN_ARM_CACHE_L2CXX0 ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/bsp/zynqmp/Kconfig b/src/kern/arm/bsp/zynqmp/Kconfig
+index 8c9b914..0c0de6f 100644
+--- a/src/kern/arm/bsp/zynqmp/Kconfig
++++ b/src/kern/arm/bsp/zynqmp/Kconfig
+@@ -1,5 +1,5 @@
+ # PF: ZYNQMP
+ # PFDESCR: Xilinx Zynq UltraSCALE+ MPSoC
+ # PFSELECT: CAN_ARM_CPU_CORTEX_A53 HAS_ARM_PSCI
+-# PFSELECT: ARM_PSCI ARM_GIC
++# PFSELECT: ARM_PSCI ARM_GIC HAVE_ARM_GICV2
+ # PFDEPENDS: ARM
+diff --git a/src/kern/arm/context-arm-hyp.cpp b/src/kern/arm/context-arm-hyp.cpp
+index b607fd6..2efd78e 100644
+--- a/src/kern/arm/context-arm-hyp.cpp
++++ b/src/kern/arm/context-arm-hyp.cpp
+@@ -75,11 +75,8 @@ Context::arch_load_vcpu_kern_state(Vcpu_state *vcpu, bool do_load)
+               v->gic.misr = Gic_h::gic->misr();
+               v->gic.eisr = Gic_h::gic->eisr(0);
+               v->gic.elsr = Gic_h::gic->elsr(0);
+-
+-              for (unsigned i = 0; i < Vm_state::Gic::N_lregs; ++i)
+-                v->gic.lr[i] = Gic_h::gic->lr(i);
+-
+-              v->gic.apr = Gic_h::gic->apr();
++              Gic_h::gic->save_lrs(v->gic.lr, Vm_state::Gic::N_lregs);
++              Gic_h::gic->save_aprs(&v->gic.aprs);
+               Gic_h::gic->hcr(Gic_h::Hcr(0));
+             }
+         }
+@@ -123,9 +120,8 @@ Context::arch_load_vcpu_user_state(Vcpu_state *vcpu, bool do_load)
+           if (v->gic.hcr.en())
+             {
+               Gic_h::gic->vmcr(v->gic.vmcr);
+-              Gic_h::gic->apr(v->gic.apr);
+-              for (unsigned i = 0; i < Vm_state::Gic::N_lregs; ++i)
+-                Gic_h::gic->lr(i, v->gic.lr[i]);
++              Gic_h::gic->load_aprs(&v->gic.aprs);
++              Gic_h::gic->load_lrs(v->gic.lr, Vm_state::Gic::N_lregs);
+             }
+           Gic_h::gic->hcr(v->gic.hcr);
+         }
+@@ -172,11 +168,8 @@ Context::switch_vm_state(Context *t)
+           v->gic.misr = Gic_h::gic->misr();
+           v->gic.eisr = Gic_h::gic->eisr(0);
+           v->gic.elsr = Gic_h::gic->elsr(0);
+-
+-          for (unsigned i = 0; i < Vm_state::Gic::N_lregs; ++i)
+-            v->gic.lr[i] = Gic_h::gic->lr(i);
+-
+-          v->gic.apr = Gic_h::gic->apr();
++          Gic_h::gic->save_lrs(v->gic.lr, Vm_state::Gic::N_lregs);
++          Gic_h::gic->save_aprs(&v->gic.aprs);
+         }
+     }
+ 
+@@ -188,9 +181,8 @@ Context::switch_vm_state(Context *t)
+       if ((_to_state & Thread_vcpu_user) && v->gic.hcr.en())
+         {
+           Gic_h::gic->vmcr(v->gic.vmcr);
+-          Gic_h::gic->apr(v->gic.apr);
+-          for (unsigned i = 0; i < Vm_state::Gic::N_lregs; ++i)
+-            Gic_h::gic->lr(i, v->gic.lr[i]);
++          Gic_h::gic->load_aprs(&v->gic.aprs);
++          Gic_h::gic->load_lrs(v->gic.lr, Vm_state::Gic::N_lregs);
+           Gic_h::gic->hcr(v->gic.hcr);
+         }
+       else if (vgic)
+diff --git a/src/kern/arm/gic-v2.cpp b/src/kern/arm/gic-v2.cpp
+new file mode 100644
+index 0000000..6f2e67a
+--- /dev/null
++++ b/src/kern/arm/gic-v2.cpp
+@@ -0,0 +1,55 @@
++INTERFACE:
++
++EXTENSION class Gic
++{
++public:
++  typedef Unsigned32 Sgi_target;
++};
++
++//-------------------------------------------------------------------
++IMPLEMENTATION:
++
++PUBLIC inline
++Gic::Sgi_target
++Gic::pcpu_to_sgi(Cpu_phys_id cpu)
++{ return Gic_dist::pcpu_to_sgi(cpu); }
++
++PUBLIC inline
++void
++Gic::softint_cpu(Gic::Sgi_target callmap, unsigned m)
++{ _dist.softint_cpu(callmap, m); }
++
++PUBLIC inline
++void
++Gic::softint_bcast(unsigned m)
++{ _dist.softint_bcast(m); }
++
++PRIVATE inline
++void
++Gic::cpu_local_init(Cpu_number)
++{
++  _dist.cpu_init();
++}
++
++PRIVATE inline void Gic::check_sgi_mapping()
++{
++  // Ensure BSPs have provided a mapping for the CPUTargetList
++  assert(pcpu_to_sgi(Proc::cpu_id()) < (1 << 8));
++}
++
++//-------------------------------------------------------------------
++IMPLEMENTATION [debug]:
++
++PUBLIC
++void
++Gic::irq_prio_bootcpu(unsigned irq, unsigned prio)
++{
++  _dist.irq_prio(irq, prio);
++}
++
++PUBLIC
++unsigned
++Gic::irq_prio_bootcpu(unsigned irq)
++{
++  return _dist.irq_prio(irq);
++}
+diff --git a/src/kern/arm/gic-v3.cpp b/src/kern/arm/gic-v3.cpp
+new file mode 100644
+index 0000000..ab5952f
+--- /dev/null
++++ b/src/kern/arm/gic-v3.cpp
+@@ -0,0 +1,81 @@
++INTERFACE:
++
++#include "gic_redist.h"
++
++EXTENSION class Gic
++{
++  static Per_cpu<Gic_redist> _redist;
++
++public:
++  typedef Unsigned64 Sgi_target;
++};
++
++//-------------------------------------------------------------------
++IMPLEMENTATION:
++
++DEFINE_PER_CPU Per_cpu<Gic_redist> Gic::_redist;
++
++PUBLIC static inline
++Gic::Sgi_target
++Gic::pcpu_to_sgi(Cpu_phys_id cpu)
++{
++  return Gic_cpu::pcpu_to_sgi(cpu);
++}
++
++PUBLIC inline
++void
++Gic::softint_cpu(Gic::Sgi_target sgi_target, unsigned m)
++{ _cpu.softint_cpu(sgi_target, m); }
++
++PUBLIC inline
++void
++Gic::softint_bcast(unsigned m)
++{ _cpu.softint_bcast(m); }
++
++PRIVATE inline
++void
++Gic::cpu_local_init(Cpu_number cpu)
++{
++  _redist.cpu(cpu).find(cpu);
++  _redist.cpu(cpu).cpu_init();
++}
++
++PUBLIC
++void
++Gic::mask_percpu(Cpu_number cpu, Mword pin)
++{
++  assert(pin < 32);
++  assert (cpu_lock.test());
++  _redist.cpu(cpu).mask(pin);
++}
++
++PUBLIC
++void
++Gic::unmask_percpu(Cpu_number cpu, Mword pin)
++{
++  assert(pin < 32);
++  assert (cpu_lock.test());
++  _redist.cpu(cpu).unmask(pin);
++}
++
++
++//-------------------------------------------------------------------
++IMPLEMENTATION [debug]:
++
++PUBLIC
++void
++Gic::irq_prio_bootcpu(unsigned irq, unsigned prio)
++{
++  assert(irq < 32);
++  _redist.cpu(Cpu_number::boot_cpu()).irq_prio(irq, prio);
++}
++
++PUBLIC
++unsigned
++Gic::irq_prio_bootcpu(unsigned irq)
++{
++  assert(irq < 32);
++  return _redist.cpu(Cpu_number::boot_cpu()).irq_prio(irq);
++}
++
++
+diff --git a/src/kern/arm/gic.cpp b/src/kern/arm/gic.cpp
+index 8578104..887f381 100644
+--- a/src/kern/arm/gic.cpp
++++ b/src/kern/arm/gic.cpp
+@@ -1,8 +1,8 @@
+ INTERFACE [arm && pic_gic]:
+ 
++#include "cpu.h"
+ #include "kmem.h"
+ #include "irq_chip_generic.h"
+-#include "mmio_register_block.h"
+ #include "gic_cpu.h"
+ #include "gic_dist.h"
+ 
+@@ -10,6 +10,7 @@ INTERFACE [arm && pic_gic]:
+ class Gic : public Irq_chip_gen
+ {
+ private:
++  friend class Jdb;
+   Gic_cpu _cpu;
+   Gic_dist _dist;
+ 
+@@ -20,7 +21,7 @@ public:
+   };
+ };
+ 
+-//-------------------------------------------------------------------
++// ------------------------------------------------------------------------
+ IMPLEMENTATION [arm && pic_gic]:
+ 
+ #include <cassert>
+@@ -38,48 +39,37 @@ unsigned
+ Gic::hw_nr_irqs()
+ { return _dist.hw_nr_irqs(); }
+ 
+-PUBLIC inline
+-Unsigned32 Gic::pcpu_to_sgi(Cpu_phys_id cpu)
+-{ return Gic_dist::pcpu_to_sgi(cpu); }
+-
+-PUBLIC inline
+-void Gic::softint_cpu(unsigned callmap, unsigned m)
+-{ _dist.softint_cpu(callmap, m); }
+-
+-PUBLIC inline
+-void Gic::softint_bcast(unsigned m)
+-{ _dist.softint_bcast(m); }
+-
+-PRIVATE
++PUBLIC
+ void
+-Gic::cpu_init(bool resume)
++Gic::init_ap(Cpu_number cpu, bool resume)
+ {
+   _cpu.disable();
+ 
+   if (!resume)
+-    _dist.cpu_init();
++    cpu_local_init(cpu);
+ 
+   _cpu.enable();
+-
+-  // Ensure BSPs have provided a mapping for the CPUTargetList
+-  assert(pcpu_to_sgi(Proc::cpu_id()) < (1u << 8));
+-}
+-
+-PUBLIC
+-void
+-Gic::init_ap(Cpu_number, bool resume)
+-{
+-  cpu_init(resume);
+ }
+ 
+ PUBLIC
+ unsigned
+ Gic::init(bool primary_gic, int nr_irqs_override = -1)
+ {
++  if (!primary_gic)
++    {
++      cpu_local_init(Cpu_number::boot_cpu());
++      return 0;
++    }
++
+   _cpu.disable();
+-  unsigned num = _dist.init(primary_gic, Cpu_prio_val,
++  unsigned num = _dist.init(Cpu_prio_val,
+                             nr_irqs_override);
++
++  if (!Gic_dist::Config_mxc_tzic)
++    cpu_local_init(Cpu_number::boot_cpu());
++
+   _cpu.enable();
++
+   return num;
+ }
+ 
+@@ -144,7 +134,6 @@ Gic::ack(Mword pin) override
+   acknowledge_locked(pin);
+ }
+ 
+-
+ PUBLIC
+ void
+ Gic::unmask(Mword pin) override
+@@ -248,7 +237,14 @@ IMPLEMENTATION [arm && mp && pic_gic]:
+ 
+ #include "cpu.h"
+ 
+-PUBLIC inline NEEDS["io.h"]
++PUBLIC inline NEEDS["cpu.h"]
++void
++Gic::set_cpu(Mword pin, Cpu_number cpu) override
++{
++  _dist.set_cpu(pin, Cpu::cpus.cpu(cpu).phys_id());
++}
++
++PUBLIC inline
+ Unsigned32 Gic::pending()
+ {
+   Unsigned32 ack = _cpu.iar();
+@@ -260,40 +256,8 @@ Unsigned32 Gic::pending()
+   return ack & 0x3ff;
+ }
+ 
+-PUBLIC inline NEEDS["cpu.h"]
+-void
+-Gic::set_cpu(Mword pin, Cpu_number cpu) override
+-{
+-  _dist.set_cpu(pin, Cpu::cpus.cpu(cpu).phys_id());
+-}
+-
+-//---------------------------------------------------------------------------
++// ------------------------------------------------------------------------
+ IMPLEMENTATION [debug]:
+-
+-PUBLIC
+-void
+-Gic::irq_prio(unsigned irq, unsigned prio)
+-{
+-  _dist.irq_prio(irq, prio);
+-}
+-
+-PUBLIC
+-unsigned
+-Gic::irq_prio(unsigned irq)
+-{
+-  return _dist.irq_prio(irq);
+-}
+-
+-PUBLIC
+-unsigned
+-Gic::pmr()
+-{ return _cpu.pmr(); }
+-
+-PUBLIC
+-void
+-Gic::pmr(unsigned prio)
+-{ return _cpu.pmr(prio); }
+-
+ PUBLIC
+ char const *
+ Gic::chip_type() const override
+diff --git a/src/kern/arm/gic_cpu.cpp b/src/kern/arm/gic_cpu-v2.cpp
+similarity index 100%
+rename from src/kern/arm/gic_cpu.cpp
+rename to src/kern/arm/gic_cpu-v2.cpp
+diff --git a/src/kern/arm/gic_cpu-v3.cpp b/src/kern/arm/gic_cpu-v3.cpp
+new file mode 100644
+index 0000000..e1b6421
+--- /dev/null
++++ b/src/kern/arm/gic_cpu-v3.cpp
+@@ -0,0 +1,30 @@
++INTERFACE:
++
++#include "types.h"
++
++class Gic_cpu
++{
++public:
++  enum
++  {
++    Cpu_prio_val      = 0xf0,
++  };
++
++  enum
++  {
++    ICC_SRE_SRE          = 1 << 0,
++    ICC_SRE_DFB          = 1 << 1,
++    ICC_SRE_DIB          = 1 << 2,
++    ICC_SRE_Enable_lower = 1 << 3,
++  };
++};
++
++//-------------------------------------------------------------------
++IMPLEMENTATION:
++
++PUBLIC explicit inline
++Gic_cpu::Gic_cpu(Address /*cpu_base*/)
++{}
++
++PUBLIC inline void Gic_cpu::disable() {}
++
+diff --git a/src/kern/arm/gic_dist.cpp b/src/kern/arm/gic_dist.cpp
+index a5b97f8..61e4e47 100644
+--- a/src/kern/arm/gic_dist.cpp
++++ b/src/kern/arm/gic_dist.cpp
+@@ -21,22 +21,27 @@ public:
+     GICD_ICENABLER    = 0x180,
+     GICD_ISPENDR      = 0x200,
+     GICD_ICPENDR      = 0x280,
++    GICD_ISACTIVER    = 0x300,
++    GICD_ICACTIVER    = 0x380,
+     GICD_IPRIORITYR   = 0x400,
+     GICD_ITARGETSR    = 0x800,
+     GICD_ICFGR        = 0xc00,
+     GICD_SGIR         = 0xf00,
+ 
++    GICD_IROUTER      = 0x6100,
++
+     MXC_TZIC_PRIOMASK = 0x00c,
+     MXC_TZIC_SYNCCTRL = 0x010,
+     MXC_TZIC_PND      = 0xd00,
+ 
+-    GICD_CTRL_ENABLE         = 1,
++    GICD_CTRL_ENABLE         = 0x01,
++    GICD_CTRL_ENGR1          = 0x01,
++    GICD_CTRL_ENGR1A         = 0x02,
++    GICD_CTRL_ARE_NS         = 0x10,
+ 
+     MXC_TZIC_CTRL_NSEN       = 1 << 16,
+     MXC_TZIC_CTRL_NSENMASK   = 1 << 31,
+   };
+-
+-  static Unsigned32 pcpu_to_sgi(Cpu_phys_id);
+ };
+ 
+ // ------------------------------------------------------------------------
+@@ -81,6 +86,77 @@ INTERFACE [arm && !arm_em_tz]:
+ 
+ EXTENSION class Gic_dist { enum { Config_tz_sec = 0 }; };
+ 
++// ------------------------------------------------------------------------
++IMPLEMENTATION [!arm_gicv3]:
++
++EXTENSION class Gic_dist
++{
++public:
++  static Unsigned32 pcpu_to_sgi(Cpu_phys_id);
++};
++
++IMPLEMENT_DEFAULT inline
++Unsigned32
++Gic_dist::pcpu_to_sgi(Cpu_phys_id cpu)
++{ return 1U << cxx::int_value<Cpu_phys_id>(cpu); }
++
++PUBLIC inline NEEDS[Gic_dist::pcpu_to_sgi]
++void
++Gic_dist::set_cpu(Mword pin, Cpu_phys_id cpu)
++{
++  _dist.write<Unsigned8>(pcpu_to_sgi(cpu), GICD_ITARGETSR + pin);
++}
++
++PRIVATE inline
++void
++Gic_dist::igroup_init(unsigned num)
++{
++  Mword v = 0;
++  if (Config_tz_sec || Config_mxc_tzic)
++    v = 0xffffffff;
++
++  for (unsigned i = 32; i < num; i += 32)
++    _dist.write<Unsigned32>(v, GICD_IGROUPR + i / 8);
++}
++
++PUBLIC inline
++void
++Gic_dist::enable()
++{
++  Unsigned32 dist_enable = GICD_CTRL_ENABLE;
++  if (Config_mxc_tzic && !Config_tz_sec)
++    dist_enable |= MXC_TZIC_CTRL_NSEN | MXC_TZIC_CTRL_NSENMASK;
++
++  _dist.write<Unsigned32>(dist_enable, GICD_CTRL);
++}
++
++//-------------------------------------------------------------------
++IMPLEMENTATION [arm_gicv3]:
++
++PUBLIC inline
++void
++Gic_dist::set_cpu(Mword pin, Cpu_phys_id cpu)
++{
++  Unsigned64 v = Cpu_phys_id::val(cpu);
++  _dist.write<Unsigned64>(v & 0xff00ffffff, GICD_IROUTER + 8 * pin);
++}
++
++PRIVATE inline
++void
++Gic_dist::igroup_init(unsigned num)
++{
++  for (unsigned i = 32; i < num; i += 32)
++    _dist.write<Unsigned32>(~0u, GICD_IGROUPR + i / 8);
++}
++
++PUBLIC inline
++void
++Gic_dist::enable()
++{
++  Unsigned32 dist_enable = GICD_CTRL_ENGR1 | GICD_CTRL_ENGR1A | GICD_CTRL_ARE_NS;
++  _dist.write<Unsigned32>(dist_enable, GICD_CTRL);
++}
++
+ //-------------------------------------------------------------------
+ IMPLEMENTATION:
+ 
+@@ -103,11 +179,6 @@ Gic_dist::has_sec_ext()
+   return _dist.read<Unsigned32>(GICD_TYPER) & (1 << 10);
+ }
+ 
+-IMPLEMENT_DEFAULT inline
+-Unsigned32
+-Gic_dist::pcpu_to_sgi(Cpu_phys_id cpu)
+-{ return 1U << cxx::int_value<Cpu_phys_id>(cpu); }
+-
+ PUBLIC inline
+ void
+ Gic_dist::softint_cpu(unsigned callmap, unsigned m)
+@@ -127,17 +198,6 @@ Gic_dist::disable()
+   _dist.write<Unsigned32>(0, GICD_CTRL);
+ }
+ 
+-PUBLIC inline
+-void
+-Gic_dist::enable()
+-{
+-  Unsigned32 dist_enable = GICD_CTRL_ENABLE;
+-  if (Config_mxc_tzic && !Config_tz_sec)
+-    dist_enable |= MXC_TZIC_CTRL_NSEN | MXC_TZIC_CTRL_NSENMASK;
+-
+-  _dist.write<Unsigned32>(dist_enable, GICD_CTRL);
+-}
+-
+ PUBLIC inline
+ void
+ Gic_dist::init_prio(unsigned from, unsigned to)
+@@ -226,7 +286,6 @@ Gic_dist::set_pending_irq(unsigned idx, Unsigned32 val)
+     }
+ }
+ 
+-
+ PUBLIC inline
+ void
+ Gic_dist::cpu_init()
+@@ -286,25 +345,12 @@ void
+ Gic_dist::enable_irq(unsigned irq)
+ { _dist.write<Unsigned32>(1 << (irq % 32), GICD_ISENABLER + (irq / 32) * 4); }
+ 
+-PUBLIC inline NEEDS[Gic_dist::pcpu_to_sgi]
+-void
+-Gic_dist::set_cpu(Mword pin, Cpu_phys_id cpu)
+-{
+-  _dist.write<Unsigned8>(pcpu_to_sgi(cpu), GICD_ITARGETSR + pin);
+-}
+-
+ PUBLIC
+ unsigned
+-Gic_dist::init(bool primary_gic, unsigned cpu_prio, int nr_irqs_override = -1)
++Gic_dist::init(unsigned cpu_prio, int nr_irqs_override = -1)
+ {
+   _lock.init();
+ 
+-  if (!primary_gic)
+-    {
+-      cpu_init();
+-      return 0;
+-    }
+-
+   disable();
+ 
+   unsigned num = hw_nr_irqs();
+@@ -317,13 +363,7 @@ Gic_dist::init(bool primary_gic, unsigned cpu_prio, int nr_irqs_override = -1)
+ 
+   init_prio(32, num);
+   init_regs(32, num);
+-
+-  Mword v = 0;
+-  if (Config_tz_sec || Config_mxc_tzic)
+-    v = 0xffffffff;
+-
+-  for (unsigned i = 32; i < num; i += 32)
+-    _dist.write<Unsigned32>(v, GICD_IGROUPR + i / 8);
++  igroup_init(num);
+ 
+   for (unsigned i = 0; i < num; ++i)
+     set_cpu(i, Proc::cpu_id());
+@@ -335,8 +375,6 @@ Gic_dist::init(bool primary_gic, unsigned cpu_prio, int nr_irqs_override = -1)
+       _dist.write<Unsigned32>(0x0, MXC_TZIC_SYNCCTRL);
+       _dist.write<Unsigned32>(cpu_prio, MXC_TZIC_PRIOMASK);
+     }
+-  else
+-    cpu_init();
+ 
+   return num;
+ }
+diff --git a/src/kern/arm/gic_redist.cpp b/src/kern/arm/gic_redist.cpp
+new file mode 100644
+index 0000000..686866e
+--- /dev/null
++++ b/src/kern/arm/gic_redist.cpp
+@@ -0,0 +1,130 @@
++INTERFACE:
++
++#include "mmio_register_block.h"
++
++class Gic_redist
++{
++private:
++  Mmio_register_block _redist;
++
++public:
++  enum
++  {
++    GICR_CTRL         = 0x0000,
++    GICR_IIDR         = 0x0004,
++    GICR_TYPER        = 0x0008,
++    GICR_STATUSR      = 0x0010,
++    GICR_WAKER        = 0x0014,
++    GICR_SGI_BASE     = 0x10000,
++    GICR_IGROUPR0     = GICR_SGI_BASE + 0x0080,
++    GICR_ISENABLER0   = GICR_SGI_BASE + 0x0100,
++    GICR_ICENABLER0   = GICR_SGI_BASE + 0x0180,
++    GICR_ISPENDR0     = GICR_SGI_BASE + 0x0200,
++    GICR_ICPENDR0     = GICR_SGI_BASE + 0x0280,
++    GICR_ISACTIVER0   = GICR_SGI_BASE + 0x0300,
++    GICR_ICACTIVER0   = GICR_SGI_BASE + 0x0380,
++    GICR_IPRIORITYR0  = GICR_SGI_BASE + 0x0400,
++
++    GICR_frame_size   = 0x10000,
++
++    GICR_TYPER_VLPIS  = 1 << 1,
++    GICR_TYPER_Last   = 1 << 4,
++  };
++
++};
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION:
++
++#include "cpu.h"
++#include "kmem.h"
++
++#include <cstdio>
++
++PUBLIC
++void
++Gic_redist::find(Cpu_number cpu)
++{
++  unsigned o = 0;
++  Unsigned64 gicr_typer;
++  Unsigned64 mpidr = Cpu::mpidr();
++  Unsigned64 typer_aff =   ((mpidr & 0x0000ffffff) << (32 - 0))
++                         | ((mpidr & 0xff00000000) << (56 - 32));
++  do
++    {
++      Mmio_register_block r(Kmem::mmio_remap(Mem_layout::Gic_redist_phys_base + o));
++
++      unsigned id = r.read<Unsigned32>(0xffe0);
++      if (   id != 0x92
++          && id != 0x93) // No GICR
++        break;
++      id = r.read<Unsigned32>(0xffe8);
++      if (   id != 0x3b    // No GICv3
++          && id != 0x4b)   // and no GICv4
++        break;
++
++      gicr_typer = r.read<Unsigned64>(GICR_TYPER);
++      if ((gicr_typer & 0xffffffff00000000) == typer_aff)
++        {
++          printf("CPU%d: GIC Redistributor at %lx/%lx for 0x%llx\n",
++                 cxx::int_value<Cpu_number>(cpu),
++                 (Address)Mem_layout::Gic_redist_phys_base + o,
++                 r.get_mmio_base(), mpidr & ~0xc0000000ull);
++          _redist = r;
++          return;
++        }
++
++      o += 2 * GICR_frame_size;
++      if (gicr_typer & GICR_TYPER_VLPIS)
++        o += 2 * GICR_frame_size;
++    }
++  while (!(gicr_typer & GICR_TYPER_Last));
++
++  printf("GIC: Did not find a redistributor for CPU%d\n",
++         cxx::int_value<Cpu_number>(cpu));
++}
++
++PUBLIC
++void
++Gic_redist::cpu_init()
++{
++  _redist.write<Unsigned32>(0xffffffff, GICR_ICENABLER0);
++
++  _redist.write<Unsigned32>(0x0000001e, GICR_ISENABLER0);
++  _redist.write<Unsigned32>(0xffffffff, GICR_IGROUPR0);
++
++  _redist.write<Unsigned32>(0xffffffff, GICR_ICPENDR0);
++  _redist.write<Unsigned32>(0xffffffff, GICR_ICACTIVER0); // clear active
++
++  for (unsigned g = 0; g < 32; g += 4)
++    _redist.write<Unsigned32>(0xa0a0a0a0, GICR_IPRIORITYR0 + g);
++}
++
++PUBLIC
++void
++Gic_redist::mask(Mword pin)
++{
++  _redist.write<Unsigned32>(1u << pin, GICR_ICENABLER0);
++}
++
++PUBLIC
++void
++Gic_redist::unmask(Mword pin)
++{
++  _redist.write<Unsigned32>(1u << pin, GICR_ISENABLER0);
++}
++
++PUBLIC inline
++void
++Gic_redist::irq_prio(unsigned irq, unsigned prio)
++{
++  _redist.write<Unsigned8>(prio, GICR_IPRIORITYR0 + irq);
++}
++
++PUBLIC inline
++unsigned
++Gic_redist::irq_prio(unsigned irq)
++{
++  return _redist.read<Unsigned8>(GICR_IPRIORITYR0 + irq);
++}
++
+diff --git a/src/kern/arm/ipi-arm.cpp b/src/kern/arm/ipi-arm.cpp
+index 829ebd0..84ad401 100644
+--- a/src/kern/arm/ipi-arm.cpp
++++ b/src/kern/arm/ipi-arm.cpp
+@@ -1,11 +1,4 @@
+-IMPLEMENTATION [pic_gic && mp]:
+-
+-#include "cpu.h"
+-#include "pic.h"
+-#include "gic.h"
+-#include "processor.h"
+-
+-IMPLEMENTATION [pic_gic && mp && arm_em_tz]: // ---------------------------
++INTERFACE [pic_gic && mp && arm_em_tz]: // --------------------------------
+ 
+ EXTENSION class Ipi
+ {
+@@ -13,7 +6,8 @@ public:
+   enum { Ipi_start = 8 };
+ };
+ 
+-IMPLEMENTATION [pic_gic && mp && !arm_em_tz]: // --------------------------
++// ---------------------------------------------------------------------------
++INTERFACE [pic_gic && mp && !arm_em_tz]:
+ 
+ EXTENSION class Ipi
+ {
+@@ -21,7 +15,10 @@ public:
+   enum { Ipi_start = 1 };
+ };
+ 
+-IMPLEMENTATION [pic_gic && mp]: // ----------------------------------------
++// ---------------------------------------------------------------------------
++INTERFACE [pic_gic && mp]:
++
++#include "gic.h"
+ 
+ EXTENSION class Ipi
+ {
+@@ -31,10 +28,17 @@ public:
+     Global_request = Ipi_start, Request, Debug, Timer,
+     Ipi_end
+   };
++
+ private:
+-  Unsigned32 _sgi_target;
++  Gic::Sgi_target _sgi_target;
+ };
+ 
++// ---------------------------------------------------------------------------
++IMPLEMENTATION [pic_gic && mp]:
++
++#include "cpu.h"
++#include "pic.h"
++#include "processor.h"
+ 
+ PUBLIC inline
+ Ipi::Ipi() : _sgi_target(~0)
+diff --git a/src/kern/arm/task-arm.cpp b/src/kern/arm/task-arm.cpp
+index 8e6046e..e556b02 100644
+--- a/src/kern/arm/task-arm.cpp
++++ b/src/kern/arm/task-arm.cpp
+@@ -8,7 +8,7 @@ Task::invoke_arch(L4_msg_tag &, Utcb *)
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && cpu_virt]:
++IMPLEMENTATION [arm && cpu_virt && !arm_gicv3]:
+ 
+ #include "mem_layout.h"
+ 
+@@ -49,6 +49,19 @@ Task::map_gicc_page(L4_msg_tag tag, Utcb *utcb)
+   return commit_result(0);
+ }
+ 
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && cpu_virt && arm_gicv3]:
++
++PRIVATE
++L4_msg_tag
++Task::map_gicc_page(L4_msg_tag, Utcb *)
++{
++  return commit_result(-L4_err::ENosys);
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && cpu_virt]:
++
+ PRIVATE inline
+ bool
+ Task::invoke_arch(L4_msg_tag &tag, Utcb *utcb)
+diff --git a/src/kern/arm/thread-arm-hyp.cpp b/src/kern/arm/thread-arm-hyp.cpp
+index 4e99d8f..5c49b74 100644
+--- a/src/kern/arm/thread-arm-hyp.cpp
++++ b/src/kern/arm/thread-arm-hyp.cpp
+@@ -42,7 +42,7 @@ Thread::arch_init_vcpu_state(Vcpu_state *vcpu_state, bool ext)
+ 
+   v->gic.hcr = Gic_h::Hcr(0);
+   v->gic.vtr = Gic_h::gic->vtr();
+-  v->gic.apr = 0;
++  v->gic.aprs.clear();
+ 
+   if (current() == this)
+     {
+@@ -218,11 +218,11 @@ public:
+     set_hit(handler_wrapper<Arm_ppi_virt>);
+   }
+ 
+-  void alloc()
++  void alloc(Cpu_number cpu)
+   {
+     printf("Allocate ARM PPI %d to virtual %d\n", _irq, _virq);
+-    check (Irq_mgr::mgr->alloc(this, _irq));
+-    chip()->unmask(pin());
++    check (Irq_mgr::mgr->alloc(this, _irq, false));
++    chip()->unmask_percpu(cpu, pin());
+   }
+ 
+ private:
+@@ -249,11 +249,11 @@ public:
+     set_hit(handler_wrapper<Arm_vtimer_ppi>);
+   }
+ 
+-  void alloc()
++  void alloc(Cpu_number cpu)
+   {
+     printf("Allocate ARM PPI %d to virtual %d\n", _irq, 1);
+-    check (Irq_mgr::mgr->alloc(this, _irq));
+-    chip()->unmask(pin());
++    check (Irq_mgr::mgr->alloc(this, _irq, false));
++    chip()->unmask_percpu(cpu, pin());
+   }
+ 
+ private:
+@@ -277,13 +277,18 @@ static Arm_vtimer_ppi __vtimer_irq(27); // virtual timer
+ namespace {
+ struct Local_irq_init
+ {
+-  Local_irq_init()
++  explicit Local_irq_init(Cpu_number cpu)
+   {
+-    __vgic_irq.alloc();
+-    __vtimer_irq.alloc();
++    if (cpu >= Cpu::invalid())
++      return;
++
++    __vgic_irq.alloc(cpu);
++    __vtimer_irq.alloc(cpu);
+   }
+ };
+-DEFINE_PER_CPU_LATE static Per_cpu<Local_irq_init> local_irqs;
++
++DEFINE_PER_CPU_LATE static Per_cpu<Local_irq_init>
++  local_irqs(Per_cpu_data::Cpu_num);
+ }
+ 
+ //-----------------------------------------------------------------------------
+@@ -395,7 +400,7 @@ Thread::arch_init_vcpu_state(Vcpu_state *vcpu_state, bool ext)
+ 
+   v->gic.hcr = Gic_h::Hcr(0);
+   v->gic.vtr = Gic_h::gic->vtr();
+-  v->gic.apr = 0;
++  v->gic.aprs.clear();
+   v->vmpidr = 1UL << 31; // ARMv8: RES1
+ 
+   // use the real MIDR as initial value
+diff --git a/src/kern/arm/thread-arm.cpp b/src/kern/arm/thread-arm.cpp
+index 2bc5d89..b1dc36f 100644
+--- a/src/kern/arm/thread-arm.cpp
++++ b/src/kern/arm/thread-arm.cpp
+@@ -617,10 +617,10 @@ class Arm_ipis
+ public:
+   Arm_ipis()
+   {
+-    check(Irq_mgr::mgr->alloc(&remote_rq_ipi, Ipi::Request));
+-    check(Irq_mgr::mgr->alloc(&glbl_remote_rq_ipi, Ipi::Global_request));
+-    check(Irq_mgr::mgr->alloc(&debug_ipi, Ipi::Debug));
+-    check(Irq_mgr::mgr->alloc(&timer_ipi, Ipi::Timer));
++    check(Irq_mgr::mgr->alloc(&remote_rq_ipi, Ipi::Request, false));
++    check(Irq_mgr::mgr->alloc(&glbl_remote_rq_ipi, Ipi::Global_request, false));
++    check(Irq_mgr::mgr->alloc(&debug_ipi, Ipi::Debug, false));
++    check(Irq_mgr::mgr->alloc(&timer_ipi, Ipi::Timer, false));
+   }
+ 
+   Thread_remote_rq_irq remote_rq_ipi;
+diff --git a/src/kern/arm/timer_tick-arm.cpp b/src/kern/arm/timer_tick-arm.cpp
+index 2209727..3937b8d 100644
+--- a/src/kern/arm/timer_tick-arm.cpp
++++ b/src/kern/arm/timer_tick-arm.cpp
+@@ -7,5 +7,5 @@ IMPLEMENTATION [arm]:
+ // function to handle timer IRQs as normal IRQs
+ IMPLEMENT bool
+ Timer_tick::allocate_irq(Irq_base *irq, unsigned irqnum)
+-{ return Irq_mgr::mgr->alloc(irq, irqnum); }
++{ return Irq_mgr::mgr->alloc(irq, irqnum, false); }
+ 
+diff --git a/src/kern/arm/vgic-v2.cpp b/src/kern/arm/vgic-v2.cpp
+new file mode 100644
+index 0000000..b53d3d3
+--- /dev/null
++++ b/src/kern/arm/vgic-v2.cpp
+@@ -0,0 +1,110 @@
++INTERFACE [cpu_virt && vgic]:
++
++#include "types.h"
++#include "kmem.h"
++#include "mmio_register_block.h"
++
++#include <cxx/bitfield>
++
++EXTENSION class Gic_h : private Mmio_register_block
++{
++public:
++  enum { Version = 2 };
++  enum Register
++  {
++    HCR   = 0x000,
++    VTR   = 0x004,
++    VMCR  = 0x008,
++    MISR  = 0x010,
++
++    EISRn = 0x020,
++    EISR0 = 0x020,
++    EISR1 = 0x024,
++
++    ELSRn = 0x030,
++    ELSR0 = 0x030,
++    ELSR1 = 0x034,
++
++    APR   = 0x0f0,
++
++    LRn   = 0x100,
++    LR0   = LRn,
++    LR63  = 0x1fc
++  };
++
++  struct Lr
++  {
++    Unsigned32 raw;
++    Lr() = default;
++    explicit Lr(Unsigned32 v) : raw(v) {}
++    CXX_BITFIELD_MEMBER(  0,  9, vid, raw);
++    CXX_BITFIELD_MEMBER( 10, 19, pid, raw);
++    CXX_BITFIELD_MEMBER( 10, 12, cpuid, raw);
++    CXX_BITFIELD_MEMBER( 19, 19, eoi, raw);
++    CXX_BITFIELD_MEMBER( 23, 27, prio, raw);
++    CXX_BITFIELD_MEMBER( 28, 29, state, raw);
++    CXX_BITFIELD_MEMBER( 30, 30, grp1, raw);
++    CXX_BITFIELD_MEMBER( 31, 31, hw, raw);
++  };
++
++  struct Aprs
++  {
++    void clear() { apr = 0; }
++    Unsigned32 apr;
++  };
++
++  explicit Gic_h(Address va) : Mmio_register_block(va) {}
++
++  static Static_object<Gic_h> gic;
++};
++
++//------------------------------------------------------------------------
++IMPLEMENTATION  [cpu_virt && vgic]:
++
++Static_object<Gic_h> Gic_h::gic;
++
++PUBLIC inline Gic_h::Hcr  Gic_h::hcr()  { return Hcr(read<Unsigned32>(HCR)); }
++PUBLIC inline void Gic_h::hcr(Gic_h::Hcr hcr)  { write(hcr.raw, HCR); }
++PUBLIC inline Gic_h::Vtr  Gic_h::vtr()  { return Vtr(read<Unsigned32>(VTR)); }
++PUBLIC inline Gic_h::Vmcr Gic_h::vmcr() { return Vmcr(read<Unsigned32>(VMCR)); }
++PUBLIC inline void Gic_h::vmcr(Gic_h::Vmcr vmcr) { write(vmcr.raw, VMCR); }
++PUBLIC inline Gic_h::Misr Gic_h::misr() { return Misr(read<Unsigned32>(MISR)); }
++PUBLIC inline Unsigned32  Gic_h::eisr(unsigned n) { return read<Unsigned32>(EISRn + (n << 2)); }
++PUBLIC inline Unsigned32  Gic_h::elsr(unsigned n) { return read<Unsigned32>(ELSRn + (n << 2)); }
++
++PUBLIC inline void
++Gic_h::save_aprs(Gic_h::Aprs *a)
++{ a->apr = read<Unsigned32>(APR); }
++
++PUBLIC inline void
++Gic_h::load_aprs(Gic_h::Aprs const *a)
++{ write(a->apr, APR); }
++
++PUBLIC inline void
++Gic_h::save_lrs(Gic_h::Lr *l, unsigned n)
++{
++  for (unsigned i = 0; i < n; ++i)
++    l[i] = Lr(read<Unsigned32>(LRn + (i << 2)));
++}
++
++PUBLIC inline void
++Gic_h::load_lrs(Gic_h::Lr const *l, unsigned n)
++{
++  for (unsigned i = 0; i < n; ++i)
++    write(l[i].raw, LRn + (i << 2));
++}
++
++
++namespace {
++
++struct Gic_h_init
++{
++  explicit Gic_h_init()
++  {
++    Gic_h::gic.construct(Kmem::mmio_remap(Mem_layout::Gic_h_phys_base));
++  }
++};
++
++Gic_h_init __gic_h;
++}
++
+diff --git a/src/kern/arm/vgic-v3.cpp b/src/kern/arm/vgic-v3.cpp
+new file mode 100644
+index 0000000..d5e53b4
+--- /dev/null
++++ b/src/kern/arm/vgic-v3.cpp
+@@ -0,0 +1,45 @@
++INTERFACE [vgic && cpu_virt]:
++
++#include "types.h"
++
++#include <cxx/bitfield>
++
++EXTENSION class Gic_h
++{
++public:
++  enum { Version = 3 };
++
++  struct Lr
++  {
++    Unsigned64 raw;
++    Lr() = default;
++    explicit Lr(Unsigned32 v) : raw(v) {}
++  };
++
++  struct Aprs
++  {
++    enum { N_aprs = 4 }; // 32 prios is max
++
++    Unsigned32 ap0r[N_aprs];
++    Unsigned32 ap1r[N_aprs];
++    void clear()
++    {
++      for (auto &a: ap0r)
++        a = 0;
++
++      for (auto &a: ap1r)
++        a = 0;
++    }
++  };
++
++  // fake pointer to call static functions
++  static Gic_h const *const gic;
++  static unsigned n_aprs;
++};
++
++IMPLEMENTATION:
++
++#include "static_init.h"
++
++unsigned Gic_h::n_aprs = 1U << (Gic_h::vtr().pri_bits() - 4);
++
+diff --git a/src/kern/arm/vgic.cpp b/src/kern/arm/vgic.cpp
+index 478f6f8..14a5a66 100644
+--- a/src/kern/arm/vgic.cpp
++++ b/src/kern/arm/vgic.cpp
+@@ -1,37 +1,12 @@
+ INTERFACE [arm && cpu_virt && vgic]:
+ 
+-#include "kmem.h"
+-#include "mmio_register_block.h"
+ #include "types.h"
+ 
+ #include <cxx/bitfield>
+ 
+-class Gic_h : private Mmio_register_block
++class Gic_h
+ {
+ public:
+-  enum { Version = 2 };
+-  enum Register
+-  {
+-    HCR   = 0x000,
+-    VTR   = 0x004,
+-    VMCR  = 0x008,
+-    MISR  = 0x010,
+-
+-    EISRn = 0x020,
+-    EISR0 = 0x020,
+-    EISR1 = 0x024,
+-
+-    ELSRn = 0x030,
+-    ELSR0 = 0x030,
+-    ELSR1 = 0x034,
+-
+-    APR   = 0x0f0,
+-
+-    LRn   = 0x100,
+-    LR0   = LRn,
+-    LR63  = 0x1fc
+-  };
+-
+   struct Hcr
+   {
+     Unsigned32 raw;
+@@ -54,6 +29,7 @@ public:
+     Vtr() = default;
+     explicit Vtr(Unsigned32 v) : raw(v) {}
+     CXX_BITFIELD_MEMBER(  0,  5, list_regs, raw);
++    CXX_BITFIELD_MEMBER( 23, 25, id_bits, raw); // v3
+     CXX_BITFIELD_MEMBER( 26, 28, pre_bits, raw);
+     CXX_BITFIELD_MEMBER( 29, 31, pri_bits, raw);
+   };
+@@ -71,6 +47,7 @@ public:
+     CXX_BITFIELD_MEMBER(  9,  9, vem, raw);
+     CXX_BITFIELD_MEMBER( 18, 20, abp, raw);
+     CXX_BITFIELD_MEMBER( 21, 23, bp, raw);
++    CXX_BITFIELD_MEMBER( 24, 31, vmpr, raw); // v3
+     CXX_BITFIELD_MEMBER( 27, 31, pri_mask, raw);
+   };
+ 
+@@ -88,26 +65,6 @@ public:
+     CXX_BITFIELD_MEMBER(  6,  6, grp1_e, raw);
+     CXX_BITFIELD_MEMBER(  7,  7, grp1_d, raw);
+   };
+-
+-  struct Lr
+-  {
+-    Unsigned32 raw;
+-    Lr() = default;
+-    explicit Lr(Unsigned32 v) : raw(v) {}
+-    CXX_BITFIELD_MEMBER(  0,  9, vid, raw);
+-    CXX_BITFIELD_MEMBER( 10, 19, pid, raw);
+-    CXX_BITFIELD_MEMBER( 10, 12, cpuid, raw);
+-    CXX_BITFIELD_MEMBER( 19, 19, eoi, raw);
+-    CXX_BITFIELD_MEMBER( 23, 27, prio, raw);
+-    CXX_BITFIELD_MEMBER( 28, 29, state, raw);
+-    CXX_BITFIELD_MEMBER( 30, 30, grp1, raw);
+-    CXX_BITFIELD_MEMBER( 31, 31, hw, raw);
+-  };
+-
+-
+-  explicit Gic_h(Address va) : Mmio_register_block(va) {}
+-
+-  static Static_object<Gic_h> gic;
+ };
+ 
+ template< unsigned LREGS >
+@@ -121,42 +78,6 @@ struct Arm_vgic_t
+    Unsigned32 eisr;
+    Unsigned32 elsr;
+    Gic_h::Lr lr[LREGS];
+-   Unsigned32 apr;
+-};
+-
+-//------------------------------------------------------------------------
+-IMPLEMENTATION [arm && cpu_virt && vgic]:
+-
+-#include "per_cpu_data.h"
+-
+-Static_object<Gic_h> Gic_h::gic;
+-
+-
+-PUBLIC inline Gic_h::Hcr  Gic_h::hcr()  { return Hcr(read<Unsigned32>(HCR)); }
+-PUBLIC inline void Gic_h::hcr(Gic_h::Hcr hcr)  { write(hcr.raw, HCR); }
+-PUBLIC inline Gic_h::Vtr  Gic_h::vtr()  { return Vtr(read<Unsigned32>(VTR)); }
+-PUBLIC inline Gic_h::Vmcr Gic_h::vmcr() { return Vmcr(read<Unsigned32>(VMCR)); }
+-PUBLIC inline void Gic_h::vmcr(Gic_h::Vmcr vmcr) { write(vmcr.raw, VMCR); }
+-PUBLIC inline Gic_h::Misr Gic_h::misr() { return Misr(read<Unsigned32>(MISR)); }
+-PUBLIC inline Unsigned32  Gic_h::eisr(unsigned n) { return read<Unsigned32>(EISRn + (n << 2)); }
+-PUBLIC inline Unsigned32  Gic_h::elsr(unsigned n) { return read<Unsigned32>(ELSRn + (n << 2)); }
+-PUBLIC inline Unsigned32  Gic_h::apr() { return read<Unsigned32>(APR); }
+-PUBLIC inline void Gic_h::apr(Unsigned32 apr) { write(apr, APR); }
+-PUBLIC inline Gic_h::Lr   Gic_h::lr(unsigned n) { return Lr(read<Unsigned32>(LRn + (n << 2))); }
+-PUBLIC inline void Gic_h::lr(unsigned n, Gic_h::Lr lr) { write(lr.raw, LRn + (n << 2)); }
+-
+-struct Gic_h_init
+-{
+-  explicit Gic_h_init(Cpu_number cpu)
+-  {
+-    if (cpu == Cpu_number::boot_cpu())
+-      {
+-        Gic_h::gic.construct(Kmem::mmio_remap(Mem_layout::Gic_h_phys_base));
+-      }
+-  }
++   Gic_h::Aprs aprs;
+ };
+ 
+-namespace {
+-DEFINE_PER_CPU Per_cpu<Gic_h_init> __gic_h(Per_cpu_data::Cpu_num);
+-}
+-
+diff --git a/src/kern/irq_chip.cpp b/src/kern/irq_chip.cpp
+index 70951e8..4f0bc23 100644
+--- a/src/kern/irq_chip.cpp
++++ b/src/kern/irq_chip.cpp
+@@ -60,7 +60,11 @@ public:
+   };
+ 
+   virtual void mask(Mword pin) = 0;
++  virtual void mask_percpu(Cpu_number, Mword pin)
++  { mask(pin); }
+   virtual void unmask(Mword pin) = 0;
++  virtual void unmask_percpu(Cpu_number, Mword pin)
++  { unmask(pin); }
+   virtual void ack(Mword pin) = 0;
+   virtual void mask_and_ack(Mword pin) = 0;
+ 
+diff --git a/src/kern/irq_mgr.cpp b/src/kern/irq_mgr.cpp
+index c31dcd1..a8378e2 100644
+--- a/src/kern/irq_mgr.cpp
++++ b/src/kern/irq_mgr.cpp
+@@ -97,15 +97,16 @@ IMPLEMENT inline Irq_mgr::~Irq_mgr() {}
+ 
+ PUBLIC inline
+ bool
+-Irq_mgr::alloc(Irq_base *irq, Mword global_irq)
++Irq_mgr::alloc(Irq_base *irq, Mword global_irq, bool init = true)
+ {
+   Irq i = chip(global_irq);
+   if (!i.chip)
+     return false;
+ 
+-  if (i.chip->alloc(irq, i.pin))
++  if (i.chip->alloc(irq, i.pin, init))
+     {
+-      i.chip->set_cpu(i.pin, Cpu_number::boot_cpu());
++      if (init)
++        i.chip->set_cpu(i.pin, Cpu_number::boot_cpu());
+       return true;
+     }
+   return false;
+diff --git a/src/kern/mips/mips_cpu_irqs.cpp b/src/kern/mips/mips_cpu_irqs.cpp
+index d16c6ba..3572f85 100644
+--- a/src/kern/mips/mips_cpu_irqs.cpp
++++ b/src/kern/mips/mips_cpu_irqs.cpp
+@@ -80,6 +80,11 @@ public:
+     // and enabling IRQs must use 'ehb'
+   }
+ 
++  void mask_percpu(Cpu_number, Mword pin) override
++  {
++    mask(pin);
++  }
++
+   void ack(Mword) override
+   {}
+ 
+@@ -110,6 +115,11 @@ public:
+     // and enabling IRQs must use 'ehb'
+   }
+ 
++  void unmask_percpu(Cpu_number, Mword pin) override
++  {
++    unmask(pin);
++  }
++
+ private:
+   Irq_base *_irqs[8];
+ };
+diff --git a/src/kern/timer_tick-single-vector.cpp b/src/kern/timer_tick-single-vector.cpp
+index 8ba21e7..6de9754 100644
+--- a/src/kern/timer_tick-single-vector.cpp
++++ b/src/kern/timer_tick-single-vector.cpp
+@@ -29,17 +29,17 @@ Timer_tick::setup(Cpu_number cpu)
+ 
+ IMPLEMENT
+ void
+-Timer_tick::enable(Cpu_number)
++Timer_tick::enable(Cpu_number cpu)
+ {
+-  _glbl_timer->chip()->unmask(_glbl_timer->pin());
++  _glbl_timer->chip()->unmask_percpu(cpu, _glbl_timer->pin());
+   Timer::enable();
+ }
+ 
+ IMPLEMENT
+ void
+-Timer_tick::disable(Cpu_number)
++Timer_tick::disable(Cpu_number cpu)
+ {
+-  _glbl_timer->chip()->mask(_glbl_timer->pin());
++  _glbl_timer->chip()->mask_percpu(cpu, _glbl_timer->pin());
+ }
+ 
+ PUBLIC inline NEEDS["timer.h"]

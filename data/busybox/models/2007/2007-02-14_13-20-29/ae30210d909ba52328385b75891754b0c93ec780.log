@@ -1,0 +1,136 @@
+"2007-02-14 13:20:29 +0000"
+diff --git a/docs/mdev.txt b/docs/mdev.txt
+new file mode 100644
+index 000000000..51c3f0ed1
+--- /dev/null
++++ b/docs/mdev.txt
+@@ -0,0 +1,68 @@
++-------------
++ MDEV Primer
++-------------
++
++For those of us who know how to use mdev, a primer might seem lame.  For
++everyone else, mdev is a weird black box that they hear is awesome, but can't
++seem to get their head around how it works.  Thus, a primer.
++
++-----------
++ Basic Use
++-----------
++
++Mdev has two primary uses: initial population and dynamic updates.  Both
++require sysfs support in the kernel and have it mounted at /sys.  For dynamic
++updates, you also need to have hotplugging enabled in your kernel.
++
++Here's a typical code snippet from the init script:
++[1] mount -t sysfs sysfs /sys
++[2] echo /bin/mdev > /proc/sys/kernel/hotplug
++[3] mdev -s
++
++Of course, a more "full" setup would entail executing this before the previous
++code snippet:
++[4] mount -t tmpfs mdev /dev
++[5] mkdir /dev/pts
++[6] mount -t devpts devpts /dev/pts
++
++The simple explanation here is that [1] you need to have /sys mounted before
++executing mdev.  Then you [2] instruct the kernel to execute /bin/mdev whenever
++a device is added or removed so that the device node can be created or
++destroyed.  Then you [3] seed /dev with all the device nodes that were created
++while the system was booting.
++
++For the "full" setup, you want to [4] make sure /dev is a tmpfs filesystem
++(assuming you're running out of flash).  Then you want to [5] create the
++/dev/pts mount point and finally [6] mount the devpts filesystem on it.
++
++-------------
++ MDEV Config   (/etc/mdev.conf)
++-------------
++
++Mdev has an optional config file for controlling ownership/permissions of
++device nodes if your system needs something more than the default root/root
++660 permissions.
++
++The file has the format:
++	<device regex> <uid>:<gid> <octal permissions>
++For example:
++	hd[a-z][0-9]* 0:3 660
++
++The config file parsing stops at the first matching line.  If no line is
++matched, then the default of 0:0 660 is used.  To set your own default, simply
++create your own total match like so:
++	.* 1:1 777
++
++If you also enable support for executing your own commands, then the file has
++the format:
++	<device regex> <uid>:<gid> <octal permissions> [<@|$|*> <command>]
++The special characters have the meaning:
++	@ Run after creating the device.
++	$ Run before removing the device.
++	* Run both after creating and before removing the device.
++
++The command is executed via the system() function (which means you're giving a
++command to the shell), so make sure you have a shell installed at /bin/sh.
++
++For your convenience, the shell env var $MDEV is set to the device name.  So if
++the device 'hdc' was matched, MDEV would be set to "hdc".
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 1f144cae5..2184df153 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -269,46 +269,30 @@ config MDEV
+ 	bool "mdev"
+ 	default n
+ 	help
+-	  mdev is a mini-udev implementation: call it with -s to populate
+-	  /dev from /sys, then "echo /sbin/mdev > /proc/sys/kernel/hotplug" to
+-	  have it handle hotplug events afterwards.  Device names are taken
+-	  from sysfs.
++	  mdev is a mini-udev implementation for dynamically creating device
++	  nodes in the /dev directory.
++
++	  For more information, please see docs/mdev.txt
+ 
+ config FEATURE_MDEV_CONF
+ 	bool "Support /etc/mdev.conf"
+ 	default n
+ 	depends on MDEV
+ 	help
+-	  The mdev config file contains lines that look like:
+-
+-	    hd[a-z][0-9]* 0:3 660
+-
+-	  That's device name (with regex match), uid:gid, and permissions.
++	  Add support for the mdev config file to control ownership and
++	  permissions of the device nodes.
+ 
+-	  Config file parsing stops on the first matching line.  If no config
+-	  entry is matched, devices are created with default 0:0 660.  (Make
+-	  the last line match .* to override this.)
++	  For more information, please see docs/mdev.txt
+ 
+ config FEATURE_MDEV_EXEC
+ 	bool "Support command execution at device addition/removal"
+ 	default n
+ 	depends on FEATURE_MDEV_CONF
+ 	help
+-	  This adds support for an optional field to /etc/mdev.conf, consisting
+-	  of a special character and a command line to run after creating the
+-	  corresponding device(s) and before removing, ala:
+-
+-	    hdc root:cdrom 660  *ln -s $MDEV cdrom
+-
+-	  The $MDEV environment variable is set to the name of the device.
+-
+-	  The special characters and their meanings are:
+-	    @ Run after creating the device.
+-	    $ Run before removing the device.
+-	    * Run both after creating and before removing the device.
++	  This adds support for an optional field to /etc/mdev.conf for
++	  executing commands when devices are created/removed.
+ 
+-	  Commands are executed via system() so you need /bin/sh, meaning you
+-	  probably want to select a default shell in the Shells menu.
++	  For more information, please see docs/mdev.txt
+ 
+ config MKSWAP
+ 	bool "mkswap"

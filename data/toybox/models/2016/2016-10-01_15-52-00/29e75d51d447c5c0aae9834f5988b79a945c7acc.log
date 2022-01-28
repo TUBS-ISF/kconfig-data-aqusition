@@ -1,0 +1,106 @@
+"2016-10-01 15:52:00 -0500"
+diff --git a/Config.in b/Config.in
+index 76b2ef1d..07c6d70c 100644
+--- a/Config.in
++++ b/Config.in
+@@ -82,12 +82,13 @@ config TOYBOX_HELP
+ 	  Include help text for each command.
+ 
+ config TOYBOX_HELP_DASHDASH
+-	bool "--help"
++	bool "--help and --version"
+ 	default y
+ 	depends on TOYBOX_HELP
+ 	help
+ 	  Support --help argument in all commands, even ones with a NULL
+-	  optstring. Produces the same output as "help command".
++	  optstring. (Use TOYFLAG_NOHELP to disable.) Produces the same output
++	  as "help command". --version shows toybox version.
+ 
+ config TOYBOX_I18N
+ 	bool "Internationalization support"
+diff --git a/main.c b/main.c
+index c0c1b824..5a2a272d 100644
+--- a/main.c
++++ b/main.c
+@@ -67,6 +67,12 @@ static const int NEED_OPTIONS =
+ #include "generated/newtoys.h"
+ 0;  // Ends the opts || opts || opts...
+ 
++static void unknown(char *name)
++{
++  toys.exitval = 127;
++  error_exit("Unknown command %s", name);
++}
++
+ // Setup toybox global state for this command.
+ static void toy_singleinit(struct toy_list *which, char *argv[])
+ {
+@@ -75,13 +81,19 @@ static void toy_singleinit(struct toy_list *which, char *argv[])
+ 
+   if (CFG_TOYBOX_I18N) setlocale(LC_ALL, "C"+!!(which->flags & TOYFLAG_LOCALE));
+ 
+-  if (CFG_TOYBOX_HELP_DASHDASH && !(which->flags & TOYFLAG_NOHELP)
+-    && argv[1] && !strcmp(argv[1], "--help"))
+-  {
+-    if (CFG_TOYBOX && toys.which == toy_list && toys.argv[2])
+-      if (!(toys.which = toy_find(toys.argv[2]))) return;
+-    show_help(stdout);
+-    xexit();
++  // Parse --help and --version for (almost) all commands
++  if (CFG_TOYBOX_HELP_DASHDASH && !(which->flags & TOYFLAG_NOHELP) && argv[1]) {
++    if (!strcmp(argv[1], "--help")) {
++      if (CFG_TOYBOX && toys.which == toy_list && toys.argv[2])
++        if (!(toys.which = toy_find(toys.argv[2]))) unknown(toys.argv[2]);
++      show_help(stdout);
++      xexit();
++    }
++
++    if (!strcmp(argv[1], "--version")) {
++      xputs("toybox "TOYBOX_VERSION);
++      xexit();
++    }
+   }
+ 
+   if (NEED_OPTIONS && which->options) get_optflags();
+@@ -168,16 +180,7 @@ void toybox_main(void)
+   // For early error reporting
+   toys.which = toy_list;
+ 
+-  if (toys.argv[1]) {
+-    if (!strcmp("--version", toys.argv[1])) {
+-      xputs(TOYBOX_VERSION);
+-      xexit();
+-    }
+-    if (toys.argv[1][0] != '-') {
+-      toys.exitval = 127;
+-      error_exit("Unknown command %s", toys.argv[1]);
+-    }
+-  }
++  if (toys.argv[1] && toys.argv[1][0] != '-') unknown(toys.argv[1]);
+ 
+   // Output list of command.
+   for (i=1; i<ARRAY_LEN(toy_list); i++) {
+diff --git a/toys/posix/sed.c b/toys/posix/sed.c
+index 31268ece..9169e077 100644
+--- a/toys/posix/sed.c
++++ b/toys/posix/sed.c
+@@ -10,7 +10,7 @@
+  * TODO: handle error return from emit(), error_msg/exit consistently
+  *       What's the right thing to do for -i when write fails? Skip to next?
+ 
+-USE_SED(NEWTOY(sed, "(version)e*f*inEr[+Er]", TOYFLAG_USR|TOYFLAG_BIN|TOYFLAG_LOCALE))
++USE_SED(NEWTOY(sed, "(help)(version)e*f*inEr[+Er]", TOYFLAG_USR|TOYFLAG_BIN|TOYFLAG_LOCALE|TOYFLAG_NOHELP))
+ 
+ config SED
+   bool "sed"
+@@ -1001,6 +1001,9 @@ void sed_main(void)
+     return;
+   }
+ 
++  // Handling our own --version means we handle our own --help too.
++  if (toys.optflags&FLAG_help) help_exit(0);
++
+   // Parse pattern into commands.
+ 
+   // If no -e or -f, first argument is the pattern.

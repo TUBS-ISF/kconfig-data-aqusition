@@ -1,0 +1,622 @@
+"2006-10-01 15:55:11 +0000"
+diff --git a/Config.in b/Config.in
+index d8f77ad31..cb41f46ae 100644
+--- a/Config.in
++++ b/Config.in
+@@ -29,6 +29,14 @@ config CONFIG_NITPICK
+ 
+ 	  You have been warned.
+ 
++config CONFIG_DESKTOP
++	bool "Enable options for full-blown desktop systems."
++	default n
++	help
++	  Enable options and features which are not essential.
++	  Select this only if you plan to use busybox on full-blown
++	  desktop machine with common Linux distro, not on an ebmbedded box.
++
+ choice
+ 	prompt "Buffer allocation policy"
+ 	default CONFIG_FEATURE_BUFFERS_USE_MALLOC
+diff --git a/archival/bunzip2.c b/archival/bunzip2.c
+index 62f28582c..9d62366c3 100644
+--- a/archival/bunzip2.c
++++ b/archival/bunzip2.c
+@@ -14,9 +14,10 @@
+ 
+ int bunzip2_main(int argc, char **argv)
+ {
++	USE_DESKTOP(long long) int status;
+ 	char *filename;
+ 	unsigned long opt;
+-	int status, src_fd, dst_fd;
++	int src_fd, dst_fd;
+ 
+ 	opt = bb_getopt_ulflags(argc, argv, "cf");
+ 
+@@ -55,7 +56,7 @@ int bunzip2_main(int argc, char **argv)
+ 	} else dst_fd = STDOUT_FILENO;
+ 	status = uncompressStream(src_fd, dst_fd);
+ 	if (filename) {
+-		if (!status) filename[strlen(filename)] = '.';
++		if (status >= 0) filename[strlen(filename)] = '.';
+ 		if (unlink(filename) < 0) {
+ 			bb_error_msg_and_die("cannot remove %s", filename);
+ 		}
+diff --git a/archival/gunzip.c b/archival/gunzip.c
+index 9a68e62e4..1b4968628 100644
+--- a/archival/gunzip.c
++++ b/archival/gunzip.c
+@@ -34,13 +34,15 @@
+ #define GUNZIP_OPT_FORCE	2
+ #define GUNZIP_OPT_TEST		4
+ #define GUNZIP_OPT_DECOMPRESS	8
++#define GUNZIP_OPT_VERBOSE	0x10
+ 
+ int gunzip_main(int argc, char **argv)
+ {
+-	char status = EXIT_SUCCESS;
++	USE_DESKTOP(long long) int status;
++	int exitcode = 0;
+ 	unsigned long opt;
+ 
+-	opt = bb_getopt_ulflags(argc, argv, "cftd");
++	opt = bb_getopt_ulflags(argc, argv, "cftdv");
+ 	/* if called as zcat */
+ 	if (strcmp(bb_applet_name, "zcat") == 0) {
+ 		opt |= GUNZIP_OPT_STDOUT;
+@@ -59,6 +61,8 @@ int gunzip_main(int argc, char **argv)
+ 		if (old_path == NULL || strcmp(old_path, "-") == 0) {
+ 			src_fd = STDIN_FILENO;
+ 			opt |= GUNZIP_OPT_STDOUT;
++			USE_DESKTOP(opt &= ~GUNZIP_OPT_VERBOSE;)
++			optind = argc; /* we don't handle "gunzip - a.gz b.gz" */
+ 		} else {
+ 			src_fd = xopen(old_path, O_RDONLY);
+ 
+@@ -67,9 +71,9 @@ int gunzip_main(int argc, char **argv)
+ 		}
+ 
+ 		/* Check that the input is sane.  */
+-		if (isatty(src_fd) && ((opt & GUNZIP_OPT_FORCE) == 0)) {
++		if (isatty(src_fd) && !(opt & GUNZIP_OPT_FORCE)) {
+ 			bb_error_msg_and_die
+-				("compressed data not read from terminal.  Use -f to force it.");
++				("compressed data not read from terminal, use -f to force it");
+ 		}
+ 
+ 		/* Set output filename and number */
+@@ -94,7 +98,8 @@ int gunzip_main(int argc, char **argv)
+ 				extension[2] = 'a';
+ 				extension[3] = 'r';
+ 			} else {
+-				bb_error_msg_and_die("Invalid extension");
++				// FIXME: should we die or just skip to next?
++				bb_error_msg_and_die("invalid extension");
+ 			}
+ 
+ 			/* Open output file (with correct permissions) */
+@@ -105,30 +110,34 @@ int gunzip_main(int argc, char **argv)
+ 			delete_path = old_path;
+ 		}
+ 
++		status = -1;
+ 		/* do the decompression, and cleanup */
+ 		if (xread_char(src_fd) == 0x1f) {
+ 			unsigned char magic2;
+ 
+ 			magic2 = xread_char(src_fd);
+-#ifdef CONFIG_FEATURE_GUNZIP_UNCOMPRESS
+-			if (magic2 == 0x9d) {
++			if (ENABLE_FEATURE_GUNZIP_UNCOMPRESS && magic2 == 0x9d) {
+ 				status = uncompress(src_fd, dst_fd);
+-			} else
+-#endif
+-				if (magic2 == 0x8b) {
+-					check_header_gzip(src_fd);
+-					status = inflate_gunzip(src_fd, dst_fd);
+-					if (status != 0) {
+-						bb_error_msg_and_die("error inflating");
+-					}
+-				} else {
+-					bb_error_msg_and_die("invalid magic");
+-				}
++			} else if (magic2 == 0x8b) {
++				check_header_gzip(src_fd); // FIXME: xfunc? _or_die?
++				status = inflate_gunzip(src_fd, dst_fd);
++			} else {
++				bb_error_msg("invalid magic");
++				exitcode = 1;
++			}
++			if (status < 0) {
++				bb_error_msg("error inflating");
++				exitcode = 1;
++			}
++			else if (ENABLE_DESKTOP && (opt & GUNZIP_OPT_VERBOSE)) {
++				fprintf(stderr, "%s: %u%% - replaced with %s\n",
++					// TODO: LARGEFILE support for stat_buf.st_size?
++					old_path, (unsigned)(stat_buf.st_size*100 / (status+1)), new_path);
++			}
+ 		} else {
+-			bb_error_msg_and_die("invalid magic");
++			bb_error_msg("invalid magic"); exitcode = 1;
+ 		}
+-
+-		if ((status != EXIT_SUCCESS) && (new_path)) {
++		if (status < 0 && new_path) {
+ 			/* Unzip failed, remove new path instead of old path */
+ 			delete_path = new_path;
+ 		}
+@@ -142,12 +151,13 @@ int gunzip_main(int argc, char **argv)
+ 
+ 		/* delete_path will be NULL if in test mode or from stdin */
+ 		if (delete_path && (unlink(delete_path) == -1)) {
+-			bb_error_msg_and_die("cannot remove %s", delete_path);
++			bb_error_msg("cannot remove %s", delete_path);
++			exitcode = 1;
+ 		}
+ 
+ 		free(new_path);
+ 
+ 	} while (optind < argc);
+ 
+-	return status;
++	return exitcode;
+ }
+diff --git a/archival/gzip.c b/archival/gzip.c
+index 05f6cb582..bb58158f4 100644
+--- a/archival/gzip.c
++++ b/archival/gzip.c
+@@ -16,6 +16,8 @@
+  * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  */
+ 
++// TODO: full support for -v for DESKTOP
++
+ #define SMALL_MEM
+ 
+ #include <stdlib.h>
+@@ -1134,7 +1136,7 @@ int gzip_main(int argc, char **argv)
+ 	struct stat statBuf;
+ 	char *delFileName;
+ 
+-	opt = bb_getopt_ulflags(argc, argv, "cf123456789q" USE_GUNZIP("d"));
++	opt = bb_getopt_ulflags(argc, argv, "cf123456789qv" USE_GUNZIP("d"));
+ 	//if (opt & 0x1) // -c
+ 	//if (opt & 0x2) // -f
+ 	/* Ignore 1-9 (compression level) options */
+@@ -1148,7 +1150,8 @@ int gzip_main(int argc, char **argv)
+ 	//if (opt & 0x200) // -8
+ 	//if (opt & 0x400) // -9
+ 	//if (opt & 0x800) // -q
+-	if (ENABLE_GUNZIP && (opt & 0x1000)) { // -d
++	//if (opt & 0x1000) // -v
++	if (ENABLE_GUNZIP && (opt & 0x2000)) { // -d
+ 		/* FIXME: bb_getopt_ulflags should not depend on optind */
+ 		optind = 1;
+ 		return gunzip_main(argc, argv);
+diff --git a/archival/libunarchive/decompress_bunzip2.c b/archival/libunarchive/decompress_bunzip2.c
+index 657d4ab01..d0a4ecb5e 100644
+--- a/archival/libunarchive/decompress_bunzip2.c
++++ b/archival/libunarchive/decompress_bunzip2.c
+@@ -671,20 +671,24 @@ static int start_bunzip(bunzip_data **bdp, int in_fd, unsigned char *inbuf,
+ /* Example usage: decompress src_fd to dst_fd.  (Stops at end of bzip data,
+    not end of file.) */
+ 
+-int uncompressStream(int src_fd, int dst_fd)
++USE_DESKTOP(long long) int
++uncompressStream(int src_fd, int dst_fd)
+ {
++	USE_DESKTOP(long long total_written = 0;)
+ 	char *outbuf;
+ 	bunzip_data *bd;
+ 	int i;
+ 
+ 	outbuf=xmalloc(IOBUF_SIZE);
+-	if(!(i=start_bunzip(&bd,src_fd,0,0))) {
++	i=start_bunzip(&bd,src_fd,0,0);
++	if(!i) {
+ 		for(;;) {
+ 			if((i=read_bunzip(bd,outbuf,IOBUF_SIZE)) <= 0) break;
+ 			if(i!=write(dst_fd,outbuf,i)) {
+ 				i=RETVAL_UNEXPECTED_OUTPUT_EOF;
+ 				break;
+ 			}
++			USE_DESKTOP(total_written += i;)
+ 		}
+ 	}
+ 
+@@ -692,27 +696,27 @@ int uncompressStream(int src_fd, int dst_fd)
+ 
+ 	if(i==RETVAL_LAST_BLOCK) {
+ 		if (bd->headerCRC!=bd->totalCRC) {
+-			bb_error_msg("Data integrity error when decompressing.");
++			bb_error_msg("data integrity error when decompressing");
+ 		} else {
+ 			i=RETVAL_OK;
+ 		}
+ 	} else if (i==RETVAL_UNEXPECTED_OUTPUT_EOF) {
+-		bb_error_msg("Compressed file ends unexpectedly");
++		bb_error_msg("compressed file ends unexpectedly");
+ 	} else {
+-		bb_error_msg("Decompression failed");
++		bb_error_msg("decompression failed");
+ 	}
+ 	free(bd->dbuf);
+ 	free(bd);
+ 	free(outbuf);
+ 
+-	return i;
++	return i ? i : USE_DESKTOP(total_written) + 0;
+ }
+ 
+ #ifdef TESTING
+ 
+ static char * const bunzip_errors[]={NULL,"Bad file checksum","Not bzip data",
+ 		"Unexpected input EOF","Unexpected output EOF","Data error",
+-		 "Out of memory","Obsolete (pre 0.9.5) bzip format not supported."};
++		"Out of memory","Obsolete (pre 0.9.5) bzip format not supported."};
+ 
+ /* Dumb little test thing, decompress stdin to stdout */
+ int main(int argc, char *argv[])
+@@ -720,8 +724,8 @@ int main(int argc, char *argv[])
+ 	int i=uncompressStream(0,1);
+ 	char c;
+ 
+-	if(i) fprintf(stderr,"%s\n", bunzip_errors[-i]);
+-    else if(read(0,&c,1)) fprintf(stderr,"Trailing garbage ignored\n");
++	if(i<0) fprintf(stderr,"%s\n", bunzip_errors[-i]);
++	else if(read(0,&c,1)) fprintf(stderr,"Trailing garbage ignored\n");
+ 	return -i;
+ }
+ #endif
+diff --git a/archival/libunarchive/decompress_uncompress.c b/archival/libunarchive/decompress_uncompress.c
+index e2941438c..ff98254ff 100644
+--- a/archival/libunarchive/decompress_uncompress.c
++++ b/archival/libunarchive/decompress_uncompress.c
+@@ -86,8 +86,10 @@ static int maxbits = BITS;
+  * with those of the compress() routine.  See the definitions above.
+  */
+ 
+-int uncompress(int fd_in, int fd_out)
++USE_DESKTOP(long long) int
++uncompress(int fd_in, int fd_out)
+ {
++	USE_DESKTOP(long long total_written = 0;)
+ 	unsigned char *stackp;
+ 	long int code;
+ 	int finchar;
+@@ -182,16 +184,16 @@ int uncompress(int fd_in, int fd_out)
+ 			{
+ 				unsigned char *p = &inbuf[posbits >> 3];
+ 
+-				code =
+-					((((long) (p[0])) | ((long) (p[1]) << 8) |
+-					  ((long) (p[2]) << 16)) >> (posbits & 0x7)) & bitmask;
++				code =	((((long) (p[0])) | ((long) (p[1]) << 8) |
++				          ((long) (p[2]) << 16)) >> (posbits & 0x7)) & bitmask;
+ 			}
+ 			posbits += n_bits;
+ 
+ 
+ 			if (oldcode == -1) {
+-				outbuf[outpos++] = (unsigned char) (finchar =
+-												(int) (oldcode = code));
++				oldcode = code;
++				finchar = (int) oldcode;
++				outbuf[outpos++] = (unsigned char) finchar;
+ 				continue;
+ 			}
+ 
+@@ -255,6 +257,7 @@ int uncompress(int fd_in, int fd_out)
+ 
+ 						if (outpos >= OBUFSIZ) {
+ 							write(fd_out, outbuf, outpos);
++							USE_DESKTOP(total_written += outpos;)
+ 							outpos = 0;
+ 						}
+ 						stackp += i;
+@@ -280,9 +283,10 @@ int uncompress(int fd_in, int fd_out)
+ 
+ 	if (outpos > 0) {
+ 		write(fd_out, outbuf, outpos);
++		USE_DESKTOP(total_written += outpos;)
+ 	}
+ 
+ 	RELEASE_CONFIG_BUFFER(inbuf);
+ 	RELEASE_CONFIG_BUFFER(outbuf);
+-	return 0;
++	return USE_DESKTOP(total_written) + 0;
+ }
+diff --git a/archival/libunarchive/decompress_unlzma.c b/archival/libunarchive/decompress_unlzma.c
+index 0fb1249cb..a6902807b 100644
+--- a/archival/libunarchive/decompress_unlzma.c
++++ b/archival/libunarchive/decompress_unlzma.c
+@@ -211,9 +211,10 @@ typedef struct {
+ #define LZMA_REP_LEN_CODER (LZMA_LEN_CODER + LZMA_NUM_LEN_PROBS)
+ #define LZMA_LITERAL (LZMA_REP_LEN_CODER + LZMA_NUM_LEN_PROBS)
+ 
+-
+-int unlzma(int src_fd, int dst_fd)
++USE_DESKTOP(long long) int
++unlzma(int src_fd, int dst_fd)
+ {
++	USE_DESKTOP(long long total_written = 0;)
+ 	lzma_header_t header;
+ 	int lc, pb, lp;
+ 	uint32_t pos_state_mask;
+@@ -305,7 +306,9 @@ int unlzma(int src_fd, int dst_fd)
+ 			if (buffer_pos == header.dict_size) {
+ 				buffer_pos = 0;
+ 				global_pos += header.dict_size;
++				// FIXME: error check
+ 				write(dst_fd, buffer, header.dict_size);
++				USE_DESKTOP(total_written += header.dict_size;)
+ 			}
+ 			if (state < 4)
+ 				state = 0;
+@@ -345,7 +348,9 @@ int unlzma(int src_fd, int dst_fd)
+ 						if (buffer_pos == header.dict_size) {
+ 							buffer_pos = 0;
+ 							global_pos += header.dict_size;
++							// FIXME: error check
+ 							write(dst_fd, buffer, header.dict_size);
++							USE_DESKTOP(total_written += header.dict_size;)
+ 						}
+ 						continue;
+ 					} else {
+@@ -456,15 +461,18 @@ int unlzma(int src_fd, int dst_fd)
+ 				if (buffer_pos == header.dict_size) {
+ 					buffer_pos = 0;
+ 					global_pos += header.dict_size;
++					// FIXME: error check
+ 					write(dst_fd, buffer, header.dict_size);
++					USE_DESKTOP(total_written += header.dict_size;)
+ 				}
+ 				len--;
+ 			} while (len != 0 && buffer_pos < header.dst_size);
+ 		}
+ 	}
+ 
++	// FIXME: error check
+ 	write(dst_fd, buffer, buffer_pos);
++	USE_DESKTOP(total_written += buffer_pos;)
+ 	rc_free(&rc);
+-	return 0;
++	return USE_DESKTOP(total_written) + 0;
+ }
+-
+diff --git a/archival/libunarchive/decompress_unzip.c b/archival/libunarchive/decompress_unzip.c
+index 989ac4fd8..27b4ddbcf 100644
+--- a/archival/libunarchive/decompress_unzip.c
++++ b/archival/libunarchive/decompress_unzip.c
+@@ -835,8 +835,10 @@ void inflate_cleanup(void)
+ 	free(bytebuffer);
+ }
+ 
+-int inflate_unzip(int in, int out)
++USE_DESKTOP(long long) int
++inflate_unzip(int in, int out)
+ {
++	USE_DESKTOP(long long total = 0;)
+ 	ssize_t nwrote;
+ 	typedef void (*sig_type) (int);
+ 
+@@ -864,6 +866,7 @@ int inflate_unzip(int in, int out)
+ 			bb_perror_msg("write");
+ 			return -1;
+ 		}
++		USE_DESKTOP(total += nwrote;)
+ 		if (ret == 0) break;
+ 	}
+ 
+@@ -880,15 +883,17 @@ int inflate_unzip(int in, int out)
+ 		gunzip_bb >>= 8;
+ 		gunzip_bk -= 8;
+ 	}
+-	return 0;
++	return USE_DESKTOP(total) + 0;
+ }
+ 
+-int inflate_gunzip(int in, int out)
++USE_DESKTOP(long long) int
++inflate_gunzip(int in, int out)
+ {
+ 	uint32_t stored_crc = 0;
+ 	unsigned int count;
++	USE_DESKTOP(long long total = )inflate_unzip(in, out);
+ 
+-	inflate_unzip(in, out);
++	USE_DESKTOP(if (total < 0) return total;)
+ 
+ 	/* top up the input buffer with the rest of the trailer */
+ 	count = bytebuffer_size - bytebuffer_offset;
+@@ -915,5 +920,5 @@ int inflate_gunzip(int in, int out)
+ 		return -1;
+ 	}
+ 
+-	return 0;
++	return USE_DESKTOP(total) + 0;
+ }
+diff --git a/archival/libunarchive/get_header_tar_gz.c b/archival/libunarchive/get_header_tar_gz.c
+index ad26f465a..24e4f9c9f 100644
+--- a/archival/libunarchive/get_header_tar_gz.c
++++ b/archival/libunarchive/get_header_tar_gz.c
+@@ -17,7 +17,7 @@ char get_header_tar_gz(archive_handle_t *archive_handle)
+ 
+ 	xread(archive_handle->src_fd, &magic, 2);
+ 	if ((magic[0] != 0x1f) || (magic[1] != 0x8b)) {
+-		bb_error_msg_and_die("Invalid gzip magic");
++		bb_error_msg_and_die("invalid gzip magic");
+ 	}
+ 
+ 	check_header_gzip(archive_handle->src_fd);
+diff --git a/archival/libunarchive/open_transformer.c b/archival/libunarchive/open_transformer.c
+index 578b92963..99e71ec2e 100644
+--- a/archival/libunarchive/open_transformer.c
++++ b/archival/libunarchive/open_transformer.c
+@@ -11,7 +11,8 @@
+ #include "unarchive.h"
+ 
+ /* transformer(), more than meets the eye */
+-int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
++int open_transformer(int src_fd,
++	USE_DESKTOP(long long) int (*transformer)(int src_fd, int dst_fd))
+ {
+ 	int fd_pipe[2];
+ 	int pid;
+@@ -28,6 +29,7 @@ int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
+ 	if (pid == 0) {
+ 		/* child process */
+ 	    close(fd_pipe[0]); /* We don't wan't to read from the parent */
++	    // FIXME: error check?
+ 	    transformer(src_fd, fd_pipe[1]);
+ 	    close(fd_pipe[1]); /* Send EOF */
+ 		close(src_fd);
+@@ -38,5 +40,5 @@ int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd))
+ 	/* parent process */
+ 	close(fd_pipe[1]); /* Don't want to write to the child */
+ 
+-	return(fd_pipe[0]);
++	return fd_pipe[0];
+ }
+diff --git a/archival/rpm2cpio.c b/archival/rpm2cpio.c
+index 3ae8458dd..c00c6be65 100644
+--- a/archival/rpm2cpio.c
++++ b/archival/rpm2cpio.c
+@@ -63,7 +63,7 @@ int rpm2cpio_main(int argc, char **argv)
+ 
+ 	xread(rpm_fd, &lead, sizeof(struct rpm_lead));
+ 	if (strncmp((char *) &lead.magic, RPM_MAGIC, 4) != 0) {
+-		bb_error_msg_and_die("Invalid RPM magic"); /* Just check the magic, the rest is irrelevant */
++		bb_error_msg_and_die("invalid RPM magic"); /* Just check the magic, the rest is irrelevant */
+ 	}
+ 
+ 	/* Skip the signature header */
+@@ -75,12 +75,12 @@ int rpm2cpio_main(int argc, char **argv)
+ 
+ 	xread(rpm_fd, &magic, 2);
+ 	if ((magic[0] != 0x1f) || (magic[1] != 0x8b)) {
+-		bb_error_msg_and_die("Invalid gzip magic");
++		bb_error_msg_and_die("invalid gzip magic");
+ 	}
+ 
+ 	check_header_gzip(rpm_fd);
+-	if (inflate_gunzip(rpm_fd, STDOUT_FILENO) != 0) {
+-		bb_error_msg("Error inflating");
++	if (inflate_gunzip(rpm_fd, STDOUT_FILENO) < 0) {
++		bb_error_msg("error inflating");
+ 	}
+ 
+ 	close(rpm_fd);
+diff --git a/archival/unlzma.c b/archival/unlzma.c
+index fe542b6ac..b87a3fe79 100644
+--- a/archival/unlzma.c
++++ b/archival/unlzma.c
+@@ -8,6 +8,8 @@
+  * Licensed under GPL v2, see file LICENSE in this tarball for details.
+  */
+ 
++/* Why our g[un]zip/bunzip2 are so ugly compared to this beauty? */
++
+ #include "busybox.h"
+ #include "unarchive.h"
+ 
+@@ -15,15 +17,16 @@
+ 
+ int unlzma_main(int argc, char **argv)
+ {
++	USE_DESKTOP(long long) int status;
+ 	char *filename;
+ 	unsigned long opt;
+-	int status, src_fd, dst_fd;
++	int src_fd, dst_fd;
+ 
+ 	opt = bb_getopt_ulflags(argc, argv, "c");
+ 
+ 	/* Set input filename and number */
+ 	filename = argv[optind];
+-	if ((filename) && (filename[0] != '-') && (filename[1] != '\0')) {
++	if (filename && (filename[0] != '-') && (filename[1] != '\0')) {
+ 		/* Open input file */
+ 		src_fd = xopen(filename, O_RDONLY);
+ 	} else {
+@@ -50,13 +53,12 @@ int unlzma_main(int argc, char **argv)
+ 		dst_fd = STDOUT_FILENO;
+ 	status = unlzma(src_fd, dst_fd);
+ 	if (filename) {
+-		if (!status)
++		if (status >= 0) /* if success delete src, else delete dst */
+ 			filename[strlen(filename)] = '.';
+ 		if (unlink(filename) < 0) {
+ 			bb_error_msg_and_die("cannot remove %s", filename);
+ 		}
+ 	}
+ 
+-	return status;
++	return (status < 0);
+ }
+-
+diff --git a/coreutils/od.c b/coreutils/od.c
+index 1149ef148..df06dd3ec 100644
+--- a/coreutils/od.c
++++ b/coreutils/od.c
+@@ -11,6 +11,8 @@
+  * Original copyright notice is retained at the end of this file.
+  */
+ 
++// TODO: -t. busybox's own build script needs it
++
+ #include <ctype.h>
+ #include <string.h>
+ #include <getopt.h>
+diff --git a/include/libbb.h b/include/libbb.h
+index 67cf4939c..b4516e99a 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -339,7 +339,7 @@ char *last_char_is(const char *s, int c);
+ 
+ char *fgets_str(FILE *file, const char *terminating_string);
+ 
+-extern int uncompress(int fd_in, int fd_out);
++extern USE_DESKTOP(long long) int uncompress(int fd_in, int fd_out);
+ extern int inflate(int in, int out);
+ 
+ extern struct hostent *xgethostbyname(const char *name);
+@@ -353,9 +353,9 @@ extern void bb_lookup_host(struct sockaddr_in *s_in, const char *host);
+ // This is declared here rather than #including <libgen.h> in order to avoid
+ // confusing the two versions of basename.  See the dirname/basename man page
+ // for details.
+-char *dirname (char *path);
++char *dirname(char *path);
+ 
+-int bb_make_directory (char *path, long mode, int flags);
++int bb_make_directory(char *path, long mode, int flags);
+ 
+ int get_signum(const char *name);
+ const char *get_signame(int number);
+diff --git a/include/unarchive.h b/include/unarchive.h
+index 653cff80f..82a70aed6 100644
+--- a/include/unarchive.h
++++ b/include/unarchive.h
+@@ -100,14 +100,15 @@ extern void data_align(archive_handle_t *archive_handle, const unsigned short bo
+ extern const llist_t *find_list_entry(const llist_t *list, const char *filename);
+ extern const llist_t *find_list_entry2(const llist_t *list, const char *filename);
+ 
+-extern int uncompressStream(int src_fd, int dst_fd);
++extern USE_DESKTOP(long long) int uncompressStream(int src_fd, int dst_fd);
+ extern void inflate_init(unsigned int bufsize);
+ extern void inflate_cleanup(void);
+-extern int inflate_unzip(int in, int out);
+-extern int inflate_gunzip(int in, int out);
+-extern int unlzma(int src_fd, int dst_fd);
++extern USE_DESKTOP(long long) int inflate_unzip(int in, int out);
++extern USE_DESKTOP(long long) int inflate_gunzip(int in, int out);
++extern USE_DESKTOP(long long) int unlzma(int src_fd, int dst_fd);
+ 
+-extern int open_transformer(int src_fd, int (*transformer)(int src_fd, int dst_fd));
++extern int open_transformer(int src_fd,
++	USE_DESKTOP(long long) int (*transformer)(int src_fd, int dst_fd));
+ 
+ 
+ #endif

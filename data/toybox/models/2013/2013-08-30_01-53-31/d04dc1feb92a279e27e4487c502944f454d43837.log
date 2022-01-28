@@ -1,0 +1,167 @@
+"2013-08-30 01:53:31 -0500"
+diff --git a/Config.in b/Config.in
+index 9bac6076..5f04bd88 100644
+--- a/Config.in
++++ b/Config.in
+@@ -10,19 +10,13 @@ menu "Toybox global settings"
+ 
+ config TOYBOX
+ 	bool
+-	default n
++	default y
+ 	help
+ 	  usage: toybox [command] [arguments...]
+ 
+ 	  With no arguments, shows available commands. First argument is
+ 	  name of a command to run, followed by any arguments to that command.
+ 
+-config TOYBOX_SINGLE
+-	bool
+-	default n
+-	help
+-	  Build a single toybox command standalone with no multiplexer.
+-
+ config TOYBOX_SUID
+ 	bool "SUID support"
+ 	default y
+diff --git a/Makefile b/Makefile
+index 43011079..7b583ed0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -3,7 +3,8 @@
+ 
+ all: toybox
+ 
+-toybox toybox_unstripped: .config *.[ch] lib/*.[ch] toys/*.h toys/*/*.c scripts/*.sh
++KCONFIG_CONFIG ?= .config
++toybox toybox_unstripped: $(KCONFIG_CONFIG) *.[ch] lib/*.[ch] toys/*.h toys/*/*.c scripts/*.sh
+ 	scripts/make.sh
+ 
+ .PHONY: clean distclean baseline bloatcheck install install_flat \
+@@ -43,7 +44,7 @@ clean::
+ 	rm -rf toybox toybox_unstripped generated/config.h generated/Config.in \
+ 		generated/newtoys.h generated/globals.h instlist testdir \
+ 		generated/Config.probed generated/oldtoys.h \
+-		generated/portability.h
++		generated/portability.h .singleconfig
+ 
+ distclean: clean
+ 	rm -f toybox_old .config* generated/help.h
+diff --git a/lib/xwrap.c b/lib/xwrap.c
+index f5eb4d11..2b0690f3 100644
+--- a/lib/xwrap.c
++++ b/lib/xwrap.c
+@@ -127,7 +127,7 @@ void xexec_optargs(int skip)
+ // with a path isn't a builtin, so /bin/sh won't match the builtin sh.
+ void xexec(char **argv)
+ {
+-  if (!CFG_TOYBOX_SINGLE) toy_exec(argv);
++  if (CFG_TOYBOX) toy_exec(argv);
+   execvp(argv[0], argv);
+ 
+   perror_exit("exec %s", argv[0]);
+diff --git a/main.c b/main.c
+index 8218b0fd..dd985b84 100644
+--- a/main.c
++++ b/main.c
+@@ -161,7 +161,7 @@ int main(int argc, char *argv[])
+ {
+   if (CFG_TOYBOX_I18N) setlocale(LC_ALL, "");
+ 
+-  if (!CFG_TOYBOX_SINGLE) {
++  if (CFG_TOYBOX) {
+     // Trim path off of command name
+     *argv = basename(*argv);
+ 
+diff --git a/scripts/make.sh b/scripts/make.sh
+index add532b8..6266dbf6 100755
+--- a/scripts/make.sh
++++ b/scripts/make.sh
+@@ -5,13 +5,15 @@
+ export LANG=c
+ source ./configure
+ 
+-if [ -z ".config" ]
++[ -z "$KCONFIG_CONFIG" ] && KCONFIG_CONFIG=".config"
++
++if [ -z "$KCONFIG_CONFIG" ]
+ then
+-  echo "No .config (see "make help" for configuration options)."
++  echo "No $KCONFIG_CONFIG (see "make help" for configuration options)."
+   exit 1
+ fi
+ 
+-echo "Make generated/config.h from .config."
++echo "Make generated/config.h from $KCONFIG_CONFIG."
+ 
+ # This long and roundabout sed invocation is to make old versions of sed happy.
+ # New ones have '\n' so can replace one line with two without all the branches
+@@ -35,7 +37,7 @@ sed -n \
+   -e 's/.*/#define CFG_& 1/p' \
+   -e 'g' \
+   -e 's/.*/#define USE_&(...) __VA_ARGS__/p' \
+-  .config > generated/config.h || exit 1
++  $KCONFIG_CONFIG > generated/config.h || exit 1
+ 
+ 
+ echo "Extract configuration information from toys/*.c files..."
+@@ -50,7 +52,7 @@ echo "Generate headers from toys/*/*.c..."
+ 
+ echo "generated/newtoys.h"
+ 
+-echo "NEWTOY(toybox, NULL, TOYFLAG_STAYROOT)" > generated/newtoys.h
++echo "USE_TOYBOX(NEWTOY(toybox, NULL, TOYFLAG_STAYROOT))" > generated/newtoys.h
+ sed -n -e 's/^USE_[A-Z0-9_]*(/&/p' toys/*/*.c \
+ 	| sed 's/\(.*TOY(\)\([^,]*\),\(.*\)/\2 \1\2,\3/' | sort -k 1,1 \
+ 	| sed 's/[^ ]* //'  >> generated/newtoys.h
+@@ -138,13 +140,14 @@ GLOBSTRUCT="$(getglobals)"
+ echo "generated/help.h"
+ # Only recreate generated/help.h if python2 is installed. Does not work with 3.
+ PYTHON="$(which python2)"
+-if [ ! -z "$PYTHON" ] && [ ! -z "$(grep 'CONFIG_TOYBOX_HELP=y' .config)" ]
++if [ ! -z "$PYTHON" ] &&
++   [ ! -z "$(grep 'CONFIG_TOYBOX_HELP=y' $KCONFIG_CONFIG)" ]
+ then
+   echo "Extract help text from Config.in."
+   "$PYTHON" scripts/config2help.py Config.in > generated/help.h || exit 1
+ fi
+ 
+-# Extract a list of toys/*/*.c files to compile from the data in ".config":
++# Extract a list of toys/*/*.c files to compile from the data in $KCONFIG_CONFIG
+ 
+ # 1) Get a list of C files in toys/* and glue them together into a regex we can
+ # feed to grep that will match any one of them (whole word, not substring).
+@@ -157,7 +160,7 @@ TOYFILES="^$(ls toys/*/*.c | sed -n 's@^.*/\(.*\)\.c$@\1@;s/-/_/g;H;${g;s/\n//;s
+ # 5) Remove any config symbol not recognized as a filename from step 1.
+ # 6) Add "toys/*/" prefix and ".c" suffix.
+ 
+-TOYFILES=$(sed -nre 's/^CONFIG_(.*)=y/\1/p' < .config \
++TOYFILES=$(sed -nre 's/^CONFIG_(.*)=y/\1/p' < "$KCONFIG_CONFIG" \
+   | sort -u | tr A-Z a-z | grep -E "$TOYFILES" | sed 's@\(.*\)@toys/\*/\1.c@')
+ 
+ echo "Library probe..."
+diff --git a/scripts/single.sh b/scripts/single.sh
+new file mode 100755
+index 00000000..5303d9ac
+--- /dev/null
++++ b/scripts/single.sh
+@@ -0,0 +1,19 @@
++#!/bin/bash
++
++# Build a standalone toybox command
++
++if [ -z "$1" ]
++then
++  echo "usage: single.sh command" >&2
++  exit 1
++fi
++
++NAME=$(echo $1 | tr a-z- A-Z_)
++export KCONFIG_CONFIG=.singleconfig
++
++make allnoconfig > /dev/null &&
++sed -i -e "s/\(CONFIG_TOYBOX\)=y/# \1 is not set/" \
++       -e "s/# CONFIG_\($NAME\|TOYBOX_HELP[^ ]*\) is not set/CONFIG_\1=y/" \
++       "$KCONFIG_CONFIG" &&
++make &&
++mv toybox $PREFIX$1

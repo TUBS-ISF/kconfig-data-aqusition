@@ -1,0 +1,64 @@
+"2004-07-13 00:09:34 +0000"
+diff --git a/modutils/Config.in b/modutils/Config.in
+index 3b5c1e37a..05ff8c9d2 100644
+--- a/modutils/Config.in
++++ b/modutils/Config.in
+@@ -81,13 +81,7 @@ config CONFIG_LSMOD
+ 	  lsmod is used to display a list of loaded modules.
+ 
+ config CONFIG_FEATURE_QUERY_MODULE_INTERFACE
+-	bool "  Support lsmod query_module interface (add 638 bytes)"
+-	default y
+-	depends on CONFIG_LSMOD && ( CONFIG_FEATURE_2_4_MODULES || CONFIG_FEATURE_2_6_MODULES )
+-	help
+-	  This will provide some extra information about each module when
+-	  running lsmod.  The fields provided are address, size, flags and
+-	  usage count.
++	depends on CONFIG_FEATURE_2_4_MODULES && !CONFIG_FEATURE_2_6_MODULES
+ 
+ config CONFIG_MODPROBE
+ 	bool "modprobe"
+diff --git a/modutils/rmmod.c b/modutils/rmmod.c
+index c83904551..5576eb6a1 100644
+--- a/modutils/rmmod.c
++++ b/modutils/rmmod.c
+@@ -34,9 +34,11 @@ extern int rmmod_main(int argc, char **argv)
+ 	int n, ret = EXIT_SUCCESS;
+ 	size_t nmod = 0; /* number of modules */
+ 	size_t pnmod = -1; /* previous number of modules */
++	unsigned int flags = O_NONBLOCK|O_EXCL;
++#ifdef CONFIG_FEATURE_QUERY_MODULE_INTERFACE
+ 	void *buf; /* hold the module names which we ignore but must get */
+ 	size_t bufsize = 0;
+-	unsigned int flags = O_NONBLOCK|O_EXCL;
++#endif
+ 
+ 	/* Parse command line. */
+ 	while ((n = getopt(argc, argv, "a")) != EOF) {
+@@ -50,17 +52,24 @@ extern int rmmod_main(int argc, char **argv)
+ 			case 'a':
+ 				/* Unload _all_ unused modules via NULL delete_module() call */
+ 				/* until the number of modules does not change */
++#ifdef CONFIG_FEATURE_QUERY_MODULE_INTERFACE
+ 				buf = xmalloc(bufsize = 256);
++#endif
+ 				while (nmod != pnmod) {
+-					if (syscall(__NR_delete_module, NULL, flags) < 0)
++					if (syscall(__NR_delete_module, NULL, flags) < 0) {
++						if (errno==EFAULT)
++							return(ret);
+ 						bb_perror_msg_and_die("rmmod");
++					}
+ 					pnmod = nmod;
++#ifdef CONFIG_FEATURE_QUERY_MODULE_INTERFACE
+ 					/* 1 == QM_MODULES */
+ 					if (my_query_module(NULL, 1, &buf, &bufsize, &nmod)) {
+ 						bb_perror_msg_and_die("QM_MODULES");
+ 					}
++#endif
+ 				}
+-#ifdef CONFIG_FEATURE_CLEAN_UP
++#if defined CONFIG_FEATURE_CLEAN_UP && CONFIG_FEATURE_QUERY_MODULE_INTERFACE
+ 				free(buf);
+ #endif
+ 				return EXIT_SUCCESS;

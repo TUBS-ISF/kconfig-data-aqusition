@@ -1,0 +1,2112 @@
+"2008-01-19 17:08:39 -0600"
+diff --git a/Config.in b/Config.in
+index 62c2ec0a..aa3100ff 100644
+--- a/Config.in
++++ b/Config.in
+@@ -2,21 +2,14 @@ mainmenu "ToyBox Configuration"
+ 
+ menu "Global settings"
+ 
+-config HELP
+-	bool "help"
+-	default y
+-	help
+-	  usage: help [command]
+-
+-	  Show usage information for toybox commands.
+-
+-config HELP_LONG
+-	bool "Verbose help text"
+-	default y
+-	depends on HELP
++config TOYBOX
++	bool
++	default n
+ 	help
+-	  Show more than one line of help information per command.
++	  usage: toybox [command] [arguments...]
+ 
++	  With no arguments, shows available commands.  First argument is
++	  name of a command to run, followed by any arguments to that command.
+ 
+ config TOYBOX_FREE
+ 	bool "Free memory unnecessarily"
+@@ -36,4 +29,6 @@ config TOYBOX_DEBUG
+ 
+ endmenu
+ 
+-source toys/Config.in
++menu "Toys"
++source generated/Config.in
++endmenu
+diff --git a/Makefile b/Makefile
+index 7e91ded4..b8936001 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,39 +1,21 @@
+ # Makefile for toybox.
+ # Copyright 2006 Rob Landley <rob@landley.net>
+ 
+-CFLAGS  := $(CFLAGS) -Wall -Wundef -Wno-char-subscripts
+-CCFLAGS = $(CFLAGS) -funsigned-char
+-OPTIMIZE = -Os -ffunction-sections -fdata-sections -Wl,--gc-sections
+-CC      = $(CROSS_COMPILE)gcc
+-STRIP   = $(CROSS_COMPILE)strip
+-HOSTCC  = gcc
+-
+-# A synonym.
+-CROSS_COMPILE = $(CROSS)
+-
+ all: toybox
+ 
+-.PHONY: clean distclean baseline bloatcheck install_flat test tests help
++toybox toybox_unstripped:
++	scripts/make.sh
+ 
+-include kconfig/Makefile
++.PHONY: clean distclean baseline bloatcheck install_flat test tests help \
++	toybox toybox_unstripped
+ 
+-# defconfig is the "maximum sane config"; allyesconfig minus debugging and such.
+-#defconfig: allyesconfig
+-#	@sed -i -r -e "s/^(CONFIG_TOYBOX_(DEBUG|FREE))=.*/# \1 is not set/" .config
++include kconfig/Makefile
+ 
+-.config: Config.in toys/Config.in
++$(KCONFIG_TOP): generated/Config.in
++generated/Config.in:
++	scripts/genconfig.sh
+ 
+-# The long and roundabout sed is to make old versions of sed happy.  New ones
+-# have '\n' so can replace one line with two without all the branches and
+-# mucking about with hold space.
+-generated/gen_config.h: .config
+-	sed -n -e 's/^# CONFIG_\(.*\) is not set.*/\1/' \
+-	  -e 't notset' -e 'b tryisset' -e ':notset' \
+-	  -e 'h' -e 's/.*/#define CFG_& 0/p' \
+-	  -e 'g' -e 's/.*/#define USE_&(...)/p' -e 'd' -e ':tryisset' \
+-	  -e 's/^CONFIG_\(.*\)=y.*/\1/' -e 't isset' -e 'd' -e ':isset' \
+-	  -e 'h' -e 's/.*/#define CFG_& 1/p' \
+-	  -e 'g' -e 's/.*/#define USE_&(...) __VA_ARGS__/p' $< > $@
++HOSTCC:=cc
+ 
+ # Development targets
+ baseline: toybox_unstripped
+@@ -42,24 +24,6 @@ baseline: toybox_unstripped
+ bloatcheck: toybox_old toybox_unstripped
+ 	@scripts/bloat-o-meter toybox_old toybox_unstripped
+ 
+-# Get list of .c files to compile, including toys/*.c files from .config
+-toyfiles = main.c lib/*.c \
+-	$(shell scripts/cfg2files.sh < .config | sed 's@\(.*\)@toys/\1.c@')
+-
+-# The following still depends on generated/help.h even when it's not there, so
+-# *.h isn't sufficient by itself.
+-
+-toybox_unstripped: generated/gen_config.h generated/help.h $(toyfiles) toys/toylist.h toys/*.h lib/*.h toys.h
+-	$(CC) $(CCFLAGS) -I . $(toyfiles) -o toybox_unstripped $(OPTIMIZE)
+-
+-toybox: toybox_unstripped
+-	$(STRIP) toybox_unstripped -o toybox
+-
+-toys/help.c: generated/help.h
+-
+-generated/help.h: Config.in toys/Config.in scripts/config2help.py
+-	scripts/config2help.py Config.in > generated/help.h
+-
+ instlist: toybox
+ 	$(HOSTCC) $(CCFLAGS) -I . scripts/install.c -o instlist
+ 
+@@ -69,7 +33,8 @@ install_flat: instlist
+ 	@for i in `./instlist`; do ln -s toybox "$(PREFIX)/$$i"; done
+ 
+ clean::
+-	rm -f toybox toybox_unstripped generated/gen_config.h instlist
++	rm -f toybox toybox_unstripped generated/config.h generated/Config.in \
++		instlist
+ 
+ distclean: clean
+ 	rm -f toybox_old .config* generated/help.h
+@@ -80,5 +45,10 @@ tests:
+ 	scripts/testall.sh
+ 
+ help::
++	@echo  '  toybox          - Build toybox.'
+ 	@echo  '  baseline        - Create busybox_old for use by bloatcheck.'
+ 	@echo  '  bloatcheck      - Report size differences between old and current versions'
++	@echo  '  test            - Run test suite against compiled commands.'
++	@echo  '  clean           - Delete temporary files.'
++	@echo  '  distclean       - Delete everything that isn't shipped.'
++	@echo  '  install_flat    - Install toybox into $PREFIX directory.'
+diff --git a/configure b/configure
+new file mode 100644
+index 00000000..c9990f27
+--- /dev/null
++++ b/configure
+@@ -0,0 +1,13 @@
++# Toybox configuration file.
++
++# This sets environment variables used by scripts/make.sh
++
++# A synonym.
++[ -z "$CROSS_COMPILE" ] && CROSS_COMPILE="$CROSS"
++
++[ -z "$CFLAGS" ] && CFLAGS="-Wall -Wundef -Wno-char-subscripts"
++CFLAGS="$CFLAGS -funsigned-char"
++[ -z "$OPTIMIZE" ] && OPTIMIZE="-Os -ffunction-sections -fdata-sections -Wl,--gc-sections"
++[ -z "$CC" ] && CC="${CROSS_COMPILE}gcc"
++[ -z "$STRIP" ] && STRIP="${CROSS_COMPILE}strip"
++[ -z "$HOSTCC" ] && HOSTCC=gcc
+diff --git a/kconfig/Makefile b/kconfig/Makefile
+index 7fc3faca..7eaee955 100644
+--- a/kconfig/Makefile
++++ b/kconfig/Makefile
+@@ -8,28 +8,28 @@ obj = ./kconfig
+ PHONY += clean help oldconfig menuconfig config silentoldconfig \
+ 	randconfig allyesconfig allnoconfig allmodconfig defconfig
+ 
+-menuconfig: $(obj)/mconf
++menuconfig: $(obj)/mconf $(KCONFIG_TOP)
+ 	$< $(KCONFIG_TOP)
+ 
+-config: $(obj)/conf
++config: $(obj)/conf $(KCONFIG_TOP)
+ 	$< $(KCONFIG_TOP)
+ 
+-oldconfig: $(obj)/conf
++oldconfig: $(obj)/conf $(KCONFIG_TOP)
+ 	$< -o $(KCONFIG_TOP)
+ 
+-silentoldconfig: $(obj)/conf
++silentoldconfig: $(obj)/conf $(KCONFIG_TOP)
+ 	$< -s $(KCONFIG_TOP)
+ 
+-randconfig: $(obj)/conf
++randconfig: $(obj)/conf $(KCONFIG_TOP)
+ 	$< -r $(KCONFIG_TOP)
+ 
+-allyesconfig: $(obj)/conf
++allyesconfig: $(obj)/conf $(KCONFIG_TOP)
+ 	$< -y $(KCONFIG_TOP)
+ 
+-allnoconfig: $(obj)/conf
++allnoconfig: $(obj)/conf $(KCONFIG_TOP)
+ 	$< -n $(KCONFIG_TOP)
+ 
+-defconfig: $(obj)/conf
++defconfig: $(obj)/conf $(KCONFIG_TOP)
+ 	$< -D /dev/null $(KCONFIG_TOP)
+ 
+ # Help text used by make help
+diff --git a/lib/bunzip.c b/lib/bunzip.c
+index 71337025..f923b0c7 100644
+--- a/lib/bunzip.c
++++ b/lib/bunzip.c
+@@ -259,7 +259,7 @@ static int read_block_header(struct bunzip_data *bd, struct bwdata *bw)
+ 		base = hufGroup->base-1;
+ 		limit = hufGroup->limit-1;
+ 
+-		// zero temp[] and limit[], and put calculate permute[]
++		// zero temp[] and limit[], and calculate permute[]
+ 		pp = 0;
+ 		for (ii = minLen; ii <= maxLen; ii++) {
+ 			temp[ii] = limit[ii] = 0;
+diff --git a/scripts/cfg2files.sh b/scripts/cfg2files.sh
+deleted file mode 100755
+index 4f24c906..00000000
+--- a/scripts/cfg2files.sh
++++ /dev/null
+@@ -1,11 +0,0 @@
+-#!/bin/bash
+-
+-# cat .config into this to get a list of .c files.
+-
+-# Grab the XXX part of all CONFIG_XXX entries, removing everything after the
+-# second underline.  Sort the list, keep only one of each entry, convert
+-# to lower case, remove toybox itself from the list (as that indicates
+-# global symbols).
+-
+-sed -nre 's/^CONFIG_(.*)=y/\1/;t skip;b;:skip;s/_.*//;p' \
+-	| sort -u | tr A-Z a-z | grep -v '^toybox$'
+diff --git a/scripts/genconfig.sh b/scripts/genconfig.sh
+new file mode 100755
+index 00000000..59c63c5b
+--- /dev/null
++++ b/scripts/genconfig.sh
+@@ -0,0 +1,16 @@
++#!/bin/bash
++
++mkdir -p generated
++
++function genconfig()
++{
++  for i in $(echo toys/*.c | sort)
++  do
++    # Grab the config block for Config.in
++    echo "# $i"
++    sed -n '/^\*\//q;/^config [A-Z]/,$p' $i || exit 1
++    echo
++  done
++}
++
++genconfig > generated/Config.in
+diff --git a/scripts/make.sh b/scripts/make.sh
+new file mode 100755
+index 00000000..6cdd01a8
+--- /dev/null
++++ b/scripts/make.sh
+@@ -0,0 +1,56 @@
++#!/bin/bash
++
++# Grab default values for $CFLAGS and such.
++
++source ./configure
++
++echo "Extract configuration information from toys/*.c files."
++scripts/genconfig.sh
++
++# Only recreate generated/help.h if python is installed
++if [ ! -z "$(which python)" ] && [ ! -z "$(grep 'CONFIG_HELP=y' .config)" ]
++then
++  echo "Extract help text from Config.in."
++  scripts/config2help.py Config.in > generated/help.h || exit 1
++fi
++
++echo "Make generated/config.h from .config."
++
++# This long and roundabout sed invocation is to make old versions of sed happy.
++# New ones have '\n' so can replace one line with two without all the branches
++# and tedious mucking about with hold space.
++
++sed -n -e 's/^# CONFIG_\(.*\) is not set.*/\1/' \
++  -e 't notset' -e 'b tryisset' -e ':notset' \
++  -e 'h' -e 's/.*/#define CFG_& 0/p' \
++  -e 'g' -e 's/.*/#define USE_&(...)/p' -e 'd' -e ':tryisset' \
++  -e 's/^CONFIG_\(.*\)=y.*/\1/' -e 't isset' -e 'd' -e ':isset' \
++  -e 'h' -e 's/.*/#define CFG_& 1/p' \
++  -e 'g' -e 's/.*/#define USE_&(...) __VA_ARGS__/p' .config > \
++  generated/config.h || exit 1
++
++#for i in $(echo toys/*.c | sort)
++#do
++  # Grab the function command names
++  # NAME=$(echo $i | sed -e 's@toys/@@' -e 's@\.c@@')
++  #sed -n '/struct '$NAME'_command {/,/};/p' $i \
++  #	>> generated/globals_big.h
++  #  echo "struct ${NAME}_command;" >> generated/globals.h
++#done
++
++# Extract a list of toys/*.c files to compile from the data in ".config" with
++# sed, sort, and tr:
++
++# 1) Grab the XXX part of all CONFIG_XXX entries, removing everything after the
++# second underline
++# 2) Sort the list, keeping only one of each entry.
++# 3) Convert to lower case.
++# 4) Remove toybox itself from the list (as that indicates global symbols).
++# 5) Add "toys/" prefix and ".c" suffix.
++
++TOYFILES=$(cat .config | sed -nre 's/^CONFIG_(.*)=y/\1/;t skip;b;:skip;s/_.*//;p' | sort -u | tr A-Z a-z | grep -v '^toybox$' | sed 's@\(.*\)@toys/\1.c@' )
++
++echo "Compile toybox..."
++
++$DEBUG $CC $CFLAGS -I . -o toybox_unstripped $OPTIMIZE main.c lib/*.c $TOYFILES
++$DEBUG $STRIP toybox_unstripped -o toybox
+diff --git a/toys.h b/toys.h
+index c54dbd6f..0eb1ee1f 100644
+--- a/toys.h
++++ b/toys.h
+@@ -6,7 +6,7 @@
+  * Licensed under GPL version 2, see file LICENSE in this tarball for details.
+  */
+ 
+-#include "generated/gen_config.h"
++#include "generated/config.h"
+ 
+ #include "lib/portability.h"
+ 
+diff --git a/toys/Config.in b/toys/Config.in
+deleted file mode 100644
+index f1083233..00000000
+--- a/toys/Config.in
++++ /dev/null
+@@ -1,561 +0,0 @@
+-menu "Toys"
+-
+-# Fake config symbol to attach help entry to.
+-
+-config TOYBOX
+-	bool
+-	default n
+-	help
+-	  usage: toybox [command] [arguments...]
+-
+-	  With no arguments, shows available commands.  First argument is
+-	  name of a command to run, followed by any arguments to that command.
+-
+-config BASENAME
+-	bool "basename"
+-	default y
+-	help
+-	  usage: basename path [suffix]
+-
+-	  Print the part of path after the last slash, optionally minus suffix.
+-
+-config BZCAT
+-	bool "bzcat"
+-	default n
+-	help
+-	  usage: bzcat [filename...]
+-
+-	  Decompress listed files to stdout.  Use stdin if no files listed.
+-
+-config CATV
+-	bool "catv"
+-	default y
+-	help
+-	  usage: catv [-evt] [filename...]
+-
+-	  Display nonprinting characters as escape sequences.  Use M-x for
+-	  high ascii characters (>127), and ^x for other nonprinting chars.
+-
+-	  -e	Mark each newline with $
+-	  -t	Show tabs as ^I
+-	  -v	Don't use ^x or M-x escapes.
+-
+-config CHROOT
+-	bool "chroot"
+-	default y
+-	help
+-	  usage: chroot NEWPATH [commandline...]
+-
+-	  Run command within a new root directory.  If no command, run /bin/sh.
+-
+-config CHVT
+-	bool "chvt"
+-	default y
+-	help
+-	  usage: chvt N
+-
+-	  Change to virtual terminal number N.  (This only works in text mode.)
+-
+-	  Virtual terminals are the Linux VGA text mode displays, ordinarily
+-	  switched between via alt-F1, alt-F2, etc.  Use ctrl-alt-F1 to switch
+-	  from X to a virtual terminal, and alt-F6 (or F7, or F8) to get back.
+-
+-config COUNT
+-	bool "count"
+-	default y
+-	help
+-	  usage: count
+-
+-	  Copy stdin to stdout, displaying simple progress indicator to stderr.
+-
+-config DF
+-	bool "df (disk free)"
+-	default y
+-	help
+-	  usage: df [-t type] [FILESYSTEM ...]
+-
+-	  The "disk free" command, df shows total/used/available disk space for
+-	  each filesystem listed on the command line, or all currently mounted
+-	  filesystems.
+-
+-	  -t type
+-		Display only filesystems of this type.
+-
+-config DF_PEDANTIC
+-	bool "options -P and -k"
+-	default y
+-	depends on DF
+-	help
+-	  usage: df [-Pk]
+-
+-	  -P	The SUSv3 "Pedantic" option
+-
+-		Provides a slightly less useful output format dictated by
+-		the Single Unix Specification version 3, and sets the
+-		units to 512 bytes instead of the default 1024 bytes.
+-
+-	  -k	Sets units back to 1024 bytes (the default without -P)
+-
+-config DIRNAME
+-	bool "dirname"
+-	default y
+-	help
+-	  usage: dirname path
+-
+-	  Print the part of path up to the last slash.
+-
+-config DMESG
+-	bool "dmesg"
+-	default y
+-	help
+-	  usage: dmesg [-n level] [-s bufsize] | -c
+-
+-	  Print or control the kernel ring buffer.
+-
+-	  -n	Set kernel logging level (1-9).
+-	  -s	Size of buffer to read (in bytes), default 16384.
+-	  -c	Clear the ring buffer after printing.
+-
+-config ECHO
+-	bool "echo"
+-	default y
+-	help
+-	  usage: echo [-ne] [args...]
+-
+-	  Write each argument to stdout, with one space between each, followed
+-	  by a newline.
+-
+-	  -n	No trailing newline.
+-	  -e	Process the following escape sequences:
+-		\\	backslash
+-		\a	alert (beep/flash)
+-		\b	backspace
+-		\c	Stop output here (avoids trailing newline)
+-		\f	form feed
+-		\n	newline
+-		\r	carriage return
+-		\t	horizontal tab
+-		\v	vertical tab
+-
+-config FALSE
+-	bool "false"
+-	default y
+-	help
+-	  Return nonzero.
+-
+-config HELLO
+-	bool "hello"
+-	default y
+-	help
+-	  A hello world program.  You don't need this.
+-
+-config MDEV
+-	bool "mdev"
+-	default n
+-	help
+-	  usage: mdev [-s]
+-
+-	  Create devices in /dev using information from /sys.
+-
+-	  -s         Scan all entries in /sys to populate /dev.
+-
+-config MDEV_CONF
+-	bool "Configuration file for mdev"
+-	default n
+-	depends on MDEV
+-	help
+-	  The mdev config file (/etc/mdev.conf) contains lines that look like:
+-	    hd[a-z][0-9]* 0:3 660
+-
+-	  Each line must contain three whitespace separated fields.  The first
+-	  field is a regular expression matching one or more device names, and
+-	  the second and third fields are uid:gid and file permissions for
+-	  matching devies.
+-
+-config MKE2FS
+-	bool "mke2fs"
+-	default n
+-	help
+-	  usage: mke2fs [-Fnq] [-b ###] [-N|i ###] [-m ###] device
+-
+-	  Create an ext2 filesystem on a block device or filesystem image.
+-
+-	  -F         Force to run on a mounted device
+-	  -n         Don't write to device
+-	  -q         Quiet (no output)
+-	  -b size    Block size (1024, 2048, or 4096)
+-          -N inodes  Allocate this many inodes
+-	  -i bytes   Allocate one inode for every XXX bytes of device
+-          -m percent Reserve this percent of filesystem space for root user
+-
+-config MKE2FS_JOURNAL
+-	bool "Journaling support (ext3)"
+-	default n
+-	depends on MKE2FS
+-	help
+-	  usage: [-j] [-J size=###,device=XXX]
+-
+-	  -j         Create journal (ext3)
+-	  -J         Journal options
+-	             size: Number of blocks (1024-102400)
+-	             device: Specify an external journal
+-
+-config MKE2FS_GEN
+-	bool "Generate (gene2fs)"
+-	default n
+-	depends on MKE2FS
+-	help
+-	  usage: gene2fs [options] device filename
+-
+-	  The [options] are the same as mke2fs.
+-
+-config MKE2FS_LABEL
+-	bool "Label support"
+-	default n
+-	depends on MKE2FS
+-	help
+-	  usage: mke2fs [-L label] [-M path] [-o string]
+-
+-	  -L         Volume label
+-	  -M         Path to mount point
+-          -o         Created by
+-
+-config MKE2FS_EXTENDED
+-	bool "Extended options"
+-	default n
+-	depends on MKE2FS
+-	help
+-	  usage: mke2fs [-E stride=###] [-O option[,option]]
+-
+-	  -E stride= Set RAID stripe size (in blocks)
+-	  -O [opts]  Specify fewer ext2 option flags (for old kernels)
+-	             All of these are on by default (as appropriate)
+-	     none         Clear default options (all but journaling)
+-	     dir_index    Use htree indexes for large directories
+-	     filetype     Store file type info in directory entry
+-	     has_journal  Set by -j
+-	     journal_dev  Set by -J device=XXX
+-	     sparse_super Don't allocate huge numbers of redundant superblocks
+-
+-config MKFIFO
+-	bool "mkfifo"
+-	default y
+-	help
+-	  usage: mkfifo [-m mode] name...
+-
+-	  Makes a named pipe at name.
+-
+-	  -m mode	The mode of the pipe(s) created by mkfifo. It defaults to 0644.
+-			The format is in octal, optionally preceded by a leading zero.
+-
+-config NETCAT
+-	bool "netcat"
+-	default y
+-	help
+-	  usage: netcat [-iwlp] {IPADDR PORTNUM|-f FILENAME} [-e COMMAND]
+-
+-	  -e exec the rest of the command line
+-	  -i SECONDS delay after each line sent
+-	  -w SECONDS timeout for connection
+-	  -f filename use file (ala /dev/ttyS0) instead of network
+-	  -l listen for incoming connection (twice for persistent connection)
+-	  -p local port number
+-	  -s local source address
+-	  -q SECONDS quit this many seconds after EOF on stdin.
+-
+-	  Use -l twice with -e for a quick-and-dirty server.
+-
+-	  Use "stty 115200 -F /dev/ttyS0 && stty raw -echo -ctlecho" with
+-	  netcat -f to connect to a serial port.
+-
+-config ONEIT
+-	bool "oneit"
+-	default y
+-	help
+-	  usage: oneit [-p] [-c /dev/tty0] command [...]
+-
+-	  A simple init program that runs a single supplied command line with a
+-	  controlling tty (so CTRL-C can kill it).
+-
+-	  -p	Power off instead of rebooting when command exits.
+-	  -c	Which console device to use.
+-
+-	  The oneit command runs the supplied command line as a child process
+-	  (because PID 1 has signals blocked), attached to /dev/tty0, in its
+-	  own session.  Then oneit reaps zombies until the child exits, at
+-	  which point it reboots (or with -p, powers off) the system.
+-
+-config PATCH
+-	bool "patch"
+-	default y
+-	help
+-	  usage: patch [-i file] [-p depth] [-Ru]
+-
+-	  Apply a unified diff to one or more files.
+-
+-	  -i	Input file (defaults=stdin)
+-	  -p	number of '/' to strip from start of file paths (default=all)
+-	  -R	Reverse patch.
+-	  -u	Ignored (only handles "unified" diffs)
+-
+-	  This version of patch only handles unified diffs, and only modifies
+-	  a file when all all hunks to that file apply.  Patch prints failed
+-	  hunks to stderr, and exits with nonzero status if any hunks fail.
+-
+-	  A file compared against /dev/null is created/deleted as appropriate.
+-
+-config PWD
+-	bool "pwd"
+-	default y
+-	help
+-	  usage: pwd
+-
+-	  The print working directory command prints the current directory.
+-
+-config READLINK
+-	bool "readlink"
+-	default n
+-	help
+-	  usage: readlink
+-
+-	  Show what a symbolic link points to.
+-
+-config READLINK_F
+-	bool "readlink -f"
+-	default n
+-	depends on READLINK
+-	help
+-	  usage: readlink [-f]
+-
+-	  -f	Show full cannonical path, with no symlinks in it.  Returns
+-		nonzero if nothing could currently exist at this location.
+-
+-config SED
+-	bool "sed"
+-	default n
+-	help
+-	  usage: sed [-irn] {command | [-e command]...} [FILE...]
+-
+-	  Stream EDitor, transforms text by appling commands to each line
+-	  of input.
+-
+-config SHA1SUM
+-	bool "sha1sum"
+-	default y
+-	help
+-	  usage: sha1sum [file...]
+-
+-	  Calculate sha1 hash of files (or stdin).
+-
+-config SLEEP
+-	bool "sleep"
+-	default y
+-	help
+-	  usage: sleep SECONDS
+-
+-	  Wait a decimal integer number of seconds.
+-
+-config SYNC
+-	bool "sync"
+-	default y
+-	help
+-	  usage: sync
+-
+-	  Write pending cached data to disk (synchronize), blocking until done.
+-
+-config TOUCH
+-	bool "touch"
+-	default y
+-	help
+-	  usage: touch [-acm] [-r FILE] [-t MMDDhhmm] [-l bytes] FILE...
+-
+-	  Change file timestamps, ensure file existance and change file length.
+-
+-	  -a	Only change the access time.
+-	  -c	Do not create the file if it doesn't exist.
+-	  -l	Length to truncate (or sparsely extend) file to.
+-	  -m	Only change the modification time.
+-	  -r	Reference file to take timestamps from.
+-	  -t	Time to change {a,m}time to.
+-
+-config TOYSH
+-	bool "sh (toysh)"
+-	default y
+-	help
+-	  usage: sh [-c command] [script]
+-
+-	  The toybox command shell.  Runs a shell script, or else reads input
+-	  interactively and responds to it.
+-
+-	  -c	command line to execute
+-
+-config TOYSH_TTY
+-	bool "Interactive shell (terminal control)"
+-	default n
+-	depends on TOYSH
+-	help
+-	  Add terminal control to toysh.  This is necessary for interactive use,
+-	  so the shell isn't killed by CTRL-C.
+-
+-config TOYSH_PROFILE
+-	bool "Profile support"
+-	default n
+-	depends on TOYSH_TTY
+-	help
+-	  Read /etc/profile and ~/.profile when running interactively.
+-
+-	  Also enables the built-in command "source".
+-
+-config TOYSH_JOBCTL
+-	bool "Job Control (fg, bg, jobs)"
+-	default n
+-	depends on TOYSH_TTY
+-	help
+-	  Add job control to toysh.  This lets toysh handle CTRL-Z, and enables
+-	  the built-in commands "fg", "bg", and "jobs".
+-
+-	  With pipe support, enable use of "&" to run background processes.
+-
+-config TOYSH_FLOWCTL
+-	bool "Flow control (if, while, for, functions)"
+-	default n
+-	depends on TOYSH
+-	help
+-	  Add flow control to toysh.  This enables the if/then/else/fi,
+-	  while/do/done, and for/do/done constructs.
+-
+-	  With pipe support, this enables the ability to define functions
+-	  using the "function name" or "name()" syntax, plus curly brackets
+-	  "{ }" to group commands.
+-
+-config TOYSH_QUOTES
+-	bool "Smarter argument parsing (quotes)"
+-	default n
+-	depends on TOYSH
+-	help
+-	  Add support for parsing "" and '' style quotes to the toysh command
+-	  parser, with lets arguments have spaces in them.
+-
+-
+-config TOYSH_WILDCARDS
+-	bool "Wildcards ( ?*{,} )"
+-	default n
+-	depends on TOYSH_QUOTES
+-	help
+-	  Expand wildcards in argument names, ala "ls -l *.t?z" and
+-	  "rm subdir/{one,two,three}.txt".
+-
+-config TOYSH_PROCARGS
+-	bool "Executable arguments ( `` and $() )"
+-	default n
+-	depends on TOYSH_QUOTES
+-	help
+-	  Add support for executing arguments contianing $() and ``, using
+-	  the output of the command as the new argument value(s).
+-
+-	  (Bash calls this "command substitution".)
+-
+-config TOYSH_ENVVARS
+-	bool "Environment variable support"
+-	default n
+-	depends on TOYSH_QUOTES
+-	help
+-	  Substitute environment variable values for $VARNAME or ${VARNAME},
+-	  and enable the built-in command "export".
+-
+-config TOYSH_LOCALS
+-	bool "Local variables"
+-	default n
+-	depends on TOYSH_ENVVARS
+-	help
+-	  Support for local variables, fancy prompts ($PS1), the "set" command,
+-	  and $?.
+-
+-config TOYSH_ARRAYS
+-	bool "Array variables"
+-	default n
+-	depends on TOYSH_LOCALS
+-	help
+-	  Support for ${blah[blah]} style array variables.
+-
+-config TOYSH_PIPES
+-	bool "Pipes and redirects ( | > >> < << & && | || () ; )"
+-	default n
+-	depends on TOYSH
+-	help
+-	  Support multiple commands on the same command line.  This includes
+-	  | pipes, > >> < redirects, << here documents, || && conditional
+-	  execution, () subshells, ; sequential execution, and (with job
+-	  control) & background processes.
+-
+-config TOYSH_BUILTINS
+-	bool "Builtin commands"
+-	default n
+-	depends on TOYSH
+-	help
+-	  Adds the commands exec, fg, bg, help, jobs, pwd, export, source, set,
+-	  unset, read, alias.
+-
+-config EXIT
+-	bool
+-	default n
+-	depends on TOYSH
+-	help
+-	  usage: exit [status]
+-
+-	  Exit shell.  If no return value supplied on command line, use value
+-	  of most recent command, or 0 if none.
+-
+-config CD
+-	bool
+-	default n
+-	depends on TOYSH
+-	help
+-	  usage: cd [path]
+-
+-	  Change current directory.  With no arguments, go to $HOME.
+-
+-config CD_P
+-	bool # "-P support for cd"
+-	default n
+-	depends on TOYSH
+-	help
+-	  usage: cd [-PL]
+-
+-	  -P	Physical path: resolve symlinks in path.
+-	  -L	Cancel previous -P and restore default behavior.
+-
+-config TRUE
+-	bool "true"
+-	default y
+-	help
+-	  Return zero.
+-
+-config TTY
+-	bool "tty"
+-	default y
+-	help
+-	  Print the filename of the terminal connected to standard input.
+-
+-	  -s	Don't print anything, only return an exit status.
+-
+-config WHICH
+-	bool "which"
+-	default y
+-	help
+-	  usage: which [-a] filename ...
+-
+-	  Search $PATH for executable files matching filename(s).
+-
+-	  -a	Show all matches
+-
+-config YES
+-	bool "yes"
+-	default y
+-	help
+-	  usage: yes [args...]
+-
+-	  Repeatedly output line until killed.  If no args, output 'y'.
+-
+-endmenu
+-
+diff --git a/toys/basename.c b/toys/basename.c
+index ee5345e4..ffcb5bbe 100644
+--- a/toys/basename.c
++++ b/toys/basename.c
+@@ -1,8 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/* basename.c - print non-directory portion of path
++/* vi: set sw=4 ts=4:
++ *
++ * basename.c - print non-directory portion of path
++ *
++ * Copyright 2007 Charlie Shepherd <masterdriverz@gentoo.org>
+  *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/basename.html
+- */
++
++config BASENAME
++	bool "basename"
++	default y
++	help
++	  usage: basename path [suffix]
++
++	  Print the part of path after the last slash, optionally minus suffix.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/bzcat.c b/toys/bzcat.c
+index 984e4186..39b962e3 100644
+--- a/toys/bzcat.c
++++ b/toys/bzcat.c
+@@ -1,7 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * bzcat.c - decompress stdin to stdout using bunzip2.
+- */
++ *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
++ * Not in SUSv3.
++
++config BZCAT
++	bool "bzcat"
++	default n
++	help
++	  usage: bzcat [filename...]
++
++	  Decompress listed files to stdout.  Use stdin if no files listed.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/catv.c b/toys/catv.c
+index 806b029a..aa1bfd54 100644
+--- a/toys/catv.c
++++ b/toys/catv.c
+@@ -1,12 +1,25 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * cat -v implementation for toybox
+  *
+  * Copyright (C) 2006, 2007 Rob Landley <rob@landley.net>
+- */
++ *
++ * Not in SUSv3, but see "Cat -v considered harmful" at
++ *   http://cm.bell-labs.com/cm/cs/doc/84/kp.ps.gz
++
++config CATV
++	bool "catv"
++	default y
++	help
++	  usage: catv [-evt] [filename...]
++
++	  Display nonprinting characters as escape sequences.  Use M-x for
++	  high ascii characters (>127), and ^x for other nonprinting chars.
+ 
+-/* See "Cat -v considered harmful" at
+- * http://cm.bell-labs.com/cm/cs/doc/84/kp.ps.gz */
++	  -e	Mark each newline with $
++	  -t	Show tabs as ^I
++	  -v	Don't use ^x or M-x escapes.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/chroot.c b/toys/chroot.c
+index 8d2e9aa2..305d4fb1 100644
+--- a/toys/chroot.c
++++ b/toys/chroot.c
+@@ -1,9 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * chroot.c - Run command in new root directory.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3.
+- */
++
++config CHROOT
++	bool "chroot"
++	default y
++	help
++	  usage: chroot NEWPATH [commandline...]
++
++	  Run command within a new root directory.  If no command, run /bin/sh.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/chvt.c b/toys/chvt.c
+index 46040685..fbee3915 100644
+--- a/toys/chvt.c
++++ b/toys/chvt.c
+@@ -1,10 +1,23 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * chvt.c switch virtual terminals
+  * 
+  * Copyright (C) 2008 David Anders <danders@amltd.com>
+  *
+- */
++ * Not in SUSv3.
++
++config CHVT
++	bool "chvt"
++	default y
++	help
++	  usage: chvt N
++
++	  Change to virtual terminal number N.  (This only works in text mode.)
++
++	  Virtual terminals are the Linux VGA text mode displays, ordinarily
++	  switched between via alt-F1, alt-F2, etc.  Use ctrl-alt-F1 to switch
++	  from X to a virtual terminal, and alt-F6 (or F7, or F8) to get back.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/count.c b/toys/count.c
+index 89f97d05..b4e24332 100644
+--- a/toys/count.c
++++ b/toys/count.c
+@@ -1,9 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * count.c - Progress indicator from stdin to stdout
+  *
++ * Copyright 2002 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3.
+- */
++
++config COUNT
++	bool "count"
++	default y
++	help
++	  usage: count
++
++	  Copy stdin to stdout, displaying simple progress indicator to stderr.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/df.c b/toys/df.c
+index 52863cc7..da0d94bb 100644
+--- a/toys/df.c
++++ b/toys/df.c
+@@ -1,12 +1,39 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * df.c - report free disk space.
+  *
+- * Implemented roughly according to SUSv3:
+- * http://www.opengroup.org/onlinepubs/009695399/utilities/df.html
++ * Copyright 2006 Rob Landley <rob@landley.net>
+  *
+- * usage: df [-k] [-P|-t] [file...]
+- */
++ * See http://www.opengroup.org/onlinepubs/009695399/utilities/df.html
++
++config DF
++	bool "df (disk free)"
++	default y
++	help
++	  usage: df [-t type] [FILESYSTEM ...]
++
++	  The "disk free" command, df shows total/used/available disk space for
++	  each filesystem listed on the command line, or all currently mounted
++	  filesystems.
++
++	  -t type
++		Display only filesystems of this type.
++
++config DF_PEDANTIC
++	bool "options -P and -k"
++	default y
++	depends on DF
++	help
++	  usage: df [-Pk]
++
++	  -P	The SUSv3 "Pedantic" option
++
++		Provides a slightly less useful output format dictated by
++		the Single Unix Specification version 3, and sets the
++		units to 512 bytes instead of the default 1024 bytes.
++
++	  -k	Sets units back to 1024 bytes (the default without -P)
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/dirname.c b/toys/dirname.c
+index 8810bec5..9d1ad430 100644
+--- a/toys/dirname.c
++++ b/toys/dirname.c
+@@ -1,8 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/* dirname.c - print directory portion of path, or "." if none.
++/* vi: set sw=4 ts=4:
++ *
++ * dirname.c - print directory portion of path, or "." if none.
++ *
++ * Copyright 2007 Charlie Shephard <masterdriverz@gentoo.org>
+  *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/dirname.html
+- */
++
++config DIRNAME
++	bool "dirname"
++	default y
++	help
++	  usage: dirname path
++
++	  Print the part of path up to the last slash.
++*/
+ 
+ #include "toys.h"
+ #include <libgen.h>
+diff --git a/toys/dmesg.c b/toys/dmesg.c
+index 82fa0c39..a16b8d01 100644
+--- a/toys/dmesg.c
++++ b/toys/dmesg.c
+@@ -1,11 +1,23 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * dmesg.c - display/control kernel ring buffer.
+  *
+  * Copyright 2006, 2007 Rob Landley <rob@landley.net>
+  *
+  * Not in SUSv3.
+- */
++
++config DMESG
++	bool "dmesg"
++	default y
++	help
++	  usage: dmesg [-n level] [-s bufsize] | -c
++
++	  Print or control the kernel ring buffer.
++
++	  -n	Set kernel logging level (1-9).
++	  -s	Size of buffer to read (in bytes), default 16384.
++	  -c	Clear the ring buffer after printing.
++*/
+ 
+ #include "toys.h"
+ #include <sys/klog.h>
+diff --git a/toys/echo.c b/toys/echo.c
+index a7e6067e..7c475ca0 100644
+--- a/toys/echo.c
++++ b/toys/echo.c
+@@ -1,9 +1,32 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * echo.c - echo supporting -n and -e.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/echo.html
+- */
++
++config ECHO
++	bool "echo"
++	default y
++	help
++	  usage: echo [-ne] [args...]
++
++	  Write each argument to stdout, with one space between each, followed
++	  by a newline.
++
++	  -n	No trailing newline.
++          -e	Process the following escape sequences:
++		\\	backslash
++		\a	alert (beep/flash)
++		\b	backspace
++		\c	Stop output here (avoids trailing newline)
++		\f	form feed
++		\n	newline
++		\r	carriage return
++		\t	horizontal tab
++		\v	vertical tab
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/false.c b/toys/false.c
+index d4345a6d..ac6bf642 100644
+--- a/toys/false.c
++++ b/toys/false.c
+@@ -1,9 +1,18 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * false.c - Return nonzero.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/false.html
+- */
++
++
++config FALSE
++	bool "false"
++	default y
++	help
++	  Return nonzero.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/hello.c b/toys/hello.c
+index 12dd7ac0..278fa0a5 100644
+--- a/toys/hello.c
++++ b/toys/hello.c
+@@ -1,9 +1,21 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * hello.c - A hello world program.
+  *
++ * Copyright 2006 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3.
+- */
++ * See http://www.opengroup.org/onlinepubs/009695399/utilities/
++
++config HELLO
++	bool "hello"
++	default y
++	help
++	  A hello world program.  You don't need this.
++
++	  Mostly used as an example/skeleton file for adding new commands,
++	  occasionally nice to test kernel booting via "init=/bin/hello".
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/help.c b/toys/help.c
+index 42d06a8c..472ccdea 100644
+--- a/toys/help.c
++++ b/toys/help.c
+@@ -1,9 +1,27 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * help.c - Show help for toybox
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3, but exists as a bash builtin.
+- */
++
++config HELP
++	bool "help"
++	default y
++	help
++	  usage: help [command]
++
++	  Show usage information for toybox commands.
++
++config HELP_LONG
++	bool "Verbose help text"
++	default y
++	depends on HELP
++	help
++	  Show more than one line of help information per command.
++*/
++ 
+ 
+ #include "toys.h"
+ #include "generated/help.h"
+diff --git a/toys/mdev.c b/toys/mdev.c
+index bc34c0d5..385e52d2 100644
+--- a/toys/mdev.c
++++ b/toys/mdev.c
+@@ -6,7 +6,30 @@
+  * Copyright 2005 Frank Sorenson <frank@tuxrocks.com>
+  *
+  * Not in SUSv3.
+- */
++
++config MDEV
++	bool "mdev"
++	default n
++	help
++	  usage: mdev [-s]
++
++	  Create devices in /dev using information from /sys.
++
++	  -s	Scan all entries in /sys to populate /dev.
++
++config MDEV_CONF
++	bool "Configuration file for mdev"
++	default n
++	depends on MDEV
++	help
++	  The mdev config file (/etc/mdev.conf) contains lines that look like:
++		hd[a-z][0-9]* 0:3 660
++
++	  Each line must contain three whitespace separated fields.  The first
++	  field is a regular expression matching one or more device names, and
++	  the second and third fields are uid:gid and file permissions for
++	  matching devies.
++*/
+ 
+ #include "toys.h"
+ #include "lib/xregcomp.h"
+diff --git a/toys/mke2fs.c b/toys/mke2fs.c
+index 32dc2141..405ed94d 100644
+--- a/toys/mke2fs.c
++++ b/toys/mke2fs.c
+@@ -5,7 +5,72 @@
+  * Copyright 2006, 2007 Rob Landley <rob@landley.net>
+  *
+  * Not in SUSv3.
+- */
++
++config MKE2FS
++	bool "mke2fs"
++	default n
++	help
++	  usage: mke2fs [-Fnq] [-b ###] [-N|i ###] [-m ###] device
++
++	  Create an ext2 filesystem on a block device or filesystem image.
++
++	  -F         Force to run on a mounted device
++	  -n         Don't write to device
++	  -q         Quiet (no output)
++	  -b size    Block size (1024, 2048, or 4096)
++	  -N inodes  Allocate this many inodes
++	  -i bytes   Allocate one inode for every XXX bytes of device
++	  -m percent Reserve this percent of filesystem space for root user
++
++config MKE2FS_JOURNAL
++	bool "Journaling support (ext3)"
++	default n
++	depends on MKE2FS
++	help
++	  usage: [-j] [-J size=###,device=XXX]
++
++	  -j         Create journal (ext3)
++	  -J         Journal options
++	             size: Number of blocks (1024-102400)
++	             device: Specify an external journal
++
++config MKE2FS_GEN
++	bool "Generate (gene2fs)"
++	default n
++	depends on MKE2FS
++	help
++	  usage: gene2fs [options] device filename
++
++	  The [options] are the same as mke2fs.
++
++config MKE2FS_LABEL
++	bool "Label support"
++	default n
++	depends on MKE2FS
++	help
++	  usage: mke2fs [-L label] [-M path] [-o string]
++
++	  -L         Volume label
++	  -M         Path to mount point
++	  -o         Created by
++
++config MKE2FS_EXTENDED
++	bool "Extended options"
++	default n
++	depends on MKE2FS
++	help
++	  usage: mke2fs [-E stride=###] [-O option[,option]]
++
++	  -E stride= Set RAID stripe size (in blocks)
++	  -O [opts]  Specify fewer ext2 option flags (for old kernels)
++	             All of these are on by default (as appropriate)
++	     none         Clear default options (all but journaling)
++	     dir_index    Use htree indexes for large directories
++	     filetype     Store file type info in directory entry
++	     has_journal  Set by -j
++	     journal_dev  Set by -J device=XXX
++	     sparse_super Don't allocate huge numbers of redundant superblocks
++*/
+ 
+ #include "toys.h"
+ 
+@@ -564,25 +629,3 @@ void mke2fs_main(void)
+ 		put_zeroes((end-start) * TT.blocksize);
+ 	}
+ }
+-
+-// Scratch pad:
+-	// b - block size (1024, 2048, 4096)
+-	// F - force (run on mounted device or non-block device)
+-	// i - bytes per inode 
+-	// N - number of inodes
+-	// m - reserved blocks percentage
+-	// n - Don't write
+-	// q - quiet
+-
+-	// L - volume label
+-	// M - last mounted path
+-	// o - creator os
+-	
+-	// j - create journal
+-	// J - journal options (size=1024-102400 blocks,device=)
+-	//        device=/dev/blah or LABEL=label UUID=uuid
+-
+-	// E - extended options (stride=stripe-size blocks)
+-	// O - none,dir_index,filetype,has_journal,journal_dev,sparse_super
+-
+-
+diff --git a/toys/mkfifo.c b/toys/mkfifo.c
+index a959a480..77cb73ee 100644
+--- a/toys/mkfifo.c
++++ b/toys/mkfifo.c
+@@ -1,9 +1,21 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * mkfifo.c: Create a named pipe.
+  *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/mkfifo.html
+- */
++
++config MKFIFO
++	bool "mkfifo"
++	default y
++	help
++	  usage: mkfifo [-m mode] name...
++
++	  Makes a named pipe at name.
++
++	  -m mode	The mode of the pipe(s) created by mkfifo. It defaults
++			to 0644.  This number is in octal, optionally preceded
++			by a leading zero.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/netcat.c b/toys/netcat.c
+index a6d93644..573a76ca 100644
+--- a/toys/netcat.c
++++ b/toys/netcat.c
+@@ -1,18 +1,35 @@
+-/* vi: set sw=4 ts=4: */
+-/* nc: mini-netcat - Forward stdin/stdout to a file or network connection.
++/* vi: set sw=4 ts=4:
++ *
++ * nc: mini-netcat - Forward stdin/stdout to a file or network connection.
+  *
+  * Copyright 2007 Rob Landley <rob@landley.net>
+  *
+  * Not in SUSv3.
+- */
++
++config NETCAT
++	bool "netcat"
++	default n
++	help
++	  usage: netcat [-iwlp] {IPADDR PORTNUM|-f FILENAME} [-e COMMAND]
++
++	  -e	exec the rest of the command line
++	  -i	SECONDS delay after each line sent
++	  -w	SECONDS timeout for connection
++	  -f	filename use file (ala /dev/ttyS0) instead of network
++	  -l	listen for incoming connection (twice for persistent connection)
++	  -p	local port number
++	  -s	local source address
++	  -q	SECONDS quit this many seconds after EOF on stdin.
++
++	  Use -l twice with -e for a quick-and-dirty server.
++
++	  Use "stty 115200 -F /dev/ttyS0 && stty raw -echo -ctlecho" with
++	  netcat -f to connect to a serial port.
++*/
+ 
+ #include "toys.h"
+ #include "toynet.h"
+ 
+-#include <sys/socket.h>
+-#include <netinet/in.h>
+-#include <arpa/inet.h>
+-
+ #define TT toy.netcat
+ 
+ static void timeout(int signum)
+diff --git a/toys/oneit.c b/toys/oneit.c
+index 8563ecb1..a05e9266 100644
+--- a/toys/oneit.c
++++ b/toys/oneit.c
+@@ -1,9 +1,28 @@
+-/* oneit.c, tiny one-process init replacement.
++/* vi: set sw=4 ts=4:
++ *
++ * oneit.c, tiny one-process init replacement.
+  *
+  * Copyright 2005, 2007 by Rob Landley <rob@landley.net>.
+  *
+  * Not in SUSv3.
+- */
++
++config ONEIT
++	bool "oneit"
++	default y
++	help
++	  usage: oneit [-p] [-c /dev/tty0] command [...]
++
++	  A simple init program that runs a single supplied command line with a
++	  controlling tty (so CTRL-C can kill it).
++
++	  -p	Power off instead of rebooting when command exits.
++	  -c	Which console device to use.
++
++	  The oneit command runs the supplied command line as a child process
++	  (because PID 1 has signals blocked), attached to /dev/tty0, in its
++	  own session.  Then oneit reaps zombies until the child exits, at
++	  which point it reboots (or with -p, powers off) the system.
++*/
+ 
+ #include "toys.h"
+ #include <sys/reboot.h>
+diff --git a/toys/patch.c b/toys/patch.c
+index 2f1db0ec..53be2631 100644
+--- a/toys/patch.c
++++ b/toys/patch.c
+@@ -1,13 +1,11 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * patch.c - Apply a "universal" diff.
+  *
+- * SUSv3 at http://www.opengroup.org/onlinepubs/009695399/utilities/patch.html
+- * but who cares about "ed"?
++ * Copyright 2007 Rob Landley <rob@landley.net>
+  *
+- * -u ignored
+- * -R reverse (remove applied hunks, apply removed hunks)
+- * -p num remove this many slashes from start of path (default = all)
++ * see http://www.opengroup.org/onlinepubs/009695399/utilities/patch.html
++ * (But only does -u, because who still cares about "ed"?)
+  *
+  * TODO:
+  * -b backup
+@@ -15,7 +13,6 @@
+  * -N ignore already applied
+  * -d chdir first
+  * -D define wrap #ifdef and #ifndef around changes
+- * -i patchfile apply patch from filename rather than stdin
+  * -o outfile output here instead of in place
+  * -r rejectfile write rejected hunks to this file
+  *
+@@ -23,7 +20,26 @@
+  * -f force (no questions asked)
+  * -F fuzz (number, default 2)
+  * [file] which file to patch
+- */
++
++config PATCH
++	bool "patch"
++	default y
++	help
++	  usage: patch [-i file] [-p depth] [-Ru]
++
++	  Apply a unified diff to one or more files.
++
++	  -i	Input file (defaults=stdin)
++	  -p	number of '/' to strip from start of file paths (default=all)
++	  -R	Reverse patch.
++	  -u	Ignored (only handles "unified" diffs)
++
++	  This version of patch only handles unified diffs, and only modifies
++	  a file when all all hunks to that file apply.  Patch prints failed
++	  hunks to stderr, and exits with nonzero status if any hunks fail.
++
++	  A file compared against /dev/null is created/deleted as appropriate.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/pwd.c b/toys/pwd.c
+index f5f04e83..d0c4dfa1 100644
+--- a/toys/pwd.c
++++ b/toys/pwd.c
+@@ -1,7 +1,21 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * pwd.c - Print working directory.
+- */
++ *
++ * Copyright 2006 Rob Landley <rob@landley.net>
++ *
++ * See http://www.opengroup.org/onlinepubs/009695399/utilities/echo.html
++ *
++ * TODO: add -L -P
++
++config PWD
++	bool "pwd"
++	default y
++	help
++	  usage: pwd
++
++	  The print working directory command prints the current directory.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/readlink.c b/toys/readlink.c
+index 79fdea52..89aff10d 100644
+--- a/toys/readlink.c
++++ b/toys/readlink.c
+@@ -1,9 +1,29 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * readlink.c - Return string representation of a symbolic link.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3.
+- */
++
++config READLINK
++	bool "readlink"
++	default n
++	help
++	  usage: readlink
++
++	  Show what a symbolic link points to.
++
++config READLINK_F
++	bool "readlink -f"
++	default n
++	depends on READLINK
++	help
++	  usage: readlink [-f]
++
++	  -f	Show full cannonical path, with no symlinks in it.  Returns
++		nonzero if nothing could currently exist at this location.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/sed.c b/toys/sed.c
+index 39753399..ffd0a2a1 100644
+--- a/toys/sed.c
++++ b/toys/sed.c
+@@ -1,15 +1,24 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * sed.c - Stream editor.
+  *
++ * Copyright 2008 Rob Landley <rob@landley.net>
++ *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/sed.c
+- */
++
++config SED
++	bool "sed"
++	default n
++	help
++	  usage: sed [-irn] {command | [-e command]...} [FILE...]
++
++	  Stream EDitor, transforms text by appling commands to each line
++	  of input.
++*/
+ 
+ #include "toys.h"
+ #include "lib/xregcomp.h"
+ 
+-#define TT toy.sed
+-
+ struct sed_command {
+ 	// Doubly linked list of commands.
+ 	struct sed_command *next, *prev;
+@@ -35,6 +44,8 @@ struct sed_command {
+ 	char command;
+ };
+ 
++#define TT toy.sed
++
+ void sed_main(void)
+ {
+ 	struct arg_list *test;
+diff --git a/toys/sha1sum.c b/toys/sha1sum.c
+index 1d405f33..2a1b11e9 100644
+--- a/toys/sha1sum.c
++++ b/toys/sha1sum.c
+@@ -1,11 +1,22 @@
+-/*
++/* vi: set sw=4 ts=4:
++ *
++ * sha1sum.c - Calculate sha1 cryptographic hash for input.
++ *
+  * Copyright 2007 Rob Landley <rob@landley.net>
+  *
+  * Based on the public domain SHA-1 in C by Steve Reid <steve@edmweb.com>
+  * from http://www.mirrors.wiretapped.net/security/cryptography/hashes/sha1/
+  *
+  * Not in SUSv3.
+- */
++
++config SHA1SUM
++	bool "sha1sum"
++	default y
++	help
++	  usage: sha1sum [file...]
++
++	  Calculate sha1 hash of files (or stdin).
++*/
+ 
+ #include <toys.h>
+ 
+diff --git a/toys/sleep.c b/toys/sleep.c
+index 0c01a6ea..205adf21 100644
+--- a/toys/sleep.c
++++ b/toys/sleep.c
+@@ -1,9 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * sleep.c - Wait for a number of seconds.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/sleep.html
+- */
++
++config SLEEP
++	bool "sleep"
++	default y
++	help
++	  usage: sleep SECONDS
++
++	  Wait a decimal integer number of seconds.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/sync.c b/toys/sync.c
+index 4eed0f53..96c36770 100644
+--- a/toys/sync.c
++++ b/toys/sync.c
+@@ -1,9 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * sync.c - Write all pending data to disk.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3.
+- */
++
++config SYNC
++	bool "sync"
++	default y
++	help
++	  usage: sync
++
++	  Write pending cached data to disk (synchronize), blocking until done.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/touch.c b/toys/touch.c
+index e01d157e..8c9b7aaa 100644
+--- a/toys/touch.c
++++ b/toys/touch.c
+@@ -1,11 +1,26 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * touch.c - Modify a file's timestamps.
+  *
+  * Copyright (C) 2007 Charlie Shepherd <masterdriverz@gentoo.org>
+  *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/touch.html
+- */
++
++config TOUCH
++	bool "touch"
++	default y
++	help
++	  usage: touch [-acm] [-r FILE] [-t MMDDhhmm] [-l bytes] FILE...
++
++	  Change file timestamps, ensure file existance and change file length.
++
++	  -a	Only change the access time.
++	  -c	Do not create the file if it doesn't exist.
++	  -l	Length to truncate (or sparsely extend) file to.
++	  -m	Only change the modification time.
++	  -r	Reference file to take timestamps from.
++	  -t	Time to change {a,m}time to.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/toysh.c b/toys/toysh.c
+index 61df13dc..353d2158 100644
+--- a/toys/toysh.c
++++ b/toys/toysh.c
+@@ -13,9 +13,155 @@
+  * http://www.opengroup.org/onlinepubs/009695399/utilities/exit.html
+  *
+  * Things like the bash man page are good to read too.
+- */
+-
+-// Handle embedded NUL bytes in the command line.
++ *
++ * TODO: // Handle embedded NUL bytes in the command line.
++
++config TOYSH
++	bool "sh (toysh)"
++	default y
++	help
++	  usage: sh [-c command] [script]
++
++	  The toybox command shell.  Runs a shell script, or else reads input
++	  interactively and responds to it.
++
++	  -c	command line to execute
++
++config TOYSH_TTY
++	bool "Interactive shell (terminal control)"
++	default n
++	depends on TOYSH
++	help
++	  Add terminal control to toysh.  This is necessary for interactive use,
++	  so the shell isn't killed by CTRL-C.
++
++config TOYSH_PROFILE
++	bool "Profile support"
++	default n
++	depends on TOYSH_TTY
++	help
++	  Read /etc/profile and ~/.profile when running interactively.
++
++	  Also enables the built-in command "source".
++
++config TOYSH_JOBCTL
++	bool "Job Control (fg, bg, jobs)"
++	default n
++	depends on TOYSH_TTY
++	help
++	  Add job control to toysh.  This lets toysh handle CTRL-Z, and enables
++	  the built-in commands "fg", "bg", and "jobs".
++
++	  With pipe support, enable use of "&" to run background processes.
++
++config TOYSH_FLOWCTL
++	bool "Flow control (if, while, for, functions)"
++	default n
++	depends on TOYSH
++	help
++	  Add flow control to toysh.  This enables the if/then/else/fi,
++	  while/do/done, and for/do/done constructs.
++
++	  With pipe support, this enables the ability to define functions
++	  using the "function name" or "name()" syntax, plus curly brackets
++	  "{ }" to group commands.
++
++config TOYSH_QUOTES
++	bool "Smarter argument parsing (quotes)"
++	default n
++	depends on TOYSH
++	help
++	  Add support for parsing "" and '' style quotes to the toysh command
++	  parser, with lets arguments have spaces in them.
++
++config TOYSH_WILDCARDS
++	bool "Wildcards ( ?*{,} )"
++	default n
++	depends on TOYSH_QUOTES
++	help
++	  Expand wildcards in argument names, ala "ls -l *.t?z" and
++	  "rm subdir/{one,two,three}.txt".
++
++config TOYSH_PROCARGS
++	bool "Executable arguments ( `` and $() )"
++	default n
++	depends on TOYSH_QUOTES
++	help
++	  Add support for executing arguments contianing $() and ``, using
++	  the output of the command as the new argument value(s).
++
++	  (Bash calls this "command substitution".)
++
++config TOYSH_ENVVARS
++	bool "Environment variable support"
++	default n
++	depends on TOYSH_QUOTES
++	help
++	  Substitute environment variable values for $VARNAME or ${VARNAME},
++	  and enable the built-in command "export".
++
++config TOYSH_LOCALS
++	bool "Local variables"
++	default n
++	depends on TOYSH_ENVVARS
++	help
++	  Support for local variables, fancy prompts ($PS1), the "set" command,
++	  and $?.
++
++config TOYSH_ARRAYS
++	bool "Array variables"
++	default n
++	depends on TOYSH_LOCALS
++	help
++	  Support for ${blah[blah]} style array variables.
++
++config TOYSH_PIPES
++	bool "Pipes and redirects ( | > >> < << & && | || () ; )"
++	default n
++	depends on TOYSH
++	help
++	  Support multiple commands on the same command line.  This includes
++	  | pipes, > >> < redirects, << here documents, || && conditional
++	  execution, () subshells, ; sequential execution, and (with job
++	  control) & background processes.
++
++config TOYSH_BUILTINS
++	bool "Builtin commands"
++	default n
++	depends on TOYSH
++	help
++	  Adds the commands exec, fg, bg, help, jobs, pwd, export, source, set,
++	  unset, read, alias.
++
++config EXIT
++	bool
++	default n
++	depends on TOYSH
++	help
++	  usage: exit [status]
++
++	  Exit shell.  If no return value supplied on command line, use value
++	  of most recent command, or 0 if none.
++
++config CD
++	bool
++	default n
++	depends on TOYSH
++	help
++	  usage: cd [path]
++
++	  Change current directory.  With no arguments, go to $HOME.
++
++config CD_P
++	bool # "-P support for cd"
++	default n
++	depends on TOYSH
++	help
++	  usage: cd [-PL]
++
++	  -P    Physical path: resolve symlinks in path.
++	  -L    Cancel previous -P and restore default behavior.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/true.c b/toys/true.c
+index 055fb76e..88e95904 100644
+--- a/toys/true.c
++++ b/toys/true.c
+@@ -1,9 +1,17 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * true.c - Return zero.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/true.html
+- */
++
++config TRUE
++	bool "true"
++	default y
++	help
++	  Return zero.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/tty.c b/toys/tty.c
+index 3dfba9ee..a603e3e3 100644
+--- a/toys/tty.c
++++ b/toys/tty.c
+@@ -1,8 +1,18 @@
+-/* vi: set sw=4 ts=4: */
+-/* tty.c - print terminal name of stdin
++/* vi: set sw=4 ts=4:
++ * tty.c - print terminal name of stdin
++ *
++ * Copyright 2007 Charlie Shepherd <masterdriverz@gentoo.org>
+  *
+  * See http://www.opengroup.org/onlinepubs/009695399/utilities/tty.html
+- */
++
++config TTY
++	bool "tty"
++	default y
++	help
++	  Print the filename of the terminal connected to standard input.
++
++	  -s	Don't print anything, only return an exit status.
++*/
+ 
+ #include "toys.h"
+ 
+diff --git a/toys/which.c b/toys/which.c
+index b8c0339a..d7205fde 100644
+--- a/toys/which.c
++++ b/toys/which.c
+@@ -1,12 +1,21 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * which.c - Find executable files in $PATH.
+  *
+  * Copyright 2006 Rob landley <rob@landley.net>
+  *
+  * Not in SUSv3.
+- */
+ 
++config WHICH
++	bool "which"
++	default y
++	help
++	  usage: which [-a] filename ...
++
++	  Search $PATH for executable files matching filename(s).
++
++	  -a	Show all matches
++*/
+ #include "toys.h"
+ 
+ #define OPT_a   1
+diff --git a/toys/yes.c b/toys/yes.c
+index d1091993..501ea3a9 100644
+--- a/toys/yes.c
++++ b/toys/yes.c
+@@ -1,9 +1,19 @@
+-/* vi: set sw=4 ts=4: */
+-/*
++/* vi: set sw=4 ts=4:
++ *
+  * yes.c - Repeatedly output a string.
+  *
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * Not in SUSv3.
+- */
++
++config YES
++	bool "yes"
++	default y
++	help
++	  usage: yes [args...]
++
++	  Repeatedly output line until killed.  If no args, output 'y'.
++*/
+ 
+ #include "toys.h"
+ 

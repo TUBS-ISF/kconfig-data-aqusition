@@ -1,0 +1,4472 @@
+"2020-10-02 19:10:36 +0200"
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 650d9b5bb..039b16895 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -23,3 +23,7 @@ Stafford Horne <shorne@gmail.com>
+ 
+ Xtensa:
+ Max Filippov <jcmvbkbc@gmail.com>
++
++KVX:
++Clment Lger <cleger@kalray.eu>
++Yann Sionneau <ysionneau@kalray.eu>
+diff --git a/README b/README
+index be53d0217..cb3a9ff57 100644
+--- a/README
++++ b/README
+@@ -12,7 +12,7 @@ Porting applications from glibc to uClibc-ng typically involves just
+ recompiling the source code.  uClibc-ng even supports shared libraries and
+ threading. It currently runs on standard Linux and MMU-less (also known as
+ Clinux) systems with support for Alpha, ARC, ARM, Blackfin, CRIS, FR-V, HPPA,
+-IA64, LM32, M68K/Coldfire, Metag, Microblaze, MIPS, MIPS64, NDS32, NIOS2,
++IA64, KVX, LM32, M68K/Coldfire, Metag, Microblaze, MIPS, MIPS64, NDS32, NIOS2,
+ OpenRisc, PowerPC, SuperH, Sparc, Tile, x86, x86_64 and Xtensa processors.
+ 
+ If you are building an embedded Linux system and you find that glibc is eating
+diff --git a/Rules.mak b/Rules.mak
+index 55e88d462..e9aebeaab 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -144,7 +144,7 @@ SHARED_LIBNAME := $(LIBC).so.$(ABI_VERSION)
+ 
+ UCLIBC_LDSO_NAME := ld-uClibc
+ ARCH_NATIVE_BIT := 32
+-ifneq ($(findstring  $(TARGET_ARCH) , hppa64 ia64 powerpc64 s390x sparc64 x86_64 ),)
++ifneq ($(findstring  $(TARGET_ARCH) , hppa64 ia64 powerpc64 s390x sparc64 x86_64 kvx ),)
+ UCLIBC_LDSO_NAME := ld64-uClibc
+ ARCH_NATIVE_BIT := 64
+ else
+@@ -465,6 +465,10 @@ ifeq ($(TARGET_ARCH),csky)
+ 	CPU_CFLAGS-$(ARCH_BIG_ENDIAN)		+= -mbig-endian
+ endif
+ 
++ifeq ($(TARGET_ARCH),kvx)
++	CPU_CFLAGS-$(CONFIG_KVX) += -march=kvx
++endif
++
+ ifeq ($(TARGET_ARCH),m68k)
+ 	# -fPIC is only supported for 68020 and above.  It is not supported
+ 	# for 68000, 68010, or Coldfire.
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index fff434b40..7dca9e305 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -28,6 +28,7 @@ choice
+ 	default TARGET_hppa if DESIRED_TARGET_ARCH = "hppa"
+ 	default TARGET_i386 if DESIRED_TARGET_ARCH = "i386"
+ 	default TARGET_ia64 if DESIRED_TARGET_ARCH = "ia64"
++	default TARGET_kvx if DESIRED_TARGET_ARCH = "kvx"
+ 	default TARGET_lm32 if DESIRED_TARGET_ARCH = "lm32"
+ 	default TARGET_m68k if DESIRED_TARGET_ARCH = "m68k"
+ 	default TARGET_metag if DESIRED_TARGET_ARCH = "metag"
+@@ -91,6 +92,9 @@ config TARGET_i386
+ config TARGET_ia64
+ 	bool "ia64"
+ 
++config TARGET_kvx
++	bool "kvx"
++
+ config TARGET_lm32
+ 	bool "lm32"
+ 
+@@ -192,6 +196,10 @@ if TARGET_ia64
+ source "extra/Configs/Config.ia64"
+ endif
+ 
++if TARGET_kvx
++source "extra/Configs/Config.kvx"
++endif
++
+ if TARGET_lm32
+ source "extra/Configs/Config.lm32"
+ endif
+diff --git a/extra/Configs/Config.kvx b/extra/Configs/Config.kvx
+new file mode 100644
+index 000000000..398ffceaa
+--- /dev/null
++++ b/extra/Configs/Config.kvx
+@@ -0,0 +1,18 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++
++config TARGET_ARCH
++	string
++	default "kvx"
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_LITTLE_ENDIAN
++        select ARCH_HAS_MMU
++	select UCLIBC_HAS_FPU
++	select UCLIBC_HAS_FENV
++	select UCLIBC_HAS_WCHAR
++	select DO_C99_MATH
+diff --git a/extra/Configs/defconfigs/kvx/defconfig b/extra/Configs/defconfigs/kvx/defconfig
+new file mode 100644
+index 000000000..c80e6ce8e
+--- /dev/null
++++ b/extra/Configs/defconfigs/kvx/defconfig
+@@ -0,0 +1 @@
++TARGET_kvx=y
+diff --git a/include/elf.h b/include/elf.h
+index d1be3bc1b..7d66d70a4 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -273,9 +273,10 @@ typedef struct
+ #define EM_ARCV2	195		/* ARCv2 Cores */
+ #define EM_RISCV        243     	/* RISC-V */
+ #define EM_CSKY		252		/* C-SKY Cores */
++#define EM_KVX		256		/* Kalray VLIW core of the MPPA processor family */
+ 
+ /* NEXT FREE NUMBER: Increment this after adding your official arch number */
+-#define EM_NUM		253
++#define EM_NUM		257
+ 
+ /* If it is necessary to assign new unofficial EM_* values, please pick large
+    random numbers (0x8523, 0xa7f2, etc.) to minimize the chances of collision
+@@ -1253,6 +1254,90 @@ typedef struct
+ #define ELF64_M_SIZE(info)	ELF32_M_SIZE (info)
+ #define ELF64_M_INFO(sym, size)	ELF32_M_INFO (sym, size)
+ 
++/* KVX relocs */
++#define R_KVX_NONE                                   0
++#define R_KVX_16                                     1
++#define R_KVX_32                                     2
++#define R_KVX_64                                     3
++#define R_KVX_S16_PCREL                              4
++#define R_KVX_PCREL17                                5
++#define R_KVX_PCREL27                                6
++#define R_KVX_32_PCREL                               7
++#define R_KVX_S37_PCREL_LO10                         8
++#define R_KVX_S37_PCREL_UP27                         9
++#define R_KVX_S43_PCREL_LO10                        10
++#define R_KVX_S43_PCREL_UP27                        11
++#define R_KVX_S43_PCREL_EX6                         12
++#define R_KVX_S64_PCREL_LO10                        13
++#define R_KVX_S64_PCREL_UP27                        14
++#define R_KVX_S64_PCREL_EX27                        15
++#define R_KVX_64_PCREL                              16
++#define R_KVX_S16                                   17
++#define R_KVX_S32_LO5                               18
++#define R_KVX_S32_UP27                              19
++#define R_KVX_S37_LO10                              20
++#define R_KVX_S37_UP27                              21
++#define R_KVX_S37_GOTOFF_LO10                       22
++#define R_KVX_S37_GOTOFF_UP27                       23
++#define R_KVX_S43_GOTOFF_LO10                       24
++#define R_KVX_S43_GOTOFF_UP27                       25
++#define R_KVX_S43_GOTOFF_EX6                        26
++#define R_KVX_32_GOTOFF                             27
++#define R_KVX_64_GOTOFF                             28
++#define R_KVX_32_GOT                                29
++#define R_KVX_S37_GOT_LO10                          30
++#define R_KVX_S37_GOT_UP27                          31
++#define R_KVX_S43_GOT_LO10                          32
++#define R_KVX_S43_GOT_UP27                          33
++#define R_KVX_S43_GOT_EX6                           34
++#define R_KVX_64_GOT                                35
++#define R_KVX_GLOB_DAT                              36
++#define R_KVX_COPY                                  37
++#define R_KVX_JMP_SLOT                              38
++#define R_KVX_RELATIVE                              39
++#define R_KVX_S43_LO10                              40
++#define R_KVX_S43_UP27                              41
++#define R_KVX_S43_EX6                               42
++#define R_KVX_S64_LO10                              43
++#define R_KVX_S64_UP27                              44
++#define R_KVX_S64_EX27                              45
++#define R_KVX_S37_GOTADDR_LO10                      46
++#define R_KVX_S37_GOTADDR_UP27                      47
++#define R_KVX_S43_GOTADDR_LO10                      48
++#define R_KVX_S43_GOTADDR_UP27                      49
++#define R_KVX_S43_GOTADDR_EX6                       50
++#define R_KVX_S64_GOTADDR_LO10                      51
++#define R_KVX_S64_GOTADDR_UP27                      52
++#define R_KVX_S64_GOTADDR_EX27                      53
++#define R_KVX_64_DTPMOD                             54
++#define R_KVX_64_DTPOFF                             55
++#define R_KVX_S37_TLS_DTPOFF_LO10                   56
++#define R_KVX_S37_TLS_DTPOFF_UP27                   57
++#define R_KVX_S43_TLS_DTPOFF_LO10                   58
++#define R_KVX_S43_TLS_DTPOFF_UP27                   59
++#define R_KVX_S43_TLS_DTPOFF_EX6                    60
++#define R_KVX_S37_TLS_GD_LO10                       61
++#define R_KVX_S37_TLS_GD_UP27                       62
++#define R_KVX_S43_TLS_GD_LO10                       63
++#define R_KVX_S43_TLS_GD_UP27                       64
++#define R_KVX_S43_TLS_GD_EX6                        65
++#define R_KVX_S37_TLS_LD_LO10                       66
++#define R_KVX_S37_TLS_LD_UP27                       67
++#define R_KVX_S43_TLS_LD_LO10                       68
++#define R_KVX_S43_TLS_LD_UP27                       69
++#define R_KVX_S43_TLS_LD_EX6                        70
++#define R_KVX_64_TPOFF                              71
++#define R_KVX_S37_TLS_IE_LO10                       72
++#define R_KVX_S37_TLS_IE_UP27                       73
++#define R_KVX_S43_TLS_IE_LO10                       74
++#define R_KVX_S43_TLS_IE_UP27                       75
++#define R_KVX_S43_TLS_IE_EX6                        76
++#define R_KVX_S37_TLS_LE_LO10                       77
++#define R_KVX_S37_TLS_LE_UP27                       78
++#define R_KVX_S43_TLS_LE_LO10                       79
++#define R_KVX_S43_TLS_LE_UP27                       80
++#define R_KVX_S43_TLS_LE_EX6                        81
++
+ /* C-SKY relocs. */
+ 
+ #define R_CKCORE_NONE               0
+diff --git a/ldso/ldso/kvx/dl-startup.h b/ldso/ldso/kvx/dl-startup.h
+new file mode 100644
+index 000000000..9784c2345
+--- /dev/null
++++ b/ldso/ldso/kvx/dl-startup.h
+@@ -0,0 +1,104 @@
++/*
++ * Architecture specific code used by dl-startup.c
++ * Copyright (C) 2016 Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Copyright (C) 2018 Kalray Inc.
++ *
++ * Ported from GNU libc
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++/* Copyright (C) 1995-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <features.h>
++
++/* This is the first bit of code, ever, executed in user space of a dynamically
++ * linked ELF.
++ * The kernel jumps on this with the following stack layout:
++ * 	argc            argument counter (integer)
++ *	argv[0]         program name (pointer)
++ *	argv[1..argc-1] program args (pointers)
++ * 	NULL
++ *	env[0...N]      environment variables (pointers)
++ *	NULL
++ *	auxvt[0...N]   Auxiliary Vector Table elements (mixed types)
++ *
++ * We should call _dl_start($sp) (the argument should point to the previously
++ * described memory layout).
++ *
++ * Next we should skip N arguments (N == _dl_skip_args).
++ * Those correspond to the arguments which are consumed by the dynamic loader
++ * if it is called directly as a program, which is possible when
++ * __LDSO_STANDALONE_SUPPORT__ is defined.
++ *
++ * We eventually end up calling the main executable's _start (from ctr1.S).
++ * The address of this _start is returned by _dl_start (in $r0).
++ *
++ * We should call this with one argument (in $r0): the address of _dl_fini()
++ */
++__asm__("\
++.text							\n\
++.globl _start						\n\
++.type _start, %function					\n\
++_start:							\n\
++	copyd $r0 = $sp					\n\
++	copyd $r18 = $sp				\n\
++	andd $sp = $sp, -32				\n\
++	call _dl_start					\n\
++	;;						\n\
++.globl _dl_start_user					\n\
++.type _dl_start_user, %function				\n\
++_dl_start_user:						\n\
++	pcrel $r1 = @gotaddr() 				\n\
++	copyd $r5 = $r0					\n\
++	copyd $sp = $r18				\n\
++	;;						\n\
++	ld $r2 = @gotoff(_dl_skip_args)[$r1]		\n\
++	addd $r0 = $r1, @gotoff(_dl_fini) 		\n\
++	;;						\n\
++	lwz $r3 = 0[$sp]				\n\
++	;;						\n\
++	sbfw $r4 = $r2, $r3				\n\
++	addx8d $sp = $r2, $sp				\n\
++	;;						\n\
++	sd 0[$sp] = $r4					\n\
++	icall $r5					\n\
++	;;						\n\
++");
++
++/* Get a pointer to the argv array.  On many platforms this can be just
++ * the address of the first argument, on other platforms we need to
++ * do something a little more subtle here.  */
++#define GET_ARGV(ARGVP, ARGS) ARGVP = (((unsigned long*)ARGS)+1)
++
++/* Handle relocation of the symbols in the dynamic loader. */
++static __always_inline
++void PERFORM_BOOTSTRAP_RELOC(ELF_RELOC *rpnt, ElfW(Addr) *reloc_addr,
++	ElfW(Addr) symbol_addr, ElfW(Addr) load_addr, ElfW(Sym) *sym)
++{
++	switch (ELF_R_TYPE(rpnt->r_info)) {
++		case R_KVX_NONE:
++			break;
++		case R_KVX_JMP_SLOT:
++		 	*reloc_addr = symbol_addr + rpnt->r_addend;
++		 	break;
++		case R_KVX_RELATIVE:
++			*reloc_addr = load_addr + rpnt->r_addend;
++			break;
++		default:
++			_dl_exit(1);
++	}
++}
+diff --git a/ldso/ldso/kvx/dl-syscalls.h b/ldso/ldso/kvx/dl-syscalls.h
+new file mode 100644
+index 000000000..f40c4fd31
+--- /dev/null
++++ b/ldso/ldso/kvx/dl-syscalls.h
+@@ -0,0 +1 @@
++/* stub for arch-specific syscall issues */
+diff --git a/ldso/ldso/kvx/dl-sysdep.h b/ldso/ldso/kvx/dl-sysdep.h
+new file mode 100644
+index 000000000..9bb20ca8e
+--- /dev/null
++++ b/ldso/ldso/kvx/dl-sysdep.h
+@@ -0,0 +1,99 @@
++/*
++ * Various assembly language/system dependent hacks that are required
++ * so that we can minimize the amount of platform specific code.
++ * Copyright (C) 2000-2004 by Erik Andersen <andersen@codepoet.org>
++ * Copyright (C) 2017-2018 by Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Copyright (C) 2018 Kalray Inc.
++
++ * Ported from GNU C Library
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++/* Copyright (C) 1995-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* Defines that this system uses RELOCA.  */
++#define ELF_USES_RELOCA
++
++#include <elf.h>
++#include <link.h>
++
++/* Initialization sequence for the GOT.  */
++#define INIT_GOT(GOT_BASE,MODULE) \
++{				\
++  GOT_BASE[2] = (unsigned long) _dl_linux_resolve; \
++  GOT_BASE[1] = (unsigned long) MODULE; \
++}
++
++/* Here we define the magic numbers that this dynamic loader should accept */
++#define MAGIC1 EM_KVX
++#undef  MAGIC2
++
++/* Used for error messages */
++#define ELF_TARGET "kvx"
++
++#define ARCH_NEEDS_BOOTSTRAP_RELOCS
++
++struct elf_resolve;
++unsigned long _dl_linux_resolver(struct elf_resolve * tpnt, int reloc_entry);
++
++#define elf_machine_type_class(type)			      \
++  ((((type) == R_KVX_JMP_SLOT || (type) == R_KVX_64_DTPMOD || \
++     (type) == R_KVX_64_DTPOFF                                \
++  || (type) == R_KVX_64_TPOFF)			              \
++    * ELF_RTYPE_CLASS_PLT)			 	      \
++   | (((type) == R_KVX_COPY) * ELF_RTYPE_CLASS_COPY))
++
++/* Return the link-time address of _DYNAMIC.  Conveniently, this is the
++   first element of the GOT. */
++extern const ElfW(Addr) _GLOBAL_OFFSET_TABLE_[] attribute_hidden;
++static __always_inline ElfW(Addr) __attribute__ ((unused))
++elf_machine_dynamic (void)
++{
++  unsigned long *ptr;
++  __asm__("\n"
++	"pcrel %0 = @gotaddr()\n"
++	";;\n" : "=r"(ptr) :: );
++  return *ptr;
++}
++
++/* Return the run-time load address of the shared object.  */
++
++static __always_inline ElfW(Addr) __attribute__ ((unused))
++elf_machine_load_address (void)
++{
++  /* To figure out the load address we use the definition that for any symbol:
++     dynamic_addr(symbol) = static_addr(symbol) + load_addr
++
++    _DYNAMIC sysmbol is used here as its link-time address stored in
++    the special unrelocated first GOT entry.  */
++
++    extern ElfW(Dyn) _DYNAMIC[] attribute_hidden;
++    return (ElfW(Addr)) &_DYNAMIC - elf_machine_dynamic ();
++}
++
++static __always_inline void
++elf_machine_relative(Elf64_Addr load_off, const Elf64_Addr rel_addr,
++                     Elf64_Word relative_count)
++{
++	Elf64_Rela *rpnt = (Elf64_Rela*)rel_addr;
++	--rpnt;
++	do {
++		Elf64_Addr *const reloc_addr = (Elf64_Addr*)(load_off + (++rpnt)->r_offset);
++
++		*reloc_addr = load_off + rpnt->r_addend;
++	} while (--relative_count);
++}
+diff --git a/ldso/ldso/kvx/dl-tlsdesc.S b/ldso/ldso/kvx/dl-tlsdesc.S
+new file mode 100644
+index 000000000..d0a55b985
+--- /dev/null
++++ b/ldso/ldso/kvx/dl-tlsdesc.S
+@@ -0,0 +1,33 @@
++/*
++ * Copyright (C) 2018 Kalray Inc.	
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#if defined __UCLIBC_HAS_TLS__
++#error NOT IMPLEMENTED: THIS IS A SKELETON 
++	.text
++
++	.hidden _dl_tlsdesc_return
++	.global	_dl_tlsdesc_return
++	.type	_dl_tlsdesc_return,%function
++	.align 2
++_dl_tlsdesc_return:
++	errop
++	;;
++.size	_dl_tlsdesc_return, .-_dl_tlsdesc_return
++
++#ifdef SHARED
++
++	.hidden _dl_tlsdesc_dynamic
++	.global	_dl_tlsdesc_dynamic
++	.type	_dl_tlsdesc_dynamic,%function
++	cfi_startproc
++	.align 2
++_dl_tlsdesc_dynamic:
++	errop
++	;;
++	cfi_endproc
++	.size	_dl_tlsdesc_dynamic, .-_dl_tlsdesc_dynamic
++
++#endif // SHARED
++#endif // __UCLIBC_HAS_TLS__
+diff --git a/ldso/ldso/kvx/elfinterp.c b/ldso/ldso/kvx/elfinterp.c
+new file mode 100644
+index 000000000..9efcf83ff
+--- /dev/null
++++ b/ldso/ldso/kvx/elfinterp.c
+@@ -0,0 +1,302 @@
++/* KVX ELF shared library loader suppport
++ *
++ * Copyright (C) 2001-2004 Erik Andersen
++ * Copyright (C) 2016-2017 Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Copyright (C) 2018 Kalray Inc.
++ *
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. The name of the above contributors may not be
++ *    used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++/* Program to load an ELF binary on a linux system, and run it.
++   References to symbols in sharable libraries can be resolved by either
++   an ELF sharable library or a linux style of shared library. */
++
++#include "ldso.h"
++
++#if defined(USE_TLS) && USE_TLS
++#include "dl-tls.h"
++#include "tlsdeschtab.h"
++#endif
++
++extern int _dl_linux_resolve(void);
++
++/* Uncomment when some relocs will be handled lazily */
++#if 0
++unsigned long _dl_linux_resolver(struct elf_resolve *tpnt, int reloc_entry)
++{
++	ELF_RELOC *this_reloc;
++	char *strtab;
++	ElfW(Sym) *symtab;
++	int symtab_index;
++	char *rel_addr;
++	char *new_addr;
++	char **got_addr;
++	ElfW(Addr) instr_addr;
++	char *symname;
++
++	rel_addr = (char *)tpnt->dynamic_info[DT_JMPREL];
++	this_reloc = (ELF_RELOC *)(rel_addr + reloc_entry);
++	symtab_index = ELF_R_SYM(this_reloc->r_info);
++
++	symtab = (ElfW(Sym) *)tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++	symname = strtab + symtab[symtab_index].st_name;
++
++	/* Address of jump instruction to fix up */
++	instr_addr = (this_reloc->r_offset + tpnt->loadaddr);
++	got_addr = (char **)instr_addr;
++
++	/* Get the address of the GOT entry */
++	new_addr = _dl_find_hash(symname, &_dl_loaded_modules->symbol_scope, tpnt, ELF_RTYPE_CLASS_PLT, NULL);
++	if (unlikely(!new_addr)) {
++		_dl_dprintf(2, "%s: can't resolve symbol '%s'\n", _dl_progname, symname);
++		_dl_exit(1);
++	}
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_bindings) {
++		_dl_dprintf(_dl_debug_file, "\nresolve function: %s", symname);
++		if (_dl_debug_detail) _dl_dprintf(_dl_debug_file,
++				"\tpatched %x ==> %x @ %x", *got_addr, new_addr, got_addr);
++	}
++	if (!_dl_debug_nofixups) {
++		*got_addr = new_addr;
++	}
++#else
++	*got_addr = new_addr;
++#endif
++	return (unsigned long)new_addr;
++}
++#endif
++
++static int
++_dl_parse(struct elf_resolve *tpnt, struct r_scope_elem *scope,
++	  unsigned long rel_addr, unsigned long rel_size,
++	  int (*reloc_fnc) (struct elf_resolve *tpnt, struct r_scope_elem *scope,
++			    ELF_RELOC *rpnt, ElfW(Sym) *symtab, char *strtab))
++{
++	unsigned int i;
++	char *strtab;
++	ElfW(Sym) *symtab;
++	ELF_RELOC *rpnt;
++	int symtab_index;
++
++	/* Parse the relocation information */
++	rpnt = (ELF_RELOC *)rel_addr;
++	rel_size = rel_size / sizeof(ELF_RELOC);
++
++	symtab = (ElfW(Sym) *)tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++
++	for (i = 0; i < rel_size; i++, rpnt++) {
++		int res;
++
++		symtab_index = ELF_R_SYM(rpnt->r_info);
++
++		debug_sym(symtab, strtab, symtab_index);
++		debug_reloc(symtab, strtab, rpnt);
++
++		res = reloc_fnc(tpnt, scope, rpnt, symtab, strtab);
++
++		if (res==0) 
++			continue;
++
++		_dl_dprintf(2, "\n%s: ", _dl_progname);
++
++		if (symtab_index)
++			_dl_dprintf(2, "symbol '%s': ", 
++				strtab + symtab[symtab_index].st_name);
++
++		if (unlikely(res < 0)) {
++		        int reloc_type = ELF_R_TYPE(rpnt->r_info);
++			_dl_dprintf(2, "can't handle reloc type %x\n", reloc_type);
++			_dl_exit(-res);
++		} else if (unlikely(res > 0)) {
++			_dl_dprintf(2, "can't resolve symbol\n");
++			return res;
++		}
++	  }
++
++	  return 0;
++}
++
++static int
++_dl_do_reloc (struct elf_resolve *tpnt, struct r_scope_elem *scope,
++	      ELF_RELOC *rpnt, ElfW(Sym) *symtab, char *strtab)
++{
++	int reloc_type;
++	int symtab_index;
++	char *symname;
++#if defined USE_TLS && USE_TLS
++	struct elf_resolve *tls_tpnt = NULL;
++#endif
++	struct symbol_ref sym_ref;
++	ElfW(Addr) *reloc_addr;
++	ElfW(Addr) symbol_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	ElfW(Addr) old_val;
++#endif
++
++	reloc_addr = (ElfW(Addr)*)(tpnt->loadaddr + (unsigned long)rpnt->r_offset);
++	reloc_type = ELF_R_TYPE(rpnt->r_info);
++	symtab_index = ELF_R_SYM(rpnt->r_info);
++	sym_ref.sym = &symtab[symtab_index];
++	sym_ref.tpnt = NULL;
++	symbol_addr = 0;
++	symname = strtab + sym_ref.sym->st_name;
++
++	if (symtab_index) {
++		symbol_addr = (ElfW(Addr))_dl_find_hash(symname, scope, tpnt,
++				elf_machine_type_class(reloc_type), &sym_ref);
++
++		/*
++		 * We want to allow undefined references to weak symbols - this might
++		 * have been intentional.  We should not be linking local symbols
++		 * here, so all bases should be covered.
++		 */
++		if (unlikely (!symbol_addr && 
++			(ELF_ST_TYPE(symtab[symtab_index].st_info) != STT_TLS) &&
++			(ELF_ST_BIND(symtab[symtab_index].st_info) != STB_WEAK))) {
++			return 1;
++		}
++		if (_dl_trace_prelink) {
++			_dl_debug_lookup (symname, tpnt, &symtab[symtab_index],
++						&sym_ref, elf_machine_type_class(reloc_type));
++		}
++#if defined USE_TLS && USE_TLS
++		tls_tpnt = sym_ref.tpnt;
++#endif
++	} else {
++		/*
++		 * Relocs against STN_UNDEF are usually treated as using a
++		 * symbol value of zero, and using the module containing the
++		 * reloc itself.
++		 */
++		symbol_addr = sym_ref.sym->st_value;
++#if defined USE_TLS && USE_TLS
++		tls_tpnt = tpnt;
++#endif
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++		case R_KVX_NONE:
++			break;
++		case R_KVX_GLOB_DAT:
++		case R_KVX_64:
++		case R_KVX_JMP_SLOT:
++			*reloc_addr = symbol_addr + rpnt->r_addend;
++			break;
++		case R_KVX_COPY:
++			if (symbol_addr) {
++				_dl_memcpy((char *)reloc_addr, (char *)symbol_addr,
++							sym_ref.sym->st_size);
++			}
++			break;
++
++#if defined USE_TLS && USE_TLS
++		case R_KVX_64_TPOFF:
++			CHECK_STATIC_TLS ((struct link_map *) tls_tpnt);
++			*reloc_addr = tls_tpnt->l_tls_offset + symbol_addr + rpnt->r_addend - TLS_TCB_SIZE;
++			break;
++		case R_KVX_64_DTPMOD:
++			*reloc_addr = tls_tpnt->l_tls_modid;
++			break;
++		case R_KVX_64_DTPOFF:
++			*reloc_addr = symbol_addr;
++			break;
++#endif
++		default:
++			return -1; /*call _dl_exit(1) */
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail) {
++		_dl_dprintf(_dl_debug_file, "\tpatched: %x ==> %x @ %x\n", 
++				old_val, *reloc_addr, reloc_addr);
++	}
++#endif
++
++	return 0;
++}
++
++/* uncomment when PLT relocs will be handled lazily */
++#if 0
++static int
++_dl_do_lazy_reloc (struct elf_resolve *tpnt, struct r_scope_elem *scope,
++		   ELF_RELOC *rpnt, ElfW(Sym) *symtab, char *strtab)
++{
++	int reloc_type;
++	ElfW(Addr) *reloc_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	ElfW(Addr) old_val;
++#endif
++
++	(void)scope;
++	(void)strtab;
++
++	reloc_addr = (ElfW(Addr)*)(tpnt->loadaddr + rpnt->r_offset);
++	reloc_type = ELF_R_TYPE(rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++		case R_KVX_NONE:
++			break;
++		case R_KVX_JMP_SLOT64:
++			*reloc_addr += tpnt->loadaddr;
++			break;
++#if defined USE_TLS && USE_TLS
++#error Not even close to be ready
++#endif
++		default:
++			return -1; /*call _dl_exit(1) */
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail) {
++		_dl_dprintf(_dl_debug_file, "\tpatched_lazy: %x ==> %x @ %x\n",
++			    old_val, *reloc_addr, reloc_addr);
++	}
++#endif
++
++	return 0;
++}
++#endif
++
++void _dl_parse_lazy_relocation_information(struct dyn_elf *rpnt,
++	unsigned long rel_addr, unsigned long rel_size)
++{
++	(void)_dl_parse(rpnt->dyn, &_dl_loaded_modules->symbol_scope, rel_addr, rel_size, _dl_do_reloc);
++}
++
++int _dl_parse_relocation_information(struct dyn_elf *rpnt,
++	struct r_scope_elem *scope, unsigned long rel_addr, unsigned long rel_size)
++{
++	return _dl_parse(rpnt->dyn, scope, rel_addr, rel_size, _dl_do_reloc);
++}
+diff --git a/ldso/ldso/kvx/resolve.S b/ldso/ldso/kvx/resolve.S
+new file mode 100644
+index 000000000..6e7c3143c
+--- /dev/null
++++ b/ldso/ldso/kvx/resolve.S
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2018 Kalray Inc.	
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#warning NOT IMPLEMENTED: THIS IS A SKELETON
++
++ .text
++ .globl _dl_linux_resolve
++ .type _dl_linux_resolve, %function
++ .align 2
++
++_dl_linux_resolve:
++	errop
++	;;
++
++.size _dl_linux_resolve, .-_dl_linux_resolve
+diff --git a/libc/string/kvx/Makefile b/libc/string/kvx/Makefile
+new file mode 100644
+index 000000000..0a95346fd
+--- /dev/null
++++ b/libc/string/kvx/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir:=../../../
++top_builddir:=../../../
++all: objs
++include $(top_builddir)Rules.mak
++include ../Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libc/string/kvx/memcpy.S b/libc/string/kvx/memcpy.S
+new file mode 100644
+index 000000000..290e705b4
+--- /dev/null
++++ b/libc/string/kvx/memcpy.S
+@@ -0,0 +1,221 @@
++/*
++ * Copyright (C) 2020 Kalray Inc.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB
++ * in this tarball.
++ */
++
++#include <sysdep.h>
++
++.align 16
++ENTRY(memcpy)
++	cb.deqz $r2? .Lreturn
++	compd.geu $r3 = $r2, 256
++	copyd $r6 = $r0
++	;;
++	cb.deqz $r3? .Lremaining_256
++	;;
++	lq.u $r32r33 = 0[$r1]
++	addd $r2 = $r2, -256
++	;;
++	lq.u $r34r35 = 16[$r1]
++	;;
++	lq.u $r36r37 = 32[$r1]
++	srld $r7 = $r2, 8
++	;;
++	lq.u $r38r39 = 48[$r1]
++	;;
++	lq.u $r40r41 = 64[$r1]
++	;;
++	lq.u $r42r43 = 80[$r1]
++	;;
++	lq.u $r44r45 = 96[$r1]
++	;;
++	lq.u $r46r47 = 112[$r1]
++	;;
++	lq.u $r48r49 = 128[$r1]
++	;;
++	lq.u $r50r51 = 144[$r1]
++	;;
++	lq.u $r52r53 = 160[$r1]
++	;;
++	lq.u $r54r55 = 176[$r1]
++	;;
++	lq.u $r56r57 = 192[$r1]
++	;;
++	lq.u $r58r59 = 208[$r1]
++	compd.geu $r3 = $r2, 256
++	;;
++	lq.u $r60r61 = 224[$r1]
++	;;
++	lq.u $r62r63 = 240[$r1]
++	addd $r1 = $r1, 256
++	;;
++	cb.deqz $r7? .Lstreaming_loop_end
++	;;
++	loopdo $r7? .Lstreaming_loop_end
++		;;
++		sq 0[$r0] = $r32r33
++		addd $r2 = $r2, -256
++		;;
++		lq.u $r32r33 = 0[$r1]
++		;;
++		sq 16[$r0] = $r34r35
++		;;
++		lq.u $r34r35 = 16[$r1]
++		;;
++		sq 32[$r0] = $r36r37
++		;;
++		lq.u $r36r37 = 32[$r1]
++		;;
++		sq 48[$r0] = $r38r39
++		;;
++		lq.u $r38r39 = 48[$r1]
++		;;
++		sq 64[$r0] = $r40r41
++		;;
++		lq.u $r40r41 = 64[$r1]
++		;;
++		sq 80[$r0] = $r42r43
++		;;
++		lq.u $r42r43 = 80[$r1]
++		;;
++		sq 96[$r0] = $r44r45
++		;;
++		lq.u $r44r45 = 96[$r1]
++		;;
++		sq 112[$r0] = $r46r47
++		;;
++		lq.u $r46r47 = 112[$r1]
++		;;
++		sq 128[$r0] = $r48r49
++		;;
++		lq.u $r48r49 = 128[$r1]
++		;;
++		sq 144[$r0] = $r50r51
++		;;
++		lq.u $r50r51 = 144[$r1]
++		;;
++		sq 160[$r0] = $r52r53
++		;;
++		lq.u $r52r53 = 160[$r1]
++		;;
++		sq 176[$r0] = $r54r55
++		;;
++		lq.u $r54r55 = 176[$r1]
++		;;
++		sq 192[$r0] = $r56r57
++		;;
++		lq.u $r56r57 = 192[$r1]
++		;;
++		sq 208[$r0] = $r58r59
++		;;
++		lq.u $r58r59 = 208[$r1]
++		;;
++		sq 224[$r0] = $r60r61
++		;;
++		lq.u $r60r61 = 224[$r1]
++		;;
++		sq 240[$r0] = $r62r63
++		addd $r0 = $r0, 256
++		;;
++		lq.u $r62r63 = 240[$r1]
++		addd $r1 = $r1, 256
++		;;
++	.Lstreaming_loop_end:
++	sq 0[$r0] = $r32r33
++	;;
++	sq 16[$r0] = $r34r35
++	;;
++	sq 32[$r0] = $r36r37
++	;;
++	sq 48[$r0] = $r38r39
++	;;
++	sq 64[$r0] = $r40r41
++	;;
++	sq 80[$r0] = $r42r43
++	;;
++	sq 96[$r0] = $r44r45
++	;;
++	sq 112[$r0] = $r46r47
++	;;
++	sq 128[$r0] = $r48r49
++	;;
++	sq 144[$r0] = $r50r51
++	;;
++	sq 160[$r0] = $r52r53
++	;;
++	sq 176[$r0] = $r54r55
++	;;
++	sq 192[$r0] = $r56r57
++	;;
++	sq 208[$r0] = $r58r59
++	;;
++	sq 224[$r0] = $r60r61
++	;;
++	sq 240[$r0] = $r62r63
++	addd $r0 = $r0, 256
++	;;
++.Lremaining_256:
++	andd $r11 = $r2, 16
++	srld $r7 = $r2, 5
++	;;
++	cb.deqz $r7? .Lloop_32_end
++	;;
++	loopdo $r7? .Lloop_32_end
++		;;
++		lo $r32r33r34r35 = 0[$r1]
++		addd $r1 = $r1, 32
++		addd $r2 = $r2, -32
++		;;
++		so 0[$r0] = $r32r33r34r35
++		addd $r0 = $r0, 32
++		;;
++	.Lloop_32_end:
++	andd $r10 = $r2, 8
++	andd $r9 = $r2, 4
++	cb.deqz $r11? .Lloop_remaining_16
++	lq.u.dnez $r11? $r32r33 = 0[$r1]
++	;;
++	sq 0[$r0] = $r32r33
++	addd $r1 = $r1, 16
++	addd $r0 = $r0, 16
++	;;
++.Lloop_remaining_16:
++	andd $r8 = $r2, 2
++	andd $r7 = $r2, 1
++	cb.deqz $r10? .Lloop_remaining_8
++	ld.dnez $r10? $r32 = 0[$r1]
++	;;
++	sd 0[$r0] = $r32
++	addd $r1 = $r1, 8
++	addd $r0 = $r0, 8
++	;;
++.Lloop_remaining_8:
++	cb.deqz $r9? .Lloop_remaining_4
++	lwz.dnez $r9? $r32 = 0[$r1]
++	;;
++	sw 0[$r0] = $r32
++	addd $r1 = $r1, 4
++	addd $r0 = $r0, 4
++	;;
++.Lloop_remaining_4:
++	cb.deqz $r8? .Lloop_remaining_2
++	lhz.dnez $r8? $r32 = 0[$r1]
++	;;
++	sh 0[$r0] = $r32
++	addd $r1 = $r1, 2
++	addd $r0 = $r0, 2
++	;;
++.Lloop_remaining_2:
++	lbz.dnez $r7? $r32 = 0[$r1]
++	;;
++	sb.dnez $r7? 0[$r0] = $r32
++	;;
++.Lreturn:
++	copyd $r0 = $r6
++	ret
++	;;
++END(memcpy)
++
++libc_hidden_def(memcpy)
+diff --git a/libc/string/kvx/memset.S b/libc/string/kvx/memset.S
+new file mode 100644
+index 000000000..45023a68f
+--- /dev/null
++++ b/libc/string/kvx/memset.S
+@@ -0,0 +1,146 @@
++/*
++ * Copyright (C) 2019 Kalray Inc.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB
++ * in this tarball.
++ */
++
++#define REPLICATE_BYTE_MASK	0x0101010101010101
++#define MIN_SIZE_FOR_ALIGN	128
++
++/*
++ * Optimized memset for kvx architecture
++ *
++ * In order to optimize memset on kvx, we can use various things:
++ * - conditionnal store which avoid branch penalty
++ * - store half/word/double/quad/octuple to store up to 16 bytes at a time
++ * - hardware loop for steady cases.
++ *
++ * First,  we start by checking if the size is below a minimum size. If so, we
++ * skip the alignment part. Indeed, the kvx supports misalignment and the
++ * penalty for letting it do unaligned accesses is lower than trying to
++ * realigning us. So for small sizes, we don't even bother to realign.
++ * In order to create the 64 bits pattern, we use sbmm to replicate the pattern
++ * on all bits on a register in one call.
++ * Once alignment has been reached, we can do the hardware loop using store
++ * octuple in order to optimize throughput. Care must be taken to align hardware
++ * loops on at least 8 bytes for performances.
++ * Once the main loop has been done, we finish the copy by checking length to do
++ * the necessary calls to store remaining bytes.
++ */
++
++#include <sysdep.h>
++
++.align 16
++ENTRY(memset)
++	/* Preserve return value */
++	copyd $r3 = $r0
++	/* Replicate the first pattern byte on all bytes */
++	sbmm8 $r32 = $r1, REPLICATE_BYTE_MASK
++	/* Check if length < MIN_SIZE_FOR_ALIGN */
++	compd.geu $r7 = $r2, MIN_SIZE_FOR_ALIGN
++	/* Invert address to compute what we need to copy to be aligned on 32 bytes */
++	negd $r5 = $r0
++	;;
++	/* Check if we are aligned on 32 bytes */
++	andw $r9 = $r0, 0x1F
++	/* Compute the length that will be copied to align on 32 bytes boundary */
++	andw $r6 = $r5, 0x1F
++	/*
++	 * If size < MIN_SIZE_FOR_ALIGN bits, directly go to so, it will be done
++	 * unaligned but that is still better that what we can do with sb
++	 */
++	cb.deqz $r7? .Laligned_32
++	;;
++	/* Remove unaligned part from length */
++	sbfd $r2 = $r6, $r2
++	/* If we are already aligned on 32 bytes, jump to main "so" loop */
++	cb.deqz $r9? .Laligned_32
++	/* Check if we need to copy 1 byte */
++	andw $r4 = $r5, (1 << 0)
++	;;
++	/* If we are not aligned, store byte */
++	sb.dnez $r4? [$r0] = $r32
++	/* Check if we need to copy 2 bytes */
++	andw $r4 = $r5, (1 << 1)
++	/* Add potentially copied part for next store offset */
++	addd $r0 = $r0, $r4
++	;;
++	sh.dnez $r4? [$r0] = $r32
++	/* Check if we need to copy 4 bytes */
++	andw $r4 = $r5, (1 << 2)
++	addd $r0 = $r0, $r4
++	;;
++	sw.dnez $r4? [$r0] = $r32
++	/* Check if we need to copy 8 bytes */
++	andw $r4 = $r5, (1 << 3)
++	addd $r0 = $r0, $r4
++	/* Copy second part of pattern for sq */
++	copyd $r33 = $r32
++	;;
++	sd.dnez $r4? [$r0] = $r32
++	/* Check if we need to copy 16 bytes */
++	andw $r4 = $r5, (1 << 4)
++	addd $r0 = $r0, $r4
++	;;
++	sq.dnez $r4? [$r0] = $r32r33
++	addd $r0 = $r0, $r4
++	;;
++.Laligned_32:
++	/* Copy second part of pattern for sq */
++	copyd $r33 = $r32
++	/* Prepare amount of data for 32 bytes store */
++	srld $r10 = $r2, 5
++	nop
++	nop
++	;;
++	copyq $r34r35 = $r32, $r33
++	/* Remaining bytes for 16 bytes store */
++	andw $r8 = $r2, (1 << 4)
++	make $r11 = 32
++	/* Check if there are enough data for 32 bytes store */
++	cb.deqz $r10? .Laligned_32_done
++	;;
++	loopdo $r10, .Laligned_32_done
++		;;
++		so 0[$r0] = $r32r33r34r35
++		addd $r0 = $r0, $r11
++		;;
++	.Laligned_32_done:
++	/*
++	 * Now that we have handled every aligned bytes using 'so', we can
++	 * handled the remainder of length using store by decrementing size
++	 * We also exploit the fact we are aligned to simply check remaining
++	 * size */
++	sq.dnez $r8? [$r0] = $r32r33
++	addd $r0 = $r0, $r8
++	/* Remaining bytes for 8 bytes store */
++	andw $r8 = $r2, (1 << 3)
++	cb.deqz $r2? .Lmemset_done
++	;;
++	sd.dnez $r8? [$r0] = $r32
++	addd $r0 = $r0, $r8
++	/* Remaining bytes for 4 bytes store */
++	andw $r8 = $r2, (1 << 2)
++	;;
++	sw.dnez $r8? [$r0] = $r32
++	addd $r0 = $r0, $r8
++	/* Remaining bytes for 2 bytes store */
++	andw $r8 = $r2, (1 << 1)
++	;;
++	sh.dnez $r8? [$r0] = $r32
++	addd $r0 = $r0, $r8
++	;;
++	sb.odd $r2? [$r0] = $r32
++	/* Restore original value */
++	copyd $r0 = $r3
++	ret
++	;;
++.Lmemset_done:
++	/* Restore original value */
++	copyd $r0 = $r3
++	ret
++	;;
++END(memset)
++
++libc_hidden_def(memset)
+diff --git a/libc/sysdeps/linux/kvx/Makefile b/libc/sysdeps/linux/kvx/Makefile
+new file mode 100644
+index 000000000..633c91f3e
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/kvx/Makefile.arch b/libc/sysdeps/linux/kvx/Makefile.arch
+new file mode 100644
+index 000000000..3ad290915
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/Makefile.arch
+@@ -0,0 +1,10 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++CSRC-y := __syscall_error.c
++CSRC-$(UCLIBC_LINUX_SPECIFIC) += cachectl.c
++SSRC-y := setjmp.S bsd-setjmp.S bsd-_setjmp.S __longjmp.S clone.S vfork.S
+diff --git a/libc/sysdeps/linux/kvx/__longjmp.S b/libc/sysdeps/linux/kvx/__longjmp.S
+new file mode 100644
+index 000000000..fbfefe81c
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/__longjmp.S
+@@ -0,0 +1,53 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <sysdep.h>
++#define _SETJMP_H
++#define _ASM
++#include <bits/setjmp.h>
++#include <libc-symbols.h>
++
++/**
++ * void __longjmp(__jmp_buf __env, int __val)
++ */
++ENTRY(__longjmp)
++	/* Load $ra and $csinto r40r41 */
++	lq $r40r41 = JMPBUF_RA_CS_OFFSET[$r0]
++	;;
++	/* Load $r36r37r38r39 with r12(sp) r14 r18 r19 */
++	lo $r36r37r38r39 = (JMPBUF_REGS_OFFSET)[$r0]
++	set $ra = $r40
++	;;
++	/* Load $lc, $le and $ls */
++	lo $r32r33r34r35 = JMPBUF_LC_LE_LS_OFFSET[$r0]
++	copyd $sp = $r36
++	copyd $r14 = $r37
++	set $cs = $r41
++	;;
++	/* Load r20r21r22r23 */
++	lo $r20r21r22r23 = (JMPBUF_REGS_OFFSET + QUAD_REG_SIZE)[$r0]
++	copyd $r18 = $r38
++	copyd $r19 = $r39
++	set $lc = $r32
++	;;
++	/* Load r24r25r26r27 */
++	lo $r24r25r26r27 = (JMPBUF_REGS_OFFSET + 2 * QUAD_REG_SIZE)[$r0]
++	set $le = $r33
++	;;
++	/* Load r28r29r30r31 */
++	lo $r28r29r30r31 = (JMPBUF_REGS_OFFSET + 3 * QUAD_REG_SIZE)[$r0]
++	set $ls = $r34
++	/* Copy retval */
++	copyd $r0 = $r1
++	;;
++	/* According to man, if retval is equal to 0, then we should return 1 */
++	cmoved.deqz $r0? $r0 = 1
++	ret
++	;;
++END(__longjmp)
++libc_hidden_def(__longjmp)
+diff --git a/libc/sysdeps/linux/kvx/__syscall_error.c b/libc/sysdeps/linux/kvx/__syscall_error.c
+new file mode 100644
+index 000000000..d534ee7d4
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/__syscall_error.c
+@@ -0,0 +1,19 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++long __syscall_error(int err_no) attribute_hidden;
++long __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/kvx/bits/atomic.h b/libc/sysdeps/linux/kvx/bits/atomic.h
+new file mode 100644
+index 000000000..3c423e9ba
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/atomic.h
+@@ -0,0 +1,141 @@
++/* Copyright (C) 2010-2012 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Maxim Kuvyrkov <maxim@codesourcery.com>, 2010.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _KVX_BITS_ATOMIC_H
++#define _KVX_BITS_ATOMIC_H
++
++#include <stdint.h>
++
++typedef int8_t atomic8_t;
++typedef uint8_t uatomic8_t;
++typedef int_fast8_t atomic_fast8_t;
++typedef uint_fast8_t uatomic_fast8_t;
++
++typedef int16_t atomic16_t;
++typedef uint16_t uatomic16_t;
++typedef int_fast16_t atomic_fast16_t;
++typedef uint_fast16_t uatomic_fast16_t;
++
++typedef int32_t atomic32_t;
++typedef uint32_t uatomic32_t;
++typedef int_fast32_t atomic_fast32_t;
++typedef uint_fast32_t uatomic_fast32_t;
++
++typedef int64_t atomic64_t;
++typedef uint64_t uatomic64_t;
++typedef int_fast64_t atomic_fast64_t;
++typedef uint_fast64_t uatomic_fast64_t;
++
++typedef intptr_t atomicptr_t;
++typedef uintptr_t uatomicptr_t;
++typedef intmax_t atomic_max_t;
++typedef uintmax_t uatomic_max_t;
++
++
++#ifndef atomic_full_barrier
++# define atomic_full_barrier() do { atomic_read_barrier();		\
++					atomic_write_barrier(); } while(0)
++#endif
++
++#ifndef atomic_read_barrier
++# define atomic_read_barrier() __builtin_kvx_dinval()
++#endif
++
++#ifndef atomic_write_barrier
++# define atomic_write_barrier() __builtin_kvx_fence()
++#endif
++
++/*
++ * On kvx, we have a boolean compare and swap which means that the operation
++ * returns only the success of operation.
++ * If operation succeeds, this is simple, we just need to return the provided
++ * old value. However, if it fails, we need to load the value to return it for
++ * the caller. If the loaded value is different from the "old" provided by the
++ * caller, we can return it since it will mean it failed.
++ * However, if for some reason the value we read is equal to the old value
++ * provided by the caller, we can't simply return it or the caller will think it
++ * succeeded. So if the value we read is the same as the "old" provided by
++ * the caller, we try again until either we succeed or we fail with a different
++ * value than the provided one.
++ */
++#define __cmpxchg(ptr, old, new, op_suffix, load_suffix)		\
++({									\
++	register unsigned long __rn __asm__("r62");			\
++	register unsigned long __ro __asm__("r63");			\
++	__asm__ __volatile__ (						\
++		/* Fence to guarantee previous store to be committed */	\
++		"fence\n"						\
++		/* Init "expect" with previous value */			\
++		"copyd $r63 = %[rOld]\n"				\
++		";;\n"							\
++		"1:\n"							\
++		/* Init "update" value with new */			\
++		"copyd $r62 = %[rNew]\n"				\
++		";;\n"							\
++		"acswap" #op_suffix " 0[%[rPtr]], $r62r63\n"		\
++		";;\n"							\
++		/* if acswap succeeds, simply return */			\
++		"cb.dnez $r62? 2f\n"					\
++		";;\n"							\
++		/* We failed, load old value */				\
++		"l"  #op_suffix  #load_suffix" $r63 = 0[%[rPtr]]\n"	\
++		";;\n"							\
++		/* Check if equal to "old" one */			\
++		"compd.ne $r62 = $r63, %[rOld]\n"			\
++		";;\n"							\
++		/* If different from "old", return it to caller */	\
++		"cb.deqz $r62? 1b\n"					\
++		";;\n"							\
++		"2:\n"							\
++		: "+r" (__rn), "+r" (__ro)				\
++		: [rPtr] "r" (ptr), [rOld] "r" (old), [rNew] "r" (new)	\
++		: "memory");						\
++	(__ro);								\
++})
++
++#define cmpxchg(ptr, o, n)						\
++({									\
++	unsigned long __cmpxchg__ret;					\
++	switch (sizeof(*(ptr))) {					\
++	case 4:								\
++		__cmpxchg__ret = __cmpxchg((ptr), (o), (n), w, s);	\
++		break;							\
++	case 8:								\
++		__cmpxchg__ret = __cmpxchg((ptr), (o), (n), d, );	\
++		break;							\
++	}								\
++	(__typeof(*(ptr))) (__cmpxchg__ret);				\
++})
++
++#define atomic_compare_and_exchange_val_acq(mem, newval, oldval)	\
++	cmpxchg((mem), (oldval), (newval))
++
++
++#define atomic_exchange_acq(mem, newval)				\
++({									\
++	unsigned long __aea__ret, __aea__old;					\
++	volatile __typeof((mem)) __aea__m = (mem);				\
++	do {								\
++		__aea__old = *__aea__m;						\
++		__aea__ret = atomic_compare_and_exchange_val_acq((mem),	\
++						(newval), (__aea__old));\
++	} while (__aea__old != __aea__ret);					\
++	(__aea__old);							\
++})
++
++#endif
+diff --git a/libc/sysdeps/linux/kvx/bits/endian.h b/libc/sysdeps/linux/kvx/bits/endian.h
+new file mode 100644
+index 000000000..03a1b7f0c
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/endian.h
+@@ -0,0 +1,13 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++#define __BYTE_ORDER __LITTLE_ENDIAN
+diff --git a/libc/sysdeps/linux/kvx/bits/fcntl.h b/libc/sysdeps/linux/kvx/bits/fcntl.h
+new file mode 100644
+index 000000000..c1815b44f
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/fcntl.h
+@@ -0,0 +1,226 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	  0003
++#define O_RDONLY	    00
++#define O_WRONLY	    01
++#define O_RDWR		    02
++#define O_CREAT		  0100	/* not fcntl */
++#define O_EXCL		  0200	/* not fcntl */
++#define O_NOCTTY	  0400	/* not fcntl */
++#define O_TRUNC		 01000	/* not fcntl */
++#define O_APPEND	 02000
++#define O_NONBLOCK	 04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		010000
++#define O_FSYNC		O_SYNC
++#define O_ASYNC		020000
++
++#ifdef __USE_XOPEN2K8
++# define O_DIRECTORY   0200000	/* Must be a directory.	 */
++# define O_NOFOLLOW    0400000	/* Do not follow links.	 */
++# define O_CLOEXEC    02000000	/* Set close_on_exec.  */
++#endif
++
++#ifdef __USE_GNU
++# define O_DIRECT	040000	/* Direct disk access.	*/
++# define O_NOATIME    01000000	/* Do not set atime.  */
++# define O_PATH	     010000000  /* Resolve pathname but do not open file.  */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE   0100000
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++
++#define F_GETLK		5	/* Get record locking info.  */
++#define F_SETLK		6	/* Set record locking info (non-blocking).  */
++#define F_SETLKW	7	/* Set record locking info (blocking).	*/
++
++/* Same as standard, since we always have 64-bit offsets.  */
++#define F_GETLK64	F_GETLK		/* Get record locking info.  */
++#define F_SETLK64	F_SETLK		/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	F_SETLKW	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_XOPEN2K
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++# define F_DUPFD_CLOEXEC 1030	/* Duplicate file descriptor with
++				   close-on-exit set on new fd.  */
++# define F_SETPIPE_SZ	1031    /* Set pipe page size array.  */
++# define F_GETPIPE_SZ	1032    /* Get pipe page size array.  */
++#endif
++
++/* For F_[GET|SET]FL.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++/* Flags for SYNC_FILE_RANGE.  */
++# define SYNC_FILE_RANGE_WAIT_BEFORE	1 /* Wait upon writeout of all pages
++					     in the range before performing the
++					     write.  */
++# define SYNC_FILE_RANGE_WRITE		2 /* Initiate writeout of all those
++					     dirty pages in the range which are
++					     not presently under writeback.  */
++# define SYNC_FILE_RANGE_WAIT_AFTER	4 /* Wait upon writeout of all pages in
++					     the range after performing the
++					     write.  */
++
++/* Flags for SPLICE and VMSPLICE.  */
++# define SPLICE_F_MOVE		1	/* Move pages instead of copying.  */
++# define SPLICE_F_NONBLOCK	2	/* Don't block on the pipe splicing
++					   (but we may still block on the fd
++					   we splice from/to).  */
++# define SPLICE_F_MORE		4	/* Expect more data.  */
++# define SPLICE_F_GIFT		8	/* Pages passed in are a gift.  */
++#endif
++
++__BEGIN_DECLS
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++/* Selective file content synch'ing.  */
++extern int sync_file_range (int __fd, __off64_t __from, __off64_t __to,
++			    unsigned int __flags);
++
++/* Splice address range into a pipe.  */
++extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
++			 size_t __count, unsigned int __flags);
++
++/* Splice two files together.  */
++extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
++		       __off64_t *__offout, size_t __len,
++		       unsigned int __flags);
++
++/* In-kernel implementation of tee for pipe buffers.  */
++extern ssize_t tee (int __fdin, int __fdout, size_t __len,
++		    unsigned int __flags);
++
++#endif
++__END_DECLS
+diff --git a/libc/sysdeps/linux/kvx/bits/fenv.h b/libc/sysdeps/linux/kvx/bits/fenv.h
+new file mode 100644
+index 000000000..445ec7aff
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/fenv.h
+@@ -0,0 +1,106 @@
++/* Copyright (C) 1997, 1998, 1999, 2000, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _FENV_H
++# error "Never use <bits/fenv.h> directly; include <fenv.h> instead."
++#endif
++
++/* $cs register number for use in kvx builtins */
++#define KVX_SFR_CS 4
++
++/* Each core of the Coolidge processor has a coprocessor. They share
++   the CS register but have distinct bit-fields for their
++   floating-point environment. This implementation synchronizes them
++   in such a way that they cannot be managed separately. */
++
++/* Compute Status ($cs) register contains the following bit-fields for
++   floating-point execption flags.
++
++   Bit-field Condition of the IEEE 754 binary floating-point standard
++   --------- --------------------------------------------------------
++   IO        Invalid Operation
++   DZ        Divide by Zero
++   OV        Overflow
++   UN        Underflow
++   IN        Inexact
++   XIO       Invalid Operation (coprocessor)
++   XDZ       Divide by Zero (coprocessor)
++   XOV       Overflow (coprocessor)
++   XUN       Underflow (coprocessor)
++   XIN       Inexact (coprocessor) */
++
++#define _FE_INVALID   0x02
++#define _FE_DIVBYZERO 0x04
++#define _FE_OVERFLOW  0x08
++#define _FE_UNDERFLOW 0x10
++#define _FE_INEXACT   0x20
++
++#define _FE_X_INVALID   0x0200
++#define _FE_X_DIVBYZERO 0x0400
++#define _FE_X_OVERFLOW  0x0800
++#define _FE_X_UNDERFLOW 0x1000
++#define _FE_X_INEXACT   0x2000
++
++#define FE_INVALID   (_FE_INVALID   | _FE_X_INVALID)
++#define FE_DIVBYZERO (_FE_DIVBYZERO | _FE_X_DIVBYZERO)
++#define FE_OVERFLOW  (_FE_OVERFLOW  | _FE_X_OVERFLOW)
++#define FE_UNDERFLOW (_FE_UNDERFLOW | _FE_X_UNDERFLOW)
++#define FE_INEXACT   (_FE_INEXACT   | _FE_X_INEXACT)
++
++#define FE_ALL_EXCEPT (FE_INVALID|FE_DIVBYZERO|FE_OVERFLOW|FE_UNDERFLOW|FE_INEXACT)
++
++/* Compute Status ($cs) register contains the following bit-fields for
++   floating-point rounding modes.
++
++   Following table describes both the RM and XRM (coproc) bit-fields.
++
++   Value Rounding Mode of the IEEE 754 binary floating-point standard
++   ----- ------------------------------------------------------------
++   0b00  to nearest even
++   0b01  toward +inf
++   0b10  toward -inf
++   0b11  toward zero */
++
++#define _FE_TONEAREST  0
++#define _FE_UPWARD     1
++#define _FE_DOWNWARD   2
++#define _FE_TOWARDZERO 3
++
++#define _FE_X_TONEAREST  0
++#define _FE_X_UPWARD     1
++#define _FE_X_DOWNWARD   2
++#define _FE_X_TOWARDZERO 3
++
++
++#define FE_TONEAREST  ((_FE_TONEAREST  << 16) | (_FE_X_TONEAREST  << 20))
++#define FE_UPWARD     ((_FE_UPWARD     << 16) | (_FE_X_UPWARD     << 20))
++#define FE_DOWNWARD   ((_FE_DOWNWARD   << 16) | (_FE_X_DOWNWARD   << 20))
++#define FE_TOWARDZERO ((_FE_TOWARDZERO << 16) | (_FE_X_TOWARDZERO << 20))
++
++#define FE_RND_MASK FE_TOWARDZERO
++
++/* The type representing all floating-point status flags collectively.
++   The environment is simply a copy from the FPU related bits in the
++   CS register, but can be improved in the future. */
++typedef unsigned int fexcept_t;
++/* The type representing the entire floating-point environment.  The
++   environment is simply a copy from the FPU related bits in the CS
++   register. */
++typedef unsigned int fenv_t;
++
++extern const fenv_t __fe_dfl_env;
++#define FE_DFL_ENV  __fe_dfl_env
+diff --git a/libc/sysdeps/linux/kvx/bits/kernel_types.h b/libc/sysdeps/linux/kvx/bits/kernel_types.h
+new file mode 100644
+index 000000000..832b17674
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/kernel_types.h
+@@ -0,0 +1,42 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts
++ * with the posix_types.h kernel header, and will ensure that
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#ifndef __ASM_GENERIC_POSIX_TYPES_H
++#define __ASM_GENERIC_POSIX_TYPES_H
++
++typedef unsigned long		__kernel_dev_t;
++typedef unsigned long		__kernel_ino_t;
++typedef unsigned int		__kernel_mode_t;
++typedef unsigned int		__kernel_nlink_t;
++typedef long			__kernel_off_t;
++typedef int			__kernel_pid_t;
++typedef int 			__kernel_ipc_pid_t;
++typedef unsigned int		__kernel_uid_t;
++typedef unsigned int		__kernel_gid_t;
++typedef unsigned long		__kernel_size_t;
++typedef long			__kernel_ssize_t;
++typedef long			__kernel_ptrdiff_t;
++typedef long			__kernel_time_t;
++typedef long			__kernel_suseconds_t;
++typedef long			__kernel_clock_t;
++typedef int			__kernel_daddr_t;
++typedef char *			__kernel_caddr_t;
++typedef unsigned short		__kernel_uid16_t;
++typedef unsigned short		__kernel_gid16_t;
++typedef unsigned int		__kernel_uid32_t;
++typedef unsigned int		__kernel_gid32_t;
++typedef unsigned short 		__kernel_old_uid_t;
++typedef unsigned short 		__kernel_old_gid_t;
++typedef long long		__kernel_loff_t;
++typedef unsigned int		__kernel_old_dev_t;
++typedef long			__kernel_long_t;
++typedef unsigned long		__kernel_ulong_t;
++
++typedef struct {
++	int	val[2];
++} __kernel_fsid_t;
++
++#endif /* __ASM_GENERIC_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/kvx/bits/posix_types.h b/libc/sysdeps/linux/kvx/bits/posix_types.h
+new file mode 100644
+index 000000000..e556fda5d
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/posix_types.h
+@@ -0,0 +1,14 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2017 Kalray Inc.
++ */
++
++#ifndef _UAPI_ASM_KVX_POSIX_TYPES_H
++#define _UAPI_ASM_KVX_POSIX_TYPES_H
++
++#include <asm-generic/posix_types.h>
++
++#endif /* _UAPI_ASM_KVX_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/kvx/bits/sem.h b/libc/sysdeps/linux/kvx/bits/sem.h
+new file mode 100644
+index 000000000..4d412a2cb
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/sem.h
+@@ -0,0 +1,84 @@
++/* Copyright (C) 1995, 1996, 1997, 1998, 2000, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_SEM_H
++# error "Never include <bits/sem.h> directly; use <sys/sem.h> instead."
++#endif
++
++#include <sys/types.h>
++
++/* Flags for `semop'.  */
++#define SEM_UNDO	0x1000		/* undo the operation on exit */
++
++/* Commands for `semctl'.  */
++#define GETPID		11		/* get sempid */
++#define GETVAL		12		/* get semval */
++#define GETALL		13		/* get all semval's */
++#define GETNCNT		14		/* get semncnt */
++#define GETZCNT		15		/* get semzcnt */
++#define SETVAL		16		/* set semval */
++#define SETALL		17		/* set all semval's */
++
++
++/* Data structure describing a set of semaphores.  */
++struct semid_ds
++{
++  struct ipc_perm sem_perm;		/* operation permission struct */
++  __time_t sem_otime;			/* last semop() time */
++  __time_t sem_ctime;			/* last time changed by semctl() */
++  unsigned long int sem_nsems;		/* number of semaphores in set */
++  unsigned long int __unused1;
++  unsigned long int __unused2;
++};
++
++/* The user should define a union like the following to use it for arguments
++   for `semctl'.
++
++   union semun
++   {
++     int val;				<= value for SETVAL
++     struct semid_ds *buf;		<= buffer for IPC_STAT & IPC_SET
++     unsigned short int *array;		<= array for GETALL & SETALL
++     struct seminfo *__buf;		<= buffer for IPC_INFO
++   };
++
++   Previous versions of this file used to define this union but this is
++   incorrect.  One can test the macro _SEM_SEMUN_UNDEFINED to see whether
++   one must define the union or not.  */
++#define _SEM_SEMUN_UNDEFINED	1
++
++#ifdef __USE_MISC
++
++/* ipcs ctl cmds */
++# define SEM_STAT 18
++# define SEM_INFO 19
++
++struct  seminfo
++{
++  int semmap;
++  int semmni;
++  int semmns;
++  int semmnu;
++  int semmsl;
++  int semopm;
++  int semume;
++  int semusz;
++  int semvmx;
++  int semaem;
++};
++
++#endif /* __USE_MISC */
+diff --git a/libc/sysdeps/linux/kvx/bits/setjmp.h b/libc/sysdeps/linux/kvx/bits/setjmp.h
+new file mode 100644
+index 000000000..59faa7620
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/setjmp.h
+@@ -0,0 +1,46 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H  1
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++#define SIZE_OF_REG 8
++
++/* Size of a quad reg (can't use sizeof(uint64_t) since it will be in asm */
++#define QUAD_REG_SIZE (4 * SIZE_OF_REG)
++
++
++#define JMPBUF_RA_CS_OFFSET  0
++#define JMPBUF_LC_LE_LS_OFFSET (2 * SIZE_OF_REG)
++/* Start offset of  regs[] in __jmp_buf struct */
++#define JMPBUF_REGS_OFFSET   (JMPBUF_LC_LE_LS_OFFSET + (4 * SIZE_OF_REG))
++
++#ifndef _ASM
++typedef struct
++  {
++    /* Return address */
++    unsigned long ra;
++    unsigned long cs;
++
++    /* Store lc, le, ls into this buf */
++    unsigned long lc_le_ls[4];
++
++    /* Callee-saved GPR registers:
++     * r12(sp) r14 r18 r19 r20 r21 r22 r23 r24 r25 r26 r27 r28 r29 r30 r31
++     */
++    unsigned long regs[16];
++
++  } __jmp_buf[1] __attribute__((__aligned__ (8)));
++
++#endif
++
++#endif  /* bits/setjmp.h */
+diff --git a/libc/sysdeps/linux/kvx/bits/stackinfo.h b/libc/sysdeps/linux/kvx/bits/stackinfo.h
+new file mode 100644
+index 000000000..0a17bff30
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/stackinfo.h
+@@ -0,0 +1,29 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  Since there is no general truth we can't say
++   anything here.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++#define _STACK_GROWS_DOWN	1
++
++#endif	/* stackinfo.h */
++
++
+diff --git a/libc/sysdeps/linux/kvx/bits/statfs.h b/libc/sysdeps/linux/kvx/bits/statfs.h
+new file mode 100644
+index 000000000..660ae8f5f
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/statfs.h
+@@ -0,0 +1,64 @@
++/* Copyright (C) 1997, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_STATFS_H
++# error "Never include <bits/statfs.h> directly; use <sys/statfs.h> instead."
++#endif
++
++#include <bits/types.h>  /* for __fsid_t and __fsblkcnt_t*/
++
++struct statfs
++  {
++    long int f_type;
++    long int f_bsize;
++    __fsblkcnt64_t f_blocks;
++    __fsblkcnt64_t f_bfree;
++    __fsblkcnt64_t f_bavail;
++    __fsfilcnt64_t f_files;
++    __fsfilcnt64_t f_ffree;
++
++	/* Linux specials */
++    __fsid_t f_fsid;
++    long int f_namelen;
++    long int f_frsize;
++    long int f_flags;
++    long int f_spare[4];
++  };
++
++#ifdef __USE_LARGEFILE64
++struct statfs64
++  {
++    long int f_type;
++    long int f_bsize;
++    __fsblkcnt64_t f_blocks;
++    __fsblkcnt64_t f_bfree;
++    __fsblkcnt64_t f_files;
++    __fsfilcnt64_t f_ffree;
++    __fsfilcnt64_t f_bavail;
++
++	/* Linux specials */
++    __fsid_t f_fsid;
++    long int f_namelen;
++    long int f_frsize;
++    long int f_flags;
++    long int f_spare[4];
++  };
++#endif
++
++/* Tell code we have these members.  */
++#define _STATFS_F_NAMELEN
++#define _STATFS_F_FRSIZE
+diff --git a/libc/sysdeps/linux/kvx/bits/syscalls.h b/libc/sysdeps/linux/kvx/bits/syscalls.h
+new file mode 100644
+index 000000000..71bd5e4fe
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/syscalls.h
+@@ -0,0 +1,80 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++#ifndef __ASSEMBLER__
++
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)                    \
++ 	({									\
++		register long _ret __asm__("r0");			\
++		register unsigned long _scno  __asm__("r6") = name;	\
++		LOAD_ARGS_##nr (args)					\
++		__asm__ __volatile__("scall %[r_scno]"			\
++				     : "=r" (_ret)			\
++				     : [r_scno] "r" (_scno) ASM_ARGS_##nr \
++				     : ASM_CLOBBER_##nr);		\
++		_ret;							\
++	})
++
++/* Mark all argument registers as per ABI in the range r1-r5 as
++   clobbered when they are not used for the invocation of the scall */
++#define ASM_CLOBBER_6 "cc", "memory",					\
++    "r7", "r8", "r9", "r10", "r11", /* unused argument registers */ \
++    "r15", /* struct pointer */						\
++    "r16", "r17", /* veneer registers */				\
++    "r32", "r33", "r34", "r35", "r36", "r37", "r38", "r39", /* 32->63 are caller-saved */ \
++    "r40", "r41", "r42", "r43", "r44", "r45", "r46", "r47",		\
++    "r48", "r49", "r50", "r51", "r52", "r53", "r54", "r55",		\
++    "r56", "r57", "r58", "r59", "r60", "r61", "r62", "r63"
++#define ASM_CLOBBER_5 "r5", ASM_CLOBBER_6
++#define ASM_CLOBBER_4 "r4", ASM_CLOBBER_5
++#define ASM_CLOBBER_3 "r3", ASM_CLOBBER_4
++#define ASM_CLOBBER_2 "r2", ASM_CLOBBER_3
++#define ASM_CLOBBER_1 "r1", ASM_CLOBBER_2
++#define ASM_CLOBBER_0 ASM_CLOBBER_1
++
++#define LOAD_ARGS_0()
++#define ASM_ARGS_0
++
++#define LOAD_ARGS_1(a1)                                 \
++	LOAD_ARGS_0();					\
++	_ret  = (long) a1;
++#define ASM_ARGS_1      ASM_ARGS_0, "r"(_ret)
++
++#define LOAD_ARGS_2(a1, a2)                             \
++	LOAD_ARGS_1(a1);				\
++	register long _a2 __asm__("r1") = (long) a2;
++#define ASM_ARGS_2      ASM_ARGS_1, "r"(_a2)
++
++#define LOAD_ARGS_3(a1, a2, a3)                         \
++	LOAD_ARGS_2(a1, a2);				\
++	register long _a3 __asm__("r2") = (long) a3;
++#define ASM_ARGS_3      ASM_ARGS_2, "r"(_a3)
++
++#define LOAD_ARGS_4(a1, a2, a3, a4)                     \
++	LOAD_ARGS_3(a1, a2, a3);			\
++	register long _a4 __asm__("r3") = (long) a4;
++#define ASM_ARGS_4      ASM_ARGS_3, "r"(_a4)
++
++#define LOAD_ARGS_5(a1, a2, a3, a4, a5)                 \
++	LOAD_ARGS_4(a1, a2, a3, a4);			\
++	register long _a5 __asm__("r4") = (long) a5;
++#define ASM_ARGS_5      ASM_ARGS_4, "r"(_a5)
++
++#define LOAD_ARGS_6(a1, a2, a3, a4, a5, a6)             \
++	LOAD_ARGS_5(a1, a2, a3, a4, a5);		\
++	register long _a6 __asm__("r5") = (long) a6;
++#define ASM_ARGS_6      ASM_ARGS_5, "r"(_a6)
++
++#endif /* __ASSEMBLER__ */
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/kvx/bits/uClibc_arch_features.h b/libc/sysdeps/linux/kvx/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..7aae2d7c3
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/uClibc_arch_features.h
+@@ -0,0 +1,41 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++/* instruction used when calling abort() to kill yourself */
++#define __UCLIBC_ABORT_INSTRUCTION__ "errop\n\t;;\n"
++
++/* can your target use syscall6() for mmap ? */
++#define __UCLIBC_MMAP_HAS_6_ARGS__
++
++/* does your target align 64bit values in register pairs ? (32bit arches only) */
++#undef __UCLIBC_SYSCALL_ALIGN_64BIT__
++
++/* does your target have a broken create_module() ? */
++#undef __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#undef __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* define if target supports CFI pseudo ops */
++#undef __UCLIBC_HAVE_ASM_CFI_DIRECTIVES__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++/* only weird assemblers generally need this */
++#undef __UCLIBC_ASM_LINE_SEP__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/kvx/bits/wordsize.h b/libc/sysdeps/linux/kvx/bits/wordsize.h
+new file mode 100644
+index 000000000..751c41ab7
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bits/wordsize.h
+@@ -0,0 +1,9 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#define __WORDSIZE 64
+diff --git a/libc/sysdeps/linux/kvx/bsd-_setjmp.S b/libc/sysdeps/linux/kvx/bsd-_setjmp.S
+new file mode 100644
+index 000000000..a4c4f87b0
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bsd-_setjmp.S
+@@ -0,0 +1,18 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <sysdep.h>
++
++ENTRY(_setjmp)
++	/* Set second argument to 0 */
++	make $r1 = 0
++	;;
++	goto HIDDEN_JUMPTARGET(__sigsetjmp)
++	;;
++END(_setjmp)
++libc_hidden_def (_setjmp)
+diff --git a/libc/sysdeps/linux/kvx/bsd-setjmp.S b/libc/sysdeps/linux/kvx/bsd-setjmp.S
+new file mode 100644
+index 000000000..d79f603d5
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/bsd-setjmp.S
+@@ -0,0 +1,17 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <sysdep.h>
++
++ENTRY(setjmp)
++	/* Set second argument to 1 */
++	make $r1 = 1
++	;;
++	goto HIDDEN_JUMPTARGET(__sigsetjmp)
++	;;
++END(setjmp)
+diff --git a/libc/sysdeps/linux/kvx/cachectl.c b/libc/sysdeps/linux/kvx/cachectl.c
+new file mode 100644
+index 000000000..9afeb44a1
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/cachectl.c
+@@ -0,0 +1,15 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2020 Kalray Inc.
++ */
++
++#include <sys/syscall.h>
++
++#ifdef __NR_cachectl
++# include <sys/cachectl.h>
++_syscall4(int, cachectl, void *, addr, size_t, len,
++	  unsigned long, cache, unsigned long, flags)
++#endif
+diff --git a/libc/sysdeps/linux/kvx/clone.S b/libc/sysdeps/linux/kvx/clone.S
+new file mode 100644
+index 000000000..71ea80a01
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/clone.S
+@@ -0,0 +1,100 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <sysdep.h>
++#define _ERRNO_H	1
++#include <bits/errno.h>
++
++/**
++ * Clone system call implementation for kvx
++ * int clone (int (*fn)(void *arg), void *child_stack, int flags, void *arg,
++ *             pid_t *ptid, struct user_desc *tls, pid_t *ctid);
++ * $r0 = fn
++ * $r1 = child_stack
++ * $r2 = flags
++ * $r3 = args
++ * $r4 = ptid
++ * $r5 = tls
++ * $r6 = ctid
++ *
++ * The kernel expects to find its arguments in the following order:
++ * sys_clone(unsigned long clone_flags, unsigned long newsp,
++ *		 int __user * parent_tidptr,
++ *		 int __user * child_tidptr,
++ *		 unsigned long tls)
++ *
++ * So we have to make a few modifications before calling
++ *
++ */
++
++ENTRY (__clone)
++	/* Check fn and stack to be non-null */
++	cb.deqz $r1? L(clone_einval_error)
++	/* Align child stack first */
++	andd $r1 = $r1, -32
++	;;
++	cb.deqz $r0? L(clone_einval_error)
++	/* Prepare space for child arguments on stack and stay aligned */
++	addd $r1 = $r1, -32
++	;;
++	/* Save fn ($r0) on child stack */
++	sd 0[$r1] = $r0
++	/* Set clone_flags */
++	copyd $r0 = $r2
++	;;
++	/* Save args ($r3) on child stack */
++	sd 8[$r1] = $r3
++	/* Set parent_tidptr */
++	copyd $r2 = $r4
++	/* Set child_tidptr */
++	copyd $r3 = $r6
++	/* Set tls */ 
++	copyd $r4 = $r5
++	;;
++	scall SYS_ify(clone)
++	;;
++	/* If 0, then we are the child */
++	cb.deqz $r0, L(child_start)
++	;;
++	/* Else we are the parent, and we need to check for errors */
++	cb.dltz $r0, L(clone_error)
++	;;
++	/* No error ! Yeepa ! */
++	ret
++	;;
++L(child_start):
++	/* get fn from stack */
++	ld $r1 = 0[$sp]
++	;;
++	/* Get args from stack */
++	ld $r0 = 8[$sp]
++	addd $sp = $sp, 32
++	;;
++	icall $r1
++	;;
++	scall SYS_ify(exit)
++	;;
++	/* We should never ever get here ! */
++	errop
++	;;
++L(clone_einval_error):
++	make $r0 = -EINVAL
++	;;
++L(clone_error):
++	/* goto __syscall_error but do not use call or $ra will be
++	 * destroyed */
++	goto __syscall_error
++	;;
++	/* We will not return here but to clone caller
++	 * (stored in $ra) */
++	errop
++	;;
++END(__clone)
++
++libc_hidden_def (__clone)
++weak_alias (__clone,clone)
+diff --git a/libc/sysdeps/linux/kvx/crt1.S b/libc/sysdeps/linux/kvx/crt1.S
+new file mode 100644
+index 000000000..34501103e
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/crt1.S
+@@ -0,0 +1,83 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++/* Startup code compliant to the ELF KVX ABI */
++
++#include <libc-symbols.h>
++#include <features.h>
++
++.type	    main,@function
++.type	    __uClibc_main,@function
++	
++/*
++ * When we enter this piece of code, the program stack has been
++ * layed out by the kernel like this:
++ *        argc            argument counter (integer)
++ *        argv[0]         program name (pointer)
++ *        argv[1...N]     program args (pointers)
++ *        argv[argc-1]    end of args (integer)
++ *        NULL
++ *        env[0...N]      environment variables (pointers)
++ *        NULL
++ * 
++ *  Moreover, when using dynamic loader, $r0 contains the rtld_fini
++ *  address
++ *
++ * And we need to call the following function:
++ *  __uClibc_main (int (*main) (int, char **, char **), int argc,
++ *		char **argv, void (*init) (void), void (*fini) (void),
++ *		void (*rtld_fini) (void), void *stack_end)
++ */
++.text
++.globl	_start
++.type	_start,@function
++.align 	8
++C_SYMBOL_NAME(_start):
++	/* Load argc from stack */
++	ld $r1 = 0[$sp]
++	/* Load argv addr from stack */
++	addd $r2 = $sp, 0x8
++#ifdef __PIC__
++	pcrel $r7 = @gotaddr()
++#endif
++	;;
++	/* $r0 contains rtld_fini when run by dynamic loader */
++	copyd $r5 = $r0
++	/* prepare __uClibc_main arg */
++#ifndef __PIC__
++	make $r3 = _init
++	make $r4 = _fini
++#endif
++	;;
++	/* Align stack to 32-byte boundary */
++	andd $sp = $sp, -32
++	make $r8 = 0
++	make $fp = 0
++	/* prepare __uClibc_main arg */
++#ifdef __PIC__
++	ld $r3 = @got(_init)[$r7]
++#endif
++	;;
++	/* Setup stack_end for __uClibc_main */
++	copyd $r6 = $sp
++	/* Clear compute status */
++	set $cs = $r8
++#ifdef __PIC__
++	ld $r4 = @got(_fini)[$r7]
++#endif
++	;;
++#ifdef __PIC__
++	ld $r0 = @got(main)[$r7]
++#else
++	make $r0 = main
++#endif
++	goto __uClibc_main
++	;;
++	/* We should never return ! */
++	errop
++	;;
+diff --git a/libc/sysdeps/linux/kvx/crti.S b/libc/sysdeps/linux/kvx/crti.S
+new file mode 100644
+index 000000000..cf5fb2b42
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/crti.S
+@@ -0,0 +1,31 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++	.section .init
++	.align 8
++	.global	_init
++	.type	 _init,@function
++_init:
++	addd $sp = $sp, -32
++	get $r15 = $ra
++	;;
++	sq 0[$sp] = $r14r15
++	copyd $fp = $sp
++	;;
++
++	.section .fini
++	.align 8
++	.global	_fini
++	.type	 _fini,@function
++_fini:
++	addd $sp = $sp, -32
++	get $r15 = $ra
++	;;
++	sq 0[$sp] = $r14r15
++	copyd $fp = $sp
++	;;
+diff --git a/libc/sysdeps/linux/kvx/crtn.S b/libc/sysdeps/linux/kvx/crtn.S
+new file mode 100644
+index 000000000..c1ba48096
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/crtn.S
+@@ -0,0 +1,33 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++	.section .init
++	.align 8
++	.global	_init
++	.type	 _init,@function
++	# EPILOGUE
++	lq $r14r15 = 0[$sp]
++	;;
++	set $ra = $r15
++	addd $sp = $sp, 32
++	;;
++	ret
++	;;
++
++	.section .fini
++	.align 8
++	.global	_fini
++	.type	 _fini,@function
++	# EPILOGUE
++	lq $r14r15 = 0[$sp]
++	;;
++	set $ra = $r15
++	addd $sp = $sp, 32
++	;;
++	ret
++	;;
+diff --git a/libc/sysdeps/linux/kvx/jmpbuf-offsets.h b/libc/sysdeps/linux/kvx/jmpbuf-offsets.h
+new file mode 100644
+index 000000000..27636fa33
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/jmpbuf-offsets.h
+@@ -0,0 +1,50 @@
++/*
++ * Private macros for accessing __jmp_buf contents.  kvx version.
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#include <bits/wordsize.h>
++
++#if __WORDSIZE == 64
++
++/* We only need to save callee-saved registers plus stackpointer */
++# define JB_R12	0 /* stack pointer */
++# define JB_R14	1 /* frame pointer */
++# define JB_R18	2
++# define JB_R19	3
++# define JB_R20	4
++# define JB_R21	5
++# define JB_R22	6
++# define JB_R23	7
++# define JB_R24	8
++# define JB_R25	9
++# define JB_R26	10
++# define JB_R27	11
++# define JB_R28	12
++# define JB_R29	13
++# define JB_R30	14
++# define JB_R31	15
++
++#ifndef  __ASSEMBLER__
++#include <setjmp.h>
++#include <stdint.h>
++#include <sysdep.h>
++
++static inline uintptr_t __attribute__ ((unused))
++_jmpbuf_sp (__jmp_buf jmpbuf)
++{
++  uintptr_t sp = jmpbuf[0].regs[JB_R12];
++  return sp;
++}
++#endif
++
++
++#else
++
++#error unsupported 32 bit wordsize
++
++#endif
+diff --git a/libc/sysdeps/linux/kvx/jmpbuf-unwind.h b/libc/sysdeps/linux/kvx/jmpbuf-unwind.h
+new file mode 100644
+index 000000000..544da7012
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/jmpbuf-unwind.h
+@@ -0,0 +1,30 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#include <setjmp.h>
++#include <jmpbuf-offsets.h>
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#if __WORDSIZE == 64
++# define _JMPBUF_UNWINDS(jmpbuf, address) \
++  ((void *) (address) < (void *) (jmpbuf)[JB_R12])
++#else
++#error 32-bit unsupported
++#endif
++
++#ifdef __UCLIBC_HAS_THREADS_NATIVE__
++#include <stdint.h>
++#include <unwind.h>
++
++#define _JMPBUF_CFA_UNWINDS_ADJ(_jmpbuf, _context, _adj) \
++  _JMPBUF_UNWINDS_ADJ (_jmpbuf, (void *) _Unwind_GetCFA (_context), _adj)
++
++#define _JMPBUF_UNWINDS_ADJ(_jmpbuf, _address, _adj) \
++  ((uintptr_t) (_address) - (_adj) < (uintptr_t) _jmpbuf_sp(_jmpbuf) - (_adj))
++#endif
+diff --git a/libc/sysdeps/linux/kvx/setjmp.S b/libc/sysdeps/linux/kvx/setjmp.S
+new file mode 100644
+index 000000000..1a8fce3fd
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/setjmp.S
+@@ -0,0 +1,59 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <sysdep.h>
++
++#define _SETJMP_H
++#define _ASM
++#include <bits/setjmp.h>
++#include <libc-symbols.h>
++
++/**
++ * Simply save the user context to $r0 (jmpbuf)
++ *
++ * This function has the following prototype:
++ * int __sigsetjmp (r0 = jmp_buf env, r1 = int savemask)
++ * At the end, we call sigjmp_save
++ * int __sigjmp_save (sigjmp_buf env, int savemask)
++ * which will save signal mask if needed (set by setjmp/_setjmp)
++ *
++ * NOTE: since r0 and r1 are used by __sigjmp_save, we must not
++ * clobber them during this function
++ */
++ENTRY(__sigsetjmp)
++	/* Save r20r21r22r23 */
++	so (JMPBUF_REGS_OFFSET + QUAD_REG_SIZE)[$r0] = $r20r21r22r23
++	get $r40 = $ra
++	;;
++	/* Save r24r25r26r27 */
++	so (JMPBUF_REGS_OFFSET + 2 * QUAD_REG_SIZE) [$r0] = $r24r25r26r27
++	get $r41 = $cs
++	;;
++	copyd $r36 = $sp
++	copyd $r37 = $r14
++	copyd $r38 = $r18
++	copyd $r39 = $r19
++	;;
++	/* Save r12(sp) r14 r18 r19 stored in $r36r37r38r39 */
++	so (JMPBUF_REGS_OFFSET)[$r0] = $r36r37r38r39
++	get $r32 = $lc
++	;;
++	/* Save r28r29r30r31 */
++	so (JMPBUF_REGS_OFFSET + 3 * QUAD_REG_SIZE) [$r0] = $r28r29r30r31
++	get $r33 = $le
++	;;
++	/* Save $cs and $ra */
++	sq JMPBUF_RA_CS_OFFSET[$r0] = $r40r41
++	get $r34 = $ls
++	;;
++	/* Save $lc, $le and $ls */
++	so JMPBUF_LC_LE_LS_OFFSET[$r0] = $r32r33r34r35
++	goto __sigjmp_save
++	;;
++END(__sigsetjmp)
++libc_hidden_def(__sigsetjmp)
+diff --git a/libc/sysdeps/linux/kvx/sys/cachectl.h b/libc/sysdeps/linux/kvx/sys/cachectl.h
+new file mode 100644
+index 000000000..707de263e
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/sys/cachectl.h
+@@ -0,0 +1,21 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2020 Kalray Inc.
++ */
++
++#ifndef _SYS_CACHECTL_H
++#define _SYS_CACHECTL_H	1
++
++#include <asm/cachectl.h>
++
++__BEGIN_DECLS
++
++extern int cachectl(void *addr, size_t len, unsigned long cache,
++		    unsigned long flags);
++
++__END_DECLS
++
++#endif
+diff --git a/libc/sysdeps/linux/kvx/sys/procfs.h b/libc/sysdeps/linux/kvx/sys/procfs.h
+new file mode 100644
+index 000000000..bbbfb838e
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/sys/procfs.h
+@@ -0,0 +1,101 @@
++/* Copyright (C) 1996, 1997, 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; see the file COPYING.LIB.  If
++   not, see <http://www.gnu.org/licenses/>.*/
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++/* No FP registers for kvx. */
++typedef struct {} elf_fpregset_t;
++
++/* And the whole bunch of them.  We could have used `struct
++   pt_regs' directly in the typedef, but tradition says that
++   the register set is an array, which does have some peculiar
++   semantics, so leave it that way.  */
++#define ELF_NGREG (sizeof (struct user_regs_struct) / sizeof(elf_greg_t))
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    short int pr_cursig;		/* Current signal.  */
++    __pid_t pr_pid;
++    elf_gregset_t pr_reg;		/* GP registers.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/kvx/sys/ucontext.h b/libc/sysdeps/linux/kvx/sys/ucontext.h
+new file mode 100644
+index 000000000..548892389
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/sys/ucontext.h
+@@ -0,0 +1,29 @@
++/*
++ * This file is subject to the terms and conditions of the GNU General Public
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <signal.h>
++#include <bits/sigcontext.h>
++
++/* Type for general register.  */
++typedef unsigned long greg_t;
++
++/* Number of general registers.  */
++#define NGREG	64
++
++typedef struct ucontext {
++	unsigned long	  uc_flags;
++	struct ucontext  *uc_link;
++	stack_t		  uc_stack;
++	struct sigcontext uc_mcontext;
++	sigset_t	  uc_sigmask;	/* mask last for extensibility */
++} ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/kvx/sys/user.h b/libc/sysdeps/linux/kvx/sys/user.h
+new file mode 100644
+index 000000000..2e228ff19
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/sys/user.h
+@@ -0,0 +1,27 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#ifndef _SYS_USER_H
++#define _SYS_USER_H	1
++
++struct user_regs_struct
++{
++  /* GPR */
++  unsigned long long gpr_regs[64];
++
++  /* SFR */
++  unsigned long lc; 
++  unsigned long le; 
++  unsigned long ls; 
++  unsigned long ra; 
++
++  unsigned long cs; 
++  unsigned long spc;
++};
++
++#endif
+diff --git a/libc/sysdeps/linux/kvx/sysdep.h b/libc/sysdeps/linux/kvx/sysdep.h
+new file mode 100644
+index 000000000..944fedead
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/sysdep.h
+@@ -0,0 +1,49 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#ifndef _LINUX_KVX_SYSDEP_H
++#define _LINUX_KVX_SYSDEP_H 1
++
++#include <common/sysdep.h>
++
++#define SYS_ify(syscall_name)  (__NR_##syscall_name)
++
++#ifdef	__ASSEMBLER__
++
++# define _ENTRY(name)                    \
++  .align 8;                              \
++  .globl C_SYMBOL_NAME(name);            \
++  .func  C_SYMBOL_NAME(name);            \
++  .type  C_SYMBOL_NAME(name), @function; \
++C_SYMBOL_NAME(name):		   	 \
++	        cfi_startproc;
++
++/* Define an entry point visible from C.  */
++# ifdef PIC
++# define ENTRY(name)                    \
++  .pic					\
++  _ENTRY(name)
++
++# else
++# define ENTRY(name) _ENTRY(name)
++# endif
++
++#endif
++
++/* Local label name for asm code.  */
++# ifndef L
++#  define L(name) $L##name
++# endif
++
++#undef END
++#define END(name) \
++  cfi_endproc;        \
++  .endfunc;           \
++  .size C_SYMBOL_NAME(name), .-C_SYMBOL_NAME(name)
++
++#endif //_LINUX_KVX_SYSDEP_H
+diff --git a/libc/sysdeps/linux/kvx/vfork.S b/libc/sysdeps/linux/kvx/vfork.S
+new file mode 100644
+index 000000000..7c6a17133
+--- /dev/null
++++ b/libc/sysdeps/linux/kvx/vfork.S
+@@ -0,0 +1,47 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2018 Kalray Inc.
++ */
++
++#include <sys/syscall.h>
++#include <sysdep.h>
++
++/* We do not want COMPAT to be enabled in our kernel, hence vfork
++ * is not available. Use clone to do the same job with appropriate flags */
++#define _SIGNAL_H
++#include <bits/signum.h>       /* For SIGCHLD */
++
++#define CLONE_VM		0x00000100
++#define CLONE_VFORK		0x00004000
++#define CLONE_FLAGS_FOR_VFORK	(CLONE_VM|CLONE_VFORK|SIGCHLD)
++
++ENTRY(__vfork)
++	make $r0 = CLONE_FLAGS_FOR_VFORK
++	/* Not sure if needed to zero-out other parameters but better
++	 * be safe than sorry */
++	make $r1 = 0
++	make $r2 = 0
++	;;
++	make $r3 = 0
++	make $r4 = 0
++	;;
++	scall SYS_ify(clone)
++	;;
++	/* If PID < 0 then it's an error, else, simply return */
++	cb.dltz $r0 ? err
++	;;
++	ret
++	;;
++L(err):
++	goto __syscall_error
++	;;
++	/* Never return */
++	errop
++	;;
++END(__vfork)
++
++weak_alias(__vfork,vfork)
++libc_hidden_def(vfork)
+diff --git a/libm/kvx/Makefile.arch b/libm/kvx/Makefile.arch
+new file mode 100644
+index 000000000..e26adb6f1
+--- /dev/null
++++ b/libm/kvx/Makefile.arch
+@@ -0,0 +1,22 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2008 Erik Andersen <andersen@uclibc.org>
++# Copyright (C) 2018 Kalray Inc.
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++
++
++ifeq ($(UCLIBC_HAS_FENV),y)
++libm_ARCH_SRC:=$(wildcard $(libm_ARCH_DIR)/*.c)
++libm_ARCH_OBJ:=$(patsubst $(libm_ARCH_DIR)/%.c,$(libm_ARCH_OUT)/%.o,$(libm_ARCH_SRC))
++endif
++
++libm_ARCH_OBJS:=$(libm_ARCH_OBJ)
++
++ifeq ($(DOPIC),y)
++libm-a-y+=$(libm_ARCH_OBJS:.o=.os)
++else
++libm-a-y+=$(libm_ARCH_OBJS)
++endif
++libm-so-y+=$(libm_ARCH_OBJS:.o=.os)
++
+diff --git a/libm/kvx/feclearexcept.c b/libm/kvx/feclearexcept.c
+new file mode 100644
+index 000000000..d886cf30e
+--- /dev/null
++++ b/libm/kvx/feclearexcept.c
+@@ -0,0 +1,20 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides feclearexcept for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int feclearexcept(int excepts)
++{
++  /* Mask excepts to be sure only supported flag bits are set */
++  excepts &= FE_ALL_EXCEPT;
++
++  /* Set $cs with 'excepts' as a clear mask. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, excepts);
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fegetenv.c b/libm/kvx/fegetenv.c
+new file mode 100644
+index 000000000..0f99541b2
+--- /dev/null
++++ b/libm/kvx/fegetenv.c
+@@ -0,0 +1,21 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fegetenv for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fegetenv(fenv_t *envp)
++{
++  /* Get the current environment ($cs) */
++  fenv_t fe;
++  fe = __builtin_kvx_get(KVX_SFR_CS);
++
++  /* Mask $cs status to keep exception flags and rounding mode only. */
++  *envp = (fe & (FE_ALL_EXCEPT | FE_RND_MASK));
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fegetexceptflag.c b/libm/kvx/fegetexceptflag.c
+new file mode 100644
+index 000000000..72738ec09
+--- /dev/null
++++ b/libm/kvx/fegetexceptflag.c
+@@ -0,0 +1,24 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fegetexceptflag for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fegetexceptflag(fexcept_t *flagp, int excepts)
++{
++  /* Mask excepts to be sure only supported flag bits are set */
++  excepts &= FE_ALL_EXCEPT;
++
++  /* Get the current exception flags of the $cs register. */
++  fexcept_t flags;
++  flags = __builtin_kvx_get(KVX_SFR_CS);
++
++  /* Return the requested flags in flagp */
++  *flagp = flags & excepts;
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fegetround.c b/libm/kvx/fegetround.c
+new file mode 100644
+index 000000000..05e872506
+--- /dev/null
++++ b/libm/kvx/fegetround.c
+@@ -0,0 +1,16 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fegetround for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fegetround(void)
++{
++  /* Get all $cs flags (exception flags and rounding mode) */
++  fenv_t rm;
++  rm = __builtin_kvx_get(KVX_SFR_CS);
++
++  /* Return the rounding mode */
++  return rm & FE_RND_MASK;
++}
+diff --git a/libm/kvx/feholdexcept.c b/libm/kvx/feholdexcept.c
+new file mode 100644
+index 000000000..e9dfc1862
+--- /dev/null
++++ b/libm/kvx/feholdexcept.c
+@@ -0,0 +1,26 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides feholdexcept for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int feholdexcept(fenv_t *envp)
++{
++  /* Get the current environment ($cs) */
++  fenv_t fe;
++  fe = __builtin_kvx_get(KVX_SFR_CS);
++
++  /* Mask $cs status to keep exception flags and rounding mode only. */
++  *envp = (fe & (FE_ALL_EXCEPT | FE_RND_MASK));
++
++  /* Set $cs with 'FE_ALL_EXCEPT' as a clear mask. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, FE_ALL_EXCEPT);
++  
++  /* KVX does not raise FP traps so it is always in a "non-stop" mode */
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/feraiseexcept.c b/libm/kvx/feraiseexcept.c
+new file mode 100644
+index 000000000..156bf66cf
+--- /dev/null
++++ b/libm/kvx/feraiseexcept.c
+@@ -0,0 +1,24 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides feraiseexcept for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int feraiseexcept(int excepts)
++{
++  /* Mask excepts to be sure only supported flag bits are set */
++  excepts &= FE_ALL_EXCEPT;
++
++  /* Set $cs with 'excepts' as a set mask. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, (long long)excepts << 32);
++
++  /* C99 requirements are met. The flags are raised at the same time
++     so order is preserved. FE_INEXACT is not raised if one of the
++     exceptions is FE_OVERFLOW or FE_UNDERFLOW. */
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fesetenv.c b/libm/kvx/fesetenv.c
+new file mode 100644
+index 000000000..0a85f1128
+--- /dev/null
++++ b/libm/kvx/fesetenv.c
+@@ -0,0 +1,23 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fesetenv for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fesetenv(const fenv_t *envp)
++{
++  /* Mask *envp to be sure only valid bits are set */
++  fenv_t fe = *envp;
++  fe &= (FE_ALL_EXCEPT|FE_RND_MASK);
++
++  /* Set exception flags and rounding mode bit-fields of $cs, with
++     'fe' as a set mask and FE_ALL_EXCEPT|FE_RND_MASK as a clear
++     mask. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, ((long long)fe << 32) | FE_ALL_EXCEPT | FE_RND_MASK);
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fesetexceptflag.c b/libm/kvx/fesetexceptflag.c
+new file mode 100644
+index 000000000..49180dc87
+--- /dev/null
++++ b/libm/kvx/fesetexceptflag.c
+@@ -0,0 +1,24 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fesetexceptflag for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fesetexceptflag(const fexcept_t *flagp, int excepts)
++{
++  /* Mask excepts to be sure only supported flag bits are set */
++  excepts &= FE_ALL_EXCEPT;
++
++  /* Set the requested flags */
++  fexcept_t flags = (*flagp & excepts);
++
++  /* Set $cs with 'flags' as a set mask and FE_ALL_EXCEPT as a clear
++     mask. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, (long long)flags << 32 | FE_ALL_EXCEPT);
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fesetround.c b/libm/kvx/fesetround.c
+new file mode 100644
+index 000000000..c1a24458e
+--- /dev/null
++++ b/libm/kvx/fesetround.c
+@@ -0,0 +1,21 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fesetround for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fesetround(int rounding_mode)
++{
++  /* Mask round to be sure only valid rounding bits are set */
++  rounding_mode &= FE_RND_MASK;
++
++  /* Set rounding mode bit-fields of $cs, with 'rounding_mode' as a
++     set mask and FE_RND_MASK as a clear mask. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, ((long long)rounding_mode << 32) | FE_RND_MASK);
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libm/kvx/fetestexcept.c b/libm/kvx/fetestexcept.c
+new file mode 100644
+index 000000000..b8ed8f0e6
+--- /dev/null
++++ b/libm/kvx/fetestexcept.c
+@@ -0,0 +1,21 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides fesetexcept for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int fetestexcept(int excepts)
++{
++  /* Mask excepts to be sure only supported flag bits are set */
++  excepts &= FE_ALL_EXCEPT;
++
++  /* Get the current exception flags of the $cs register. */
++  fexcept_t flags;
++  flags = __builtin_kvx_get(KVX_SFR_CS);
++
++  /* Return the floating-point exception macros that are both included
++     in excepts and correspond to the floating-point exceptions
++     currently set. */
++  return (flags & excepts);
++}
+diff --git a/libm/kvx/feupdateenv.c b/libm/kvx/feupdateenv.c
+new file mode 100644
+index 000000000..f64510308
+--- /dev/null
++++ b/libm/kvx/feupdateenv.c
+@@ -0,0 +1,24 @@
++/*
++  (C) Copyright 2019 Kalray S.A.
++  This file provides feupdateenv for the Coolidge processor.
++*/
++
++#include <fenv.h>
++
++int feupdateenv(const fenv_t *envp)
++{
++  /* Mask *envp to be sure only valid bits are set */
++  fenv_t fe = *envp;
++  fe &= (FE_ALL_EXCEPT|FE_RND_MASK);
++
++  /* Update exception flags and rounding mode bit-fields of $cs, with
++     'fe' as a set mask and FE_RND_MASK as a clear mask. FE_ALL_EXCEPT
++     is not cleared: restores rounding mode and updates exception
++     flags. */
++  __builtin_kvx_wfxl(KVX_SFR_CS, ((long long)fe << 32) | FE_RND_MASK);
++
++  /* The above insn cannot fail (while the OS allows access to the
++     floating-point exception flags of the $cs register). Return
++     success. */
++  return 0;
++}
+diff --git a/libpthread/nptl/sysdeps/kvx/Makefile.arch b/libpthread/nptl/sysdeps/kvx/Makefile.arch
+new file mode 100644
+index 000000000..b2ad58197
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/Makefile.arch
+@@ -0,0 +1,9 @@
++# Makefile for uClibc NPTL
++#
++# Copyright (C) 2019 Kalray
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++libc_arch_a_CSRC = unwind-forcedunwind.c libc-tls.c
++CFLAGS-unwind-forcedunwind.c = -fexceptions -fasynchronous-unwind-tables
+diff --git a/libpthread/nptl/sysdeps/kvx/dl-tls.h b/libpthread/nptl/sysdeps/kvx/dl-tls.h
+new file mode 100644
+index 000000000..61b810db6
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/dl-tls.h
+@@ -0,0 +1,47 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#ifndef _KVX_DL_TLS_H
++#define _KVX_DL_TLS_H 1
++
++/* Type used to represent a TLS descriptor in the GOT.  */
++struct tlsdesc
++{
++  ptrdiff_t (*entry) (struct tlsdesc *);
++  void *arg;
++};
++
++typedef struct dl_tls_index
++{
++  unsigned long int ti_module;
++  unsigned long int ti_offset;
++} tls_index;
++
++/* Type used as the argument in a TLS descriptor for a symbol that
++   needs dynamic TLS offsets.  */
++struct tlsdesc_dynamic_arg
++{
++  tls_index tlsinfo;
++  size_t gen_count;
++};
++
++extern ptrdiff_t attribute_hidden
++_dl_tlsdesc_return (struct tlsdesc *);
++
++# ifdef SHARED
++extern void *_dl_make_tlsdesc_dynamic (struct link_map *, size_t);
++
++extern ptrdiff_t attribute_hidden
++_dl_tlsdesc_dynamic (struct tlsdesc *);
++# endif
++
++extern void *__tls_get_addr (tls_index *ti);
++
++#define TLS_DTV_UNALLOCATED ((void *) -1l)
++
++#endif
+diff --git a/libpthread/nptl/sysdeps/kvx/libc-tls.c b/libpthread/nptl/sysdeps/kvx/libc-tls.c
+new file mode 100644
+index 000000000..5fd9e7e70
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/libc-tls.c
+@@ -0,0 +1,26 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2020 Kalray Inc.
++ */
++
++#include <sysdeps/generic/libc-tls.c>
++#include <dl-tls.h>
++
++#if defined(USE_TLS) && USE_TLS
++
++/* On kvx, linker optimizations are not required, so __tls_get_addr
++   can be called even in statically linked binaries.  In this case module
++   must be always 1 and PT_TLS segment exist in the binary, otherwise it
++   would not link.  */
++
++void *
++__tls_get_addr (tls_index *ti)
++{
++  dtv_t *dtv = THREAD_DTV ();
++  return (char *) dtv[1].pointer.val + ti->ti_offset;
++}
++
++#endif
+diff --git a/libpthread/nptl/sysdeps/kvx/pthread_spin_lock.c b/libpthread/nptl/sysdeps/kvx/pthread_spin_lock.c
+new file mode 100644
+index 000000000..6f77c6250
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/pthread_spin_lock.c
+@@ -0,0 +1,60 @@
++/* pthread_spin_lock -- lock a spin lock.  Generic version.
++   Copyright (C) 2012-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <atomic.h>
++#include "pthreadP.h"
++
++/* A machine-specific version can define SPIN_LOCK_READS_BETWEEN_CMPXCHG
++  to the number of plain reads that it's optimal to spin on between uses
++  of atomic_compare_and_exchange_val_acq.  If spinning forever is optimal
++  then use -1.  If no plain reads here would ever be optimal, use 0.  */
++#define SPIN_LOCK_READS_BETWEEN_CMPXCHG 1000
++
++int
++pthread_spin_lock (pthread_spinlock_t *lock)
++{
++  /* atomic_exchange usually takes less instructions than
++     atomic_compare_and_exchange.  On the other hand,
++     atomic_compare_and_exchange potentially generates less bus traffic
++     when the lock is locked.
++     We assume that the first try mostly will be successful, and we use
++     atomic_exchange.  For the subsequent tries we use
++     atomic_compare_and_exchange.  */
++  if (atomic_exchange_acq (lock, 1) == 0)
++    return 0;
++
++  do {
++      /* The lock is contended and we need to wait.  Going straight back
++	 to cmpxchg is not a good idea on many targets as that will force
++	 expensive memory synchronizations among processors and penalize other
++	 running threads.
++	 On the other hand, we do want to update memory state on the local core
++	 once in a while to avoid spinning indefinitely until some event that
++	 will happen to update local memory as a side-effect.  */
++      if (SPIN_LOCK_READS_BETWEEN_CMPXCHG >= 0) {
++	  int wait = SPIN_LOCK_READS_BETWEEN_CMPXCHG;
++
++	  while (*lock != 0 && wait > 0)
++	    --wait;
++      } else {
++	  while (*lock != 0)
++	    ;
++      }
++  } while (atomic_compare_and_exchange_val_acq (lock, 1, 0) != 0);
++
++  return 0;
++}
+diff --git a/libpthread/nptl/sysdeps/kvx/pthread_spin_trylock.c b/libpthread/nptl/sysdeps/kvx/pthread_spin_trylock.c
+new file mode 100644
+index 000000000..4e9aa64d3
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/pthread_spin_trylock.c
+@@ -0,0 +1,26 @@
++/* pthread_spin_trylock -- trylock a spin lock.  Generic version.
++   Copyright (C) 2012-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <errno.h>
++#include <atomic.h>
++#include "pthreadP.h"
++
++int
++pthread_spin_trylock (pthread_spinlock_t *lock)
++{
++  return atomic_exchange_acq (lock, 1) ? EBUSY : 0;
++}
+diff --git a/libpthread/nptl/sysdeps/kvx/pthreaddef.h b/libpthread/nptl/sysdeps/kvx/pthreaddef.h
+new file mode 100644
+index 000000000..6e1485998
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/pthreaddef.h
+@@ -0,0 +1,26 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++/* Default stack size.  */
++#define ARCH_STACK_DEFAULT_SIZE	(2 * 1024 * 1024)
++
++/* Required stack pointer alignment at beginning.  */
++#define STACK_ALIGN 32
++
++/* Minimal stack size after allocating thread descriptor and guard size.  */
++#define MINIMAL_REST_STACK 2048
++
++/* Alignment requirement for TCB.  */
++#define TCB_ALIGNMENT 32
++
++/* Location of current stack frame.  */
++#define CURRENT_STACK_FRAME	__builtin_frame_address (0)
++
++/* XXX Until we have a better place keep the definitions here.  */
++#define __exit_thread_inline(val) \
++  INLINE_SYSCALL (exit, 1, (val))
+diff --git a/libpthread/nptl/sysdeps/kvx/tcb-offsets.sym b/libpthread/nptl/sysdeps/kvx/tcb-offsets.sym
+new file mode 100644
+index 000000000..238647dd4
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/tcb-offsets.sym
+@@ -0,0 +1,6 @@
++#include <sysdep.h>
++#include <tls.h>
++
++PTHREAD_MULTIPLE_THREADS_OFFSET		offsetof (struct pthread, header.multiple_threads)
++PTHREAD_TID_OFFSET			offsetof (struct pthread, tid)
++PTHREAD_SIZEOF				sizeof (struct pthread)
+diff --git a/libpthread/nptl/sysdeps/kvx/tls.h b/libpthread/nptl/sysdeps/kvx/tls.h
+new file mode 100644
+index 000000000..a3e7fa97b
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/tls.h
+@@ -0,0 +1,160 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#ifndef _TLS_H
++#define _TLS_H	1
++
++#ifndef __ASSEMBLER__
++# include <stdbool.h>
++# include <stddef.h>
++# include <stdint.h>
++
++/* Type for the dtv.  */
++typedef union dtv
++{
++  size_t counter;
++  struct
++  {
++    void *val;
++    bool is_static;
++  } pointer;
++} dtv_t;
++
++#else /* __ASSEMBLER__ */
++# include <tcb-offsets.h>
++#endif /* __ASSEMBLER__ */
++
++/* We require TLS support in the tools.  */
++#define HAVE_TLS_SUPPORT                1
++#define HAVE_TLS_MODEL_ATTRIBUTE        1
++#define HAVE___THREAD                   1
++
++/* Signal that TLS support is available.  */
++#define USE_TLS	1
++
++#ifndef __ASSEMBLER__
++
++/* Get system call information.  */
++# include <sysdep.h>
++
++/* The TP points to the start of the thread blocks.  */
++# define TLS_DTV_AT_TP	1
++
++/* Get the thread descriptor definition.  */
++# include <../../descr.h>
++
++typedef struct
++{
++  dtv_t *dtv;
++} tcbhead_t;
++
++/* Thread Pointer $tp is $r13 */
++register tcbhead_t *__thread_self __asm__("$r13");
++
++/* This is the size of the initial TCB.  */
++# define TLS_INIT_TCB_SIZE	sizeof (tcbhead_t)
++
++/* Alignment requirements for the initial TCB.  */
++# define TLS_INIT_TCB_ALIGN	__alignof__ (tcbhead_t)
++
++/* This is the size of the TCB.  */
++# define TLS_TCB_SIZE		sizeof (tcbhead_t)
++
++/* This is the size we need before TCB.  */
++# define TLS_PRE_TCB_SIZE	sizeof (struct pthread)
++
++/* Alignment requirements for the TCB.  */
++# define TLS_TCB_ALIGN		__alignof__ (tcbhead_t)
++
++/* Install the dtv pointer.  The pointer passed is to the element with
++   index -1 which contain the length.  */
++# define INSTALL_DTV(tcbp, dtvp) \
++  (((tcbhead_t *) (tcbp))->dtv = (dtvp) + 1)
++
++/* Install new dtv for current thread.  */
++# define INSTALL_NEW_DTV(dtv) \
++  (THREAD_DTV() = (dtv))
++
++/* Return dtv of given thread descriptor.  */
++# define GET_DTV(tcbp) \
++  (((tcbhead_t *) (tcbp))->dtv)
++
++/* Code to initially initialize the thread pointer.
++ *
++ * Set TP to the address _after_ tcbhead_t. This will allow us
++ * to change the size of tcbhead_t without having to re-link everything.
++ *
++ * secondcall has something to do with USE__THREAD,
++ * seems to always be 0 so we don't care about it.
++ *
++ * This has to return NULL on success (or a string with the failure text).
++ * It's hard to fail this, so return NULL always.
++ */
++# define TLS_INIT_TP(tcbp, secondcall) \
++  ({__thread_self = ((tcbhead_t *)tcbp + 1); NULL;})
++
++/* Return the address of the dtv for the current thread.
++ *
++ * Dereference TP, offset to dtv - really straightforward.
++ * Remember that we made TP point to after tcb, so we need to reverse that.
++ */
++#  define THREAD_DTV() \
++  ((((tcbhead_t *)__thread_self)-1)->dtv)
++
++/* Return the thread descriptor for the current thread.
++ *
++ * Return a pointer to the TLS_PRE area where we allocated space for
++ * a struct pthread. Again, TP points to after tcbhead_t, compensate with
++ * TLS_INIT_TCB_SIZE.
++ *
++ * I regard this is a seperate system from the "normal" TLS.
++ */
++# define THREAD_SELF \
++  ((struct pthread *) ((char *) __thread_self - TLS_INIT_TCB_SIZE \
++    - TLS_PRE_TCB_SIZE))
++
++/* Magic for libthread_db to know how to do THREAD_SELF.  */
++# define DB_THREAD_SELF \
++  CONST_THREAD_AREA (64, sizeof (struct pthread))
++
++/* Access to data in the thread descriptor is easy.  */
++# define THREAD_GETMEM(descr, member) \
++  descr->member
++# define THREAD_GETMEM_NC(descr, member, idx) \
++  descr->member[idx]
++# define THREAD_SETMEM(descr, member, value) \
++  descr->member = (value)
++# define THREAD_SETMEM_NC(descr, member, idx, value) \
++  descr->member[idx] = (value)
++
++/* Get and set the global scope generation counter in struct pthread.  */
++# define THREAD_GSCOPE_FLAG_UNUSED 0
++# define THREAD_GSCOPE_FLAG_USED   1
++# define THREAD_GSCOPE_FLAG_WAIT   2
++# define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1, LLL_PRIVATE);   \
++    }									     \
++  while (0)
++# define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++# define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
++# endif /* __ASSEMBLER__ */
++
++#endif	/* tls.h */
+diff --git a/libpthread/nptl/sysdeps/kvx/unwind-forcedunwind.c b/libpthread/nptl/sysdeps/kvx/unwind-forcedunwind.c
+new file mode 100644
+index 000000000..b9618dead
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/kvx/unwind-forcedunwind.c
+@@ -0,0 +1,165 @@
++/* Copyright (C) 2003, 2005, 2006, 2009 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Jakub Jelinek <jakub@redhat.com>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; see the file COPYING.LIB.  If
++   not, see <http://www.gnu.org/licenses/>.  */
++
++#include <dlfcn.h>
++#include <stdio.h>
++#include <unwind.h>
++#include <pthreadP.h>
++#include <sysdep.h>
++#include <libgcc_s.h>
++#include <unwind-resume.h>
++
++#define __libc_dlopen(x)        dlopen(x, (RTLD_LOCAL | RTLD_LAZY))
++#define __libc_dlsym            dlsym
++#define __libc_dlclose		dlclose
++
++static void *libgcc_s_handle;
++void (*__libgcc_s_resume) (struct _Unwind_Exception *exc)
++  attribute_hidden __attribute__ ((noreturn));
++static _Unwind_Reason_Code (*libgcc_s_personality) PERSONALITY_PROTO;
++static _Unwind_Reason_Code (*libgcc_s_forcedunwind)
++  (struct _Unwind_Exception *, _Unwind_Stop_Fn, void *);
++static _Unwind_Word (*libgcc_s_getcfa) (struct _Unwind_Context *);
++static void (*libgcc_s_sjlj_register) (struct SjLj_Function_Context *);
++static void (*libgcc_s_sjlj_unregister) (struct SjLj_Function_Context *);
++
++void
++__attribute_noinline__
++pthread_cancel_init (void)
++{
++  void *resume;
++  void *personality;
++  void *forcedunwind;
++  void *getcfa;
++  void *handle;
++  void *sjlj_register, *sjlj_unregister;
++
++  if (__builtin_expect (libgcc_s_handle != NULL, 1))
++    {
++      /* Force gcc to reload all values.  */
++      __asm__ __volatile__ ("" ::: "memory");
++      return;
++    }
++
++  handle = __libc_dlopen (LIBGCC_S_SO);
++
++  resume = __libc_dlsym (handle, "_Unwind_SjLj_Resume");
++  personality = __libc_dlsym (handle, "__gcc_personality_sj0");
++  forcedunwind = __libc_dlsym (handle, "_Unwind_SjLj_ForcedUnwind");
++  getcfa = __libc_dlsym (handle, "_Unwind_GetCFA");
++  sjlj_register = __libc_dlsym (handle, "_Unwind_SjLj_Register");
++  sjlj_unregister = __libc_dlsym (handle, "_Unwind_SjLj_Unregister");
++
++  if ((handle == NULL)
++      || (resume == NULL)
++      || (personality == NULL)
++      || (forcedunwind == NULL)
++      || (getcfa == NULL)
++      || (sjlj_register == NULL)
++      || (sjlj_unregister == NULL)
++#ifdef ARCH_CANCEL_INIT
++      || ARCH_CANCEL_INIT (handle)
++#endif
++      )
++  {
++    fprintf (stderr,
++	     LIBGCC_S_SO " must be installed for pthread_cancel to work\n");
++    abort();
++  }
++
++  __libgcc_s_resume = resume;
++  libgcc_s_personality = personality;
++  libgcc_s_forcedunwind = forcedunwind;
++  libgcc_s_sjlj_register = sjlj_register;
++  libgcc_s_sjlj_unregister = sjlj_unregister;
++  libgcc_s_getcfa = getcfa;
++  /* Make sure libgcc_s_handle is written last.  Otherwise,
++     pthread_cancel_init might return early even when the pointer the
++     caller is interested in is not initialized yet.  */
++  atomic_write_barrier ();
++  libgcc_s_handle = handle;
++}
++
++void
++__libc_freeres_fn_section
++__unwind_freeres (void)
++{
++  void *handle = libgcc_s_handle;
++  if (handle != NULL)
++    {
++      libgcc_s_handle = NULL;
++      __libc_dlclose (handle);
++    }
++}
++
++#if !HAVE_ARCH_UNWIND_RESUME
++void attribute_hidden
++_Unwind_Resume (struct _Unwind_Exception *exc)
++{
++  if (__builtin_expect (libgcc_s_handle == NULL, 0))
++    pthread_cancel_init ();
++
++  __libgcc_s_resume(exc);
++}
++#endif
++
++_Unwind_Reason_Code attribute_hidden
++__gcc_personality_v0 PERSONALITY_PROTO
++{
++  if (__builtin_expect (libgcc_s_handle == NULL, 0))
++    pthread_cancel_init ();
++
++  return libgcc_s_personality PERSONALITY_ARGS;
++}
++
++_Unwind_Reason_Code attribute_hidden
++_Unwind_ForcedUnwind (struct _Unwind_Exception *exc, _Unwind_Stop_Fn stop,
++		      void *stop_argument)
++{
++  if (__builtin_expect (libgcc_s_handle == NULL, 0))
++    pthread_cancel_init ();
++
++  return libgcc_s_forcedunwind (exc, stop, stop_argument);
++}
++
++_Unwind_Word attribute_hidden
++_Unwind_GetCFA (struct _Unwind_Context *context)
++{
++  if (__builtin_expect (libgcc_s_handle == NULL, 0))
++    pthread_cancel_init ();
++
++  return libgcc_s_getcfa (context);
++}
++
++void
++_Unwind_SjLj_Register (struct SjLj_Function_Context *fc)
++{
++  if (__builtin_expect (libgcc_s_sjlj_register == NULL, 0))
++    pthread_cancel_init ();
++
++  libgcc_s_sjlj_register (fc);
++}
++
++void
++_Unwind_SjLj_Unregister (struct SjLj_Function_Context *fc)
++{
++  if (__builtin_expect (libgcc_s_sjlj_unregister == NULL, 0))
++    pthread_cancel_init ();
++
++  libgcc_s_sjlj_unregister (fc);
++}
+diff --git a/libpthread/nptl/sysdeps/pthread/Makefile.in b/libpthread/nptl/sysdeps/pthread/Makefile.in
+index 6c09e7b7e..70546bc0e 100644
+--- a/libpthread/nptl/sysdeps/pthread/Makefile.in
++++ b/libpthread/nptl/sysdeps/pthread/Makefile.in
+@@ -44,7 +44,9 @@ CFLAGS-unwind-forcedunwind.c = -fexceptions -fasynchronous-unwind-tables
+ CFLAGS-OMIT-librt-cancellation.c = -DIS_IN_libpthread
+ CFLAGS-librt-cancellation.c = -DIS_IN_librt				\
+ 			      -fexceptions -fasynchronous-unwind-tables
++ifneq ($(TARGET_ARCH),kvx)
+ libpthread-so-y += $(patsubst %,$(libpthread_pthread_OUT)/%.oS, unwind-forcedunwind)
++endif
+ 
+ librt-pt-routines-y = librt-cancellation.c
+ 
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/Makefile b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/Makefile
+new file mode 100644
+index 000000000..0d6f2f45d
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc NPTL
++#
++# Copyright (C) 2019 Kalray
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../../../../../../../
++top_builddir=../../../../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/Makefile.arch b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/Makefile.arch
+new file mode 100644
+index 000000000..8af56320c
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/Makefile.arch
+@@ -0,0 +1,14 @@
++# Makefile for uClibc NPTL
++#
++# Copyright (C) 2019 Kalray
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++libpthread_linux_arch_SSRC =
++libpthread_linux_arch_CSRC = pthread_once.c
++
++libc_linux_arch_CSRC = fork.c
++
++CFLAGS += $(SSP_ALL_CFLAGS)
++
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/bits/pthreadtypes.h b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/bits/pthreadtypes.h
+new file mode 100644
+index 000000000..e1bfe51cf
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/bits/pthreadtypes.h
+@@ -0,0 +1,166 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#ifndef _BITS_PTHREADTYPES_H
++#define _BITS_PTHREADTYPES_H	1
++
++#include <endian.h>
++
++#define __SIZEOF_PTHREAD_ATTR_T        64
++#define __SIZEOF_PTHREAD_MUTEX_T       48
++#define __SIZEOF_PTHREAD_MUTEXATTR_T    8
++#define __SIZEOF_PTHREAD_COND_T        72
++#define __SIZEOF_PTHREAD_COND_COMPAT_T 48
++#define __SIZEOF_PTHREAD_CONDATTR_T     8
++#define __SIZEOF_PTHREAD_RWLOCK_T      80
++#define __SIZEOF_PTHREAD_RWLOCKATTR_T   16
++#define __SIZEOF_PTHREAD_BARRIER_T      32
++#define __SIZEOF_PTHREAD_BARRIERATTR_T  16
++
++#define __PTHREAD_RWLOCK_INT_FLAGS_SHARED 1
++
++/* Thread identifiers.  The structure of the attribute type is not
++   exposed on purpose.  */
++typedef unsigned long int pthread_t;
++
++
++union pthread_attr_t
++{
++  char __size[__SIZEOF_PTHREAD_ATTR_T];
++  long int __align;
++};
++#ifndef __have_pthread_attr_t
++typedef union pthread_attr_t pthread_attr_t;
++# define __have_pthread_attr_t1
++#endif
++
++typedef struct __pthread_internal_list
++{
++  struct __pthread_internal_list *__prev;
++  struct __pthread_internal_list *__next;
++} __pthread_list_t;
++
++
++/* Data structures for mutex handling.  The structure of the attribute
++   type is not exposed on purpose.  */
++typedef union
++{
++  struct __pthread_mutex_s
++  {
++    int __lock;
++    unsigned int __count;
++    int __owner;
++    unsigned int __nusers;
++    /* KIND must stay at this position in the structure to maintain
++       binary compatibility with static initializers.  */
++    int __kind;
++    int __spins;
++    __pthread_list_t __list;
++#define __PTHREAD_MUTEX_HAVE_PREV	1
++  } __data;
++  char __size[__SIZEOF_PTHREAD_MUTEX_T];
++  long int __align;
++} pthread_mutex_t;
++
++/* Mutex __spins initializer used by PTHREAD_MUTEX_INITIALIZER.  */
++#define __PTHREAD_SPINS 0
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_MUTEXATTR_T];
++  long int __align;
++} pthread_mutexattr_t;
++
++/* Data structure for conditional variable handling.  The structure of
++   the attribute type is not exposed on purpose.  */
++typedef union
++{
++  struct
++  {
++    int __lock;
++    unsigned int __futex;
++    __extension__ unsigned long long int __total_seq;
++    __extension__ unsigned long long int __wakeup_seq;
++    __extension__ unsigned long long int __woken_seq;
++    void *__mutex;
++    unsigned int __nwaiters;
++    unsigned int __broadcast_seq;
++  } __data;
++  char __size[__SIZEOF_PTHREAD_COND_T];
++  __extension__ long long int __align;
++} pthread_cond_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_CONDATTR_T];
++  int __align;
++} pthread_condattr_t;
++
++
++/* Keys for thread-specific data */
++typedef unsigned int pthread_key_t;
++
++
++/* Once-only execution */
++typedef int pthread_once_t;
++
++
++#if defined __USE_UNIX98 || defined __USE_XOPEN2K
++/* Data structure for read-write lock variable handling.  The
++   structure of the attribute type is not exposed on purpose.  */
++typedef union
++{
++  struct
++  {
++    int __lock;
++    unsigned int __nr_readers;
++    unsigned int __readers_wakeup;
++    unsigned int __writer_wakeup;
++    unsigned int __nr_readers_queued;
++    unsigned int __nr_writers_queued;
++    int __writer;
++    int __shared;
++    unsigned long int __pad1;
++    unsigned long int __pad2;
++    unsigned int __flags;
++  } __data;
++  char __size[__SIZEOF_PTHREAD_RWLOCK_T];
++  long int __align;
++} pthread_rwlock_t;
++
++#define __PTHREAD_RWLOCK_ELISION_EXTRA 0
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_RWLOCKATTR_T];
++  long int __align;
++} pthread_rwlockattr_t;
++#endif
++
++
++#ifdef __USE_XOPEN2K
++/* POSIX spinlock data type.  */
++typedef volatile int pthread_spinlock_t;
++
++
++/* POSIX barriers data type.  The structure of the type is
++   deliberately not exposed.  */
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_BARRIER_T];
++  long int __align;
++} pthread_barrier_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_BARRIERATTR_T];
++  int __align;
++} pthread_barrierattr_t;
++#endif
++
++#endif	/* bits/pthreadtypes.h */
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/bits/semaphore.h b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/bits/semaphore.h
+new file mode 100644
+index 000000000..0acafdbb0
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/bits/semaphore.h
+@@ -0,0 +1,30 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#ifndef _SEMAPHORE_H
++# error "Never use <bits/semaphore.h> directly; include <semaphore.h> instead."
++#endif
++
++#include <bits/wordsize.h>
++
++#if __WORDSIZE == 64
++# define __SIZEOF_SEM_T	32
++#else
++# define __SIZEOF_SEM_T	16
++#endif
++
++
++/* Value returned if `sem_open' failed.  */
++#define SEM_FAILED      ((sem_t *) 0)
++
++
++typedef union
++{
++  char __size[__SIZEOF_SEM_T];
++  long int __align;
++} sem_t;
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/createthread.c b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/createthread.c
+new file mode 100644
+index 000000000..1b82c9190
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/createthread.c
+@@ -0,0 +1,14 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++/* Value passed to 'clone' for initialization of the thread register.  */
++#define TLS_VALUE ((void *) (pd) \
++		   + TLS_PRE_TCB_SIZE + TLS_INIT_TCB_SIZE)
++
++/* Get the real implementation.	 */
++#include <sysdeps/pthread/createthread.c>
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/fork.c b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/fork.c
+new file mode 100644
+index 000000000..4f7044a0b
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/fork.c
+@@ -0,0 +1,11 @@
++#include <sched.h>
++#include <signal.h>
++#include <sysdep.h>
++#include <tls.h>
++
++#define ARCH_FORK() \
++  INLINE_SYSCALL (clone, 5,                                                  \
++                 CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | SIGCHLD, 0,     \
++                 NULL, &THREAD_SELF->tid, NULL)
++
++#include "../fork.c"
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/pthread_once.c b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/pthread_once.c
+new file mode 100644
+index 000000000..0d2749edf
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/pthread_once.c
+@@ -0,0 +1,77 @@
++/*
++ * This file is subject to the terms and conditions of the LGPL V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#include "pthreadP.h"
++#include <lowlevellock.h>
++
++unsigned long int __fork_generation attribute_hidden;
++
++static void
++clear_once_control (void *arg)
++{
++	pthread_once_t *once_control = (pthread_once_t *) arg;
++
++	*once_control = 0;
++	lll_futex_wake (once_control, INT_MAX, LLL_PRIVATE);
++}
++
++
++int
++__pthread_once (once_control, init_routine)
++	pthread_once_t *once_control;
++	void (*init_routine) (void);
++{
++	while (1)
++	{
++		int oldval, val, newval;
++
++		val = *once_control;
++		do
++		{
++			/* Check if the initialized has already been done. */
++			if ((val & 2) != 0)
++				return 0;
++
++			oldval = val;
++			newval = (oldval & 3) | __fork_generation | 1;
++			val = atomic_compare_and_exchange_val_acq (once_control, newval, oldval);
++		} while (__builtin_expect (val != oldval, 0));
++
++		/* Check if another thread already runs the initializer. */
++		if ((oldval & 1) != 0)
++		{
++		/* Check whether the initializer execution was interrupted
++		 * by a fork. */
++			if (((oldval ^ newval) & -4) == 0)
++			{
++				/* Same generation, some other thread was faster. Wait. */
++				lll_futex_wait (once_control, newval, LLL_PRIVATE);
++				continue;
++			}
++		}
++		/* This thread is the first here.  Do the initialization.
++		 * Register a cleanup handler so that in case the thread gets
++		 * interrupted the initialization can be restarted. */
++		pthread_cleanup_push (clear_once_control, once_control);
++
++		init_routine ();
++
++		pthread_cleanup_pop (0);
++
++		/* Add one to *once_control. */
++		atomic_increment (once_control);
++
++		/* Wake up all other threads. */
++		lll_futex_wake (once_control, INT_MAX, LLL_PRIVATE);
++		break;
++	}
++
++	return 0;
++}
++weak_alias (__pthread_once, pthread_once)
++strong_alias (__pthread_once, __pthread_once_internal)
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/sysdep-cancel.h b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/sysdep-cancel.h
+new file mode 100644
+index 000000000..09f538fc2
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/kvx/sysdep-cancel.h
+@@ -0,0 +1,43 @@
++/*
++ * This file is subject to the terms and conditions of the LGPV V2.1
++ * License.  See the file "COPYING" in the main directory of this archive
++ * for more details.
++ *
++ * Copyright (C) 2019 Kalray Inc.
++ */
++
++#include <sysdep.h>
++#include <tls.h>
++#ifndef __ASSEMBLER__
++# include <pthreadP.h>
++#endif
++
++#if !defined NOT_IN_libc || defined IS_IN_libpthread || defined IS_IN_librt
++
++# if defined IS_IN_libpthread
++#  define __local_multiple_threads __pthread_multiple_threads
++# elif !defined NOT_IN_libc
++#  define __local_multiple_threads __libc_multiple_threads
++# endif
++
++# if defined IS_IN_libpthread || !defined NOT_IN_libc
++extern int __local_multiple_threads attribute_hidden;
++#  define SINGLE_THREAD_P __builtin_expect (__local_multiple_threads == 0, 1)
++# else
++/*  There is no __local_multiple_threads for librt, so use the TCB.  */
++#  define SINGLE_THREAD_P						\
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF,				\
++				   header.multiple_threads) == 0, 1)
++# endif
++
++#else
++
++/* For rtld, et cetera.  */
++# define SINGLE_THREAD_P 1
++# define NO_CANCELLATION 1
++
++#endif
++
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
+diff --git a/utils/ldd.c b/utils/ldd.c
+index 8852be399..dfc4ee9a5 100644
+--- a/utils/ldd.c
++++ b/utils/ldd.c
+@@ -14,6 +14,11 @@
+ 
+ #include "porting.h"
+ 
++#if defined(__kvx__)
++#define MATCH_MACHINE(x) (x == EM_KVX)
++#define ELFCLASSM	ELFCLASS64
++#endif
++
+ #if defined(__aarch64__)
+ #define MATCH_MACHINE(x) (x == EM_AARCH64)
+ #define ELFCLASSM	ELFCLASS64

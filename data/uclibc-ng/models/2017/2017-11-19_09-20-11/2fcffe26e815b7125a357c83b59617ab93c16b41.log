@@ -1,0 +1,5134 @@
+"2017-11-19 09:20:11 +0100"
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 642f9034a..d5aa02441 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -7,6 +7,9 @@ ARC:
+ Alexey Brodkin <Alexey.Brodkin@synopsys.com>
+ Vineet Gupta <Vineet.Gupta1@synopsys.com>
+ 
++CSKY:
++Guo Ren <ren_guo@c-sky.com>
++
+ MIPS:
+ Matthew Fortune <Matthew.Fortune@imgtec.com>
+ 
+diff --git a/Rules.mak b/Rules.mak
+index 0aa29a737..b553cd41c 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -453,6 +453,21 @@ ifeq ($(TARGET_ARCH),cris)
+ 	PIEFLAG_NAME:=-fpie
+ endif
+ 
++ifeq ($(TARGET_ARCH),csky)
++	# In csky gas implement, we use $t and $d to detect .text or literal pool.
++	# So we couldn't strip them for objdump.
++	STRIP_FLAGS += -K "$$"t -K "$$"d
++
++	CPU_CFLAGS-$(CK610)	+= -mcpu=ck610f
++	CPU_CFLAGS-$(CK810)	+= -mcpu=ck810f
++	CPU_CFLAGS-$(CK807)	+= -mcpu=ck807f
++
++	CPU_CFLAGS-$(UCLIBC_HAS_FPU)		+= -mhard-float
++
++	CPU_CFLAGS-$(ARCH_LITTLE_ENDIAN)	+= -mlittle-endian
++	CPU_CFLAGS-$(ARCH_BIG_ENDIAN)		+= -mbig-endian
++endif
++
+ ifeq ($(TARGET_ARCH),m68k)
+ 	# -fPIC is only supported for 68020 and above.  It is not supported
+ 	# for 68000, 68010, or Coldfire.
+diff --git a/extra/Configs/Config.csky b/extra/Configs/Config.csky
+new file mode 100644
+index 000000000..704f7be1b
+--- /dev/null
++++ b/extra/Configs/Config.csky
+@@ -0,0 +1,25 @@
++config TARGET_ARCH
++	string
++	default "csky"
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_ANY_ENDIAN
++	select ARCH_HAS_DEPRECATED_SYSCALLS
++	select ARCH_USE_MMU
++	select ARCH_HAS_MMU
++
++choice
++	prompt "Target Processor Type"
++	default CK610
++
++config CK610
++	bool "ck610"
++config CK810
++	bool "ck810"
++config CK807
++	bool "ck807"
++
++endchoice
++
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index ce832b55b..b5ee294db 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -22,6 +22,7 @@ choice
+ 	default TARGET_avr32 if DESIRED_TARGET_ARCH = "avr32"
+ 	default TARGET_bfin if DESIRED_TARGET_ARCH = "bfin"
+ 	default TARGET_cris if DESIRED_TARGET_ARCH = "cris"
++	default TARGET_csky if DESIRED_TARGET_ARCH = "csky"
+ 	default TARGET_frv if DESIRED_TARGET_ARCH = "frv"
+ 	default TARGET_h8300 if DESIRED_TARGET_ARCH = "h8300"
+ 	default TARGET_hppa if DESIRED_TARGET_ARCH = "hppa"
+@@ -70,6 +71,9 @@ config TARGET_c6x
+ config TARGET_cris
+ 	bool "cris"
+ 
++config TARGET_csky
++	bool "csky"
++
+ config TARGET_frv
+ 	bool "frv"
+ 
+@@ -156,6 +160,10 @@ if TARGET_cris
+ source "extra/Configs/Config.cris"
+ endif
+ 
++if TARGET_csky
++source "extra/Configs/Config.csky"
++endif
++
+ if TARGET_frv
+ source "extra/Configs/Config.frv"
+ endif
+diff --git a/extra/Configs/defconfigs/csky/defconfig b/extra/Configs/defconfigs/csky/defconfig
+new file mode 100644
+index 000000000..da837fc29
+--- /dev/null
++++ b/extra/Configs/defconfigs/csky/defconfig
+@@ -0,0 +1 @@
++TARGET_csky=y
+diff --git a/include/elf.h b/include/elf.h
+index c8488bb3d..fcb546a0f 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -1200,6 +1200,67 @@ typedef struct
+ #define ELF64_M_SIZE(info)	ELF32_M_SIZE (info)
+ #define ELF64_M_INFO(sym, size)	ELF32_M_INFO (sym, size)
+ 
++/* C-SKY relocs. */
++
++#define R_CKCORE_NONE               0
++#define R_CKCORE_ADDR32             1
++#define R_CKCORE_PCRELIMM8BY4       2
++#define R_CKCORE_PCRELIMM11BY2      3
++#define R_CKCORE_PCRELIMM4BY2       4
++#define R_CKCORE_PCREL32            5
++#define R_CKCORE_PCRELJSR_IMM11BY2  6
++#define R_CKCORE_GNU_VTINHERIT      7
++#define R_CKCORE_GNU_VTENTRY        8
++#define R_CKCORE_RELATIVE           9
++#define R_CKCORE_COPY               10
++#define R_CKCORE_GLOB_DAT           11
++#define R_CKCORE_JUMP_SLOT          12
++#define R_CKCORE_GOTOFF             13
++#define R_CKCORE_GOTPC              14
++#define R_CKCORE_GOT32              15
++#define R_CKCORE_PLT32              16
++#define R_CKCORE_ADDRGOT            17
++#define R_CKCORE_ADDRPLT            18
++#define R_CKCORE_PCREL_IMM26BY2     19
++#define R_CKCORE_PCREL_IMM16BY2     20
++#define R_CKCORE_PCREL_IMM16BY4     21
++#define R_CKCORE_PCREL_IMM10BY2     22
++#define R_CKCORE_PCREL_IMM10BY4     23
++#define R_CKCORE_ADDR_HI16          24
++#define R_CKCORE_ADDR_LO16          25
++#define R_CKCORE_GOTPC_HI16         26
++#define R_CKCORE_GOTPC_LO16         27
++#define R_CKCORE_GOTOFF_HI16        28
++#define R_CKCORE_GOTOFF_LO16        29
++#define R_CKCORE_GOT12              30
++#define R_CKCORE_GOT_HI16           31
++#define R_CKCORE_GOT_LO16           32
++#define R_CKCORE_PLT12              33
++#define R_CKCORE_PLT_HI16           34
++#define R_CKCORE_PLT_LO16           35
++#define R_CKCORE_ADDRGOT_HI16       36
++#define R_CKCORE_ADDRGOT_LO16       37
++#define R_CKCORE_ADDRPLT_HI16       38
++#define R_CKCORE_ADDRPLT_LO16       39
++#define R_CKCORE_PCREL_JSR_IMM26BY2 40
++#define R_CKCORE_TOFFSET_LO16       41
++#define R_CKCORE_DOFFSET_LO16       42
++#define R_CKCORE_PCREL_IMM18BY2     43
++#define R_CKCORE_DOFFSET_IMM18      44
++#define R_CKCORE_DOFFSET_IMM18BY2   45
++#define R_CKCORE_DOFFSET_IMM18BY4   46
++#define R_CKCORE_GOTOFF_IMM18       47
++#define R_CKCORE_GOT_IMM18BY4       48
++#define R_CKCORE_PLT_IMM18BY4       49
++#define R_CKCORE_PCREL_IMM7BY4      50
++#define R_CKCORE_TLS_LE32           51
++#define R_CKCORE_TLS_IE32           52
++#define R_CKCORE_TLS_GD32           53
++#define R_CKCORE_TLS_LDM32          54
++#define R_CKCORE_TLS_LDO32          55
++#define R_CKCORE_TLS_DTPMOD32       56
++#define R_CKCORE_TLS_DTPOFF32       57
++#define R_CKCORE_TLS_TPOFF32        58
+ 
+ /* Motorola 68k specific definitions.  */
+ 
+diff --git a/ldso/ldso/csky/dl-startup.h b/ldso/ldso/csky/dl-startup.h
+new file mode 100644
+index 000000000..0a74ab69f
+--- /dev/null
++++ b/ldso/ldso/csky/dl-startup.h
+@@ -0,0 +1,115 @@
++#ifdef __CSKYABIV2__
++
++__asm__ (
++    "    .text\n\t"
++    "    .globl _start\n\t"
++    "_start:\n\t"
++    "    mov a0, sp\n\t"
++    "    bsr _dl_start\n\t"
++    "    # Return from _dl_start, user entry point address in a0 \n\t"
++    "    # the code is PIC, so get global offset table\n\t"
++    "    grs gb,.Lgetpc1\n\t"
++    ".Lgetpc1:\n\t    "
++    "    lrw t0, .Lgetpc1@GOTPC\n\t"
++    "    add gb, gb,t0\n\t"
++    "    lrw r5, _dl_skip_args@GOT\n\t"
++    "    ldr.w r5, (gb, r5 << 0)\n\t"
++    "    # get the value of variable _dl_skip_args in r6\n\t"
++    "    ldw r6, (r5, 0)\n\t"
++    "    # get the argc in r7 \n\t"
++    "    ldw r7, (sp, 0)\n\t"
++    "    # adjust the argc, this may be a bug when _dl_skip_args > argc\n\t"
++    "    rsub r6, r7\n\t"
++    "    # adjust the stack\n\t"
++    "    mov r7, r6\n\t"
++    "    lsli r6, 2\n\t"
++    "    # adjust the stack pointer,this may be a bug, "
++    "    # because it must be 8 bytes align"
++    "    addu sp, r6\n\t"
++    "    stw  r7, (sp, 0)\n\t"
++    "    lrw  r7, _dl_fini@GOTOFF\n\t"
++    "    addu  r7, gb\n\t"
++    "    jmp a0"
++);
++#else
++__asm__ (
++    "    .text\n\t"
++    "    .globl _start\n\t"
++    "_start:\n\t"
++    "    mov r2, r0\n\t"
++# if defined(__ck810__)
++    "    bsr _dl_start\n\t"
++#else
++    "    # the code is PIC, so get global offset table\n\t"
++    "    bsr .Lgetpc0\n\t"
++    ".Lgetpc0:\n\t    "
++    "    lrw r14, .Lgetpc0@GOTPC\n\t"
++    "    add r14, r15\n\t"
++    "    lrw r4, _dl_start@GOTOFF\n\t"
++    "    add r4, r14\n\t"
++    "    jsr r4\n\t"
++#endif
++    "    # Return from _dl_start, user entry point address in r2 \n\t"
++    "    # the code is PIC, so get global offset table\n\t"
++    "    bsr .Lgetpc1\n\t"
++    ".Lgetpc1:\n\t    "
++    "    lrw r3, .Lgetpc1@GOTPC\n\t"
++    "    add r3, r15\n\t"
++# if defined(__ck810__)
++    "    ldw r5, (r3, _dl_skip_args@GOT)\n\t"
++#else
++    "    lrw r4, _dl_skip_args@GOT\n\t"
++    "    add r4, r3\n\t"
++    "    ldw r5, (r4, 0)\n\t"
++#endif
++    "    # get the value of variable _dl_skip_args in r6\n\t"
++    "    ldw r6, (r5, 0)\n\t"
++    "    # get the argc in r7 \n\t"
++    "    ldw r7, (r0, 0)\n\t"
++    "    # adjust the argc, this may be a bug when _dl_skip_args > argc\n\t"
++    "    rsub r6, r7\n\t"
++    "    # adjust the stack\n\t"
++    "    mov r7, r6\n\t"
++    "    lsli r6, 2\n\t"
++    "    # adjust the stack pointer,this may be a bug, "
++    "    # because it must be 8 bytes align"
++    "    addu r0, r6\n\t"
++    "    stw  r7, (r0, 0)\n\t"
++    "    lrw  r7, _dl_fini@GOTOFF\n\t"
++    "    addu  r7, r3\n\t"
++    "    jmp r2"
++);
++
++#endif
++
++/* Get a pointer to the argv array. */
++#define GET_ARGV(ARGVP, ARGS) ARGVP = (((unsigned long*)ARGS)+1)
++
++/* Function calls are not safe until the GOT relocations have been done.  */
++#define NO_FUNCS_BEFORE_BOOTSTRAP
++/* Handle relocation of the symbols in the dynamic loader. */
++static __always_inline
++void PERFORM_BOOTSTRAP_RELOC(ELF_RELOC *rpnt, unsigned long *reloc_addr,
++    unsigned long symbol_addr, unsigned long load_addr, attribute_unused Elf32_Sym *symtab)
++{
++    switch (ELF32_R_TYPE(rpnt->r_info))
++    {
++       case R_CKCORE_RELATIVE:
++            *reloc_addr = load_addr + rpnt->r_addend;
++            break;
++        case R_CKCORE_GLOB_DAT:
++        case R_CKCORE_JUMP_SLOT:
++            *reloc_addr = symbol_addr;
++            break;
++        case R_CKCORE_ADDR32:
++            *reloc_addr = symbol_addr + rpnt->r_addend;
++            break;
++        case R_CKCORE_NONE:
++            break;
++
++        default:
++            _dl_exit(1);
++    }
++}
++
++
+diff --git a/ldso/ldso/csky/dl-syscalls.h b/ldso/ldso/csky/dl-syscalls.h
+new file mode 100644
+index 000000000..f40c4fd31
+--- /dev/null
++++ b/ldso/ldso/csky/dl-syscalls.h
+@@ -0,0 +1 @@
++/* stub for arch-specific syscall issues */
+diff --git a/ldso/ldso/csky/dl-sysdep.h b/ldso/ldso/csky/dl-sysdep.h
+new file mode 100644
+index 000000000..c78dd81bc
+--- /dev/null
++++ b/ldso/ldso/csky/dl-sysdep.h
+@@ -0,0 +1,89 @@
++/* Define this if the system uses RELOCA.  */
++#define ELF_USES_RELOCA
++
++#include <elf.h>
++/* Initialization sequence for the GOT.  */
++#define INIT_GOT(GOT_BASE,MODULE)                           \
++do {                                                        \
++    GOT_BASE[2] = (unsigned long) _dl_linux_resolve;        \
++    GOT_BASE[1] = (unsigned long) MODULE;                   \
++} while(0)
++
++/* Here we define the magic numbers that this dynamic loader should accept */
++#define MAGIC1 EM_MCORE
++#undef  MAGIC2
++
++/* Used for error messages */
++#define ELF_TARGET "csky"
++
++struct elf_resolve;
++extern unsigned long _dl_linux_resolver(struct elf_resolve * tpnt, int reloc_entry);
++
++/* 65536 bytes alignment */
++#define PAGE_ALIGN 0xfffff000          /* need modify */
++#define ADDR_ALIGN 0xfff
++#define OFFS_ALIGN 0x7ffff000
++
++/* ELF_RTYPE_CLASS_PLT iff TYPE describes relocation of a PLT entry or
++   TLS variable, so undefined references should not be allowed to
++   define the value.
++   ELF_RTYPE_CLASS_NOCOPY iff TYPE should not be allowed to resolve to one
++   of the main executable's symbols, as for a COPY reloc.  */
++#define elf_machine_type_class(type) \
++  ((((type) == R_CKCORE_JUMP_SLOT || (type) == R_CKCORE_TLS_DTPMOD32 \
++     || (type) == R_CKCORE_TLS_DTPOFF32 || (type) == R_CKCORE_TLS_TPOFF32) \
++     * ELF_RTYPE_CLASS_PLT)                 \
++   | (((type) == R_CKCORE_COPY) * ELF_RTYPE_CLASS_COPY))
++
++/* Return the link-time address of _DYNAMIC.  Conveniently, this is the
++   first element of the GOT.  This must be inlined in a function which
++   uses global data.  */
++static __inline__ Elf32_Addr elf_machine_dynamic (void) attribute_unused;
++static __inline__ Elf32_Addr
++elf_machine_dynamic (void)
++{
++    register Elf32_Addr *got __asm__ ("gb");    /* need modify */
++    return *got;
++}
++
++/* this funtion will be called only when the auxvt[AT_BASE].a_un.a_val == 0
++   so it normal not be called, we should define a default address of the interprrter load */
++static __inline__ Elf32_Addr elf_machine_load_address (void) attribute_unused;
++static __inline__ Elf32_Addr
++elf_machine_load_address (void)
++{
++#ifdef __CSKYABIV2__
++  extern Elf32_Addr internal_function __dl_start (void *) __asm__ ("_dl_start");
++  Elf32_Addr got_addr = (Elf32_Addr) &__dl_start;
++  Elf32_Addr pcrel_addr;
++  __asm__  ("grs %0,_dl_start\n" : "=r" (pcrel_addr));
++#else
++  extern Elf32_Addr internal_function __start_flag (void *) __asm__ ("start_flag");
++  Elf32_Addr got_addr = (Elf32_Addr) &__start_flag;
++  Elf32_Addr pcrel_addr;
++  __asm__  ("subi sp,8\n"           \
++        "stw lr,(sp,0)\n"               \
++        "bsr start_flag\n"              \
++        "start_flag:"                           \
++        "mov  %0, lr\n"         \
++        "ldw lr,(sp,0)\n"       \
++        "addi sp,8\n"           \
++        : "=r" (pcrel_addr));
++#endif
++  return pcrel_addr - got_addr;
++
++}
++
++/* some relocation information are machine special */
++static __inline__ void
++elf_machine_relative (Elf32_Addr load_off, const Elf32_Addr rel_addr,
++              Elf32_Word relative_count)
++{
++    Elf32_Rela *rpnt = (void *) rel_addr;
++    --rpnt;
++    do {
++        Elf32_Addr *reloc_addr = (void *) (load_off + (++rpnt)->r_offset);
++        *reloc_addr = load_off + rpnt->r_addend;
++    } while (--relative_count); /* maybe need modify */
++}
++
+diff --git a/ldso/ldso/csky/elfinterp.c b/ldso/ldso/csky/elfinterp.c
+new file mode 100644
+index 000000000..1469c28f1
+--- /dev/null
++++ b/ldso/ldso/csky/elfinterp.c
+@@ -0,0 +1,297 @@
++#include "ldso.h"
++
++unsigned long
++_dl_linux_resolver(struct elf_resolve *tpnt, int reloc_entry)
++{
++    ELF_RELOC *this_reloc;
++    int symtab_index;
++    //char *rel_tab;
++    Elf32_Sym *sym_tab;
++    char *str_tab;
++    char *sym_name;
++    char *sym_addr;
++    char **reloc_addr;
++
++    this_reloc  = (ELF_RELOC *)tpnt->dynamic_info[DT_JMPREL];
++    this_reloc += reloc_entry;
++    //this_reloc = (ELF_RELOC *)(intptr_t)(rel_tab + reloc_entry);
++    symtab_index = ELF32_R_SYM(this_reloc->r_info);
++
++    sym_tab = (Elf32_Sym *)(intptr_t)tpnt->dynamic_info[DT_SYMTAB];
++    str_tab = (char *)tpnt->dynamic_info[DT_STRTAB];
++    sym_name = str_tab + sym_tab[symtab_index].st_name;
++
++    reloc_addr = (char **)((unsigned long)this_reloc->r_offset +
++                     (unsigned long)tpnt->loadaddr);
++
++    sym_addr = _dl_find_hash(sym_name, &_dl_loaded_modules->symbol_scope, tpnt, ELF_RTYPE_CLASS_PLT, NULL);
++
++    if (unlikely(!sym_addr)) {
++        _dl_dprintf(2, "%s: 1can't resolve symbol '%s' in lib '%s'.\n", _dl_progname, sym_name, tpnt->libname);
++        _dl_exit(1);
++    }
++
++    *reloc_addr = sym_addr;
++
++    return (unsigned long)sym_addr;
++}
++
++static int
++_dl_parse(struct elf_resolve *tpnt, struct r_scope_elem*scope,
++      unsigned long rel_addr, unsigned long rel_size,
++      int (*reloc_fnc)(struct elf_resolve *tpnt, struct r_scope_elem*scope,
++               ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab))
++{
++    unsigned int i;
++    char *strtab;
++    Elf32_Sym *symtab;
++    ELF_RELOC *rpnt;
++    int symtab_index;
++
++    /* Parse the relocation information. */
++    rpnt = (ELF_RELOC *)(intptr_t)rel_addr;
++    rel_size /= sizeof(ELF_RELOC);
++    symtab = (Elf32_Sym *)(intptr_t)tpnt->dynamic_info[DT_SYMTAB];
++    strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++
++    for (i = 0; i < rel_size; i++, rpnt++) {
++        int res;
++
++        symtab_index = ELF32_R_SYM(rpnt->r_info);
++
++        debug_sym(symtab, strtab, symtab_index);
++        debug_reloc(symtab, strtab, rpnt);
++
++        res = reloc_fnc(tpnt, scope, rpnt, symtab, strtab);
++        if (res == 0)
++            continue;
++        _dl_dprintf(2, "\n%s: ", _dl_progname);
++
++        if (symtab_index)
++            _dl_dprintf(2, "symbol '%s': ",
++                    strtab + symtab[symtab_index].st_name);
++        if (unlikely(res < 0)) {
++            int reloc_type = ELF32_R_TYPE(rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++            _dl_dprintf(2, "2can't handle reloc type '%s' in lib '%s'\n",
++                    _dl_reltypes(reloc_type), tpnt->libname);
++#else
++            _dl_dprintf(2, "3can't handle reloc type %x in lib '%s'\n",
++                    reloc_type, tpnt->libname);
++#endif
++            return res;
++        } else if (unlikely(res > 0)) {
++            _dl_dprintf(2, "4can't resolve symbol in lib '%s'.\n", tpnt->libname);
++            return res;
++        }
++    }
++
++    return 0;
++}
++
++static int
++_dl_do_reloc(struct elf_resolve *tpnt, struct r_scope_elem *scope,
++         ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab)
++{
++    int reloc_type;
++    int symtab_index;
++    char *symname;
++    unsigned long *reloc_addr;
++    unsigned long symbol_addr;
++    struct symbol_ref sym_ref;
++#if defined (__SUPPORT_LD_DEBUG__)
++    unsigned long old_val;
++#endif
++#if defined USE_TLS && USE_TLS
++	struct elf_resolve *tls_tpnt = NULL;
++#endif
++#if defined(__CSKYABIV2__)
++    unsigned int insn_opcode = 0x0;
++    unsigned short *opcode16_addr;
++#endif
++
++    reloc_addr = (unsigned long *)(intptr_t)(tpnt->loadaddr + (unsigned long)rpnt->r_offset);
++#if defined(__CSKYABIV2__)
++    opcode16_addr = (unsigned short *)reloc_addr;
++#endif
++	reloc_type = ELF32_R_TYPE(rpnt->r_info);
++
++	if (reloc_type == R_CKCORE_NONE)
++		return 0;
++
++    symtab_index = ELF32_R_SYM(rpnt->r_info);
++    symbol_addr = 0;
++    sym_ref.sym = &symtab[symtab_index];
++    sym_ref.tpnt = NULL;
++    symname = strtab + symtab[symtab_index].st_name;
++    if (symtab_index) {
++        symbol_addr = (unsigned long)_dl_find_hash(symname, scope, tpnt,
++                               elf_machine_type_class(reloc_type), &sym_ref);
++    /*
++         * We want to allow undefined references to weak symbols - this
++         * might have been intentional.  We should not be linking local
++         * symbols here, so all bases should be covered.
++         */
++      //  if (unlikely(!symbol_addr && ELF32_ST_BIND(symtab[symtab_index].st_info) != STB_WEAK))
++		if (!symbol_addr && (ELF_ST_TYPE(symtab[symtab_index].st_info) != STT_TLS)
++			&& (ELF_ST_BIND(symtab[symtab_index].st_info) != STB_WEAK))
++            return 1;
++#if defined USE_TLS && USE_TLS
++		tls_tpnt = sym_ref.tpnt;
++#endif
++    }else{
++		/*
++		 * Relocs against STN_UNDEF are usually treated as using a
++		 * symbol value of zero, and using the module containing the
++		 * reloc itself.
++		 */
++        symbol_addr = symtab[symtab_index].st_name;
++#if defined USE_TLS && USE_TLS
++		tls_tpnt = tpnt;
++#endif
++    }
++#if defined (__SUPPORT_LD_DEBUG__)
++    old_val = *reloc_addr;
++#endif
++
++    switch (reloc_type) {            /* need modify */
++        case R_CKCORE_NONE:
++		case R_CKCORE_PCRELJSR_IMM11BY2:
++            break;
++        case R_CKCORE_ADDR32:
++            *reloc_addr = symbol_addr + rpnt->r_addend;
++            break;
++        case R_CKCORE_GLOB_DAT:
++        case R_CKCORE_JUMP_SLOT:
++            *reloc_addr = symbol_addr;
++            break;
++        case R_CKCORE_RELATIVE:
++            *reloc_addr = (unsigned long)tpnt->loadaddr + rpnt->r_addend;
++            break;
++#if defined(__CSKYABIV2__)
++        case R_CKCORE_ADDR_HI16:
++            insn_opcode = (*opcode16_addr << 16) | (*(opcode16_addr + 1));
++            insn_opcode = (insn_opcode & 0xffff0000)
++                            | (((symbol_addr + rpnt->r_addend) >> 16) & 0xffff);
++            *(opcode16_addr++) = (unsigned short)(insn_opcode >> 16);
++            *opcode16_addr = (unsigned short)(insn_opcode & 0xffff);
++            break;
++        case R_CKCORE_ADDR_LO16:
++            insn_opcode = (*opcode16_addr << 16) | (*(opcode16_addr + 1));
++            insn_opcode = (insn_opcode & 0xffff0000)
++                            | ((symbol_addr + rpnt->r_addend) & 0xffff);
++            *(opcode16_addr++) = (unsigned short)(insn_opcode >> 16);
++            *opcode16_addr = (unsigned short)(insn_opcode & 0xffff);
++            break;
++        case R_CKCORE_PCREL_IMM26BY2:
++        {
++            unsigned int offset = ((symbol_addr + rpnt->r_addend -
++                                    (unsigned int)reloc_addr) >> 1);
++            insn_opcode = (*opcode16_addr << 16) | (*(opcode16_addr + 1));
++            if (offset > 0x3ffffff){
++                _dl_dprintf(2, "%s:The reloc R_CKCORE_PCREL_IMM26BY2 cannot reach the symbol '%s'.\n", _dl_progname, symname);
++                _dl_exit(1);
++            }
++            insn_opcode = (insn_opcode & ~0x3ffffff) | offset;
++            *(opcode16_addr++) = (unsigned short)(insn_opcode >> 16);
++            *opcode16_addr = (unsigned short)(insn_opcode & 0xffff);
++            break;
++        }
++        case R_CKCORE_PCREL_JSR_IMM26BY2:
++            break;
++#endif
++        case R_CKCORE_COPY:
++            if (symbol_addr) {
++#if defined (__SUPPORT_LD_DEBUG__)
++                if (_dl_debug_move)
++                    _dl_dprintf(_dl_debug_file,
++                            "\n%s move %d bytes from %x to %x",
++                            symname, symtab[symtab_index].st_size,
++                            symbol_addr, reloc_addr);
++#endif
++
++                _dl_memcpy((char *)reloc_addr,
++                       (char *)symbol_addr,
++                       symtab[symtab_index].st_size);
++            }
++            break;
++#if defined USE_TLS && USE_TLS
++		case R_CKCORE_TLS_DTPMOD32:
++			*reloc_addr = tls_tpnt->l_tls_modid;
++			break;
++		case R_CKCORE_TLS_DTPOFF32:
++			*reloc_addr += symbol_addr;
++			break;
++		case R_CKCORE_TLS_TPOFF32:
++			CHECK_STATIC_TLS ((struct link_map *) tls_tpnt);
++			*reloc_addr += tls_tpnt->l_tls_offset + symbol_addr;
++			break;
++#endif
++        default:
++            return -1;
++    }
++
++#if defined (__SUPPORT_LD_DEBUG__)
++    if (_dl_debug_reloc && _dl_debug_detail)
++        _dl_dprintf(_dl_debug_file, "\n\tpatched: %x ==> %x @ %x",
++                old_val, *reloc_addr, reloc_addr);
++#endif
++
++    return 0;
++}
++
++static int
++_dl_do_lazy_reloc(struct elf_resolve *tpnt, struct r_scope_elem *scope,
++          ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab)
++{
++    int reloc_type;
++    unsigned long *reloc_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++    unsigned long old_val;
++#endif
++
++    reloc_addr = (unsigned long *)(intptr_t)(tpnt->loadaddr + (unsigned long)rpnt->r_offset);
++    reloc_type = ELF32_R_TYPE(rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++    old_val = *reloc_addr;
++#endif
++
++    switch (reloc_type) {
++        case R_CKCORE_NONE:
++		case R_CKCORE_PCRELJSR_IMM11BY2:
++            break;
++        case R_CKCORE_JUMP_SLOT:
++            *reloc_addr = (unsigned long)tpnt->loadaddr + rpnt->r_addend;
++            break;
++        default:
++            return -1;
++    }
++
++#if defined (__SUPPORT_LD_DEBUG__)
++    if (_dl_debug_reloc && _dl_debug_detail)
++        _dl_dprintf(_dl_debug_file, "\n\tpatched: %x ==> %x @ %x",
++                old_val, *reloc_addr, reloc_addr);
++#endif
++
++    return 0;
++}
++
++
++void
++_dl_parse_lazy_relocation_information(struct dyn_elf *rpnt,
++                      unsigned long rel_addr,
++                      unsigned long rel_size)
++{
++    (void)_dl_parse(rpnt->dyn, NULL, rel_addr, rel_size, _dl_do_lazy_reloc);
++}
++
++int
++_dl_parse_relocation_information(struct dyn_elf *rpnt,
++                 struct r_scope_elem *scope,
++                 unsigned long rel_addr,
++                 unsigned long rel_size)
++{
++    return _dl_parse(rpnt->dyn, scope, rel_addr, rel_size, _dl_do_reloc);
++}
+diff --git a/ldso/ldso/csky/read_tp.S b/ldso/ldso/csky/read_tp.S
+new file mode 100644
+index 000000000..ef8d509d5
+--- /dev/null
++++ b/ldso/ldso/csky/read_tp.S
+@@ -0,0 +1,17 @@
++#include <sysdep.h>
++
++#ifndef NOT_IN_libc
++.global __read_tp
++#else
++.hidden __read_tp
++#endif
++
++ENTRY (__read_tp)
++#ifdef __CSKYABIV2__
++	mov	a0, tls
++#else
++	trap 3
++#endif
++	rts
++END (__read_tp)
++
+diff --git a/ldso/ldso/csky/resolve.S b/ldso/ldso/csky/resolve.S
+new file mode 100644
+index 000000000..46a436345
+--- /dev/null
++++ b/ldso/ldso/csky/resolve.S
+@@ -0,0 +1,72 @@
++/*
++ * This function is not called directly. It is jumped when attempting to use a
++ * symbol that has not yet been resolved.
++ *
++ *.plt*:
++ *   subi r0, 32
++ *   stw r2, (r0, 0)
++ *   stw r3, (r0, 4)
++ *   lrw r3, #offset
++ *   ldw r2, (gb, 8)
++ *   jmp r2
++ */
++
++.import _dl_linux_resolver
++
++.text
++.globl _dl_linux_resolve
++.type  _dl_linux_resolve,@function
++
++_dl_linux_resolve:
++#ifdef __CSKYABIV1__
++    stw  r4, (r0, 8)
++    stw  r5, (r0, 12)
++    stw  r6, (r0, 16)
++    stw  r7, (r0, 20)
++    stw  r15,(r0, 24)
++    # load the ID of this module
++    ldw  r2, (gb, 4)
++    # r2 = id, r3 = offset(do it in plt*)
++#ifdef __PIC__
++    # get global offset table address_
++    bsr .L2
++.L2:
++    lrw r7, .L2@GOTPC
++    add r7, r15
++    # get the address of function (_dl_linux_resolver) in got table
++    lrw r6, _dl_linux_resolver@GOT
++    add r6, r7
++    ldw r5, (r6, 0)
++    jsr r5
++#else  /* no __PIC__ */
++    jsri  _dl_linux_resolver      /* need modify */
++#endif
++    # Return from _dl_linux_resolver, the address of function is in r2
++    mov  r1, r2
++    # Restore the registers
++    ldw  r2, (r0, 0)
++    ldw  r3, (r0, 4)
++    ldw  r4, (r0, 8)
++    ldw  r5, (r0, 12)
++    ldw  r6, (r0, 16)
++    ldw  r7, (r0, 20)
++    ldw  r15,(r0, 24)
++    # Restore the r0, because r0 is subtracted in PLT table
++    addi r0, 32
++    # The address of function is in r1, call the function without saving pc
++    jmp  r1
++#else       /* __CSKYABIV1__ */
++    subi sp, 20
++    stm  a0-a3, (sp)
++    stw  lr, (sp, 16)
++    # a0 = id, a1 = offset(do it in plt*)
++    ldw  a0,  (gb, 4)
++    mov  a1, t1
++    bsr  _dl_linux_resolver
++    mov  t0, a0
++    ldw  lr, (sp, 16)
++    ldm  a0-a3, (sp)
++    addi sp, 20
++    jmp  t0
++
++#endif
+diff --git a/libc/string/csky/Makefile b/libc/string/csky/Makefile
+new file mode 100644
+index 000000000..ce5add623
+--- /dev/null
++++ b/libc/string/csky/Makefile
+@@ -0,0 +1,6 @@
++top_srcdir:=../../../
++top_builddir:=../../../
++all: objs
++include $(top_builddir)Rules.mak
++include ../Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libc/string/csky/cskyv1/memcpy.S b/libc/string/csky/cskyv1/memcpy.S
+new file mode 100644
+index 000000000..dfa7f64a4
+--- /dev/null
++++ b/libc/string/csky/cskyv1/memcpy.S
+@@ -0,0 +1,211 @@
++.macro      GET_FRONT_BITS rx ry
++#ifdef      __cskyLE__
++    lsr     \rx, \ry
++#else
++    lsl     \rx, \ry
++#endif
++.endm
++
++.macro      GET_AFTER_BITS rx ry
++#ifdef      __cskyLE__
++    lsl     \rx, \ry
++#else
++    lsr     \rx, \ry
++#endif
++.endm
++
++
++#ifdef WANT_WIDE
++# define Wmemcpy wmemcpy
++#else
++# define Wmemcpy memcpy
++#endif
++
++/* void *memcpy(void *dest, const void *src, size_t n); */
++
++	.text
++	.align 2
++	.global Wmemcpy
++	.type   Wmemcpy, @function
++Wmemcpy:
++    mov     r7, r2
++    cmplti  r4, 4                                   /* If len less than 4 bytes */
++    jbt     .L_copy_by_byte
++
++    mov     r6, r2
++    andi    r6, 3
++    cmpnei  r6, 0
++    jbt     .L_dest_not_aligned                     /* If dest is not 4 bytes aligned */
++.L0:
++    mov     r6, r3
++    andi    r6, 3
++    cmpnei  r6, 0
++    jbt     .L_dest_aligned_but_src_not_aligned     /* If dest is aligned, but src is not aligned */
++
++    cmplti  r4, 16                                  /* dest and src are all aligned */
++    jbt     .L_aligned_and_len_less_16bytes         /* If len less than 16 bytes */
++
++    subi    sp, 8
++    stw     r8, (sp, 0)
++    stw     r9, (sp, 4)
++.L_aligned_and_len_larger_16bytes:                  /* src and dst are all aligned, and len > 16 bytes */
++    ldw     r1, (r3, 0)
++    ldw     r5, (r3, 4)
++    ldw     r8, (r3, 8)
++    ldw     r9, (r3, 12)
++    stw     r1, (r7, 0)
++    stw     r5, (r7, 4)
++    stw     r8, (r7, 8)
++    stw     r9, (r7, 12)
++    subi    r4, 16
++    addi    r3, 16
++    addi    r7, 16
++    cmplti  r4, 16
++    jbf     .L_aligned_and_len_larger_16bytes
++    ldw     r8, (sp, 0)
++    ldw     r9, (sp, 4)
++    addi    sp, 8
++
++.L_aligned_and_len_less_16bytes:
++    cmplti  r4, 4
++    jbt     .L_copy_by_byte
++    ldw     r1, (r3, 0)
++    stw     r1, (r7, 0)
++    subi    r4, 4
++    addi    r3, 4
++    addi    r7, 4
++    jbr     .L_aligned_and_len_less_16bytes
++
++.L_copy_by_byte:                                    /* len less than 4 bytes */
++    cmpnei  r4, 0
++    jbf     .L_return
++    ldb     r1, (r3, 0)
++    stb     r1, (r7, 0)
++    subi    r4, 1
++    addi    r3, 1
++    addi    r7, 1
++    jbr     .L_copy_by_byte
++
++.L_return:
++    rts
++
++/* If dest is not aligned, we copy some bytes to make dest align.
++   Then we should judge whether src is aligned. */
++
++.L_dest_not_aligned:
++    mov     r5, r3                                  /* consider overlapped case */
++    rsub    r5, r5, r7
++    abs     r5, r5
++    cmplt   r5, r4
++    jbt     .L_copy_by_byte
++
++.L1:
++    ldb     r1, (r3, 0)                             /* makes the dest align. */
++    stb     r1, (r7, 0)
++    addi    r6, 1
++    subi    r4, 1
++    addi    r3, 1
++    addi    r7, 1
++    cmpnei  r6, 4
++    jbt     .L1
++    cmplti  r4, 4
++    jbt     .L_copy_by_byte
++    jbf     .L0                                     /* judge whether the src is aligned. */
++
++.L_dest_aligned_but_src_not_aligned:
++    mov     r5, r3                                  /* consider overlapped case*/
++    rsub    r5, r5, r7
++    abs     r5, r5
++    cmplt   r5, r4
++    jbt     .L_copy_by_byte
++
++    bclri   r3, 0
++    bclri   r3, 1
++    ldw     r1, (r3, 0)
++    addi    r3, 4
++
++    subi    sp, 16
++    stw     r11, (sp,0)
++    stw     r12, (sp,4)
++    stw     r13, (sp,8)
++    movi    r5, 8
++    mult    r5, r6                                  /* r6 is used to store tne misaligned bits */
++    mov     r12, r5
++    rsubi   r5, 31
++    addi    r5, 1
++    mov     r13, r5
++
++    cmplti  r4, 16
++    jbt     .L_not_aligned_and_len_less_16bytes
++
++    stw     r8, (sp, 12)
++    subi    sp, 8
++    stw     r9, (sp, 0)
++    stw     r10, (sp, 4)
++.L_not_aligned_and_len_larger_16bytes:
++    ldw     r5, (r3, 0)
++    ldw     r11, (r3, 4)
++    ldw     r8, (r3, 8)
++    ldw     r9, (r3, 12)
++
++    GET_FRONT_BITS r1 r12                          /* little or big endian? */
++    mov     r10, r5
++    GET_AFTER_BITS r5 r13
++    or      r5, r1
++
++    GET_FRONT_BITS r10 r12
++    mov     r1, r11
++    GET_AFTER_BITS r11 r13
++    or      r11, r10
++
++    GET_FRONT_BITS r1 r12
++    mov     r10, r8
++    GET_AFTER_BITS r8 r13
++    or      r8, r1
++
++    GET_FRONT_BITS r10 r12
++    mov     r1, r9
++    GET_AFTER_BITS r9 r13
++    or      r9, r10
++
++    stw     r5, (r7, 0)
++    stw     r11, (r7, 4)
++    stw     r8, (r7, 8)
++    stw     r9, (r7, 12)
++    subi    r4, 16
++    addi    r3, 16
++    addi    r7, 16
++    cmplti  r4, 16
++    jbf     .L_not_aligned_and_len_larger_16bytes
++    ldw     r9, (sp, 0)
++    ldw     r10, (sp, 4)
++    addi    sp, 8
++    ldw     r8, (sp,12)
++
++.L_not_aligned_and_len_less_16bytes:
++    cmplti  r4, 4
++    jbf     .L2
++    rsubi   r6, 4                                   /* r6 is used to stored the misaligned bits */
++    subu    r3, r6                                 /* initial the position */
++    ldw     r11, (sp, 0)
++    ldw     r12, (sp, 4)
++    ldw     r13, (sp, 8)
++    addi    sp, 16
++    jbr     .L_copy_by_byte
++.L2:
++    ldw     r5, (r3, 0)
++    GET_FRONT_BITS r1 r12
++    mov     r11, r1
++    mov     r1, r5
++    GET_AFTER_BITS r5 r13
++    or      r5, r11
++    stw     r5, (r7, 0)
++    subi    r4, 4
++    addi    r3, 4
++    addi    r7, 4
++    jbr     .L_not_aligned_and_len_less_16bytes
++
++.size   Wmemcpy, .-Wmemcpy
++
++libc_hidden_def(Wmemcpy)
++.weak Wmemcpy
+diff --git a/libc/string/csky/cskyv1/strcmp.S b/libc/string/csky/cskyv1/strcmp.S
+new file mode 100644
+index 000000000..e22f29ebd
+--- /dev/null
++++ b/libc/string/csky/cskyv1/strcmp.S
+@@ -0,0 +1,185 @@
++#include <features.h>
++#include <endian.h>
++
++#ifdef WANT_WIDE
++# define Wstrcmp wcscmp
++# define Wstrcoll wcscoll
++#else
++# define Wstrcmp strcmp
++# define Wstrcoll strcoll
++#endif
++
++/* FIXME attention!!! it may be a bug when WANT_WIDE define */
++/*libc_hidden_proto(Wstrcmp)*/
++	.align 2
++	.global Wstrcmp
++	.type   Wstrcmp, @function
++Wstrcmp:
++    mov        r6, r2
++
++    or         r2, r3
++    andi       r2, 0x3
++    cmpnei     r2, 0x0     /* d or s is aligned ?*/
++    bt         4f          /* if not aligned, goto 4f*/
++    1:                   /* if aligned, load word each time.*/
++    ldw        r2, (r6, 0)
++    ldw        r7, (r3, 0)
++    cmpne      r2, r7
++    bt         1f       /* if d[i] != s[i], goto 1f */
++    tstnbz     r2       /* if d[i] == s[i], check if d or s is at the end. */
++    bf         3f       /* if at the end, goto 3f (finish comparing) */
++
++    ldw        r2, (r6, 4)
++    ldw        r7, (r3, 4)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    ldw        r2, (r6, 8)
++    ldw        r7, (r3, 8)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    ldw        r2, (r6, 12)
++    ldw        r7, (r3, 12)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    ldw        r2, (r6, 16)
++    ldw        r7, (r3, 16)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    ldw        r2, (r6, 20)
++    ldw        r7, (r3, 20)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    ldw        r2, (r6, 24)
++    ldw        r7, (r3, 24)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    ldw        r2, (r6, 28)
++    ldw        r7, (r3, 28)
++    cmpne      r2, r7
++    bt         1f
++    tstnbz     r2
++    bf         3f
++
++    addi       r6, 32
++    addi       r3, 32
++    br         1b
++
++#ifdef __CSKYBE__
++    /* d[i] != s[i] in word, so we check byte 0 ? */
++    1:
++    xtrb0      r1, r2
++    mov        r4, r1
++    xtrb0      r1, r7
++    cmpne      r4, r1
++    bt         2f
++    cmpnei     r4, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb1      r1, r2
++    mov        r4, r1
++    xtrb1      r1, r7
++    cmpne      r4, r1
++    bt         2f
++    cmpnei     r4, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb2      r1, r2
++    mov        r4, r1
++    xtrb2      r1, r7
++    cmpne      r4, r1
++    bt         2f
++    cmpnei     r4, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb3      r1, r2
++    mov        r4, r1
++    xtrb3      r1, r7
++
++#else /* little endian */
++    /* d[i] != s[i] in word, so we check byte 0 ? */
++1:
++    xtrb3      r1, r2
++    mov        r4, r1
++    xtrb3      r1, r7
++    cmpne      r4, r1
++    bt         2f
++    cmpnei     r4, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb2      r1, r2
++    mov        r4, r1
++    xtrb2      r1, r7
++    cmpne      r4, r1
++    bt         2f
++    cmpnei     r4, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb1      r1, r2
++    mov        r4, r1
++    xtrb1      r1, r7
++    cmpne      r4, r1
++    bt         2f
++    cmpnei     r4, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb0      r1, r2
++    mov        r4, r1
++    xtrb0      r1, r7
++
++#endif
++    /* get the result when d[i] != s[i] */
++2:
++    subu       r4, r1
++    mov        r2, r4
++    jmp        r15
++
++    /* return when d[i] == s[i] */
++3:
++    subu       r2, r7
++    jmp        r15
++
++     /* cmp when d or s is not aligned */
++4:
++     ldb       r2, (r6,0)
++     ldb       r7, (r3, 0)
++     cmpne     r2, r7
++     bt        3b
++     addi      r3, 1
++     addi      r6, 1
++     cmpnei    r2, 0
++     bt        4b
++     jmp       r15
++
++     .size   Wstrcmp, .-Wstrcmp
++
++libc_hidden_def(Wstrcmp)
++.weak Wstrcmp
++#ifndef __UCLIBC_HAS_LOCALE__
++/* libc_hidden_proto(Wstrcoll) */
++strong_alias(Wstrcmp,Wstrcoll)
++libc_hidden_def(Wstrcoll)
++#endif
+diff --git a/libc/string/csky/cskyv1/strcpy.S b/libc/string/csky/cskyv1/strcpy.S
+new file mode 100644
+index 000000000..c2f1e7a0f
+--- /dev/null
++++ b/libc/string/csky/cskyv1/strcpy.S
+@@ -0,0 +1,139 @@
++#include <features.h>
++#include <endian.h>
++
++#ifdef WANT_WIDE
++# define Wstrcpy wcscpy
++#else
++# define Wstrcpy strcpy
++#endif
++
++	.align 2
++	.global Wstrcpy
++	.type   Wstrcpy, @function
++Wstrcpy:
++
++		mov     r6, r2
++        mov     r7, r3
++        or      r7, r6
++        andi    r7, 3
++        cmpnei  r7, 0
++        bf      2f
++       1:
++        ldb     r5, (r3)
++        stb     r5, (r6)
++        addi    r3, 1
++        addi    r6, 1
++        cmpnei  r5, 0
++        bt      1b
++       1:
++        jmp     r15
++
++       2:
++        ldw     r5, (r3)
++        tstnbz  r5
++        bf      10f
++        stw     r5, (r6)
++
++        ldw     r5, (r3, 4)
++        tstnbz  r5
++        bf      3f
++        stw     r5, (r6, 4)
++
++        ldw     r5, (r3, 8)
++        tstnbz  r5
++        bf      4f
++        stw     r5, (r6, 8)
++
++        ldw     r5, (r3, 12)
++        tstnbz  r5
++        bf      5f
++        stw     r5, (r6, 12)
++
++        ldw     r5, (r3, 16)
++        tstnbz  r5
++        bf      6f
++        stw     r5, (r6, 16)
++
++        ldw     r5, (r3, 20)
++        tstnbz  r5
++        bf      7f
++        stw     r5, (r6, 20)
++
++        ldw     r5, (r3, 24)
++        tstnbz  r5
++        bf      8f
++        stw     r5, (r6, 24)
++
++        ldw     r5, (r3, 28)
++        tstnbz  r5
++        bf      9f
++        stw     r5, (r6, 28)
++
++        addi    r6, 32
++        addi    r3, 32
++        br      2b
++
++       3:
++        addi    r6, 4
++        br      10f
++
++       4:
++        addi    r6, 8
++        br      10f
++
++       5:
++        addi    r6, 12
++        br      10f
++
++       6:
++        addi    r6, 16
++        br      10f
++
++       7:
++        addi    r6, 20
++        br      10f
++
++       8:
++        addi    r6, 24
++        br      10f
++
++       9:
++        addi    r6, 28
++
++       10:
++#ifdef __CSKYBE__
++        xtrb0   r1, r5
++        stb     r1, (r6)
++        cmpnei  r1, 0
++        bf      5f
++        xtrb1   r1, r5
++        stb     r1, (r6, 1)
++        cmpnei  r1, 0
++        bf      5f
++        xtrb2   r1, r5
++        stb     r1, (r6, 2 )
++        cmpnei  r1, 0
++        bf      5f
++        stw     r5, (r6)
++
++#else
++        xtrb3   r1, r5
++        stb     r1, (r6)
++        cmpnei  r1, 0
++        bf      5f
++        xtrb2   r1, r5
++        stb     r1, (r6, 1)
++        cmpnei  r1, 0
++        bf      5f
++        xtrb1   r1, r5
++        stb     r1, (r6, 2)
++        cmpnei  r1, 0
++        bf      5f
++        stw     r5, (r6)
++#endif
++       5:
++        jmp     r15
++
++
++libc_hidden_def(Wstrcpy)
++.weak Wstrcpy
+diff --git a/libc/string/csky/cskyv2/abiv2_memcpy.S b/libc/string/csky/cskyv2/abiv2_memcpy.S
+new file mode 100644
+index 000000000..c112ec01b
+--- /dev/null
++++ b/libc/string/csky/cskyv2/abiv2_memcpy.S
+@@ -0,0 +1,184 @@
++.macro      GET_FRONT_BITS rx ry
++#ifdef      __cskyLE__
++    lsr     \rx, \ry
++#else
++    lsl     \rx, \ry
++#endif
++.endm
++
++.macro      GET_AFTER_BITS rx ry
++#ifdef      __cskyLE__
++    lsl     \rx, \ry
++#else
++    lsr     \rx, \ry
++#endif
++.endm
++
++
++#ifdef WANT_WIDE
++# define Wmemcpy wmemcpy
++#else
++# define Wmemcpy memcpy
++#endif
++
++/* void *memcpy(void *dest, const void *src, size_t n); */
++
++    .text
++	.align 2
++	.global Wmemcpy
++	.type   Wmemcpy, @function
++Wmemcpy:
++    mov     r3, r0
++    cmplti  r2, 4                                            /* If len less than 4 bytes */
++    jbt     .L_copy_by_byte
++
++    mov     r12, r0
++    andi    r12, 3
++    bnez    r12, .L_dest_not_aligned                         /* If dest is not 4 bytes aligned */
++.L0:
++    mov     r12, r1
++    andi    r12, 3
++    bnez    r12, .L_dest_aligned_but_src_not_aligned         /* If dest is aligned, but src is not aligned */
++
++    cmplti  r2, 16                                           /* dest and src are all aligned */
++    jbt     .L_aligned_and_len_less_16bytes                  /* If len less than 16 bytes */
++
++.L_aligned_and_len_larger_16bytes:                           /* src and dst are all aligned, and len > 16 bytes */
++    ldw     r18, (r1, 0)
++    ldw     r19, (r1, 4)
++    ldw     r20, (r1, 8)
++    ldw     r21, (r1, 12)
++    stw     r18, (r3, 0)
++    stw     r19, (r3, 4)
++    stw     r20, (r3, 8)
++    stw     r21, (r3, 12)
++    subi    r2, 16
++    addi    r1, 16
++    addi    r3, 16
++    cmplti  r2, 16
++    jbf     .L_aligned_and_len_larger_16bytes
++
++.L_aligned_and_len_less_16bytes:
++    cmplti  r2, 4
++    jbt     .L_copy_by_byte
++    ldw     r18, (r1, 0)
++    stw     r18, (r3, 0)
++    subi    r2, 4
++    addi    r1, 4
++    addi    r3, 4
++    jbr     .L_aligned_and_len_less_16bytes
++
++.L_copy_by_byte:                                    /* len less than 4 bytes */
++    cmpnei  r2, 0
++    jbf     .L_return
++    ldb     r18, (r1, 0)
++    stb     r18, (r3, 0)
++    subi    r2, 1
++    addi    r1, 1
++    addi    r3, 1
++    jbr     .L_copy_by_byte
++
++.L_return:
++    rts
++
++/* If dest is not aligned, just copying some bytes makes the dest align.
++   After that, we judge whether the src is aligned. */
++
++.L_dest_not_aligned:
++    rsub    r13, r1, r3                              /* consider overlapped case */
++    abs     r13, r13
++    cmplt   r13, r2
++    jbt     .L_copy_by_byte
++
++.L1:
++    ldb     r18, (r1, 0)                             /* makes the dest align. */
++    stb     r18, (r3, 0)
++    addi    r12, 1
++    subi    r2, 1
++    addi    r1, 1
++    addi    r3, 1
++    cmpnei  r12, 4
++    jbt     .L1
++    cmplti  r2, 4
++    jbt     .L_copy_by_byte
++    jbf     .L0                                     /* judge whether the src is aligned. */
++
++.L_dest_aligned_but_src_not_aligned:
++    rsub    r13, r1, r3                             /* consider overlapped case */
++    abs     r13, r13
++    cmplt   r13, r2
++    jbt     .L_copy_by_byte
++
++    bclri   r1, 0
++    bclri   r1, 1
++    ldw     r18, (r1, 0)
++    addi    r1, 4
++
++    movi    r13, 8
++    mult    r13, r12
++    mov     r24, r13                                /* r12 is used to store the misaligned bits */
++    rsubi   r13, 32
++    mov     r25, r13
++
++    cmplti  r2, 16
++    jbt     .L_not_aligned_and_len_less_16bytes
++
++.L_not_aligned_and_len_larger_16bytes:
++    ldw     r20, (r1, 0)
++    ldw     r21, (r1, 4)
++    ldw     r22, (r1, 8)
++    ldw     r23, (r1, 12)
++
++    GET_FRONT_BITS r18 r24                          /* little or big endian? */
++    mov     r19, r20
++    GET_AFTER_BITS r20 r25
++    or      r20, r18
++
++    GET_FRONT_BITS r19 r24
++    mov     r18, r21
++    GET_AFTER_BITS r21 r13
++    or      r21, r19
++
++    GET_FRONT_BITS r18 r24
++    mov     r19, r22
++    GET_AFTER_BITS r22 r25
++    or      r22, r18
++
++    GET_FRONT_BITS r19 r24
++    mov     r18, r23
++    GET_AFTER_BITS r23 r25
++    or      r23, r19
++
++    stw     r20, (r3, 0)
++    stw     r21, (r3, 4)
++    stw     r22, (r3, 8)
++    stw     r23, (r3, 12)
++    subi    r2, 16
++    addi    r1, 16
++    addi    r3, 16
++    cmplti  r2, 16
++    jbf     .L_not_aligned_and_len_larger_16bytes
++
++.L_not_aligned_and_len_less_16bytes:
++    cmplti  r2, 4
++    jbf     .L2
++    rsubi   r12, 4                                   /* r12 is used to stored the misaligned bits */
++    subu    r1, r12                                  /* initial the position */
++    jbr     .L_copy_by_byte
++.L2:
++    ldw     r21, (r1, 0)
++    GET_FRONT_BITS r18 r24
++    mov     r19, r18
++    mov     r18, r21
++    GET_AFTER_BITS r21 r25
++    or      r21, r19
++    stw     r21, (r3, 0)
++    subi    r2, 4
++    addi    r1, 4
++    addi    r3, 4
++    jbr     .L_not_aligned_and_len_less_16bytes
++
++.size   Wmemcpy, .-Wmemcpy
++
++libc_hidden_def(Wmemcpy)
++.weak Wmemcpy
+diff --git a/libc/string/csky/cskyv2/abiv2_strcmp.S b/libc/string/csky/cskyv2/abiv2_strcmp.S
+new file mode 100644
+index 000000000..202da7c8a
+--- /dev/null
++++ b/libc/string/csky/cskyv2/abiv2_strcmp.S
+@@ -0,0 +1,168 @@
++#include <endian.h>
++#include "macro.S"
++
++#ifdef WANT_WIDE
++# define Wstrcmp wcscmp
++# define Wstrcoll wcscoll
++#else
++# define Wstrcmp strcmp
++# define Wstrcoll strcoll
++#endif
++
++/* FIXME attention!!! it may be a bug when WANT_WIDE define */
++/*libc_hidden_proto(Wstrcmp)*/
++	.align 2
++	.global Wstrcmp
++	.type   Wstrcmp, @function
++Wstrcmp:
++    mov        a3, a0
++
++    or         a0, a1
++    andi       a0, 0x3
++    M_BNEZ     a0, 4f
++    1:                   // if aligned, load word each time.
++
++    ldw        a0, (a3, 0)
++    ldw        t0, (a1, 0)
++    M_BNE      a0, t0, 1f // if d[i] != s[i], goto 1f
++    tstnbz     a0       // if d[i] == s[i], check if d or s is at the end.
++    bf         3f       // if at the end, goto 3f (finish comparing)
++    ldw        a0, (a3, 4)
++    ldw        t0, (a1, 4)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    ldw        a0, (a3, 8)
++    ldw        t0, (a1, 8)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    ldw        a0, (a3, 12)
++    ldw        t0, (a1, 12)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    ldw        a0, (a3, 16)
++    ldw        t0, (a1, 16)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    ldw        a0, (a3, 20)
++    ldw        t0, (a1, 20)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    ldw        a0, (a3, 24)
++    ldw        t0, (a1, 24)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    ldw        a0, (a3, 28)
++    ldw        t0, (a1, 28)
++    M_BNE      a0, t0, 1f
++    tstnbz     a0
++    bf         3f
++
++    addi       a3, 32
++    addi       a1, 32
++    br         1b
++
++#ifdef __CSKYBE__
++    /* d[i] != s[i] in word, so we check byte 0 ? */
++    1:
++    xtrb0      t1, a0
++    mov        a2, t1
++    xtrb0      t1, t0
++    M_BNE      a2, t1, 2f
++    cmpnei     a2, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb1      t1, a0
++    mov        a2, t1
++    xtrb1      t1, t0
++    M_BNE      a2, t1, 2f
++    cmpnei     a2, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb2      t1, a0
++    mov        a2, t1
++    xtrb2      t1, t0
++    M_BNE      a2, t1, 2f
++    cmpnei     a2, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb3      t1, a0
++    mov        a2, t1
++    xtrb3      t1, t0
++
++#else /* little endian */
++    /* d[i] != s[i] in word, so we check byte 0 ? */
++    1:
++    xtrb3      t1, a0
++    mov        a2, t1
++    xtrb3      t1, t0
++    M_BNE      a2, t1, 2f
++    cmpnei     a2, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb2      t1, a0
++    mov        a2, t1
++    xtrb2      t1, t0
++    M_BNE      a2, t1, 2f
++    cmpnei     a2, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb1      t1, a0
++    mov        a2, t1
++    xtrb1      t1, t0
++    M_BNE      a2, t1, 2f
++    cmpnei     a2, 0
++    bf         2f
++
++    /* d[i] != s[i] in word, so we check byte 1 ? */
++    xtrb0      t1, a0
++    mov        a2, t1
++    xtrb0      t1, t0
++
++#endif
++    /* get the result when d[i] != s[i] */
++    2:
++    subu       a2, t1
++    mov        a0, a2
++    jmp        r15
++
++    /* return when d[i] == s[i] */
++    3:
++    subu       a0, t0
++    jmp        r15
++
++     /* cmp when d or s is not aligned */
++    4:
++    ldb       a0, (a3,0)
++    ldb       t0, (a1, 0)
++    M_BNE     a0, t0, 3b
++    addi      a1, 1
++    addi      a3, 1
++    M_BNEZ    a0, 4b
++    jmp        r15
++
++    .size   Wstrcmp, .-Wstrcmp
++
++libc_hidden_def(Wstrcmp)
++.weak Wstrcmp
++#ifndef __UCLIBC_HAS_LOCALE__
++/* libc_hidden_proto(Wstrcoll) */
++strong_alias(Wstrcmp,Wstrcoll)
++libc_hidden_def(Wstrcoll)
++#endif
+diff --git a/libc/string/csky/cskyv2/abiv2_strcpy.S b/libc/string/csky/cskyv2/abiv2_strcpy.S
+new file mode 100644
+index 000000000..20262feae
+--- /dev/null
++++ b/libc/string/csky/cskyv2/abiv2_strcpy.S
+@@ -0,0 +1,129 @@
++#include <endian.h>
++#include "macro.S"
++
++#ifdef WANT_WIDE
++# define Wstrcpy wcscpy
++#else
++# define Wstrcpy strcpy
++#endif
++
++	.align 2
++	.global Wstrcpy
++	.type   Wstrcpy, @function
++Wstrcpy:
++
++        mov     a3, a0
++        or      a2, a1, a3
++        andi    t0, a2, 3
++        M_BEZ   t0, 2f
++        mov     t0, a1
++       1:
++        ld.b    a2, (t0)
++        stb     a2, (a3)
++        addi    t0, t0, 1
++        addi    a3, a3, 1
++        M_BNEZ  a2, 1b
++
++        jmp     r15
++
++       2:
++        ldw     a2, (a1)
++        tstnbz  a2
++        bf      11f
++        stw     a2, (a3)
++
++        ldw     a2, (a1, 4)
++        tstnbz  a2
++        bf      4f
++        stw     a2, (a3, 4)
++
++        ldw     a2, (a1, 8)
++        tstnbz  a2
++        bf      5f
++        stw     a2, (a3, 8)
++
++        ldw     a2, (a1, 12)
++        tstnbz  a2
++        bf      6f
++        stw     a2, (a3, 12)
++
++        ldw     a2, (a1, 16)
++        tstnbz  a2
++        bf      7f
++        stw     a2, (a3, 16)
++
++        ldw     a2, (a1, 20)
++        tstnbz  a2
++        bf      8f
++        stw     a2, (a3, 20)
++
++        ldw     a2, (a1, 24)
++        tstnbz  a2
++        bf      9f
++        stw     a2, (a3, 24)
++
++        ldw     a2, (a1, 28)
++        tstnbz  a2
++        bf      10f
++        stw     a2, (a3, 28)
++
++        addi     a3, 32
++        addi     a1, 32
++        br       2b
++
++       4:
++        addi    a3, 4
++        br      11f
++
++       5:
++        addi    a3, 8
++        br      11f
++
++       6:
++        addi    a3, 12
++        br      11f
++
++       7:
++        addi    a3, 16
++        br      11f
++
++       8:
++        addi    a3, 20
++        br      11f
++
++       9:
++        addi    a3, 24
++        br      11f
++
++       10:
++        addi    a3, 28
++       11:
++#ifdef __CSKYBE__
++        xtrb0   t0, a2
++        st.b    t0, (a3)
++        M_BEZ   t0, 5f
++        xtrb1   t0, a2
++        st.b    t0, (a3, 1)
++        M_BEZ   t0, 5f
++        xtrb2   t0, a2
++        st.b    t0, (a3, 2 )
++        M_BEZ   t0, 5f
++        stw     a2, (a3)
++#else
++        xtrb3   t0, a2
++        st.b    t0, (a3)
++        M_BEZ   t0, 5f
++        xtrb2   t0, a2
++        st.b    t0, (a3, 1)
++        M_BEZ   t0, 5f
++        xtrb1   t0, a2
++        st.b    t0, (a3, 2)
++        M_BEZ   t0, 5f
++        stw     a2, (a3)
++#endif
++       5:
++	jmp     r15
++
++
++libc_hidden_def(Wstrcpy)
++.weak Wstrcpy
+diff --git a/libc/string/csky/cskyv2/macro.S b/libc/string/csky/cskyv2/macro.S
+new file mode 100644
+index 000000000..047645c21
+--- /dev/null
++++ b/libc/string/csky/cskyv2/macro.S
+@@ -0,0 +1,13 @@
++.macro M_BEZ rx, label
++	bez   \rx, \label
++.endm
++
++.macro M_BNEZ rx, label
++	bnez  \rx, \label
++.endm
++
++.macro M_BNE rx, ry, label
++	cmpne \rx, \ry
++	bt    \label
++.endm
++
+diff --git a/libc/string/csky/memcpy.S b/libc/string/csky/memcpy.S
+new file mode 100644
+index 000000000..51d258a11
+--- /dev/null
++++ b/libc/string/csky/memcpy.S
+@@ -0,0 +1,7 @@
++#include <features.h>
++
++#ifdef __CSKYABIV2__
++#include "cskyv2/abiv2_memcpy.S"
++#else
++#include "cskyv1/memcpy.S"
++#endif
+diff --git a/libc/string/csky/strcmp.S b/libc/string/csky/strcmp.S
+new file mode 100644
+index 000000000..05a88c912
+--- /dev/null
++++ b/libc/string/csky/strcmp.S
+@@ -0,0 +1,7 @@
++#include <features.h>
++
++#ifdef __CSKYABIV2__
++#include "cskyv2/abiv2_strcmp.S"
++#else
++#include "cskyv1/strcmp.S"
++#endif
+diff --git a/libc/string/csky/strcpy.S b/libc/string/csky/strcpy.S
+new file mode 100644
+index 000000000..dd3be04b5
+--- /dev/null
++++ b/libc/string/csky/strcpy.S
+@@ -0,0 +1,7 @@
++#include <features.h>
++
++#ifdef __CSKYABIV2__
++#include "cskyv2/abiv2_strcpy.S"
++#else
++#include "cskyv1/strcpy.S"
++#endif
+diff --git a/libc/sysdeps/linux/common/posix_fadvise.c b/libc/sysdeps/linux/common/posix_fadvise.c
+index f4ec4f831..d2fb57e97 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise.c
++++ b/libc/sysdeps/linux/common/posix_fadvise.c
+@@ -40,7 +40,7 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice)
+ #  if __WORDSIZE == 64
+ 	ret = INTERNAL_SYSCALL(fadvise64_64, err, 4, fd, offset, len, advice);
+ #  else
+-#   if defined (__arm__) || defined (__nds32__) || \
++#   if defined (__arm__) || defined (__nds32__) || defined(__csky__) || \
+       (defined(__UCLIBC_SYSCALL_ALIGN_64BIT__) && (defined(__powerpc__) || defined(__xtensa__)))
+ 	/* arch with 64-bit data in even reg alignment #1: [powerpc/xtensa]
+ 	 * custom syscall handler (rearranges @advice to avoid register hole punch) */
+diff --git a/libc/sysdeps/linux/common/posix_fadvise64.c b/libc/sysdeps/linux/common/posix_fadvise64.c
+index 2d4e466bd..a7ce1ce9b 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise64.c
++++ b/libc/sysdeps/linux/common/posix_fadvise64.c
+@@ -24,7 +24,7 @@ int posix_fadvise64(int fd, off64_t offset, off64_t len, int advice)
+ 	int ret;
+ 	INTERNAL_SYSCALL_DECL (err);
+ 	/* ARM has always been funky. */
+-#if defined (__arm__) || defined (__nds32__) || \
++#if defined (__arm__) || defined (__nds32__) || defined (__csky__) || \
+     (defined(__UCLIBC_SYSCALL_ALIGN_64BIT__) && (defined(__powerpc__) || defined(__xtensa__)))
+ 	/* arch with 64-bit data in even reg alignment #1: [powerpc/xtensa]
+ 	 * custom syscall handler (rearranges @advice to avoid register hole punch) */
+diff --git a/libc/sysdeps/linux/csky/Makefile b/libc/sysdeps/linux/csky/Makefile
+new file mode 100644
+index 000000000..43dc60a42
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/Makefile
+@@ -0,0 +1,6 @@
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/csky/Makefile.arch b/libc/sysdeps/linux/csky/Makefile.arch
+new file mode 100644
+index 000000000..704b36aff
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/Makefile.arch
+@@ -0,0 +1,6 @@
++CSRC-y := clone.c __syscall_error.c cacheflush.c
++
++SSRC-y := __longjmp.S setjmp.S
++SSRC-y += libc-read_tp.S vfork.S csky_clone.S
++
++
+diff --git a/libc/sysdeps/linux/csky/__longjmp.S b/libc/sysdeps/linux/csky/__longjmp.S
+new file mode 100644
+index 000000000..66ad62617
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/__longjmp.S
+@@ -0,0 +1,39 @@
++#include <sysdep.h>
++
++ENTRY(__longjmp)
++        ldw	sp, (a0, 0)
++	ldw	lr, (a0, 4)
++
++	ldw	l0, (a0, 8)
++	ldw	l1, (a0, 12)
++	ldw	l2, (a0, 16)
++	ldw	l3, (a0, 20)
++	ldw	l4, (a0, 24)
++	ldw	l5, (a0, 28)
++
++#ifdef __CSKYABIV2__
++	ldw	l6, (a0, 32)
++	ldw	l7, (a0, 36)
++	ldw	l8, (a0, 40)
++	ldw	l9, (a0, 44)
++
++	ldw	r26, (a0, 48)
++	ldw	r27, (a0, 52)
++	ldw	gb,  (a0, 56)
++	ldw	r29, (a0, 60)
++	ldw	r30, (a0, 64)
++	ldw	tls, (a0, 68)
++#else
++	ldw	gb, (a0, 32)
++#endif
++
++	mov    a0, a1
++	cmpnei a1, 0
++	bt     1f
++	movi   a0, 1
++1:
++	rts
++
++END(__longjmp)
++libc_hidden_def(__longjmp)
++
+diff --git a/libc/sysdeps/linux/csky/__syscall_error.c b/libc/sysdeps/linux/csky/__syscall_error.c
+new file mode 100644
+index 000000000..346ce8a92
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/__syscall_error.c
+@@ -0,0 +1,9 @@
++#include <errno.h>
++#include <features.h>
++
++int __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
++
+diff --git a/libc/sysdeps/linux/csky/bits/atomic.h b/libc/sysdeps/linux/csky/bits/atomic.h
+new file mode 100644
+index 000000000..231d58f30
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/atomic.h
+@@ -0,0 +1,93 @@
++#ifndef __CSKY_ATOMIC_H_
++#define __CSKY_ATOMIC_H_
++
++#include <stdint.h>
++#include <sysdep.h>
++
++typedef int8_t atomic8_t;
++typedef uint8_t uatomic8_t;
++typedef int_fast8_t atomic_fast8_t;
++typedef uint_fast8_t uatomic_fast8_t;
++
++typedef int16_t atomic16_t;
++typedef uint16_t uatomic16_t;
++typedef int_fast16_t atomic_fast16_t;
++typedef uint_fast16_t uatomic_fast16_t;
++
++typedef int32_t atomic32_t;
++typedef uint32_t uatomic32_t;
++typedef int_fast32_t atomic_fast32_t;
++typedef uint_fast32_t uatomic_fast32_t;
++
++typedef int64_t atomic64_t;
++typedef uint64_t uatomic64_t;
++typedef int_fast64_t atomic_fast64_t;
++typedef uint_fast64_t uatomic_fast64_t;
++
++typedef intptr_t atomicptr_t;
++typedef uintptr_t uatomicptr_t;
++typedef intmax_t atomic_max_t;
++typedef uintmax_t uatomic_max_t;
++
++# define __arch_compare_and_exchange_bool_8_int(mem, newval, oldval) \
++  (abort (), 0)
++
++# define __arch_compare_and_exchange_bool_16_int(mem, newval, oldval) \
++  (abort (), 0)
++
++# define __arch_compare_and_exchange_bool_32_int(mem, newval, oldval) \
++  ({ __typeof(mem) _mem = (mem);                       \
++    __typeof(oldval) _oldval = oldval;                 \
++    __typeof(newval) _newval = newval;                 \
++    register __typeof(oldval) _a0 __asm__ ("a0") = _oldval;        \
++    register __typeof(newval) _a1 __asm__ ("a1") = _newval;        \
++    register __typeof(mem) _a2 __asm__ ("a2") = _mem;          \
++    __asm__ __volatile__ ("trap   2;"                     \
++     : "+r" (_a0) : "r" (_a1) , "r" (_a2)                 \
++     : "a3", "memory");                \
++    _a0; })
++
++#  define __arch_compare_and_exchange_bool_64_int(mem, newval, oldval) \
++  (abort (), 0)
++
++#define __arch_compare_and_exchange_val_8_int(mem, newval, oldval) \
++	(abort (), 0)
++
++#define __arch_compare_and_exchange_val_16_int(mem, newval, oldval) \
++	(abort (), 0)
++
++#define __arch_compare_and_exchange_val_32_int(mem, newval, oldval) \
++  ({ __typeof (mem) _mem = (mem);                       \
++	__typeof (*mem) __gret = *_mem;                     \
++    unsigned int _tmp = 0;                                  \
++    __typeof (oldval) _oldval = oldval;                 \
++    __typeof (newval) _newval = newval;                 \
++    register __typeof (oldval) _a0 __asm__ ("a0") = _oldval;    \
++    register __typeof (newval) _a1 __asm__ ("a1") = _newval;    \
++    register __typeof (mem) _a2 __asm__ ("a2") = _mem;          \
++        __asm__ __volatile__ ("1:\n\t"        \
++      "ldw      %1, (%4, 0x0)\n\t"            \
++      "cmpne    %1, %0\n\t"                   \
++      "bt       2f\n\t"                       \
++      "mov      %2, %0\n\t"                   \
++      "trap     2\n\t"                        \
++      "cmpnei   %0, 0\n\t"                    \
++      "mov      %0, %2\n\t"                   \
++      "bt       1b\n\t"                       \
++      "2:         \n\t"                       \
++     :"+r" (_a0), "+r"(__gret), "+r" (_tmp) :"r" (_a1) , "r" (_a2)    \
++     : "a3", "memory");                \
++    __gret; })
++
++# define __arch_compare_and_exchange_val_64_int(mem, newval, oldval) \
++	(abort (), 0)
++
++# define atomic_compare_and_exchange_bool_acq(mem, new, old)    \
++  __atomic_bool_bysize (__arch_compare_and_exchange_bool, int,  \
++            mem, new, old)
++
++# define atomic_compare_and_exchange_val_acq(mem, new, old) \
++  __atomic_val_bysize (__arch_compare_and_exchange_val, int,    \
++               mem, new, old)
++
++#endif
+diff --git a/libc/sysdeps/linux/csky/bits/endian.h b/libc/sysdeps/linux/csky/bits/endian.h
+new file mode 100644
+index 000000000..09af89cd7
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/endian.h
+@@ -0,0 +1,10 @@
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++/* CSKY CPU can be either big or little endian.  */
++#ifdef __cskyBE__
++# define __BYTE_ORDER __BIG_ENDIAN
++#else
++# define __BYTE_ORDER __LITTLE_ENDIAN
++#endif
+diff --git a/libc/sysdeps/linux/csky/bits/fcntl.h b/libc/sysdeps/linux/csky/bits/fcntl.h
+new file mode 100644
+index 000000000..feacdaded
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/fcntl.h
+@@ -0,0 +1,193 @@
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	   0003
++#define O_RDONLY	     00
++#define O_WRONLY	     01
++#define O_RDWR		     02
++#define O_CREAT		   0100	/* not fcntl */
++#define O_EXCL		   0200	/* not fcntl */
++#define O_NOCTTY	   0400	/* not fcntl */
++#define O_TRUNC		  01000	/* not fcntl */
++#define O_APPEND	  02000
++#define O_NONBLOCK	  04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		 010000
++#define O_FSYNC		 O_SYNC
++#define O_ASYNC		 020000
++
++#ifdef __USE_GNU
++# define O_DIRECTORY	 040000	/* Must be a directory.	 */
++# define O_NOFOLLOW	0100000	/* Do not follow links.	 */
++# define O_DIRECT	0200000	/* Direct disk access.	*/
++# define O_STREAMING	04000000/* streaming access */
++# define O_CLOEXEC	02000000 /* set close_on_exec */
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	0400000
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	12	/* Get record locking info.  */
++#define F_SETLK64	13	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	14	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_XOPEN2K
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++#endif
++
++/* For F_[GET|SET]FL.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++__BEGIN_DECLS
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++
++/* Selective file content synch'ing.  */
++extern int sync_file_range (int __fd, __off64_t __from, __off64_t __to,
++                            unsigned int __flags);
++
++/* Splice address range into a pipe.  */
++extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
++                         size_t __count, unsigned int __flags);
++
++/* Splice two files together.  */
++extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
++                       __off64_t *__offout, size_t __len,
++                       unsigned int __flags);
++
++/* In-kernel implementation of tee for pipe buffers.  */
++extern ssize_t tee (int __fdin, int __fdout, size_t __len,
++                    unsigned int __flags);
++
++#endif
++__END_DECLS
+diff --git a/libc/sysdeps/linux/csky/bits/fenv.h b/libc/sysdeps/linux/csky/bits/fenv.h
+new file mode 100644
+index 000000000..606fe793d
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/fenv.h
+@@ -0,0 +1,58 @@
++#ifndef _FENV_H
++# error "Never use <bits/fenv.h> directly; include <fenv.h> instead."
++#endif
++
++/* Define bits representing the exception.  We use the bit positions of
++   the appropriate bits in the FPSR Accrued Exception Byte.  */
++enum
++  {
++    FE_INEXACT = 1 << 3,
++#define FE_INEXACT	FE_INEXACT
++    FE_DIVBYZERO = 1 << 4,
++#define FE_DIVBYZERO	FE_DIVBYZERO
++    FE_UNDERFLOW = 1 << 5,
++#define FE_UNDERFLOW	FE_UNDERFLOW
++    FE_OVERFLOW = 1 << 6,
++#define FE_OVERFLOW	FE_OVERFLOW
++    FE_INVALID = 1 << 7
++#define FE_INVALID	FE_INVALID
++  };
++
++#define FE_ALL_EXCEPT \
++	(FE_INEXACT | FE_DIVBYZERO | FE_UNDERFLOW | FE_OVERFLOW | FE_INVALID)
++
++/* The csky FPU supports all of the four defined rounding modes.  We use
++   the bit positions in the FPCR Mode Control Byte as the values for the
++   appropriate macros.  */
++enum
++  {
++    FE_TONEAREST = 0,
++#define FE_TONEAREST	FE_TONEAREST
++    FE_TOWARDZERO = 1 << 4,
++#define FE_TOWARDZERO	FE_TOWARDZERO
++    FE_DOWNWARD = 2 << 4,
++#define FE_DOWNWARD	FE_DOWNWARD
++    FE_UPWARD = 3 << 4
++#define FE_UPWARD	FE_UPWARD
++  };
++
++/* Type representing exception flags.  */
++typedef unsigned int fexcept_t;
++
++/* Type representing floating-point environment.  This structure
++   corresponds to the layout of the block written by `fmovem'.  */
++typedef struct
++  {
++    unsigned int __control_register;
++    unsigned int __status_register;
++    unsigned int __instruction_address;
++  }
++fenv_t;
++
++/* If the default argument is used we use this value.  */
++#define FE_DFL_ENV	((__const fenv_t *) -1)
++
++#ifdef __USE_GNU
++/* Floating-point environment where none of the exceptions are masked.  */
++# define FE_NOMASK_ENV	((__const fenv_t *) -2)
++#endif
+diff --git a/libc/sysdeps/linux/csky/bits/kernel_stat.h b/libc/sysdeps/linux/csky/bits/kernel_stat.h
+new file mode 100644
+index 000000000..079a01ace
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/kernel_stat.h
+@@ -0,0 +1,60 @@
++#ifndef _BITS_STAT_STRUCT_H
++#define _BITS_STAT_STRUCT_H
++
++#define STAT_HAVE_NSEC 1
++
++struct kernel_stat {
++#if defined(__cskyBE__)
++	unsigned short st_dev;
++	unsigned short __pad1;
++#else
++	unsigned long  st_dev;
++#endif
++	unsigned long  st_ino;
++	unsigned short st_mode;
++	unsigned short st_nlink;
++	unsigned short st_uid;
++	unsigned short st_gid;
++#if defined(__cskyBE__)
++	unsigned short st_rdev;
++	unsigned short __pad2;
++#else
++	unsigned long  st_rdev;
++#endif
++	unsigned long  st_size;
++	unsigned long  st_blksize;
++	unsigned long  st_blocks;
++	struct timespec st_atim;
++	struct timespec st_mtim;
++	struct timespec st_ctim;
++	unsigned long  __unused4;
++	unsigned long  __unused5;
++};
++
++struct kernel_stat64 {
++	unsigned long long  st_dev;
++	unsigned char   __pad0[4];
++
++#define STAT64_HAS_BROKEN_ST_INO    1
++	unsigned long   __st_ino;
++	unsigned int    st_mode;
++	unsigned int    st_nlink;
++
++	unsigned long   st_uid;
++	unsigned long   st_gid;
++
++	unsigned long long  st_rdev;
++	unsigned char   __pad3[4];
++
++	long long       st_size;
++	unsigned long   st_blksize;
++	unsigned long long  st_blocks;  /* Number 512-byte blocks allocated. */
++
++	struct timespec st_atim;
++	struct timespec st_mtim;
++	struct timespec st_ctim;
++	unsigned long long  st_ino;
++};
++
++#endif	/*  _BITS_STAT_STRUCT_H */
++
+diff --git a/libc/sysdeps/linux/csky/bits/kernel_types.h b/libc/sysdeps/linux/csky/bits/kernel_types.h
+new file mode 100644
+index 000000000..80c9d599e
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/kernel_types.h
+@@ -0,0 +1,47 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts
++ * with the posix_types.h kernel header, and will ensure that
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#if !defined(__ARCH_CSKY_POSIX_TYPES_H) || !defined(__ASM_GENERIC_POSIX_TYPES_H)
++#define __ARCH_CSKY_POSIX_TYPES_H
++#define __ASM_GENERIC_POSIX_TYPES_H
++
++typedef unsigned short	__kernel_dev_t;
++typedef unsigned long	__kernel_ino_t;
++typedef unsigned short	__kernel_mode_t;
++typedef unsigned short	__kernel_nlink_t;
++typedef long		__kernel_off_t;
++typedef int		__kernel_pid_t;
++typedef unsigned short	__kernel_ipc_pid_t;
++typedef unsigned short	__kernel_uid_t;
++typedef unsigned short	__kernel_gid_t;
++typedef unsigned int	__kernel_size_t;
++typedef int		__kernel_ssize_t;
++typedef int		__kernel_ptrdiff_t;
++typedef long		__kernel_time_t;
++typedef long		__kernel_suseconds_t;
++typedef long		__kernel_clock_t;
++typedef int		__kernel_daddr_t;
++typedef char *		__kernel_caddr_t;
++typedef unsigned short	__kernel_uid16_t;
++typedef unsigned short	__kernel_gid16_t;
++typedef unsigned int	__kernel_uid32_t;
++typedef unsigned int	__kernel_gid32_t;
++typedef unsigned short	__kernel_old_uid_t;
++typedef unsigned short	__kernel_old_gid_t;
++typedef long long	__kernel_loff_t;
++typedef __kernel_dev_t  __kernel_old_dev_t;
++typedef long		__kernel_long_t;
++typedef unsigned long	__kernel_ulong_t;
++
++typedef struct {
++#ifdef __USE_ALL
++	int val[2];
++#else
++	int __val[2];
++#endif
++} __kernel_fsid_t;
++
++#endif /* __ARCH_CSKY_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/csky/bits/mathinline.h b/libc/sysdeps/linux/csky/bits/mathinline.h
+new file mode 100644
+index 000000000..d6ab1a22c
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/mathinline.h
+@@ -0,0 +1,445 @@
++#ifdef	__GNUC__
++
++#ifdef __USE_ISOC99
++
++/* ISO C99 defines some macros to perform unordered comparisons.  The
++   csky FPU supports this with special opcodes and we should use them.
++   These must not be inline functions since we have to be able to handle
++   all floating-point types.  */
++# define isgreater(x, y)					\
++   __extension__					\
++   ({ char __result;					\
++      __asm__ ("fcmp%.x %2,%1; fsogt %0"		\
++	       : "=dm" (__result) : "f" (x), "f" (y));	\
++      __result != 0; })
++
++# define isgreaterequal(x, y)				\
++   __extension__					\
++   ({ char __result;					\
++      __asm__ ("fcmp%.x %2,%1; fsoge %0"		\
++	       : "=dm" (__result) : "f" (x), "f" (y));	\
++      __result != 0; })
++
++# define isless(x, y)					\
++   __extension__					\
++   ({ char __result;					\
++      __asm__ ("fcmp%.x %2,%1; fsolt %0"		\
++	       : "=dm" (__result) : "f" (x), "f" (y));	\
++      __result != 0; })
++
++# define islessequal(x, y)				\
++   __extension__					\
++   ({ char __result;					\
++      __asm__ ("fcmp%.x %2,%1; fsole %0"		\
++	       : "=dm" (__result) : "f" (x), "f" (y));	\
++      __result != 0; })
++
++# define islessgreater(x, y)				\
++   __extension__					\
++   ({ char __result;					\
++      __asm__ ("fcmp%.x %2,%1; fsogl %0"		\
++	       : "=dm" (__result) : "f" (x), "f" (y));	\
++      __result != 0; })
++
++# define isunordered(x, y)				\
++   __extension__					\
++   ({ char __result;					\
++      __asm__ ("fcmp%.x %2,%1; fsun %0"			\
++	       : "=dm" (__result) : "f" (x), "f" (y));	\
++      __result != 0; })
++#endif
++
++
++#if (!defined __NO_MATH_INLINES && defined __OPTIMIZE__) \
++    || defined __LIBC_INTERNAL_MATH_INLINES
++
++#ifdef	__LIBC_INTERNAL_MATH_INLINES
++/* This is used when defining the functions themselves.  Define them with
++   __ names, and with `static inline' instead of `extern inline' so the
++   bodies will always be used, never an external function call.  */
++# define __m81_u(x)		__CONCAT(__,x)
++# define __m81_inline		static __inline
++#else
++# define __m81_u(x)		x
++# ifdef __cplusplus
++#  define __m81_inline		__inline
++# else
++#  define __m81_inline		extern __inline
++# endif
++# define __M81_MATH_INLINES	1
++#endif
++
++/* Define a const math function.  */
++#define __m81_defun(rettype, func, args)				      \
++  __m81_inline rettype __attribute__((__const__))			      \
++  __m81_u(func) args
++
++/* Define the three variants of a math function that has a direct
++   implementation in the csky fpu.  FUNC is the name for C (which will be
++   suffixed with f and l for the float and long double version, resp).  OP
++   is the name of the fpu operation (without leading f).  */
++
++#if defined __USE_MISC || defined __USE_ISOC99
++# define __inline_mathop(func, op)			\
++  __inline_mathop1(double, func, op)			\
++  __inline_mathop1(float, __CONCAT(func,f), op)		\
++  __inline_mathop1(long double, __CONCAT(func,l), op)
++#else
++# define __inline_mathop(func, op)			\
++  __inline_mathop1(double, func, op)
++#endif
++
++#define __inline_mathop1(float_type,func, op)				      \
++  __m81_defun (float_type, func, (float_type __mathop_x)) __THROW	      \
++  {									      \
++    float_type __result;						      \
++    __asm("f" __STRING(op) "%.x %1, %0" : "=f" (__result) : "f" (__mathop_x));\
++    return __result;							      \
++  }
++
++__inline_mathop(__atan, atan)
++__inline_mathop(__cos, cos)
++__inline_mathop(__sin, sin)
++__inline_mathop(__tan, tan)
++__inline_mathop(__tanh, tanh)
++__inline_mathop(__fabs, abs)
++
++#if defined __USE_MISC || defined __USE_XOPEN_EXTENDED || defined __USE_ISOC99
++__inline_mathop(__rint, int)
++__inline_mathop(__expm1, etoxm1)
++__inline_mathop(__log1p, lognp1)
++#endif
++
++#ifdef __USE_MISC
++__inline_mathop(__significand, getman)
++#endif
++
++#ifdef __USE_ISOC99
++__inline_mathop(__trunc, intrz)
++#endif
++
++#if !defined __NO_MATH_INLINES && defined __OPTIMIZE__
++
++__inline_mathop(atan, atan)
++__inline_mathop(cos, cos)
++__inline_mathop(sin, sin)
++__inline_mathop(tan, tan)
++__inline_mathop(tanh, tanh)
++
++# if defined __USE_MISC || defined __USE_XOPEN_EXTENDED || defined __USE_ISOC99
++__inline_mathop(rint, int)
++__inline_mathop(expm1, etoxm1)
++__inline_mathop(log1p, lognp1)
++# endif
++
++# ifdef __USE_MISC
++__inline_mathop(significand, getman)
++# endif
++
++# ifdef __USE_ISOC99
++__inline_mathop(trunc, intrz)
++# endif
++
++#endif /* !__NO_MATH_INLINES && __OPTIMIZE__ */
++
++/* This macro contains the definition for the rest of the inline
++   functions, using FLOAT_TYPE as the domain type and S as the suffix
++   for the function names.  */
++
++#define __inline_functions(float_type, s)				  \
++__m81_inline float_type							  \
++__m81_u(__CONCAT(__frexp,s))(float_type __value, int *__expptr)	__THROW	  \
++{									  \
++  float_type __mantissa, __exponent;					  \
++  int __iexponent;							  \
++  unsigned long __fpsr;							  \
++  __asm("ftst%.x %1\n"							  \
++	"fmove%.l %/fpsr, %0" : "=dm" (__fpsr) : "f" (__value));	  \
++  if (__fpsr & (7 << 24))						  \
++    {									  \
++      /* Not finite or zero.  */					  \
++      *__expptr = 0;							  \
++      return __value;							  \
++    }									  \
++  __asm("fgetexp%.x %1, %0" : "=f" (__exponent) : "f" (__value));	  \
++  __iexponent = (int) __exponent + 1;					  \
++  *__expptr = __iexponent;						  \
++  __asm("fscale%.l %2, %0" : "=f" (__mantissa)				  \
++	: "0" (__value), "dmi" (-__iexponent));				  \
++  return __mantissa;							  \
++}									  \
++									  \
++__m81_defun (float_type, __CONCAT(__floor,s), (float_type __x))	__THROW	  \
++{									  \
++  float_type __result;							  \
++  unsigned long int __ctrl_reg;						  \
++  __asm __volatile__ ("fmove%.l %!, %0" : "=dm" (__ctrl_reg));		  \
++  /* Set rounding towards negative infinity.  */			  \
++  __asm __volatile__ ("fmove%.l %0, %!" : /* No outputs.  */		  \
++		      : "dmi" ((__ctrl_reg & ~0x10) | 0x20));		  \
++  /* Convert X to an integer, using -Inf rounding.  */			  \
++  __asm __volatile__ ("fint%.x %1, %0" : "=f" (__result) : "f" (__x));	  \
++  /* Restore the previous rounding mode.  */				  \
++  __asm __volatile__ ("fmove%.l %0, %!" : /* No outputs.  */		  \
++		      : "dmi" (__ctrl_reg));				  \
++  return __result;							  \
++}									  \
++									  \
++__m81_defun (float_type, __CONCAT(__ceil,s), (float_type __x)) __THROW	  \
++{									  \
++  float_type __result;							  \
++  unsigned long int __ctrl_reg;						  \
++  __asm __volatile__ ("fmove%.l %!, %0" : "=dm" (__ctrl_reg));		  \
++  /* Set rounding towards positive infinity.  */			  \
++  __asm __volatile__ ("fmove%.l %0, %!" : /* No outputs.  */		  \
++		      : "dmi" (__ctrl_reg | 0x30));			  \
++  /* Convert X to an integer, using +Inf rounding.  */			  \
++  __asm __volatile__ ("fint%.x %1, %0" : "=f" (__result) : "f" (__x));	  \
++  /* Restore the previous rounding mode.  */				  \
++  __asm __volatile__ ("fmove%.l %0, %!" : /* No outputs.  */		  \
++		      : "dmi" (__ctrl_reg));				  \
++  return __result;							  \
++}
++
++__inline_functions(double,)
++#if defined __USE_MISC || defined __USE_ISOC99
++__inline_functions(float,f)
++__inline_functions(long double,l)
++#endif
++#undef __inline_functions
++
++#ifdef __USE_MISC
++
++# define __inline_functions(float_type, s)				  \
++__m81_defun (int, __CONCAT(__isinf,s), (float_type __value)) __THROW	  \
++{									  \
++  /* There is no branch-condition for infinity,				  \
++     so we must extract and examine the condition codes manually.  */	  \
++  unsigned long int __fpsr;						  \
++  __asm("ftst%.x %1\n"							  \
++	"fmove%.l %/fpsr, %0" : "=dm" (__fpsr) : "f" (__value));	  \
++  return (__fpsr & (2 << 24)) ? (__fpsr & (8 << 24) ? -1 : 1) : 0;	  \
++}									  \
++									  \
++__m81_defun (int, __CONCAT(__finite,s), (float_type __value)) __THROW	  \
++{									  \
++  /* There is no branch-condition for infinity, so we must extract and	  \
++     examine the condition codes manually.  */				  \
++  unsigned long int __fpsr;						  \
++  __asm ("ftst%.x %1\n"							  \
++	 "fmove%.l %/fpsr, %0" : "=dm" (__fpsr) : "f" (__value));	  \
++  return (__fpsr & (3 << 24)) == 0;					  \
++}									  \
++									  \
++__m81_defun (float_type, __CONCAT(__scalbn,s),				  \
++	     (float_type __x, int __n))	__THROW				  \
++{									  \
++  float_type __result;							  \
++  __asm ("fscale%.l %1, %0" : "=f" (__result) : "dmi" (__n), "0" (__x));  \
++  return __result;							  \
++}
++
++__inline_functions(double,)
++__inline_functions(float,f)
++__inline_functions(long double,l)
++# undef __inline_functions
++
++#endif /* Use misc.  */
++
++#if defined __USE_MISC || defined __USE_XOPEN
++
++# define __inline_functions(float_type, s)				  \
++__m81_defun (int, __CONCAT(__isnan,s), (float_type __value)) __THROW	  \
++{									  \
++  char __result;							  \
++  __asm("ftst%.x %1\n"							  \
++	"fsun %0" : "=dm" (__result) : "f" (__value));			  \
++  return __result;							  \
++}
++
++__inline_functions(double,)
++# ifdef __USE_MISC
++__inline_functions(float,f)
++__inline_functions(long double,l)
++# endif
++# undef __inline_functions
++
++#endif
++
++#ifdef __USE_ISOC99
++
++# define __inline_functions(float_type, s)				  \
++__m81_defun (int, __CONCAT(__signbit,s), (float_type __value)) __THROW	  \
++{									  \
++  /* There is no branch-condition for the sign bit, so we must extract	  \
++     and examine the condition codes manually.  */			  \
++  unsigned long int __fpsr;						  \
++  __asm ("ftst%.x %1\n"							  \
++	 "fmove%.l %/fpsr, %0" : "=dm" (__fpsr) : "f" (__value));	  \
++  return (__fpsr >> 27) & 1;						  \
++}									  \
++									  \
++__m81_defun (float_type, __CONCAT(__scalbln,s),				  \
++	     (float_type __x, long int __n)) __THROW			  \
++{									  \
++  return __CONCAT(__scalbn,s) (__x, __n);				  \
++}									  \
++									  \
++__m81_defun (float_type, __CONCAT(__nearbyint,s), (float_type __x)) __THROW \
++{									  \
++  float_type __result;							  \
++  unsigned long int __ctrl_reg;						  \
++  __asm __volatile__ ("fmove%.l %!, %0" : "=dm" (__ctrl_reg));		  \
++  /* Temporarily disable the inexact exception.  */			  \
++  __asm __volatile__ ("fmove%.l %0, %!" : /* No outputs.  */		  \
++		      : "dmi" (__ctrl_reg & ~0x200));			  \
++  __asm __volatile__ ("fint%.x %1, %0" : "=f" (__result) : "f" (__x));	  \
++  __asm __volatile__ ("fmove%.l %0, %!" : /* No outputs.  */		  \
++		      : "dmi" (__ctrl_reg));				  \
++  return __result;							  \
++}									  \
++									  \
++__m81_defun (long int, __CONCAT(__lrint,s), (float_type __x)) __THROW	  \
++{									  \
++  long int __result;							  \
++  __asm ("fmove%.l %1, %0" : "=dm" (__result) : "f" (__x));		  \
++  return __result;							  \
++}									  \
++									  \
++__m81_inline float_type							  \
++__m81_u(__CONCAT(__fma,s))(float_type __x, float_type __y,		  \
++			   float_type __z) __THROW			  \
++{									  \
++  return (__x * __y) + __z;						  \
++}
++
++__inline_functions (double,)
++__inline_functions (float,f)
++__inline_functions (long double,l)
++# undef __inline_functions
++
++#endif /* Use ISO C9x */
++
++#ifdef __USE_GNU
++
++# define __inline_functions(float_type, s)				\
++__m81_inline void							\
++__m81_u(__CONCAT(__sincos,s))(float_type __x, float_type *__sinx,	\
++			      float_type *__cosx) __THROW		\
++{									\
++  __asm ("fsincos%.x %2,%1:%0"						\
++	 : "=f" (*__sinx), "=f" (*__cosx) : "f" (__x));			\
++}
++
++__inline_functions (double,)
++__inline_functions (float,f)
++__inline_functions (long double,l)
++# undef __inline_functions
++
++#endif
++
++#if !defined __NO_MATH_INLINES && defined __OPTIMIZE__
++
++/* Define inline versions of the user visible functions.  */
++
++/* Note that there must be no whitespace before the argument passed for
++   NAME, to make token pasting work correctly with -traditional.  */
++# define __inline_forward_c(rettype, name, args1, args2)	\
++extern __inline rettype __attribute__((__const__))	\
++name args1 __THROW					\
++{							\
++  return __CONCAT(__,name) args2;			\
++}
++
++# define __inline_forward(rettype, name, args1, args2)	\
++extern __inline rettype name args1 __THROW		\
++{							\
++  return __CONCAT(__,name) args2;			\
++}
++
++__inline_forward(double,frexp, (double __value, int *__expptr),
++		 (__value, __expptr))
++__inline_forward_c(double,floor, (double __x), (__x))
++__inline_forward_c(double,ceil, (double __x), (__x))
++# ifdef __USE_MISC
++#  ifndef __USE_ISOC99 /* Conflict with macro of same name.  */
++__inline_forward_c(int,isinf, (double __value), (__value))
++#  endif
++__inline_forward_c(int,finite, (double __value), (__value))
++__inline_forward_c(double,scalbn, (double __x, int __n), (__x, __n))
++# endif
++# if defined __USE_MISC || defined __USE_XOPEN
++#  ifndef __USE_ISOC99 /* Conflict with macro of same name.  */
++__inline_forward_c(int,isnan, (double __value), (__value))
++#  endif
++# endif
++# ifdef __USE_ISOC99
++__inline_forward_c(double,scalbln, (double __x, long int __n), (__x, __n))
++__inline_forward_c(double,nearbyint, (double __value), (__value))
++__inline_forward_c(long int,lrint, (double __value), (__value))
++__inline_forward_c(double,fma, (double __x, double __y, double __z),
++		   (__x, __y, __z))
++# endif
++# ifdef __USE_GNU
++__inline_forward(void,sincos, (double __x, double *__sinx, double *__cosx),
++		 (__x, __sinx, __cosx))
++# endif
++
++# if defined __USE_MISC || defined __USE_ISOC99
++
++__inline_forward(float,frexpf, (float __value, int *__expptr),
++		 (__value, __expptr))
++__inline_forward_c(float,floorf, (float __x), (__x))
++__inline_forward_c(float,ceilf, (float __x), (__x))
++#  ifdef __USE_MISC
++__inline_forward_c(int,isinff, (float __value), (__value))
++__inline_forward_c(int,finitef, (float __value), (__value))
++__inline_forward_c(float,scalbnf, (float __x, int __n), (__x, __n))
++__inline_forward_c(int,isnanf, (float __value), (__value))
++#  endif
++# ifdef __USE_ISOC99
++__inline_forward_c(float,scalblnf, (float __x, long int __n), (__x, __n))
++__inline_forward_c(float,nearbyintf, (float __value), (__value))
++__inline_forward_c(long int,lrintf, (float __value), (__value))
++__inline_forward_c(float,fmaf, (float __x, float __y, float __z),
++		   (__x, __y, __z))
++# endif
++# ifdef __USE_GNU
++__inline_forward(void,sincosf, (float __x, float *__sinx, float *__cosx),
++		 (__x, __sinx, __cosx))
++# endif
++
++__inline_forward(long double,frexpl, (long double __value, int *__expptr),
++		 (__value, __expptr))
++__inline_forward_c(long double,floorl, (long double __x), (__x))
++__inline_forward_c(long double,ceill, (long double __x), (__x))
++# ifdef __USE_MISC
++__inline_forward_c(int,isinfl, (long double __value), (__value))
++__inline_forward_c(int,finitel, (long double __value), (__value))
++__inline_forward_c(long double,scalbnl, (long double __x, int __n), (__x, __n))
++__inline_forward_c(int,isnanl, (long double __value), (__value))
++# endif
++# ifdef __USE_ISOC99
++__inline_forward_c(long double,scalblnl, (long double __x, long int __n),
++		   (__x, __n))
++__inline_forward_c(long double,nearbyintl, (long double __value), (__value))
++__inline_forward_c(long int,lrintl, (long double __value), (__value))
++__inline_forward_c(long double,fmal,
++		   (long double __x, long double __y, long double __z),
++		   (__x, __y, __z))
++# endif
++# ifdef __USE_GNU
++__inline_forward(void,sincosl,
++		 (long double __x, long double *__sinx, long double *__cosx),
++		 (__x, __sinx, __cosx))
++# endif
++
++#endif /* Use misc or ISO C99 */
++
++#undef __inline_forward
++#undef __inline_forward_c
++
++#endif /* !__NO_MATH_INLINES && __OPTIMIZE__ */
++
++#endif
++#endif
+diff --git a/libc/sysdeps/linux/csky/bits/setjmp.h b/libc/sysdeps/linux/csky/bits/setjmp.h
+new file mode 100644
+index 000000000..c818ec9dc
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/setjmp.h
+@@ -0,0 +1,19 @@
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H	1
++
++#if !defined _SETJMP_H  && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++typedef struct
++{
++  unsigned long __sp; /* the return stack address */
++  unsigned long __pc; /* pc: r15, return address */
++  /*
++   * ABIV1 is r8~r14
++   * ABIV2 is r4~r11, r16~r17, r26~r31
++   */
++  unsigned long __regs[16];
++} __jmp_buf[1];
++
++#endif /* _BITS_SETJMP_H */
+diff --git a/libc/sysdeps/linux/csky/bits/shm.h b/libc/sysdeps/linux/csky/bits/shm.h
+new file mode 100644
+index 000000000..bfb44bb4c
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/shm.h
+@@ -0,0 +1,85 @@
++#ifndef _SYS_SHM_H
++# error "Never include <bits/shm.h> directly; use <sys/shm.h> instead."
++#endif
++
++#include <bits/types.h>
++
++/* Permission flag for shmget.  */
++#define SHM_R		0400		/* or S_IRUGO from <linux/stat.h> */
++#define SHM_W		0200		/* or S_IWUGO from <linux/stat.h> */
++
++/* Flags for `shmat'.  */
++#define SHM_RDONLY	010000		/* attach read-only else read-write */
++#define SHM_RND		020000		/* round attach address to SHMLBA */
++#define SHM_REMAP	040000		/* take-over region on attach */
++
++/* Commands for `shmctl'.  */
++#define SHM_LOCK	11		/* lock segment (root only) */
++#define SHM_UNLOCK	12		/* unlock segment (root only) */
++
++__BEGIN_DECLS
++
++/* Segment low boundary address multiple.  */
++#define SHMLBA		(__getpagesize () << 2)
++extern int __getpagesize (void) __THROW __attribute__ ((__const__));
++
++
++/* Type to count number of attaches.  */
++typedef unsigned long int shmatt_t;
++
++/* Data structure describing a set of semaphores.  */
++struct shmid_ds
++  {
++    struct ipc_perm shm_perm;		/* operation permission struct */
++    size_t shm_segsz;			/* size of segment in bytes */
++    __time_t shm_atime;			/* time of last shmat() */
++    unsigned long int __unused1;
++    __time_t shm_dtime;			/* time of last shmdt() */
++    unsigned long int __unused2;
++    __time_t shm_ctime;			/* time of last change by shmctl() */
++    unsigned long int __unused3;
++    __pid_t shm_cpid;			/* pid of creator */
++    __pid_t shm_lpid;			/* pid of last shmop */
++    shmatt_t shm_nattch;		/* number of current attaches */
++    unsigned long int __unused4;
++    unsigned long int __unused5;
++  };
++
++#ifdef __USE_MISC
++
++/* ipcs ctl commands */
++# define SHM_STAT 	13
++# define SHM_INFO 	14
++
++/* shm_mode upper byte flags */
++# define SHM_DEST	01000	/* segment will be destroyed on last detach */
++# define SHM_LOCKED	02000   /* segment will not be swapped */
++# define SHM_HUGETLB	04000	/* segment is mapped via hugetlb */
++# define SHM_NORESERVE	010000	/* don't check for reservations */
++
++struct	shminfo
++  {
++    unsigned long int shmmax;
++    unsigned long int shmmin;
++    unsigned long int shmmni;
++    unsigned long int shmseg;
++    unsigned long int shmall;
++    unsigned long int __unused1;
++    unsigned long int __unused2;
++    unsigned long int __unused3;
++    unsigned long int __unused4;
++  };
++
++struct shm_info
++  {
++    int used_ids;
++    unsigned long int shm_tot;	/* total allocated shm */
++    unsigned long int shm_rss;	/* total resident shm */
++    unsigned long int shm_swp;	/* total swapped shm */
++    unsigned long int swap_attempts;
++    unsigned long int swap_successes;
++  };
++
++#endif /* __USE_MISC */
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/csky/bits/sigcontextinfo.h b/libc/sysdeps/linux/csky/bits/sigcontextinfo.h
+new file mode 100644
+index 000000000..b7e08cfc9
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/sigcontextinfo.h
+@@ -0,0 +1,26 @@
++/* Copyright (C) 1998, 1999, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Andreas Schwab <schwab@issan.informatik.uni-dortmund.de>, 1998.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define SIGCONTEXT int _code, struct sigcontext *
++#define SIGCONTEXT_EXTRA_ARGS _code,
++#define GET_PC(ctx)	((void *) (ctx)->sc_pc)
++#define GET_FRAME(ctx)	((void *) __builtin_frame_address (1))
++#define GET_STACK(ctx)	((void *) (ctx)->sc_usp)
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libc/sysdeps/linux/csky/bits/stackinfo.h b/libc/sysdeps/linux/csky/bits/stackinfo.h
+new file mode 100644
+index 000000000..aaf980752
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/stackinfo.h
+@@ -0,0 +1,6 @@
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++#define _STACK_GROWS_DOWN	1
++
++#endif
+diff --git a/libc/sysdeps/linux/csky/bits/syscalls.h b/libc/sysdeps/linux/csky/bits/syscalls.h
+new file mode 100644
+index 000000000..04d01f4ca
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/syscalls.h
+@@ -0,0 +1,113 @@
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++#undef __NR_iopl
++#undef __NR_vm86
++
++/*
++   Some of the sneaky macros in the code were taken from
++   glibc-2.3.2/sysdeps/unix/sysv/linux/arm/sysdep.h
++*/
++
++//#include <errno.h>
++
++#define INLINE_SYSCALL_NCS(name, nr, args...)				\
++(__extension__								\
++  ({									\
++     unsigned int _inline_sys_result = INTERNAL_SYSCALL_NCS (name, , nr, args);\
++     if (unlikely (INTERNAL_SYSCALL_ERROR_P (_inline_sys_result, )))	\
++       {								\
++	 __set_errno (INTERNAL_SYSCALL_ERRNO (_inline_sys_result, ));	\
++	 _inline_sys_result = (unsigned int) -1;			\
++       }								\
++     (int) _inline_sys_result;						\
++   })									\
++)
++
++#undef INTERNAL_SYSCALL_NCS
++#ifndef __cskyabiv2__
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)                        \
++  ({unsigned int __sys_result;                                          \
++     {                                                                  \
++       register int _a1 __asm__ ("a0"), _nr __asm__ ("r1");             \
++       LOAD_ARGS_##nr (args)                                            \
++       _nr = (name);                                             \
++       __asm__ __volatile__ ("trap  0 \n\t"                             \
++                             : "=r" (_a1)                               \
++                             : "r" (_nr) ASM_ARGS_##nr                  \
++                             : "memory");                               \
++               __sys_result = _a1;                                      \
++     }                                                                  \
++     (int) __sys_result; })
++
++#else /* __cskyabiv2__ */
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)                        \
++  ({unsigned int __sys_result;                                          \
++     {                                                                  \
++       register int _a1 __asm__ ("a0"), _nr __asm__ ("r7");             \
++       LOAD_ARGS_##nr (args)                                            \
++       _nr = (name);                                             \
++       __asm__ __volatile__ ("trap  0    \n\t"                          \
++                             : "=r" (_a1)                               \
++                             : "r" (_nr) ASM_ARGS_##nr                  \
++                             : "memory");                               \
++               __sys_result = _a1;                                      \
++     }                                                                  \
++     (int) __sys_result; })
++#endif /* __ABI_CSKY_V2__ */
++
++#define INTERNAL_SYSCALL_ERROR_P(val, err) \
++  ((unsigned int) (val) >= 0xfffff001u)
++
++#define LOAD_ARGS_0()
++#define ASM_ARGS_0
++#define LOAD_ARGS_1(a1)                         \
++  _a1 = (int) (a1);                             \
++  LOAD_ARGS_0 ()
++#define ASM_ARGS_1      ASM_ARGS_0, "r" (_a1)
++#define LOAD_ARGS_2(a1, a2)                     \
++  register int _a2 __asm__ ("a1") = (int) (a2); \
++  LOAD_ARGS_1 (a1)
++#define ASM_ARGS_2      ASM_ARGS_1, "r" (_a2)
++#define LOAD_ARGS_3(a1, a2, a3)                 \
++  register int _a3 __asm__ ("a2") = (int) (a3); \
++  LOAD_ARGS_2 (a1, a2)
++#define ASM_ARGS_3      ASM_ARGS_2, "r" (_a3)
++#define LOAD_ARGS_4(a1, a2, a3, a4)             \
++  register int _a4 __asm__ ("a3") = (int) (a4); \
++  LOAD_ARGS_3 (a1, a2, a3)
++#define ASM_ARGS_4      ASM_ARGS_3, "r" (_a4)
++
++#ifndef __cskyabiv2__
++#define LOAD_ARGS_5(a1, a2, a3, a4, a5)         \
++  register int _v1 __asm__ ("a4") = (int) (a5); \
++  LOAD_ARGS_4 (a1, a2, a3, a4)
++#define ASM_ARGS_5      ASM_ARGS_4, "r" (_v1)
++#define LOAD_ARGS_6(a1, a2, a3, a4, a5, a6)     \
++  register int _v2 __asm__ ("a5") = (int) (a6); \
++  LOAD_ARGS_5 (a1, a2, a3, a4, a5)
++#define ASM_ARGS_6      ASM_ARGS_5, "r" (_v2)
++#define LOAD_ARGS_7(a1, a2, a3, a4, a5, a6, a7) \
++  register int _v3 __asm__ ("r8") = (int) (a7); \
++  LOAD_ARGS_6 (a1, a2, a3, a4, a5, a6)
++#define ASM_ARGS_7      ASM_ARGS_6, "r" (_v3)
++#else /* __cskyabiv2__ */
++#define LOAD_ARGS_5(a1, a2, a3, a4, a5)         \
++  register int _v1 __asm__ ("l0") = (int) (a5); \
++  LOAD_ARGS_4 (a1, a2, a3, a4)
++#define ASM_ARGS_5      ASM_ARGS_4, "r" (_v1)
++#define LOAD_ARGS_6(a1, a2, a3, a4, a5, a6)     \
++  register int _v2 __asm__ ("l1") = (int) (a6); \
++  LOAD_ARGS_5 (a1, a2, a3, a4, a5)
++#define ASM_ARGS_6      ASM_ARGS_5, "r" (_v2)
++#define LOAD_ARGS_7(a1, a2, a3, a4, a5, a6, a7) \
++  register int _v3 __asm__ ("l2") = (int) (a7); \
++  LOAD_ARGS_6 (a1, a2, a3, a4, a5, a6)
++#define ASM_ARGS_7      ASM_ARGS_6, "r" (_v3)
++#endif /* __ABI_CSKY_V2__ */
++
++
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/csky/bits/uClibc_arch_features.h b/libc/sysdeps/linux/csky/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..ca898ee18
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/uClibc_arch_features.h
+@@ -0,0 +1,46 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++# define __UCLIBC_ABORT_INSTRUCTION__ ".long 0xffffffff"
++
++/* can your target use syscall6() for mmap ? */
++#undef __UCLIBC_MMAP_HAS_6_ARGS__
++
++#ifdef __CSKYABIV2__
++#undef __UCLIBC_SYSCALL_ALIGN_64BIT__
++#else
++#define __UCLIBC_SYSCALL_ALIGN_64BIT__
++#endif
++
++/* does your target have a broken create_module() ? */
++#define __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#define __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target doesn't like .global */
++#undef __UCLIBC_ASM_GLOBAL_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* needed probably only for ppc64 */
++#undef __UCLIBC_HAVE_ASM_GLOBAL_DOT_NAME__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++/* define if target supports CFI pseudo ops */
++#define __UCLIBC_HAVE_ASM_CFI_DIRECTIVES__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/csky/bits/wordsize.h b/libc/sysdeps/linux/csky/bits/wordsize.h
+new file mode 100644
+index 000000000..1b5842adb
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/bits/wordsize.h
+@@ -0,0 +1 @@
++#define __WORDSIZE	32
+diff --git a/libc/sysdeps/linux/csky/cacheflush.c b/libc/sysdeps/linux/csky/cacheflush.c
+new file mode 100644
+index 000000000..7762c7332
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/cacheflush.c
+@@ -0,0 +1,2 @@
++#include <sys/syscall.h>
++_syscall3(int, cacheflush, void *, addr, int, nbytes, int, op)
+diff --git a/libc/sysdeps/linux/csky/clone.c b/libc/sysdeps/linux/csky/clone.c
+new file mode 100644
+index 000000000..97c30d027
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/clone.c
+@@ -0,0 +1,47 @@
++#include <stdarg.h>
++#include <sysdep.h>
++#include <unistd.h>
++
++extern int __syscall_error(int err_no);
++
++extern int __csky_clone (
++  int flags,
++  void *child_stack,
++  pid_t *ptid,
++  pid_t *ctid,
++  void *tls);
++
++int __clone(
++  int (*fn)(void *),
++  void *child_stack,
++  int flags,
++  void *arg, ...)
++{
++  void *ptid;
++  void *tls;
++  void *ctid;
++  va_list al;
++  int err;
++
++  va_start(al, arg);
++  ptid = va_arg(al, void *);
++  tls = va_arg(al, void *);
++  ctid = va_arg(al, void *);
++  va_end(al);
++
++  err = EINVAL;
++  if (!fn)
++    goto err;
++  if (!child_stack)
++    goto err;
++
++  /* prepare fn&arg in child_stack */
++  child_stack = (void *)((unsigned int)child_stack - 8);
++  *(unsigned int *)child_stack = (unsigned int)fn;
++  *(unsigned int *)(child_stack + 4) = (unsigned int)arg;
++
++  return __csky_clone(flags, child_stack, ptid, ctid, tls);
++err:
++  return __syscall_error(-err);
++}
++weak_alias(__clone, clone)
+diff --git a/libc/sysdeps/linux/csky/crt1.S b/libc/sysdeps/linux/csky/crt1.S
+new file mode 100644
+index 000000000..ae73843fb
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/crt1.S
+@@ -0,0 +1,95 @@
++#include <sysdep.h>
++
++ .text
++.global	_start
++.type   _start,%function
++.global __exit
++.global atexit
++
++.global _init
++.global _fini
++
++.global main
++.global __uClibc_main
++
++/*
++ * argc, argv and envp are on the stack
++ *
++ * Call:
++ * void __uClibc_main(
++ *         int (*main)(int, char **, char **),
++ *         int argc,
++ *         char **argv,
++ *         void (*app_init)(void),
++ *         void (*app_fini)(void),
++ *         void (*rtld_fini)(void),
++ *         void *stack_end attribute_unused);
++ */
++
++_start:
++#ifdef __PIC__
++	__GET_GB
++	lrw	a0, main@GOT
++	addu	a0, gb
++	ldw	a0, (a0)
++
++	ldw	a1, (sp)
++	mov	a2, sp
++	addi	a2, 4
++
++	mov	a3, sp /* push stack_end */
++	subi	sp, 8
++	stw	a3, (sp)
++
++	lrw	a3, _init@GOT
++	addu	a3, gb
++	ldw	a3, (a3)
++
++#ifdef __CSKYABIV2__
++	subi	sp, 8
++	lrw	l4, _fini@GOT
++	addu	l4, gb
++	ldw	l4, (l4)
++	stw	l4, (sp)
++
++	stw	r7, (sp, 4) /* push rtld_fini */
++#else
++	lrw	a4, _fini@GOT
++	addu	a4, gb
++	ldw	a4, (a4)
++#endif
++
++	lrw	l4,  __uClibc_main@PLT
++	addu	l4, gb
++	ldw	l4, (l4)
++	jsr	l4
++
++#else /* __PIC__ */
++	lrw	a0, main
++
++	ldw	a1, (sp)
++	mov	a2, sp
++	addi	a2, 4
++
++	mov	a3, sp     /* push stack_end */
++	subi	sp, 8
++	stw	a3, (sp)
++
++	lrw	a3, _init
++#ifdef __CSKYABIV2__
++	subi	sp, 8
++	lrw	l4, _fini
++	stw	l4, (sp)
++	stw	r7, (sp, 4)
++#else
++	lrw	a4, _fini
++#endif
++
++	lrw	l4, __uClibc_main
++	jsr	l4
++#endif /* __PIC__ */
++	bsr	__exit
++__exit:
++	DO_CALL(exit, 0)
++	br .
++
+diff --git a/libc/sysdeps/linux/csky/crti.S b/libc/sysdeps/linux/csky/crti.S
+new file mode 100644
+index 000000000..e85a81cb1
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/crti.S
+@@ -0,0 +1,13 @@
++#include <sysdep.h>
++.file  "initfini.c"
++
++.section .init
++ENTRY(_init)
++	subi	sp, 8
++	stw	lr, (sp, 4)
++
++.section .fini
++ENTRY(_fini)
++	subi	sp, 8
++	stw	lr, (sp, 4)
++
+diff --git a/libc/sysdeps/linux/csky/crtn.S b/libc/sysdeps/linux/csky/crtn.S
+new file mode 100644
+index 000000000..3814f307e
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/crtn.S
+@@ -0,0 +1,11 @@
++.file  "initfini.c"
++
++.section .init
++	ldw	lr, (sp, 4)
++	addi	sp, 8
++	rts
++
++.section .fini
++	ldw	lr, (sp, 4)
++	addi	sp, 8
++	rts
+diff --git a/libc/sysdeps/linux/csky/csky_clone.S b/libc/sysdeps/linux/csky/csky_clone.S
+new file mode 100644
+index 000000000..83604691f
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/csky_clone.S
+@@ -0,0 +1,20 @@
++#include <sysdep.h>
++
++PSEUDO_ERRVAL(__csky_clone, clone, 5)
++  cmpnei a0, 0
++  bf start_thread
++  rts
++
++start_thread:
++#ifdef  __CSKYABIV2__
++  subi	sp, 4
++#endif
++  ld.w	a0, (sp, 0x4)
++  ld.w	a1, (sp, 0x0)
++  addi	sp, 8
++  jsr   a1
++
++  DO_CALL(exit, 0)
++
++END(__csky_clone)
++
+diff --git a/libc/sysdeps/linux/csky/jmpbuf-unwind.h b/libc/sysdeps/linux/csky/jmpbuf-unwind.h
+new file mode 100644
+index 000000000..30e39f451
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/jmpbuf-unwind.h
+@@ -0,0 +1,15 @@
++#include <setjmp.h>
++#include <stdint.h>
++#include <unwind.h>
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(jmpbuf, address, demangle) \
++  ((void *) (address) < (void *) demangle (jmpbuf[0].__sp))
++
++#define _JMPBUF_CFA_UNWINDS_ADJ(_jmpbuf, _context, _adj) \
++  _JMPBUF_UNWINDS_ADJ (_jmpbuf, (void *) _Unwind_GetCFA (_context), _adj)
++
++#define _JMPBUF_UNWINDS_ADJ(_jmpbuf, _address, _adj) \
++  ((uintptr_t) (_address) - (_adj) < (uintptr_t) (_jmpbuf[0].__sp) - (_adj))
++
+diff --git a/libc/sysdeps/linux/csky/libc-read_tp.S b/libc/sysdeps/linux/csky/libc-read_tp.S
+new file mode 100644
+index 000000000..1974cba25
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/libc-read_tp.S
+@@ -0,0 +1 @@
++#include <ldso/ldso/csky/read_tp.S>
+diff --git a/libc/sysdeps/linux/csky/setjmp.S b/libc/sysdeps/linux/csky/setjmp.S
+new file mode 100644
+index 000000000..daadcb318
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/setjmp.S
+@@ -0,0 +1,43 @@
++#include <sysdep.h>
++
++ENTRY(setjmp)
++	stw     sp, (a0, 0)
++	stw     lr, (a0, 4)
++
++	stw     l0, (a0, 8)
++	stw     l1, (a0, 12)
++	stw     l2, (a0, 16)
++	stw     l3, (a0, 20)
++	stw     l4, (a0, 24)
++	stw     l5, (a0, 28)
++
++#ifdef __CSKYABIV2__
++	stw	l6, (a0, 32)
++        stw	l7, (a0, 36)
++        stw	l8, (a0, 40)
++        stw	l9, (a0, 44)
++
++        stw	r26, (a0, 48)
++        stw	r27, (a0, 52)
++        stw	gb,  (a0, 56)
++        stw	r29, (a0, 60)
++        stw	r30, (a0, 64)
++        stw	tls, (a0, 68)
++#else
++	stw     gb, (a0, 32)
++#endif
++
++	subi	sp, 8
++	stw	lr, (sp, 0)
++	stw     gb, (sp, 4)
++	__GET_GB
++	__JSR(__sigjmp_save)
++	ldw     gb, (sp, 4)
++	ldw	lr, (sp, 0)
++	addi	sp, 8
++	rts
++END(setjmp)
++
++strong_alias(setjmp, __sigsetjmp)
++strong_alias(setjmp, _setjmp)
++
+diff --git a/libc/sysdeps/linux/csky/sys/cachectl.h b/libc/sysdeps/linux/csky/sys/cachectl.h
+new file mode 100644
+index 000000000..0d45bf07f
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/sys/cachectl.h
+@@ -0,0 +1,10 @@
++#ifndef _SYS_CACHECTL_H
++#define _SYS_CACHECTL_H	1
++
++#include <asm/cachectl.h>
++
++__BEGIN_DECLS
++extern int cacheflush(void *addr, int nbytes, int flags);
++__END_DECLS
++
++#endif
+diff --git a/libc/sysdeps/linux/csky/sys/procfs.h b/libc/sysdeps/linux/csky/sys/procfs.h
+new file mode 100644
+index 000000000..91c1388d7
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/sys/procfs.h
+@@ -0,0 +1,126 @@
++/* Copyright (C) 1996, 1997, 1999, 2000, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++
++/* And the whole bunch of them.  We could have used `struct
++   user_regs' directly in the typedef, but tradition says that
++   the register set is an array, which does have some peculiar
++   semantics, so leave it that way.  */
++#define ELF_NGREG (sizeof (struct user_regs) / sizeof(elf_greg_t))
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Register set for the floating-point registers.  */
++typedef struct user_fpregs elf_fpregset_t;
++
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned short int pr_uid;
++    unsigned short int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/csky/sys/ucontext.h b/libc/sysdeps/linux/csky/sys/ucontext.h
+new file mode 100644
+index 000000000..59176882c
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/sys/ucontext.h
+@@ -0,0 +1,17 @@
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++#include <bits/sigcontext.h>
++
++typedef struct ucontext
++{
++	unsigned long int uc_flags;
++	struct ucontext * uc_link;
++	stack_t           uc_stack;
++	struct sigcontext uc_mcontext;
++	sigset_t          uc_sigmask;
++} ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/csky/sys/user.h b/libc/sysdeps/linux/csky/sys/user.h
+new file mode 100644
+index 000000000..4ab1972a0
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/sys/user.h
+@@ -0,0 +1,48 @@
++#ifndef _SYS_USER_H
++#define _SYS_USER_H  1
++
++struct user_fpregs {
++	unsigned long  fsr;         /* fpu status reg */
++	unsigned long  fesr;        /* fpu exception status reg */
++	unsigned long  fp[32];      /* fpu general regs */
++};
++
++struct user_regs {
++#if defined(__CSKYABIV2__)
++	unsigned long int uregs[34];  /* CSKY V2 has 32 general rgister */
++#else
++	unsigned long int uregs[18];  /* CSKY V1 has 16 general rgister */
++#endif
++};
++
++/*
++ * When the kernel dumps core, it starts by dumping the user struct -
++ * this will be used by gdb to figure out where the data and stack segments
++ * are within the file, and what virtual addresses to use.
++ */
++struct user{
++/* We start with the registers, to mimic the way that "memory" is returned
++   from the ptrace(3,...) function.  */
++	struct user_regs    regs; /* Where the registers are actually stored */
++	int                 u_fpvalid;  /* True if math co-processor being used. */
++
++/* The rest of this junk is to help gdb figure out what goes where */
++	unsigned long int   u_tsize;	/* Text segment size (pages). */
++	unsigned long int   u_dsize;	/* Data segment size (pages). */
++	unsigned long int   u_ssize;	/* Stack segment size (pages). */
++	unsigned long       start_code; /* Starting virtual address of text. */
++	unsigned long       start_stack;/* Starting virtual address of stack area.
++					   This is actually the bottom of the stack,
++					   the top of the stack is always found in
++					   the esp register.  */
++	long int            signal;     /* Signal that caused the core dump. */
++	int                 reserved;	/* No longer used */
++	struct user_regs *  u_ar0;	/* Used by gdb to help find the values
++					   for the registers. */
++	unsigned long       magic;	/* To uniquely identify a core file */
++	char                u_comm[32];	/* User command that was responsible */
++	struct user_fpregs  u_fp;
++	struct user_fpregs* u_fpstate;	/* Math Co-processor pointer. */
++};
++
++#endif /* _SYS_USER_H */
+diff --git a/libc/sysdeps/linux/csky/sysdep.h b/libc/sysdeps/linux/csky/sysdep.h
+new file mode 100644
+index 000000000..2fcff684e
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/sysdep.h
+@@ -0,0 +1,204 @@
++#ifndef _LINUX_CSKY_SYSDEP_H
++#define _LINUX_CSKY_SYSDEP_H 1
++
++#include <common/sysdep.h>
++#include <sys/syscall.h>
++
++#undef	SYS_ify
++#define	SYS_ify(name) (__NR_##name)
++
++#ifdef __ASSEMBLER__
++
++/* ELF uses byte-counts for .align, most others use log2 of count of bytes.  */
++#define ALIGNARG(log2) log2
++/* For ELF we need the `.type' directive to make shared libs work right.  */
++#define ASM_TYPE_DIRECTIVE(name,typearg) .type name,%##typearg;
++#define ASM_SIZE_DIRECTIVE(name) .size name,.-name
++
++#define	ENTRY(name) \
++  .globl C_SYMBOL_NAME(name); \
++  ASM_TYPE_DIRECTIVE (C_SYMBOL_NAME(name),function) \
++  .align ALIGNARG(4); \
++  C_LABEL(name)
++
++#undef END
++#define END(name) ASM_SIZE_DIRECTIVE(name)
++
++#undef	ret_ERRVAL
++#define	ret_ERRVAL rts
++
++#undef	PSEUDO_END
++#define	PSEUDO_END(name) END(name)
++
++#ifdef __PIC__
++#define __GET_GB \
++  bsr 1f; \
++  1: lrw gb, 1b@GOTPC; \
++  addu gb, lr;
++
++/*
++ * __JSR must be used with __GET_GB and SAVE_ARGS
++ */
++#define __JSR(symbol) \
++  lrw a2, symbol@PLT; \
++  add a2, gb; \
++  ld.w a2, (a2); \
++  jsr a2;
++
++#define PSEUDO_ERRJMP \
++  subi sp, 8; \
++  st.w lr, (sp); \
++  st.w gb, (sp, 4); \
++  __GET_GB \
++  lrw a2, __syscall_error@PLT; \
++  addu a2, gb; \
++  ld.w a2, (a2); \
++  jsr a2; \
++  ld.w lr, (sp); \
++  ld.w gb, (sp, 4); \
++  addi sp, 8; \
++  rts;
++
++#else /* __PIC__ */
++
++#define __GET_GB
++#define __JSR(symbol) jsri symbol;
++#define PSEUDO_ERRJMP \
++  subi	sp, 4; \
++  stw	lr, (sp, 0); \
++  jsri	__syscall_error; \
++  ldw	lr, (sp, 0); \
++  addi	sp, 4; \
++  rts;
++
++#endif /* __PIC__ */
++
++#define PSEUDO_ERRVAL(name, syscall_name, args) \
++  .text; \
++  99: PSEUDO_ERRJMP; \
++  ENTRY(name); \
++  DO_CALL(syscall_name, args); \
++  btsti	a0, 31; \
++  bt 99b;
++
++#undef PSEUDO_END_ERRVAL
++#define PSEUDO_END_ERRVAL(name) \
++  rts; \
++  END(name)
++
++/* DO_CALL */
++#undef	DO_CALL
++#ifdef	__CSKYABIV2__
++
++#define	DO_CALL(syscall_name, args) \
++  DOARGS_##args \
++  mov	t0, r7; \
++  lrw	r7, SYS_ify (syscall_name); \
++  trap	0; \
++  mov	r7, t0; \
++  UNDOARGS_##args
++
++#define DOARGS_0
++#define DOARGS_1
++#define DOARGS_2
++#define DOARGS_3
++#define DOARGS_4
++#define DOARGS_5 subi sp, 4; st.w r4, (sp, 0); ld.w r4, (sp, 4);
++#define DOARGS_6 subi sp, 8; stm r4-r5, (sp); ld.w r4, (sp, 8); ld.w r5, (sp, 12);
++
++#define UNDOARGS_0
++#define UNDOARGS_1
++#define UNDOARGS_2
++#define UNDOARGS_3
++#define UNDOARGS_4
++#define UNDOARGS_5 ld.w r4, (sp, 0); addi sp, 4;
++#define UNDOARGS_6 ldm r4-r5, (sp); addi sp, 8;
++
++#else /* __CSKYABIV2__ */
++
++#define DO_CALL(syscall_name, args) \
++  lrw  r1, SYS_ify (syscall_name); \
++  trap 0;
++
++#define DOARGS_0
++#define DOARGS_1
++#define DOARGS_2
++#define DOARGS_3
++#define DOARGS_4
++#define DOARGS_5
++#define DOARGS_6
++
++#define UNDOARGS_0
++#define UNDOARGS_1
++#define UNDOARGS_2
++#define UNDOARGS_3
++#define UNDOARGS_4
++#define UNDOARGS_5
++#define UNDOARGS_6
++
++#endif /* __CSKYABIV2__ */
++
++/*
++ * define DO_CALL_2, only ABIV2 need DO_CALL_2
++ * to be quite different with DO_CALL, DO_CALL_2 need not save r7.
++ */
++#ifdef __CSKYABIV2__
++#undef  DO_CALL_2
++#define DO_CALL_2(syscall_name, args) \
++  DOARGS2_##args; \
++  lrw	r7, SYS_ify(syscall_name); \
++  trap	0; \
++  UNDOARGS2_##args
++#undef  DOARGS2_0
++#define DOARGS2_0
++
++#undef  DOARGS2_1
++#define DOARGS2_1 DOARGS2_0
++#undef  DOARGS2_2
++#define DOARGS2_2 DOARGS2_0
++#undef  DOARGS2_3
++#define DOARGS2_3 DOARGS2_0
++#undef  DOARGS2_4
++#define DOARGS2_4 DOARGS2_0
++#undef  DOARGS2_5
++#define DOARGS2_5 \
++  subi sp, 8; \
++  cfi_adjust_cfa_offset (8); \
++  stw  r4, (sp, 0); \
++  ldw  r4, (sp, 24)
++#undef  DOARGS2_6
++#define DOARGS2_6 \
++  subi sp, 8; \
++  cfi_adjust_cfa_offset (8); \
++  stw  r4, (sp, 0); \
++  stw  r5, (sp, 4); \
++  ldw  r4, (sp, 24); \
++  ldw  r5, (sp, 28)
++
++#undef  UNDOARGS2_0
++#define UNDOARGS2_0
++
++#undef  UNDOARGS2_1
++#define UNDOARGS2_1 UNDOARGS2_0
++#undef  UNDOARGS2_2
++#define UNDOARGS2_2 UNDOARGS2_0
++#undef  UNDOARGS2_3
++#define UNDOARGS2_3 UNDOARGS2_0
++#undef  UNDOARGS2_4
++#define UNDOARGS2_4 UNDOARGS2_0
++#undef  UNDOARGS2_5
++#define UNDOARGS2_5 \
++  ldw  r4, (sp, 0); \
++  addi sp, 8
++
++#undef  UNDOARGS2_6
++#define UNDOARGS2_6 \
++  ldw  r4, (sp, 0); \
++  ldw  r5, (sp, 4); \
++  addi sp, 8
++
++#endif  /* __CSKYABIV2__ */
++
++#endif /* __ASSEMBLER__ */
++#endif /* _LINUX_CSKY_SYSDEP_H */
++
+diff --git a/libc/sysdeps/linux/csky/vfork.S b/libc/sysdeps/linux/csky/vfork.S
+new file mode 100644
+index 000000000..a28bb32fa
+--- /dev/null
++++ b/libc/sysdeps/linux/csky/vfork.S
+@@ -0,0 +1,6 @@
++#include <sysdep.h>
++PSEUDO_ERRVAL(__vfork, vfork, 0)
++PSEUDO_END_ERRVAL(__vfork)
++weak_alias(__vfork, vfork)
++libc_hidden_weak(vfork)
++
+diff --git a/libpthread/nptl/sysdeps/csky/Makefile b/libpthread/nptl/sysdeps/csky/Makefile
+new file mode 100644
+index 000000000..43dc60a42
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/Makefile
+@@ -0,0 +1,6 @@
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libpthread/nptl/sysdeps/csky/Makefile.arch b/libpthread/nptl/sysdeps/csky/Makefile.arch
+new file mode 100644
+index 000000000..0e0a5e6d4
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/Makefile.arch
+@@ -0,0 +1,7 @@
++CFLAGS-pt-raise.c = -DNOT_IN_libc -DIS_IN_libpthread
++
++ASFLAGS-pthread_spin_lock.S = -DNOT_IN_libc -DIS_IN_libpthread
++ASFLAGS-pthread_spin_trylock.S = -DNOT_IN_libc -DIS_IN_libpthread
++
++libc_arch_a_CSRC = libc-tls.c
++
+diff --git a/libpthread/nptl/sysdeps/csky/dl-tls.h b/libpthread/nptl/sysdeps/csky/dl-tls.h
+new file mode 100644
+index 000000000..70f7e9681
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/dl-tls.h
+@@ -0,0 +1,9 @@
++/* Type used for the representation of TLS information in the GOT.  */
++typedef struct
++{
++	unsigned long int ti_module;
++	unsigned long int ti_offset;
++} tls_index;
++
++extern void *__tls_get_addr (tls_index *ti);
++
+diff --git a/libpthread/nptl/sysdeps/csky/libc-tls.c b/libpthread/nptl/sysdeps/csky/libc-tls.c
+new file mode 100644
+index 000000000..ceb61f848
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/libc-tls.c
+@@ -0,0 +1,18 @@
++#include <sysdeps/generic/libc-tls.c>
++#include <dl-tls.h>
++
++#if defined(USE_TLS) && USE_TLS
++
++/* On CSKY, linker optimizations are not required, so __tls_get_addr
++   can be called even in statically linked binaries.  In this case module
++   must be always 1 and PT_TLS segment exist in the binary, otherwise it
++   would not link.  */
++
++void *
++__tls_get_addr (tls_index *ti)
++{
++	dtv_t *dtv = THREAD_DTV ();
++	return (char *) dtv[1].pointer.val + ti->ti_offset;
++}
++
++#endif
+diff --git a/libpthread/nptl/sysdeps/csky/pthread_spin_lock.S b/libpthread/nptl/sysdeps/csky/pthread_spin_lock.S
+new file mode 100644
+index 000000000..da6e234eb
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/pthread_spin_lock.S
+@@ -0,0 +1,18 @@
++#include <sysdep.h>
++
++	.text
++	.align	4
++
++ENTRY (pthread_spin_lock)
++	mov	a2, a0
++1:
++	movi	a0, 0
++	movi	a1, 1
++	trap	2		// trap 2 use to cmpxchg
++	cmpnei	a0, 0
++	bt	1b
++	movi	a0, 0
++	jmp	r15
++
++    /* TODO */
++END (pthread_spin_lock)
+diff --git a/libpthread/nptl/sysdeps/csky/pthread_spin_trylock.S b/libpthread/nptl/sysdeps/csky/pthread_spin_trylock.S
+new file mode 100644
+index 000000000..113e94d51
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/pthread_spin_trylock.S
+@@ -0,0 +1,16 @@
++#define _ERRNO_H 1
++#include <bits/errno.h>
++#include <sysdep.h>
++
++.text
++ENTRY (pthread_spin_trylock)
++	mov	a2, a0
++	movi	a0, 0
++	movi	a1, 1
++	trap	2		// trap 2 use to cmpxchg
++	cmpnei	a0, 0
++	bf	1f
++	movi	a0, EBUSY
++1:
++	jmp	r15
++END (pthread_spin_trylock)
+diff --git a/libpthread/nptl/sysdeps/csky/pthreaddef.h b/libpthread/nptl/sysdeps/csky/pthreaddef.h
+new file mode 100644
+index 000000000..da6a0fac8
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/pthreaddef.h
+@@ -0,0 +1,19 @@
++/* Default stack size.  */
++#define ARCH_STACK_DEFAULT_SIZE	(2 * 1024 * 1024)
++
++/* Required stack pointer alignment at beginning.  SSE requires 16
++   bytes.  */
++#define STACK_ALIGN		16
++
++/* Minimal stack size after allocating thread descriptor and guard size.  */
++#define MINIMAL_REST_STACK	2048
++
++/* Alignment requirement for TCB.  */
++#define TCB_ALIGNMENT		16
++
++/* Location of current stack frame.  */
++#define CURRENT_STACK_FRAME	__builtin_frame_address (0)
++
++/* XXX Until we have a better place keep the definitions here.  */
++#define __exit_thread_inline(val) \
++  INLINE_SYSCALL (exit, 1, (val))
+diff --git a/libpthread/nptl/sysdeps/csky/tcb-offsets.sym b/libpthread/nptl/sysdeps/csky/tcb-offsets.sym
+new file mode 100644
+index 000000000..bf9c0a1c1
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/tcb-offsets.sym
+@@ -0,0 +1,10 @@
++#include <sysdep.h>
++#include <tls.h>
++
++--
++
++-- Derive offsets relative to the thread register.
++#define thread_offsetof(mem)	(long)(offsetof(struct pthread, mem) - sizeof(struct pthread))
++
++MULTIPLE_THREADS_OFFSET		thread_offsetof (header.multiple_threads)
++TID_OFFSET			thread_offsetof (tid)
+diff --git a/libpthread/nptl/sysdeps/csky/tls.h b/libpthread/nptl/sysdeps/csky/tls.h
+new file mode 100644
+index 000000000..721551c8d
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/csky/tls.h
+@@ -0,0 +1,170 @@
++#ifndef _TLS_H
++#define _TLS_H 1
++
++#ifndef __ASSEMBLER__
++
++# include <stdbool.h>
++# include <stddef.h>
++# include <stdint.h>
++
++/* Type for the dtv.  */
++typedef union dtv
++{
++  size_t counter;
++  struct
++  {
++    void *val;
++    bool is_static;
++  } pointer;
++} dtv_t;
++
++#ifdef __CSKYABIV2__
++/* define r31 as thread pointer register? */
++# define READ_THREAD_POINTER() \
++    ({ void *__result;                                \
++       __asm__ __volatile__ ("mov %0, r31"	          \
++                             : "=r" (__result));      \
++       __result; })
++#else
++# define READ_THREAD_POINTER() \
++    ({ register unsigned int __result __asm__("a0");                 \
++       __asm__ __volatile__ ("trap 3;"	    \
++                             : "=r" (__result) : : );      \
++       __result; })
++#endif
++
++#else /* __ASSEMBLER__ */
++# include <tcb-offsets.h>
++# ifdef __CSKYABIV2__
++/* define r31 as thread pointer register? */
++# define READ_THREAD_POINTER() \
++       mov r0, r31;
++# else
++# define READ_THREAD_POINTER() \
++       trap 3;
++# endif
++#endif /* __ASSEMBLER__ */
++
++/* We require TLS support in the tools.  */
++#define HAVE_TLS_SUPPORT                1
++#define HAVE_TLS_MODEL_ATTRIBUTE        1
++#define HAVE___THREAD                   1
++
++/* Signal that TLS support is available.  */
++#define USE_TLS	1
++
++# ifndef __ASSEMBLER__
++
++/* Get system call information.  */
++#  include <sysdep.h>
++
++/* The TP points to the start of the thread blocks.  */
++# define TLS_DTV_AT_TP	1
++
++/* Get the thread descriptor definition.  */
++# include <../../descr.h>
++
++typedef struct
++{
++  dtv_t *dtv;
++  void *private;
++} tcbhead_t;
++
++/* This is the size of the initial TCB.  */
++#  define TLS_INIT_TCB_SIZE	     sizeof (tcbhead_t)
++
++/* Alignment requirements for the initial TCB.  */
++#  define TLS_INIT_TCB_ALIGN     16
++
++/* This is the size of the TCB.  */
++#  define TLS_TCB_SIZE		sizeof (tcbhead_t)
++
++/* Alignment requirements for the TCB.  */
++#  define TLS_TCB_ALIGN	    16
++
++/* This is the size we need before TCB.  */
++#  define TLS_PRE_TCB_SIZE	sizeof (struct pthread)
++
++/* The thread pointer (in hardware register $29) points to the end of
++   the TCB + 0x7000, as for PowerPC.  The pthread_descr structure is
++   immediately in front of the TCB.  */
++# define TLS_TCB_OFFSET     0//0x7000
++
++/* Install the dtv pointer.  The pointer passed is to the element with
++   index -1 which contain the length.  */
++#  define INSTALL_DTV(tcbp, dtvp) \
++  (((tcbhead_t *) (tcbp))->dtv = (dtvp) + 1)
++
++/* Install new dtv for current thread.  */
++#  define INSTALL_NEW_DTV(dtv) \
++  (THREAD_DTV() = (dtv))
++
++/* Return dtv of given thread descriptor.  */
++#  define GET_DTV(tcbp) \
++  (((tcbhead_t *) (tcbp))->dtv)
++
++/* Code to initially initialize the thread pointer.  This might need
++   special attention since 'errno' is not yet available and if the
++   operation can cause a failure 'errno' must not be touched.  */
++# define TLS_INIT_TP(tcbp, secondcall) \
++  ({ INTERNAL_SYSCALL_DECL (err);                   \
++     long result_var;                           \
++     result_var = INTERNAL_SYSCALL (set_thread_area, err, 1,        \
++                    (char *) (tcbp) + TLS_TCB_OFFSET);  \
++     INTERNAL_SYSCALL_ERROR_P (result_var, err)             \
++       ? "unknown error" : NULL; })
++
++/* Return the address of the dtv for the current thread.  */
++#  define THREAD_DTV() \
++  (((tcbhead_t *) (READ_THREAD_POINTER () - TLS_TCB_OFFSET))->dtv)
++
++/* Return the thread descriptor for the current thread.  */
++#  undef THREAD_SELF
++#  define THREAD_SELF \
++ ((struct pthread *) (READ_THREAD_POINTER ()                 \
++              - TLS_TCB_OFFSET - TLS_PRE_TCB_SIZE))
++
++/* Magic for libthread_db to know how to do THREAD_SELF.  */
++# define DB_THREAD_SELF \
++  CONST_THREAD_AREA (32, sizeof (struct pthread))
++
++/* Access to data in the thread descriptor is easy.  */
++#define THREAD_GETMEM(descr, member) \
++  descr->member
++#define THREAD_GETMEM_NC(descr, member, idx) \
++  descr->member[idx]
++#define THREAD_SETMEM(descr, member, value) \
++  descr->member = (value)
++#define THREAD_SETMEM_NC(descr, member, idx, value) \
++  descr->member[idx] = (value)
++
++/* Initializing the thread pointer will generate a SIGILL if the syscall
++   is not available.  */
++#define TLS_INIT_TP_EXPENSIVE 1
++
++/* Get and set the global scope generation counter in struct pthread.  */
++#define THREAD_GSCOPE_FLAG_UNUSED 0
++#define THREAD_GSCOPE_FLAG_USED   1
++#define THREAD_GSCOPE_FLAG_WAIT   2
++#define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1, LLL_PRIVATE);   \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++#define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
++#endif /* __ASSEMBLER__ */
++
++#endif	/* tls.h */
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/Makefile b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/Makefile
+new file mode 100644
+index 000000000..8679a8456
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/Makefile
+@@ -0,0 +1,6 @@
++top_srcdir=../../../../../../../
++top_builddir=../../../../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/Makefile.arch b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/Makefile.arch
+new file mode 100644
+index 000000000..6c85eda4f
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/Makefile.arch
+@@ -0,0 +1,4 @@
++libpthread_linux_arch_SSRC =
++libpthread_linux_arch_CSRC = pthread_once.c
++
++libc_linux_arch_CSRC = fork.c
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/bits/pthreadtypes.h b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/bits/pthreadtypes.h
+new file mode 100644
+index 000000000..e1b115c8c
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/bits/pthreadtypes.h
+@@ -0,0 +1,181 @@
++/* Copyright (C) 2002, 2003, 2004, 2005, 2006 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _BITS_PTHREADTYPES_H
++#define _BITS_PTHREADTYPES_H	1
++
++#include <endian.h>
++
++#define __SIZEOF_PTHREAD_ATTR_T 36
++#define __SIZEOF_PTHREAD_MUTEX_T 24
++#define __SIZEOF_PTHREAD_MUTEXATTR_T 4
++#define __SIZEOF_PTHREAD_COND_T 48
++#define __SIZEOF_PTHREAD_COND_COMPAT_T 12
++#define __SIZEOF_PTHREAD_CONDATTR_T 4
++#define __SIZEOF_PTHREAD_RWLOCK_T 32
++#define __SIZEOF_PTHREAD_RWLOCKATTR_T 8
++#define __SIZEOF_PTHREAD_BARRIER_T 20
++#define __SIZEOF_PTHREAD_BARRIERATTR_T 4
++
++
++/* Thread identifiers.  The structure of the attribute type is not
++   exposed on purpose.  */
++typedef unsigned long int pthread_t;
++
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_ATTR_T];
++  long int __align;
++} pthread_attr_t;
++
++
++typedef struct __pthread_internal_slist
++{
++  struct __pthread_internal_slist *__next;
++} __pthread_slist_t;
++
++
++/* Data structures for mutex handling.  The structure of the attribute
++   type is not exposed on purpose.  */
++typedef union
++{
++  struct __pthread_mutex_s
++  {
++    int __lock;
++    unsigned int __count;
++    int __owner;
++    /* KIND must stay at this position in the structure to maintain
++       binary compatibility.  */
++    int __kind;
++    unsigned int __nusers;
++    __extension__ union
++    {
++      int __spins;
++      __pthread_slist_t __list;
++    };
++  } __data;
++  char __size[__SIZEOF_PTHREAD_MUTEX_T];
++  long int __align;
++} pthread_mutex_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_MUTEXATTR_T];
++  long int __align;
++} pthread_mutexattr_t;
++
++
++/* Data structure for conditional variable handling.  The structure of
++   the attribute type is not exposed on purpose.  */
++typedef union
++{
++  struct
++  {
++    int __lock;
++    unsigned int __futex;
++    __extension__ unsigned long long int __total_seq;
++    __extension__ unsigned long long int __wakeup_seq;
++    __extension__ unsigned long long int __woken_seq;
++    void *__mutex;
++    unsigned int __nwaiters;
++    unsigned int __broadcast_seq;
++  } __data;
++  char __size[__SIZEOF_PTHREAD_COND_T];
++  __extension__ long long int __align;
++} pthread_cond_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_CONDATTR_T];
++  long int __align;
++} pthread_condattr_t;
++
++
++/* Keys for thread-specific data */
++typedef unsigned int pthread_key_t;
++
++
++/* Once-only execution */
++typedef int pthread_once_t;
++
++
++#if defined __USE_UNIX98 || defined __USE_XOPEN2K
++/* Data structure for read-write lock variable handling.  The
++   structure of the attribute type is not exposed on purpose.  */
++typedef union
++{
++  struct
++  {
++    int __lock;
++    unsigned int __nr_readers;
++    unsigned int __readers_wakeup;
++    unsigned int __writer_wakeup;
++    unsigned int __nr_readers_queued;
++    unsigned int __nr_writers_queued;
++#if __BYTE_ORDER == __BIG_ENDIAN
++    unsigned char __pad1;
++    unsigned char __pad2;
++    unsigned char __shared;
++    /* FLAGS must stay at this position in the structure to maintain
++       binary compatibility.  */
++    unsigned char __flags;
++#else
++    /* FLAGS must stay at this position in the structure to maintain
++       binary compatibility.  */
++    unsigned char __flags;
++    unsigned char __shared;
++    unsigned char __pad1;
++    unsigned char __pad2;
++#endif
++    int __writer;
++  } __data;
++  char __size[__SIZEOF_PTHREAD_RWLOCK_T];
++  long int __align;
++} pthread_rwlock_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_RWLOCKATTR_T];
++  long int __align;
++} pthread_rwlockattr_t;
++#endif
++
++
++#ifdef __USE_XOPEN2K
++/* POSIX spinlock data type.  */
++typedef volatile int pthread_spinlock_t;
++
++
++/* POSIX barriers data type.  The structure of the type is
++   deliberately not exposed.  */
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_BARRIER_T];
++  long int __align;
++} pthread_barrier_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_BARRIERATTR_T];
++  int __align;
++} pthread_barrierattr_t;
++#endif
++
++
++#endif	/* bits/pthreadtypes.h */
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/bits/semaphore.h b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/bits/semaphore.h
+new file mode 100644
+index 000000000..dadfac2af
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/bits/semaphore.h
+@@ -0,0 +1,35 @@
++/* Copyright (C) 2002, 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SEMAPHORE_H
++# error "Never use <bits/semaphore.h> directly; include <semaphore.h> instead."
++#endif
++
++
++#define __SIZEOF_SEM_T	16
++
++
++/* Value returned if `sem_open' failed.  */
++#define SEM_FAILED      ((sem_t *) 0)
++
++
++typedef union
++{
++  char __size[__SIZEOF_SEM_T];
++  long int __align;
++} sem_t;
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/createthread.c b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/createthread.c
+new file mode 100644
+index 000000000..bad8b0578
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/createthread.c
+@@ -0,0 +1,5 @@
++/* Value passed to 'clone' for initialization of the thread register.  */
++#define TLS_VALUE (pd + 1)
++
++/* Get the real implementation.	 */
++#include <sysdeps/pthread/createthread.c>
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/fork.c b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/fork.c
+new file mode 100644
+index 000000000..41776f9bc
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/fork.c
+@@ -0,0 +1,31 @@
++/* Copyright (C) 2005 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Phil Blundell <pb@nexus.co.uk>, 2005
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sched.h>
++#include <signal.h>
++#include <sysdep.h>
++#include <tls.h>
++
++
++#define ARCH_FORK()							\
++  INLINE_SYSCALL (clone, 5,						\
++		  CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | SIGCHLD,	\
++		  NULL, NULL, &THREAD_SELF->tid, NULL)
++
++#include "../fork.c"
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/lowlevellock.h b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/lowlevellock.h
+new file mode 100644
+index 000000000..0a5650318
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/lowlevellock.h
+@@ -0,0 +1,281 @@
++/* Copyright (C) 2005, 2006, 2007, 2008, 2009 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _LOWLEVELLOCK_H
++#define _LOWLEVELLOCK_H	1
++
++#include <time.h>
++#include <sys/param.h>
++#include <bits/pthreadtypes.h>
++#include <atomic.h>
++#include <sysdep.h>
++#include <bits/kernel-features.h>
++
++#define FUTEX_WAIT		0
++#define FUTEX_WAKE		1
++#define FUTEX_REQUEUE		3
++#define FUTEX_CMP_REQUEUE	4
++#define FUTEX_WAKE_OP		5
++#define FUTEX_OP_CLEAR_WAKE_IF_GT_ONE	((4 << 24) | 1)
++#define FUTEX_LOCK_PI		6
++#define FUTEX_UNLOCK_PI		7
++#define FUTEX_TRYLOCK_PI	8
++#define FUTEX_WAIT_BITSET	9
++#define FUTEX_WAKE_BITSET	10
++#define FUTEX_PRIVATE_FLAG	128
++#define FUTEX_CLOCK_REALTIME	256
++
++#define FUTEX_BITSET_MATCH_ANY	0xffffffff
++
++/* Values for 'private' parameter of locking macros.  Yes, the
++   definition seems to be backwards.  But it is not.  The bit will be
++   reversed before passing to the system call.  */
++#define LLL_PRIVATE	0
++#define LLL_SHARED	FUTEX_PRIVATE_FLAG
++
++
++#if !defined NOT_IN_libc || defined IS_IN_rtld
++/* In libc.so or ld.so all futexes are private.  */
++# ifdef __ASSUME_PRIVATE_FUTEX
++#  define __lll_private_flag(fl, private) \
++  ((fl) | FUTEX_PRIVATE_FLAG)
++# else
++#  define __lll_private_flag(fl, private) \
++  ((fl) | THREAD_GETMEM (THREAD_SELF, header.private_futex))
++# endif
++#else
++# ifdef __ASSUME_PRIVATE_FUTEX
++#  define __lll_private_flag(fl, private) \
++  (((fl) | FUTEX_PRIVATE_FLAG) ^ (private))
++# else
++#  define __lll_private_flag(fl, private) \
++  (__builtin_constant_p (private)					      \
++   ? ((private) == 0							      \
++      ? ((fl) | THREAD_GETMEM (THREAD_SELF, header.private_futex))	      \
++      : (fl))								      \
++   : ((fl) | (((private) ^ FUTEX_PRIVATE_FLAG)				      \
++	      & THREAD_GETMEM (THREAD_SELF, header.private_futex))))
++# endif
++#endif
++
++#define lll_futex_wait(futexp, val, private) \
++  lll_futex_timed_wait(futexp, val, NULL, private)
++
++#define lll_futex_timed_wait(futexp, val, timespec, private) \
++  ({									      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    long int __ret;							      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 4, (futexp),		      \
++			      __lll_private_flag (FUTEX_WAIT, private),	      \
++			      (val), (timespec));			      \
++    __ret;								      \
++  })
++
++#define lll_futex_wake(futexp, nr, private) \
++  ({									      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    long int __ret;							      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 4, (futexp),		      \
++			      __lll_private_flag (FUTEX_WAKE, private),	      \
++			      (nr), 0);					      \
++    __ret;								      \
++  })
++
++#define lll_robust_dead(futexv, private) \
++  do									      \
++    {									      \
++      int *__futexp = &(futexv);					      \
++      atomic_or (__futexp, FUTEX_OWNER_DIED);				      \
++      lll_futex_wake (__futexp, 1, private);				      \
++    }									      \
++  while (0)
++
++/* Returns non-zero if error happened, zero if success.  */
++#define lll_futex_requeue(futexp, nr_wake, nr_move, mutex, val, private) \
++  ({									      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    long int __ret;							      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 6, (futexp),		      \
++			      __lll_private_flag (FUTEX_CMP_REQUEUE, private),\
++			      (nr_wake), (nr_move), (mutex), (val));	      \
++    INTERNAL_SYSCALL_ERROR_P (__ret, __err);				      \
++  })
++
++
++/* Returns non-zero if error happened, zero if success.  */
++#define lll_futex_wake_unlock(futexp, nr_wake, nr_wake2, futexp2, private) \
++  ({									      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    long int __ret;							      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 6, (futexp),		      \
++			      __lll_private_flag (FUTEX_WAKE_OP, private),    \
++			      (nr_wake), (nr_wake2), (futexp2),		      \
++			      FUTEX_OP_CLEAR_WAKE_IF_GT_ONE);		      \
++    INTERNAL_SYSCALL_ERROR_P (__ret, __err);				      \
++  })
++
++
++#define lll_trylock(lock)	\
++  atomic_compare_and_exchange_val_acq(&(lock), 1, 0)
++
++#define lll_cond_trylock(lock)	\
++  atomic_compare_and_exchange_val_acq(&(lock), 2, 0)
++
++#define __lll_robust_trylock(futex, id) \
++  (atomic_compare_and_exchange_val_acq (futex, id, 0) != 0)
++#define lll_robust_trylock(lock, id) \
++  __lll_robust_trylock (&(lock), id)
++
++extern void __lll_lock_wait_private (int *futex) attribute_hidden;
++extern void __lll_lock_wait (int *futex, int private) attribute_hidden;
++extern int __lll_robust_lock_wait (int *futex, int private) attribute_hidden;
++
++#define __lll_lock(futex, private)					      \
++  ((void) ({								      \
++    int *__futex = (futex);						      \
++    if (__builtin_expect (atomic_compare_and_exchange_val_acq (__futex,       \
++								1, 0), 0))    \
++      {									      \
++	if (__builtin_constant_p (private) && (private) == LLL_PRIVATE)	      \
++	  __lll_lock_wait_private (__futex);				      \
++	else								      \
++	  __lll_lock_wait (__futex, private);				      \
++      }									      \
++  }))
++#define lll_lock(futex, private) __lll_lock (&(futex), private)
++
++
++#define __lll_robust_lock(futex, id, private)				      \
++  ({									      \
++    int *__futex = (futex);						      \
++    int __val = 0;							      \
++									      \
++    if (__builtin_expect (atomic_compare_and_exchange_bool_acq (__futex, id,  \
++								0), 0))	      \
++      __val = __lll_robust_lock_wait (__futex, private);		      \
++    __val;								      \
++  })
++#define lll_robust_lock(futex, id, private) \
++  __lll_robust_lock (&(futex), id, private)
++
++
++#define __lll_cond_lock(futex, private)					      \
++  ((void) ({								      \
++    int *__futex = (futex);						      \
++    if (__builtin_expect (atomic_exchange_acq (__futex, 2), 0))		      \
++      __lll_lock_wait (__futex, private);				      \
++  }))
++#define lll_cond_lock(futex, private) __lll_cond_lock (&(futex), private)
++
++
++#define lll_robust_cond_lock(futex, id, private) \
++  __lll_robust_lock (&(futex), (id) | FUTEX_WAITERS, private)
++
++
++extern int __lll_timedlock_wait (int *futex, const struct timespec *,
++				 int private) attribute_hidden;
++extern int __lll_robust_timedlock_wait (int *futex, const struct timespec *,
++					int private) attribute_hidden;
++
++#define __lll_timedlock(futex, abstime, private)			      \
++  ({									      \
++     int *__futex = (futex);						      \
++     int __val = 0;							      \
++									      \
++     if (__builtin_expect (atomic_exchange_acq (__futex, 1), 0))	      \
++       __val = __lll_timedlock_wait (__futex, abstime, private);	      \
++     __val;								      \
++  })
++#define lll_timedlock(futex, abstime, private) \
++  __lll_timedlock (&(futex), abstime, private)
++
++
++#define __lll_robust_timedlock(futex, abstime, id, private)		      \
++  ({									      \
++    int *__futex = (futex);						      \
++    int __val = 0;							      \
++									      \
++    if (__builtin_expect (atomic_compare_and_exchange_bool_acq (__futex, id,  \
++								0), 0))	      \
++      __val = __lll_robust_timedlock_wait (__futex, abstime, private);	      \
++    __val;								      \
++  })
++#define lll_robust_timedlock(futex, abstime, id, private) \
++  __lll_robust_timedlock (&(futex), abstime, id, private)
++
++
++#define __lll_unlock(futex, private) \
++  (void)							\
++    ({ int *__futex = (futex);					\
++       int __oldval = atomic_exchange_rel (__futex, 0);		\
++       if (__builtin_expect (__oldval > 1, 0))			\
++	 lll_futex_wake (__futex, 1, private);			\
++    })
++#define lll_unlock(futex, private) __lll_unlock(&(futex), private)
++
++
++#define __lll_robust_unlock(futex, private) \
++  (void)							\
++    ({ int *__futex = (futex);					\
++       int __oldval = atomic_exchange_rel (__futex, 0);		\
++       if (__builtin_expect (__oldval & FUTEX_WAITERS, 0))	\
++	 lll_futex_wake (__futex, 1, private);			\
++    })
++#define lll_robust_unlock(futex, private) \
++  __lll_robust_unlock(&(futex), private)
++
++
++#define lll_islocked(futex) \
++  (futex != 0)
++
++
++/* Our internal lock implementation is identical to the binary-compatible
++   mutex implementation. */
++
++/* Initializers for lock.  */
++#define LLL_LOCK_INITIALIZER		(0)
++#define LLL_LOCK_INITIALIZER_LOCKED	(1)
++
++/* The states of a lock are:
++    0  -  untaken
++    1  -  taken by one user
++   >1  -  taken by more users */
++
++/* The kernel notifies a process which uses CLONE_CLEARTID via futex
++   wakeup when the clone terminates.  The memory location contains the
++   thread ID while the clone is running and is reset to zero
++   afterwards.	*/
++#define lll_wait_tid(tid) \
++  do {					\
++    __typeof (tid) __tid;		\
++    while ((__tid = (tid)) != 0)	\
++      lll_futex_wait (&(tid), __tid, LLL_SHARED);\
++  } while (0)
++
++extern int __lll_timedwait_tid (int *, const struct timespec *)
++     attribute_hidden;
++
++#define lll_timedwait_tid(tid, abstime) \
++  ({							\
++    int __res = 0;					\
++    if ((tid) != 0)					\
++      __res = __lll_timedwait_tid (&(tid), (abstime));	\
++    __res;						\
++  })
++
++#endif	/* lowlevellock.h */
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/pthread_once.c b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/pthread_once.c
+new file mode 100644
+index 000000000..e977a7d0c
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/pthread_once.c
+@@ -0,0 +1,100 @@
++/* Copyright (C) 2004, 2005 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include "pthreadP.h"
++#include <lowlevellock.h>
++
++unsigned long int __fork_generation attribute_hidden;
++
++static void
++clear_once_control (void *arg)
++{
++  pthread_once_t *once_control = (pthread_once_t *) arg;
++
++  *once_control = 0;
++  lll_futex_wake (once_control, INT_MAX, LLL_PRIVATE);
++}
++
++int
++attribute_protected
++__pthread_once (pthread_once_t *once_control, void (*init_routine) (void))
++{
++  for (;;)
++    {
++      int oldval;
++      int newval;
++
++      /* Pseudo code:
++	 newval = __fork_generation | 1;
++	 oldval = *once_control;
++	 if ((oldval & 2) == 0)
++	   *once_control = newval;
++	 Do this atomically.
++      */
++      do
++	{
++	  newval = __fork_generation | 1;
++	  oldval = *once_control;
++	  if (oldval & 2)
++	    break;
++	} while (atomic_compare_and_exchange_val_acq (once_control, newval, oldval) != oldval);
++
++      /* Check if the initializer has already been done.  */
++      if ((oldval & 2) != 0)
++	return 0;
++
++      /* Check if another thread already runs the initializer.	*/
++      if ((oldval & 1) == 0)
++	break;
++
++      /* Check whether the initializer execution was interrupted by a fork.  */
++      if (oldval != newval)
++	break;
++
++      /* Same generation, some other thread was faster. Wait.  */
++      lll_futex_wait (once_control, oldval, LLL_PRIVATE);
++    }
++
++  /* This thread is the first here.  Do the initialization.
++     Register a cleanup handler so that in case the thread gets
++     interrupted the initialization can be restarted.  */
++  pthread_cleanup_push (clear_once_control, once_control);
++
++  init_routine ();
++
++  pthread_cleanup_pop (0);
++
++  /* Say that the initialisation is done.  */
++  *once_control = __fork_generation | 2;
++
++  /* Wake up all other threads.  */
++  lll_futex_wake (once_control, INT_MAX, LLL_PRIVATE);
++
++  return 0;
++}
++weak_alias (__pthread_once, pthread_once)
++strong_alias (__pthread_once, __pthread_once_internal)
++
++#if defined(__USING_SJLJ_EXCEPTIONS__) && !defined(__PIC__)
++/* When statically linked, if pthread_create is used, this file
++   will be brought in.  The exception handling code in GCC assumes
++   that if pthread_create is available, so are these.  */
++const void *include_pthread_getspecific attribute_hidden = pthread_getspecific;
++const void *include_pthread_setspecific attribute_hidden = pthread_setspecific;
++const void *include_pthread_key_create attribute_hidden = pthread_key_create;
++#endif
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/csky/sysdep-cancel.h b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/sysdep-cancel.h
+new file mode 100644
+index 000000000..34c43b06d
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/csky/sysdep-cancel.h
+@@ -0,0 +1,33 @@
++#include <sysdep.h>
++#include <tls.h>
++#ifndef __ASSEMBLER__
++#include <pthreadP.h>
++#endif
++
++#if !defined NOT_IN_libc || defined IS_IN_libpthread || defined IS_IN_librt
++
++# ifdef IS_IN_libpthread
++#  define __local_multiple_threads __pthread_multiple_threads
++# elif !defined NOT_IN_libc
++#  define __local_multiple_threads __libc_multiple_threads
++# endif
++
++# if defined IS_IN_libpthread || !defined NOT_IN_libc
++extern int __local_multiple_threads attribute_hidden;
++#  define SINGLE_THREAD_P __builtin_expect (__local_multiple_threads == 0, 1)
++# else
++#  define SINGLE_THREAD_P						\
++   __builtin_expect (THREAD_GETMEM (THREAD_SELF,			\
++				    header.multiple_threads) == 0, 1)
++# endif
++
++#else
++
++# define SINGLE_THREAD_P 1
++# define NO_CANCELLATION 1
++
++#endif
++
++#define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)

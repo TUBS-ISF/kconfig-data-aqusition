@@ -1,0 +1,106 @@
+"2007-04-01 19:10:36 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 8073c15e1..386f4b110 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -311,6 +311,7 @@ USE_TTY(APPLET(tty, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ //USE_TUNE2FS(APPLET(tune2fs, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_APP_UDHCPC(APPLET(udhcpc, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_APP_UDHCPD(APPLET(udhcpd, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
++USE_UDPSVD(APPLET(udpsvd, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_UMOUNT(APPLET(umount, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_UNAME(APPLET(uname, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_UNCOMPRESS(APPLET(uncompress, _BB_DIR_BIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index e1fbf7599..cec2dd766 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -3348,6 +3348,11 @@ USE_FEATURE_RUN_PARTS_FANCY("\n	-l	Prints names of all matching files even when
+      "\n-E		Do not set up TCP-related environment variables" \
+      "\n-v		Verbose"
+ 
++#define udpsvd_trivial_usage \
++       "TODO"
++#define udpsvd_full_usage \
++       "TODO"
++
+ #define tftp_trivial_usage \
+        "[OPTION]... HOST [PORT]"
+ #define tftp_full_usage \
+diff --git a/ipsvd/Config.in b/ipsvd/Config.in
+index fb2931d07..8522ef9eb 100644
+--- a/ipsvd/Config.in
++++ b/ipsvd/Config.in
+@@ -9,6 +9,12 @@ config TCPSVD
+ 	bool "tcpsvd"
+ 	default n
+ 	help
+-	  tcpsvd listens on a port and runs a program for each new connection
++	  tcpsvd listens on a tcp port and runs a program for each new connection
++
++config UDPSVD
++	bool "udpsvd"
++	default n
++	help
++	  udpsvd listens on a udp port and runs a program for each new connection
+ 
+ endmenu
+diff --git a/ipsvd/Kbuild b/ipsvd/Kbuild
+index 8050921b0..9eda63d20 100644
+--- a/ipsvd/Kbuild
++++ b/ipsvd/Kbuild
+@@ -6,3 +6,4 @@
+ 
+ lib-y:=
+ lib-$(CONFIG_TCPSVD) += tcpsvd.o ipsvd_perhost.o
++lib-$(CONFIG_UDPSVD) += udpsvd.o
+diff --git a/ipsvd/tcpsvd.c b/ipsvd/tcpsvd.c
+index 2a3cd3b01..197edca4e 100644
+--- a/ipsvd/tcpsvd.c
++++ b/ipsvd/tcpsvd.c
+@@ -126,7 +126,6 @@ int tcpsvd_main(int argc, char **argv)
+ 	socklen_t sockadr_size;
+ 	uint16_t local_port = local_port;
+ 	uint16_t remote_port;
+-	unsigned port;
+ 	char *local_hostname = NULL;
+ 	char *remote_hostname = (char*)""; /* "" used if no -h */
+ 	char *local_ip = local_ip;
+@@ -221,8 +220,8 @@ int tcpsvd_main(int argc, char **argv)
+ 	if (max_per_host)
+ 		ipsvd_perhost_init(cmax);
+ 
+-	port = bb_lookup_port(argv[1], "tcp", 0);
+-	sock = create_and_bind_stream_or_die(argv[0], port);
++	local_port = bb_lookup_port(argv[1], "tcp", 0);
++	sock = create_and_bind_stream_or_die(argv[0], local_port);
+ 	xlisten(sock, backlog);
+ 	/* ndelay_off(sock); - it is the default I think? */
+ 
+@@ -238,7 +237,7 @@ int tcpsvd_main(int argc, char **argv)
+ 
+ 	if (verbose) {
+ 		/* we do it only for ":port" cosmetics... oh well */
+-		len_and_sockaddr *lsa = xhost2sockaddr(argv[0], port);
++		len_and_sockaddr *lsa = xhost2sockaddr(argv[0], local_port);
+ 		char *addr = xmalloc_sockaddr2dotted(&lsa->sa, lsa->len);
+ 
+ 		printf("%s: info: listening on %s", applet_name, addr);
+@@ -246,7 +245,7 @@ int tcpsvd_main(int argc, char **argv)
+ #ifndef SSLSVD
+ 		if (option_mask32 & OPT_u)
+ 			printf(", uid %u, gid %u",
+-				(unsigned)ugid.uid, (unsigned)ugid.uid);
++				(unsigned)ugid.uid, (unsigned)ugid.gid);
+ #endif
+ 		puts(", starting");
+ 	}
+@@ -356,7 +355,7 @@ int tcpsvd_main(int argc, char **argv)
+ 		sockadr_size = sizeof(sock_adr);
+ 		if (getsockopt(conn, SOL_IP, SO_ORIGINAL_DST, &sock_adr.sa, &sockadr_size) == 0) {
+ 			char *ip = xmalloc_sockaddr2dotted_noport(&sock_adr.sa, sockadr_size);
+-			port = get_nport(&sock_adr.sa);
++			unsigned port = get_nport(&sock_adr.sa);
+ 			port = ntohs(port);
+ 			xsetenv("TCPORIGDSTIP", ip);
+ 			xsetenv("TCPORIGDSTPORT", utoa(port));

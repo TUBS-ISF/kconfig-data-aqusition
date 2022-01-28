@@ -1,0 +1,204 @@
+"2007-11-29 18:32:20 -0600"
+diff --git a/lib/lib.c b/lib/lib.c
+index 6aaf7b00..2fd7fb8e 100644
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -554,7 +554,7 @@ void loopfiles(char **argv, void (*function)(int fd, char *name))
+ 	int fd;
+ 
+ 	// If no arguments, read from stdin.
+-	if (!*argv) function(0, *argv);
++	if (!*argv) function(0, "-");
+ 	else do {
+ 		// Filename "-" means read from stdin.
+ 		// Inability to open a file prints a warning, but doesn't exit.
+diff --git a/toys/Config.in b/toys/Config.in
+index 0c3cb1e3..7c75d255 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -269,6 +269,14 @@ config READLINK_F
+ 
+ 	  -f	Show final location, including normal files and multiple symlinks.
+ 
++config SHA1SUM
++	bool "sleep"
++	default y
++	help
++	  usage: sha1sum [file...]
++
++	  Calculate sha1 hash of files (or stdin).
++
+ config SLEEP
+ 	bool "sleep"
+ 	default y
+diff --git a/toys/catv.c b/toys/catv.c
+index e5412700..6770c648 100644
+--- a/toys/catv.c
++++ b/toys/catv.c
+@@ -12,7 +12,7 @@
+ 
+ // Callback function for loopfiles()
+ 
+-void do_catv(int fd, char *name)
++static void do_catv(int fd, char *name)
+ {
+ 	for(;;) {
+ 		int i, len;
+diff --git a/toys/sha1.c b/toys/sha1sum.c
+similarity index 71%
+rename from toys/sha1.c
+rename to toys/sha1sum.c
+index 7c598c88..6db3b552 100644
+--- a/toys/sha1.c
++++ b/toys/sha1sum.c
+@@ -1,15 +1,11 @@
+ /*
++ * Copyright 2007 Rob Landley <rob@landley.net>
++ *
+  * Based on the public domain SHA-1 in C by Steve Reid <steve@edmweb.com>
+  * from http://www.mirrors.wiretapped.net/security/cryptography/hashes/sha1/
+  */
+ 
+-/* #define LITTLE_ENDIAN * This should be #define'd if true. */
+-/* #define SHA1HANDSOFF * Copies data before messing with it. */
+-#define	LITTLE_ENDIAN
+-
+-#include <stdio.h>
+-#include <string.h>
+-#include <inttypes.h>
++#include <toys.h>
+ 
+ struct sha1 {
+ 	uint32_t state[5];
+@@ -23,17 +19,17 @@ struct sha1 {
+ 
+ void sha1_init(struct sha1 *this);
+ void sha1_transform(struct sha1 *this);
+-void sha1_update(struct sha1 *this, unsigned char *data, unsigned int len);
+-void sha1_final(struct sha1 *this, unsigned char digest[20]);
++void sha1_update(struct sha1 *this, char *data, unsigned int len);
++void sha1_final(struct sha1 *this, char digest[20]);
+ 
+ #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
+ 
+ /* blk0() and blk() perform the initial expand. */
+-/* I got the idea of expanding during the round function from SSLeay */
+-#ifdef LITTLE_ENDIAN
++/* The idea of expanding during the round function comes from SSLeay */
++#if 1
+ #define blk0(i) (block[i] = (rol(block[i],24)&0xFF00FF00) \
+ 	|(rol(block[i],8)&0x00FF00FF))
+-#else
++#else	// big endian?
+ #define blk0(i) block[i]
+ #endif
+ #define blk(i) (block[i&15] = rol(block[(i+13)&15]^block[(i+8)&15] \
+@@ -41,14 +37,6 @@ void sha1_final(struct sha1 *this, unsigned char digest[20]);
+ 
+ static const uint32_t rconsts[]={0x5A827999,0x6ED9EBA1,0x8F1BBCDC,0xCA62C1D6};
+ 
+-void printy(unsigned char *this)
+-{
+-	int i;
+-
+-	for (i = 0; i < 20; i++) printf("%02x", this[i]);
+-	xputc('\n');
+-}
+-
+ /* Hash a single 512-bit block. This is the core of the algorithm. */
+ 
+ void sha1_transform(struct sha1 *this)
+@@ -106,7 +94,7 @@ void sha1_init(struct sha1 *this)
+ 
+ /* Run your data through this function. */
+ 
+-void sha1_update(struct sha1 *this, unsigned char *data, unsigned int len)
++void sha1_update(struct sha1 *this, char *data, unsigned int len)
+ {
+ 	unsigned int i, j;
+ 
+@@ -130,11 +118,11 @@ void sha1_update(struct sha1 *this, unsigned char *data, unsigned int len)
+ 
+ /* Add padding and return the message digest. */
+ 
+-void sha1_final(struct sha1 *this, unsigned char digest[20])
++void sha1_final(struct sha1 *this, char digest[20])
+ {
+ 	uint64_t count = this->count << 3;
+ 	unsigned int i;
+-	unsigned char buf;
++	char buf;
+ 
+ 	// End the message by appending a "1" bit to the data, ending with the
+ 	// message size (in bits, big endian), and adding enough zero bits in
+@@ -150,41 +138,31 @@ void sha1_final(struct sha1 *this, unsigned char digest[20])
+ 	  this->buffer.c[56+i] = count >> (8*(7-i));
+ 	sha1_transform(this);
+ 
+-	for (i = 0; i < 20; i++) {
+-		digest[i] = (unsigned char)
+-		 ((this->state[i>>2] >> ((3-(i & 3)) * 8) ) & 255);
+-	}
++	for (i = 0; i < 20; i++)
++		digest[i] = this->state[i>>2] >> ((3-(i & 3)) * 8);
+ 	/* Wipe variables */
+ 	memset(this, 0, sizeof(struct sha1));
+ }
+ 
++// Callback for loopfiles()
+ 
+-/*************************************************************/
+-
+-
+-int main(int argc, char** argv)
++static void do_sha1(int fd, char *name)
+ {
+-	int i, j;
+ 	struct sha1 this;
+-	unsigned char digest[20], buffer[16384];
+-	FILE* file;
++	int len;
+ 
+-	if (argc < 2) {
+-		file = stdin;
+-	}
+-	else {
+-		if (!(file = fopen(argv[1], "rb"))) {
+-			fputs("Unable to open file.", stderr);
+-			exit(-1);
+-		}
+-	}
+ 	sha1_init(&this);
+-	while (!feof(file)) {  /* note: what if ferror(file) */
+-		i = fread(buffer, 1, 16384, file);
+-		sha1_update(&this, buffer, i);
++	for (;;) {
++		len = read(fd, toybuf, sizeof(toybuf));
++		if (len<1) break;
++		sha1_update(&this, toybuf, len);
+ 	}
+-	sha1_final(&this, digest);
+-	fclose(file);
+-	printy(digest);
+-	exit(0);
++	sha1_final(&this, toybuf);
++	for (len = 0; len < 20; len++) printf("%02x", toybuf[len]);
++	printf("  %s\n", name);
++}
++
++void sha1sum_main(void)
++{
++	loopfiles(toys.optargs, do_sha1);
+ }
+diff --git a/toys/toylist.h b/toys/toylist.h
+index 074ddbb8..e3fb4d7c 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -124,6 +124,7 @@ USE_ONEIT(NEWTOY(oneit, "+<1p", TOYFLAG_SBIN))
+ USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
+ USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))
+ USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
++USE_SHA1SUM(NEWTOY(sha1sum, NULL, TOYFLAG_USR|TOYFLAG_BIN))
+ USE_SLEEP(NEWTOY(sleep, "<1", TOYFLAG_BIN))
+ USE_SYNC(NEWTOY(sync, NULL, TOYFLAG_BIN))
+ USE_TOUCH(NEWTOY(touch, "l#t:r:mca", TOYFLAG_BIN))

@@ -1,0 +1,2164 @@
+"2018-06-10 06:35:18 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 74439038f..9869bcf5c 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -37,6 +37,7 @@ choice
+ 	default TARGET_nios2 if DESIRED_TARGET_ARCH = "nios2"
+ 	default TARGET_or1k if DESIRED_TARGET_ARCH = "or1k"
+ 	default TARGET_powerpc if DESIRED_TARGET_ARCH = "powerpc"
++	default TARGET_riscv64 if DESIRED_TARGET_ARCH = "riscv64"
+ 	default TARGET_sh if DESIRED_TARGET_ARCH = "sh"
+ 	default TARGET_sparc if DESIRED_TARGET_ARCH = "sparc"
+ 	default TARGET_sparc64 if DESIRED_TARGET_ARCH = "sparc64"
+@@ -117,6 +118,9 @@ config TARGET_or1k
+ config TARGET_powerpc
+ 	bool "powerpc"
+ 
++config TARGET_riscv64
++	bool "riscv64"
++
+ config TARGET_sh
+ 	bool "superh"
+ 
+@@ -224,6 +228,10 @@ if TARGET_powerpc
+ source "extra/Configs/Config.powerpc"
+ endif
+ 
++if TARGET_riscv64
++source "extra/Configs/Config.riscv64"
++endif
++
+ if TARGET_sh
+ source "extra/Configs/Config.sh"
+ endif
+diff --git a/extra/Configs/Config.riscv64 b/extra/Configs/Config.riscv64
+new file mode 100644
+index 000000000..7d0136a2b
+--- /dev/null
++++ b/extra/Configs/Config.riscv64
+@@ -0,0 +1,15 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++
++config TARGET_ARCH
++	string
++	default "riscv64"
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_LITTLE_ENDIAN
++	select ARCH_HAS_MMU
++	select ARCH_HAS_NO_LDSO
+diff --git a/libc/sysdeps/linux/common/rename.c b/libc/sysdeps/linux/common/rename.c
+index 260347f40..30a4ed75f 100644
+--- a/libc/sysdeps/linux/common/rename.c
++++ b/libc/sysdeps/linux/common/rename.c
+@@ -16,6 +16,12 @@ int rename(const char *oldpath, const char *newpath)
+ {
+ 	return renameat(AT_FDCWD, oldpath, AT_FDCWD, newpath);
+ }
++#elif defined __NR_renameat2
++# include <fcntl.h>
++int rename(const char *oldpath, const char *newpath)
++{
++	_syscall2(int, renameat2, const char *, oldpath, const char *, newpath)
++}
+ #else
+ _syscall2(int, rename, const char *, oldpath, const char *, newpath)
+ #endif
+diff --git a/libc/sysdeps/linux/riscv64/Makefile b/libc/sysdeps/linux/riscv64/Makefile
+new file mode 100644
+index 000000000..43dc60a42
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/Makefile
+@@ -0,0 +1,6 @@
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/riscv64/Makefile.arch b/libc/sysdeps/linux/riscv64/Makefile.arch
+new file mode 100644
+index 000000000..74c074852
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/Makefile.arch
+@@ -0,0 +1,2 @@
++CSRC-y := __syscall_error.c
++SSRC-y := __longjmp.S setjmp.S vfork.S clone.S
+diff --git a/libc/sysdeps/linux/riscv64/__longjmp.S b/libc/sysdeps/linux/riscv64/__longjmp.S
+new file mode 100644
+index 000000000..6079f98c1
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/__longjmp.S
+@@ -0,0 +1,57 @@
++/* longjmp, RISC-V version.
++   Copyright (C) 1996-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++#include <sys/asm.h>
++
++ENTRY (__longjmp)
++	REG_L ra,  0*SZREG(a0)
++	REG_L s0,  1*SZREG(a0)
++	REG_L s1,  2*SZREG(a0)
++	REG_L s2,  3*SZREG(a0)
++	REG_L s3,  4*SZREG(a0)
++	REG_L s4,  5*SZREG(a0)
++	REG_L s5,  6*SZREG(a0)
++	REG_L s6,  7*SZREG(a0)
++	REG_L s7,  8*SZREG(a0)
++	REG_L s8,  9*SZREG(a0)
++	REG_L s9, 10*SZREG(a0)
++	REG_L s10,11*SZREG(a0)
++	REG_L s11,12*SZREG(a0)
++	REG_L sp, 13*SZREG(a0)
++
++#ifndef __riscv_float_abi_soft
++	FREG_L fs0, 14*SZREG+ 0*SZFREG(a0)
++	FREG_L fs1, 14*SZREG+ 1*SZFREG(a0)
++	FREG_L fs2, 14*SZREG+ 2*SZFREG(a0)
++	FREG_L fs3, 14*SZREG+ 3*SZFREG(a0)
++	FREG_L fs4, 14*SZREG+ 4*SZFREG(a0)
++	FREG_L fs5, 14*SZREG+ 5*SZFREG(a0)
++	FREG_L fs6, 14*SZREG+ 6*SZFREG(a0)
++	FREG_L fs7, 14*SZREG+ 7*SZFREG(a0)
++	FREG_L fs8, 14*SZREG+ 8*SZFREG(a0)
++	FREG_L fs9, 14*SZREG+ 9*SZFREG(a0)
++	FREG_L fs10,14*SZREG+10*SZFREG(a0)
++	FREG_L fs11,14*SZREG+11*SZFREG(a0)
++#endif
++
++	seqz a0, a1
++	add  a0, a0, a1   # a0 = (a1 == 0) ? 1 : a1
++	ret
++
++END (__longjmp)
++libc_hidden_def(__longjmp)
+diff --git a/libc/sysdeps/linux/riscv64/__syscall_error.c b/libc/sysdeps/linux/riscv64/__syscall_error.c
+new file mode 100644
+index 000000000..2b642e816
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/__syscall_error.c
+@@ -0,0 +1,18 @@
++/* Wrapper for setting errno.
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++int __syscall_error(int err_no) attribute_hidden;
++int __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/riscv64/bits/endian.h b/libc/sysdeps/linux/riscv64/bits/endian.h
+new file mode 100644
+index 000000000..4aaf559d4
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/endian.h
+@@ -0,0 +1,5 @@
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++#define __BYTE_ORDER __LITTLE_ENDIAN
+diff --git a/libc/sysdeps/linux/riscv64/bits/fcntl.h b/libc/sysdeps/linux/riscv64/bits/fcntl.h
+new file mode 100644
+index 000000000..a08bbf5b5
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/fcntl.h
+@@ -0,0 +1,228 @@
++/* O_*, F_*, FD_* bit values for Linux.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file 
++ * COPYING.LIB in this tarball.
++ */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	00000003
++#define O_RDONLY	00000000
++#define O_WRONLY	00000001
++#define O_RDWR		00000002
++#define O_CREAT		00000100	/* not fcntl */
++#define O_EXCL		00000200	/* not fcntl */
++#define O_NOCTTY	00000400	/* not fcntl */
++#define O_TRUNC		00001000	/* not fcntl */
++#define O_APPEND	00002000
++#define O_NONBLOCK	00004000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		00010000
++#define O_FSYNC		O_SYNC
++#define O_ASYNC		00020000
++
++#ifdef __USE_XOPEN2K8
++# define O_DIRECTORY	00200000	/* Must be a directory.	 */
++# define O_NOFOLLOW	00400000	/* Do not follow links.	 */
++# define O_CLOEXEC	02000000	/* Set close_on_exec.  */
++#endif
++
++#ifdef __USE_GNU
++# define O_DIRECT	00040000	/* Direct disk access.	*/
++# define O_NOATIME	01000000	/* Do not set atime.  */
++# define O_PATH		010000000  	/* Resolve pathname but do not open file.  */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	00100000
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	12	/* Get record locking info.  */
++#define F_SETLK64	13	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	14	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_XOPEN2K
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++# define F_DUPFD_CLOEXEC 1030	/* Duplicate file descriptor with
++				   close-on-exit set on new fd.  */
++# define F_SETPIPE_SZ	1031    /* Set pipe page size array.  */
++# define F_GETPIPE_SZ	1032    /* Get pipe page size array.  */
++#endif
++
++/* For F_[GET|SET]FL.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++/* Flags for SYNC_FILE_RANGE.  */
++# define SYNC_FILE_RANGE_WAIT_BEFORE	1 /* Wait upon writeout of all pages
++					     in the range before performing the
++					     write.  */
++# define SYNC_FILE_RANGE_WRITE		2 /* Initiate writeout of all those
++					     dirty pages in the range which are
++					     not presently under writeback.  */
++# define SYNC_FILE_RANGE_WAIT_AFTER	4 /* Wait upon writeout of all pages in
++					     the range after performing the
++					     write.  */
++
++/* Flags for SPLICE and VMSPLICE.  */
++# define SPLICE_F_MOVE		1	/* Move pages instead of copying.  */
++# define SPLICE_F_NONBLOCK	2	/* Don't block on the pipe splicing
++					   (but we may still block on the fd
++					   we splice from/to).  */
++# define SPLICE_F_MORE		4	/* Expect more data.  */
++# define SPLICE_F_GIFT		8	/* Pages passed in are a gift.  */
++#endif
++
++__BEGIN_DECLS
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++/* Selective file content synch'ing.  */
++extern int sync_file_range (int __fd, __off64_t __from, __off64_t __to,
++			    unsigned int __flags);
++
++/* Splice address range into a pipe.  */
++extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
++			 size_t __count, unsigned int __flags);
++
++/* Splice two files together.  */
++extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
++		       __off64_t *__offout, size_t __len,
++		       unsigned int __flags);
++
++/* In-kernel implementation of tee for pipe buffers.  */
++extern ssize_t tee (int __fdin, int __fdout, size_t __len,
++		    unsigned int __flags);
++
++#endif
++__END_DECLS
+diff --git a/libc/sysdeps/linux/riscv64/bits/fenv.h b/libc/sysdeps/linux/riscv64/bits/fenv.h
+new file mode 100644
+index 000000000..a3f8031af
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/fenv.h
+@@ -0,0 +1,73 @@
++/* Floating point environment, RISC-V version.
++   Copyright (C) 1998-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _FENV_H
++# error "Never use <bits/fenv.h> directly; include <fenv.h> instead."
++#endif
++
++enum
++  {
++    FE_INEXACT   =
++#define FE_INEXACT	(0x01)
++      FE_INEXACT,
++    FE_UNDERFLOW =
++#define FE_UNDERFLOW	(0x02)
++      FE_UNDERFLOW,
++    FE_OVERFLOW  =
++#define FE_OVERFLOW	(0x04)
++      FE_OVERFLOW,
++    FE_DIVBYZERO =
++#define FE_DIVBYZERO	(0x08)
++      FE_DIVBYZERO,
++    FE_INVALID   =
++#define FE_INVALID	(0x10)
++      FE_INVALID
++  };
++
++#define FE_ALL_EXCEPT \
++	(FE_INEXACT | FE_DIVBYZERO | FE_UNDERFLOW | FE_OVERFLOW | FE_INVALID)
++
++enum
++  {
++    FE_TONEAREST  =
++#define FE_TONEAREST	(0x0)
++      FE_TONEAREST,
++    FE_TOWARDZERO =
++#define FE_TOWARDZERO	(0x1)
++      FE_TOWARDZERO,
++    FE_DOWNWARD   =
++#define FE_DOWNWARD	(0x2)
++      FE_DOWNWARD,
++    FE_UPWARD     =
++#define FE_UPWARD	(0x3)
++      FE_UPWARD
++  };
++
++
++typedef unsigned int fexcept_t;
++typedef unsigned int fenv_t;
++
++/* If the default argument is used we use this value.  */
++#define FE_DFL_ENV	((__const fenv_t *) -1)
++
++#if __GLIBC_USE (IEC_60559_BFP_EXT)
++/* Type representing floating-point control modes.  */
++typedef unsigned int femode_t;
++
++/* Default floating-point control modes.  */
++# define FE_DFL_MODE	((const femode_t *) -1L)
++#endif
+diff --git a/libc/sysdeps/linux/riscv64/bits/kernel_types.h b/libc/sysdeps/linux/riscv64/bits/kernel_types.h
+new file mode 100644
+index 000000000..832b17674
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/kernel_types.h
+@@ -0,0 +1,42 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts
++ * with the posix_types.h kernel header, and will ensure that
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#ifndef __ASM_GENERIC_POSIX_TYPES_H
++#define __ASM_GENERIC_POSIX_TYPES_H
++
++typedef unsigned long		__kernel_dev_t;
++typedef unsigned long		__kernel_ino_t;
++typedef unsigned int		__kernel_mode_t;
++typedef unsigned int		__kernel_nlink_t;
++typedef long			__kernel_off_t;
++typedef int			__kernel_pid_t;
++typedef int 			__kernel_ipc_pid_t;
++typedef unsigned int		__kernel_uid_t;
++typedef unsigned int		__kernel_gid_t;
++typedef unsigned long		__kernel_size_t;
++typedef long			__kernel_ssize_t;
++typedef long			__kernel_ptrdiff_t;
++typedef long			__kernel_time_t;
++typedef long			__kernel_suseconds_t;
++typedef long			__kernel_clock_t;
++typedef int			__kernel_daddr_t;
++typedef char *			__kernel_caddr_t;
++typedef unsigned short		__kernel_uid16_t;
++typedef unsigned short		__kernel_gid16_t;
++typedef unsigned int		__kernel_uid32_t;
++typedef unsigned int		__kernel_gid32_t;
++typedef unsigned short 		__kernel_old_uid_t;
++typedef unsigned short 		__kernel_old_gid_t;
++typedef long long		__kernel_loff_t;
++typedef unsigned int		__kernel_old_dev_t;
++typedef long			__kernel_long_t;
++typedef unsigned long		__kernel_ulong_t;
++
++typedef struct {
++	int	val[2];
++} __kernel_fsid_t;
++
++#endif /* __ASM_GENERIC_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/riscv64/bits/mman.h b/libc/sysdeps/linux/riscv64/bits/mman.h
+new file mode 100644
+index 000000000..316f87d99
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/mman.h
+@@ -0,0 +1,37 @@
++/* Definitions for POSIX memory map interface.  Linux/RISC-V version.
++   Copyright (C) 1997-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_MMAN_H
++# error "Never use <bits/mman.h> directly; include <sys/mman.h> instead."
++#endif
++
++#ifdef __USE_MISC
++# define MAP_GROWSDOWN	0x00100		/* Stack-like segment.  */
++# define MAP_DENYWRITE	0x00800		/* ETXTBSY.  */
++# define MAP_EXECUTABLE	0x01000		/* Mark it as an executable.  */
++# define MAP_LOCKED	0x02000		/* Lock the mapping.  */
++# define MAP_NORESERVE	0x04000		/* Don't check for reservations.  */
++# define MAP_POPULATE	0x08000		/* Populate (prefault) pagetables.  */
++# define MAP_NONBLOCK	0x10000		/* Do not block on IO.  */
++# define MAP_STACK	0x20000		/* Allocation is for a stack.  */
++# define MAP_HUGETLB	0x40000		/* Create huge page mapping.  */
++# define MAP_SYNC	0x80000		/* Perform synchronous page
++					   faults for the mapping.  */
++#endif
++
++/* Include generic Linux declarations.  */
++#include <bits/mman-linux.h>
+diff --git a/libc/sysdeps/linux/riscv64/bits/setjmp.h b/libc/sysdeps/linux/riscv64/bits/setjmp.h
+new file mode 100644
+index 000000000..c45f93957
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/setjmp.h
+@@ -0,0 +1,38 @@
++/* Define the machine-dependent type `jmp_buf'.  RISC-V version.
++   Copyright (C) 2011-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _RISCV_BITS_SETJMP_H
++#define _RISCV_BITS_SETJMP_H
++
++typedef struct __jmp_buf_internal_tag
++  {
++    /* Program counter.  */
++    long int __pc;
++    /* Callee-saved registers.  */
++    long int __regs[12];
++    /* Stack pointer.  */
++    long int __sp;
++
++    /* Callee-saved floating point registers.  */
++#if defined __riscv_float_abi_double
++   double __fpregs[12];
++#elif !defined __riscv_float_abi_soft
++# error unsupported FLEN
++#endif
++  } __jmp_buf[1];
++
++#endif /* _RISCV_BITS_SETJMP_H */
+diff --git a/libc/sysdeps/linux/riscv64/bits/shm.h b/libc/sysdeps/linux/riscv64/bits/shm.h
+new file mode 100644
+index 000000000..dbe4851f9
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/shm.h
+@@ -0,0 +1,90 @@
++/*
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB
++ * in this tarball.
++ */
++
++#ifndef _SYS_SHM_H
++# error "Never include <bits/shm.h> directly; use <sys/shm.h> instead."
++#endif
++
++#include <bits/types.h>
++
++/* Permission flag for shmget.  */
++#define SHM_R		0400		/* or S_IRUGO from <linux/stat.h> */
++#define SHM_W		0200		/* or S_IWUGO from <linux/stat.h> */
++
++/* Flags for `shmat'.  */
++#define SHM_RDONLY	010000		/* attach read-only else read-write */
++#define SHM_RND		020000		/* round attach address to SHMLBA */
++#define SHM_REMAP	040000		/* take-over region on attach */
++
++/* Commands for `shmctl'.  */
++#define SHM_LOCK	11		/* lock segment (root only) */
++#define SHM_UNLOCK	12		/* unlock segment (root only) */
++
++__BEGIN_DECLS
++
++/* Segment low boundary address multiple.  */
++#define SHMLBA		(__getpagesize () << 2)
++extern int __getpagesize (void) __THROW __attribute__ ((__const__));
++
++
++/* Type to count number of attaches.  */
++typedef unsigned long int shmatt_t;
++
++/* Data structure describing a set of semaphores.  */
++struct shmid_ds
++  {
++    struct ipc_perm shm_perm;		/* operation permission struct */
++    size_t shm_segsz;			/* size of segment in bytes */
++    __time_t shm_atime;			/* time of last shmat() */
++    unsigned long int __unused1;
++    __time_t shm_dtime;			/* time of last shmdt() */
++    unsigned long int __unused2;
++    __time_t shm_ctime;			/* time of last change by shmctl() */
++    unsigned long int __unused3;
++    __pid_t shm_cpid;			/* pid of creator */
++    __pid_t shm_lpid;			/* pid of last shmop */
++    shmatt_t shm_nattch;		/* number of current attaches */
++    unsigned long int __unused4;
++    unsigned long int __unused5;
++  };
++
++#ifdef __USE_MISC
++
++/* ipcs ctl commands */
++# define SHM_STAT 	13
++# define SHM_INFO 	14
++
++/* shm_mode upper byte flags */
++# define SHM_DEST	01000	/* segment will be destroyed on last detach */
++# define SHM_LOCKED	02000   /* segment will not be swapped */
++# define SHM_HUGETLB	04000	/* segment is mapped via hugetlb */
++# define SHM_NORESERVE	010000	/* don't check for reservations */
++
++struct	shminfo
++  {
++    unsigned long int shmmax;
++    unsigned long int shmmin;
++    unsigned long int shmmni;
++    unsigned long int shmseg;
++    unsigned long int shmall;
++    unsigned long int __unused1;
++    unsigned long int __unused2;
++    unsigned long int __unused3;
++    unsigned long int __unused4;
++  };
++
++struct shm_info
++  {
++    int used_ids;
++    unsigned long int shm_tot;	/* total allocated shm */
++    unsigned long int shm_rss;	/* total resident shm */
++    unsigned long int shm_swp;	/* total swapped shm */
++    unsigned long int swap_attempts;
++    unsigned long int swap_successes;
++  };
++
++#endif /* __USE_MISC */
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/riscv64/bits/sigcontext.h b/libc/sysdeps/linux/riscv64/bits/sigcontext.h
+new file mode 100644
+index 000000000..9b896a626
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/sigcontext.h
+@@ -0,0 +1,32 @@
++/* Machine-dependent signal context structure for Linux.  RISC-V version.
++   Copyright (C) 1996-2018 Free Software
++   Foundation, Inc.  This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _BITS_SIGCONTEXT_H
++#define _BITS_SIGCONTEXT_H 1
++
++#if !defined _SIGNAL_H && !defined _SYS_UCONTEXT_H
++# error "Never use <bits/sigcontext.h> directly; include <signal.h> instead."
++#endif
++
++struct sigcontext {
++  /* gregs[0] holds the program counter.  */
++  unsigned long int gregs[32];
++  unsigned long long int fpregs[66] __attribute__ ((__aligned__ (16)));
++};
++
++#endif
+diff --git a/libc/sysdeps/linux/riscv64/bits/stackinfo.h b/libc/sysdeps/linux/riscv64/bits/stackinfo.h
+new file mode 100644
+index 000000000..a9fd8173b
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/stackinfo.h
+@@ -0,0 +1,11 @@
++/*
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB
++ * in this tarball.
++ */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++#define _STACK_GROWS_DOWN	1
++
++#endif
+diff --git a/libc/sysdeps/linux/riscv64/bits/syscalls.h b/libc/sysdeps/linux/riscv64/bits/syscalls.h
+new file mode 100644
+index 000000000..d1f1d9170
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/syscalls.h
+@@ -0,0 +1,85 @@
++/*
++ * Copyright (C) 2018 by Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ * ported from GNU C Library
++ */
++
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)	\
++  ({ long _sys_result;					\
++     {							\
++	register long int _a7 __asm__ ("a7");		\
++	LOAD_ARGS_##nr (args)				\
++	_a7 = (name);					\
++							\
++        __asm__ volatile (				\
++		"scall\n\t"				\
++		: "=r" (_a0) 				\
++		: "r"(_a7) ASM_ARGS_##nr  		\
++		: "memory"); 				\
++	_sys_result = _a0;				\
++     } 							\
++     _sys_result; 					\
++  })
++
++/* Macros for setting up inline __asm__ input regs */
++# define ASM_ARGS_0
++# define ASM_ARGS_1	, "r" (_a0)
++# define ASM_ARGS_2	ASM_ARGS_1, "r" (_a1)
++# define ASM_ARGS_3	ASM_ARGS_2, "r" (_a2)
++# define ASM_ARGS_4	ASM_ARGS_3, "r" (_a3)
++# define ASM_ARGS_5	ASM_ARGS_4, "r" (_a4)
++# define ASM_ARGS_6	ASM_ARGS_5, "r" (_a5)
++# define ASM_ARGS_7	ASM_ARGS_6, "r" (_a6)
++
++/* Macros for converting sys-call wrapper args into sys call args */
++# define LOAD_ARGS_0()				\
++  register long _a0 __asm__ ("a0");
++# define LOAD_ARGS_1(a0)			\
++  long _a0tmp;					\
++  LOAD_ARGS_0 ()				\
++  _a0tmp = (long) (a0);				\
++  _a0 = _a0tmp;
++# define LOAD_ARGS_2(a0, a1)			\
++  register long _a1 __asm__ ("a1");		\
++  long _a1tmp;					\
++  LOAD_ARGS_1 (a0)				\
++  _a1tmp = (long) (a1);				\
++  _a1 = _a1tmp;
++# define LOAD_ARGS_3(a0, a1, a2)		\
++  register long _a2 __asm__ ("a2");		\
++  long _a2tmp;					\
++  LOAD_ARGS_2 (a0, a1)				\
++  _a2tmp = (long) (a2);				\
++  _a2 = _a2tmp;
++# define LOAD_ARGS_4(a0, a1, a2, a3)		\
++  register long _a3 __asm__ ("a3");		\
++  long _a3tmp;					\
++  LOAD_ARGS_3 (a0, a1, a2)			\
++  _a3tmp = (long) (a3);				\
++  _a3 = _a3tmp;
++# define LOAD_ARGS_5(a0, a1, a2, a3, a4)	\
++  register long _a4 __asm__ ("a4");		\
++  long _a4tmp;					\
++  LOAD_ARGS_4 (a0, a1, a2, a3)			\
++  _a4tmp = (long) (a4);				\
++  _a4 = _a4tmp;
++# define LOAD_ARGS_6(a0, a1, a2, a3, a4, a5)	\
++  register long _a5 __asm__ ("a5");		\
++  long _a5tmp;					\
++  LOAD_ARGS_5 (a0, a1, a2, a3, a4)		\
++  _a5tmp = (long) (a5);				\
++  _a5 = _a5tmp;
++# define LOAD_ARGS_7(a0, a1, a2, a3, a4, a5, a6)\
++  register long _a6 __asm__ ("a6");		\
++  long _a6tmp;					\
++  LOAD_ARGS_6 (a0, a1, a2, a3, a4, a5)		\
++  _a6tmp = (long) (a6);				\
++  _a6 = _a6tmp;
++
++#endif
+diff --git a/libc/sysdeps/linux/riscv64/bits/uClibc_arch_features.h b/libc/sysdeps/linux/riscv64/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..b754f3227
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/uClibc_arch_features.h
+@@ -0,0 +1,39 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++#undef __UCLIBC_ABORT_INSTRUCTION__
++
++/* can your target use syscall6() for mmap ? */
++#undef __UCLIBC_MMAP_HAS_6_ARGS__
++
++#define __UCLIBC_SYSCALL_ALIGN_64BIT__
++
++/* does your target have a broken create_module() ? */
++#define __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#define __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target doesn't like .global */
++#undef __UCLIBC_ASM_GLOBAL_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++/* define if target supports CFI pseudo ops */
++#define __UCLIBC_HAVE_ASM_CFI_DIRECTIVES__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/riscv64/bits/wordsize.h b/libc/sysdeps/linux/riscv64/bits/wordsize.h
+new file mode 100644
+index 000000000..67a16ba62
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bits/wordsize.h
+@@ -0,0 +1,29 @@
++/* Determine the wordsize from the preprocessor defines.  RISC-V version.
++   Copyright (C) 2002-2018 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#if __riscv_xlen == (__SIZEOF_POINTER__ * 8)
++# define __WORDSIZE __riscv_xlen
++#else
++# error unsupported ABI
++#endif
++
++#if __riscv_xlen == 64
++# define __WORDSIZE_TIME64_COMPAT32 1
++#else
++# error "rv32i-based targets are not supported"
++#endif
+diff --git a/libc/sysdeps/linux/riscv64/bsd-_setjmp.c b/libc/sysdeps/linux/riscv64/bsd-_setjmp.c
+new file mode 100644
+index 000000000..0d413101c
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bsd-_setjmp.c
+@@ -0,0 +1 @@
++/* _setjmp is implemented in setjmp.S */
+diff --git a/libc/sysdeps/linux/riscv64/bsd-setjmp.c b/libc/sysdeps/linux/riscv64/bsd-setjmp.c
+new file mode 100644
+index 000000000..0d413101c
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/bsd-setjmp.c
+@@ -0,0 +1 @@
++/* _setjmp is implemented in setjmp.S */
+diff --git a/libc/sysdeps/linux/riscv64/clone.S b/libc/sysdeps/linux/riscv64/clone.S
+new file mode 100644
+index 000000000..f7684c88d
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/clone.S
+@@ -0,0 +1,80 @@
++/* Wrapper around clone system call.  RISC-V version.
++   Copyright (C) 1996-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* clone() is even more special than fork() as it mucks with stacks
++   and invokes a function in the right context after its all over.  */
++
++#include <sys/asm.h>
++#include <sysdep.h>
++#define _ERRNO_H	1
++#include <bits/errno.h>
++
++/* int clone(int (*fn)(void *arg), void *child_stack, int flags, void *arg,
++	     void *parent_tidptr, void *tls, void *child_tidptr) */
++
++	.text
++LEAF (clone)
++
++	/* Sanity check arguments.  */
++	beqz		a0,L (invalid)	/* No NULL function pointers.  */
++	beqz		a1,L (invalid)	/* No NULL stack pointers.  */
++
++	addi		a1,a1,-16	/* Reserve argument save space.  */
++	REG_S		a0,0(a1)	/* Save function pointer.  */
++	REG_S		a3,SZREG(a1)	/* Save argument pointer.  */
++
++	/* The syscall expects the args to be in different slots.  */
++	mv		a0,a2
++	mv		a2,a4
++	mv		a3,a5
++	mv		a4,a6
++
++	/* Do the system call.  */
++	li		a7,__NR_clone
++	scall
++
++	bltz		a0,L (error)
++	beqz		a0,L (thread_start)
++
++	/* Successful return from the parent.  */
++	ret
++
++L (invalid):
++	li		a0, -EINVAL
++	/* Something bad happened -- no child created.  */
++L (error):
++	j		__syscall_error
++	END (clone)
++
++/* Load up the arguments to the function.  Put this block of code in
++   its own function so that we can terminate the stack trace with our
++   debug info.  */
++
++ENTRY (__thread_start)
++L (thread_start):
++	/* Restore the arg for user's function.  */
++	REG_L		a1,0(sp)	/* Function pointer.  */
++	REG_L		a0,SZREG(sp)	/* Argument pointer.  */
++
++	/* Call the user's function.  */
++	jalr		a1
++
++	/* Call exit with the function's return value.  */
++	li		a7, __NR_exit
++	scall
++
++	END (__thread_start)
+diff --git a/libc/sysdeps/linux/riscv64/crt1.S b/libc/sysdeps/linux/riscv64/crt1.S
+new file mode 100644
+index 000000000..872e0b12e
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/crt1.S
+@@ -0,0 +1,83 @@
++/* Startup code compliant to the ELF RISC-V ABI.
++   Copyright (C) 1995-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   In addition to the permissions in the GNU Lesser General Public
++   License, the Free Software Foundation gives you unlimited
++   permission to link the compiled version of this file with other
++   programs, and to distribute those programs without any restriction
++   coming from the use of this file. (The GNU Lesser General Public
++   License restrictions do apply in other respects; for example, they
++   cover modification of the file, and distribution when not linked
++   into another program.)
++
++   Note that people who make modified versions of this file are not
++   obligated to grant this special exception for their modified
++   versions; it is their choice whether to do so. The GNU Lesser
++   General Public License gives permission to release a modified
++   version without this exception; this exception also makes it
++   possible to release a modified version which carries forward this
++   exception.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#define __ASSEMBLY__ 1
++
++#include <sysdep.h>
++#include <sys/asm.h>
++
++/* The entry point's job is to call __uClibc_main.  Per the ABI,
++   a0 contains the address of a function to be passed to atexit.
++   __uClibc_main wants this in a5.  */
++
++.text
++	.globl	_start
++	.type	_start,%function
++
++_start:
++	call  .Lload_gp
++	mv    a5, a0  /* rtld_fini.  */
++	/* main may be in a shared library.  */
++	la   a0, main
++	REG_L a1, 0(sp)      /* argc.  */
++	addi  a2, sp, SZREG  /* argv.  */
++	andi  sp, sp, ALMASK /* Align stack. */
++	mv    a6, sp  /* stack_end.  */
++
++	tail  __uClibc_main@plt
++
++	.size	_start,.-_start
++
++/* Dynamic links need the global pointer to be initialized prior to calling
++   any shared library's initializers, so we use preinit_array to load it.
++   This doesn't cut it for static links, though, since the global pointer
++   needs to be initialized before calling __libc_start_main in that case.
++   So we redundantly initialize it at the beginning of _start.  */
++
++.Lload_gp:
++.option push
++.option norelax
++	lla   gp, __global_pointer$
++.option pop
++	ret
++
++	.section .preinit_array,"aw"
++	.dc.a .Lload_gp
++
++/* Define a symbol for the first piece of initialized data.  */
++	.data
++	.globl __data_start
++__data_start:
++	.weak data_start
++	data_start = __data_start
+diff --git a/libc/sysdeps/linux/riscv64/crti.S b/libc/sysdeps/linux/riscv64/crti.S
+new file mode 100644
+index 000000000..176de9199
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/crti.S
+@@ -0,0 +1,17 @@
++/* dummy _init and _fini */
++
++	.section .init
++	.globl	_init
++	.align	2
++	.type	_init,@function
++
++_init:
++
++
++	.section .fini
++	.global	_fini
++	.align	2
++	.type	_fini,@function
++
++_fini: 
++
+diff --git a/libc/sysdeps/linux/riscv64/crtn.S b/libc/sysdeps/linux/riscv64/crtn.S
+new file mode 100644
+index 000000000..6f70e7716
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/crtn.S
+@@ -0,0 +1,13 @@
++/* Dummy crtn file.
++
++   In this configuration, crti.o and crtn.o are both empty because the
++   .init_array/.fini_array sections are used exclusively.
++
++   Older ports cannot use this because even if the linker used to
++   build libc itself has .init_array support, we don't want to produce
++   a crt[in].o that presume a linker that new will be used to link
++   other things later.
++
++   But new configurations without compatibility concerns for
++   toolchains without .init_array support can use this to avoid the
++   superfluous .init and .fini boilerplate code.  */
+diff --git a/libc/sysdeps/linux/riscv64/getcontext.S b/libc/sysdeps/linux/riscv64/getcontext.S
+new file mode 100644
+index 000000000..0b9e7c2d3
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/getcontext.S
+@@ -0,0 +1,74 @@
++/* Save current context.
++   Copyright (C) 2009-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include "ucontext-macros.h"
++
++/* int getcontext (ucontext_t *ucp) */
++
++	.text
++LEAF (getcontext)
++	SAVE_INT_REG (ra,   0, a0)
++	SAVE_INT_REG (ra,   1, a0)
++	SAVE_INT_REG (sp,   2, a0)
++	SAVE_INT_REG (s0,   8, a0)
++	SAVE_INT_REG (s1,   9, a0)
++	SAVE_INT_REG (x0,  10, a0)	/* return 0 by overwriting a0.  */
++	SAVE_INT_REG (s2,  18, a0)
++	SAVE_INT_REG (s3,  19, a0)
++	SAVE_INT_REG (s4,  20, a0)
++	SAVE_INT_REG (s5,  21, a0)
++	SAVE_INT_REG (s6,  22, a0)
++	SAVE_INT_REG (s7,  23, a0)
++	SAVE_INT_REG (s8,  24, a0)
++	SAVE_INT_REG (s9,  25, a0)
++	SAVE_INT_REG (s10, 26, a0)
++	SAVE_INT_REG (s11, 27, a0)
++
++#ifndef __riscv_float_abi_soft
++	frsr	a1
++
++	SAVE_FP_REG (fs0,   8, a0)
++	SAVE_FP_REG (fs1,   9, a0)
++	SAVE_FP_REG (fs2,  18, a0)
++	SAVE_FP_REG (fs3,  19, a0)
++	SAVE_FP_REG (fs4,  20, a0)
++	SAVE_FP_REG (fs5,  21, a0)
++	SAVE_FP_REG (fs6,  22, a0)
++	SAVE_FP_REG (fs7,  23, a0)
++	SAVE_FP_REG (fs8,  24, a0)
++	SAVE_FP_REG (fs9,  25, a0)
++	SAVE_FP_REG (fs10, 26, a0)
++	SAVE_FP_REG (fs11, 27, a0)
++
++	sw	a1, MCONTEXT_FSR(a0)
++#endif /* __riscv_float_abi_soft */
++
++/* rt_sigprocmask (SIG_BLOCK, NULL, &ucp->uc_sigmask, _NSIG8) */
++	li	a3, _NSIG8
++	add     a2, a0, UCONTEXT_SIGMASK
++	mv	a1, zero
++	li	a0, SIG_BLOCK
++
++	li	a7, SYS_ify (rt_sigprocmask)
++	scall
++	bltz	a0, 99f
++
++	ret
++
++99:	j	__syscall_error
++
++PSEUDO_END (getcontext)
+diff --git a/libc/sysdeps/linux/riscv64/jmpbuf-offsets.h b/libc/sysdeps/linux/riscv64/jmpbuf-offsets.h
+new file mode 100644
+index 000000000..fff4d0d9c
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/jmpbuf-offsets.h
+@@ -0,0 +1,23 @@
++/* Private macros for accessing __jmp_buf contents.  RISC-V version.
++   Copyright (C) 2018 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <jmpbuf-unwind.h>
++
++/* Helper for generic ____longjmp_chk().  */
++#define JB_FRAME_ADDRESS(buf) \
++  ((void *) _jmpbuf_sp (buf))
+diff --git a/libc/sysdeps/linux/riscv64/jmpbuf-unwind.h b/libc/sysdeps/linux/riscv64/jmpbuf-unwind.h
+new file mode 100644
+index 000000000..2e5f37f10
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/jmpbuf-unwind.h
+@@ -0,0 +1,46 @@
++/* Examine __jmp_buf for unwinding frames.  RISC-V version.
++   Copyright (C) 2003-2018 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <setjmp.h>
++#include <stdint.h>
++#include <unwind.h>
++#include <sysdep.h>
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(jmpbuf, address, demangle)		\
++  ((void *) (address) < (void *) demangle ((jmpbuf)[0].__sp))
++
++#define _JMPBUF_CFA_UNWINDS_ADJ(_jmpbuf, _context, _adj) \
++  _JMPBUF_UNWINDS_ADJ (_jmpbuf, (void *) _Unwind_GetCFA (_context), _adj)
++
++static inline uintptr_t __attribute__ ((unused))
++_jmpbuf_sp (__jmp_buf regs)
++{
++  uintptr_t sp = regs[0].__sp;
++#ifdef PTR_DEMANGLE
++  PTR_DEMANGLE (sp);
++#endif
++  return sp;
++}
++
++#define _JMPBUF_UNWINDS_ADJ(_jmpbuf, _address, _adj) \
++  ((uintptr_t) (_address) - (_adj) < _jmpbuf_sp (_jmpbuf) - (_adj))
++
++/* We use the normal longjmp for unwinding.  */
++#define __libc_unwind_longjmp(buf, val) __libc_longjmp (buf, val)
+diff --git a/libc/sysdeps/linux/riscv64/setcontext.S b/libc/sysdeps/linux/riscv64/setcontext.S
+new file mode 100644
+index 000000000..15cc17bd8
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/setcontext.S
+@@ -0,0 +1,112 @@
++/* Set current context.
++   Copyright (C) 2009-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include "ucontext-macros.h"
++
++/*  int __setcontext (const ucontext_t *ucp)
++
++  Restores the machine context in UCP and thereby resumes execution
++  in that context.
++
++  This implementation is intended to be used for *synchronous* context
++  switches only.  Therefore, it does not have to restore anything
++  other than the PRESERVED state.  */
++
++	.text
++LEAF (setcontext)
++
++	mv	t0, a0	/* Save ucp into t0.  */
++
++/* rt_sigprocmask (SIG_SETMASK, &ucp->uc_sigmask, NULL, _NSIG8) */
++	li	a3, _NSIG8
++	mv	a2, zero
++	add     a1, a0, UCONTEXT_SIGMASK
++	li	a0, SIG_SETMASK
++
++	li	a7, SYS_ify (rt_sigprocmask)
++	scall
++
++	bltz	a0, 99f
++
++	cfi_def_cfa (t0, 0)
++
++#ifndef __riscv_float_abi_soft
++	lw	t1, MCONTEXT_FSR(t0)
++
++	RESTORE_FP_REG_CFI (fs0,   8, t0)
++	RESTORE_FP_REG_CFI (fs1,   9, t0)
++	RESTORE_FP_REG_CFI (fs2,  18, t0)
++	RESTORE_FP_REG_CFI (fs3,  19, t0)
++	RESTORE_FP_REG_CFI (fs4,  20, t0)
++	RESTORE_FP_REG_CFI (fs5,  21, t0)
++	RESTORE_FP_REG_CFI (fs6,  22, t0)
++	RESTORE_FP_REG_CFI (fs7,  23, t0)
++	RESTORE_FP_REG_CFI (fs8,  24, t0)
++	RESTORE_FP_REG_CFI (fs9,  25, t0)
++	RESTORE_FP_REG_CFI (fs10, 26, t0)
++	RESTORE_FP_REG_CFI (fs11, 27, t0)
++
++	fssr	t1
++#endif /* __riscv_float_abi_soft */
++
++	/* Note the contents of argument registers will be random
++	   unless makecontext() has been called.  */
++	RESTORE_INT_REG     (t1,   0, t0)
++	RESTORE_INT_REG_CFI (ra,   1, t0)
++	RESTORE_INT_REG     (sp,   2, t0)
++	RESTORE_INT_REG_CFI (s0,   8, t0)
++	RESTORE_INT_REG_CFI (s1,   9, t0)
++	RESTORE_INT_REG     (a0,  10, t0)
++	RESTORE_INT_REG     (a1,  11, t0)
++	RESTORE_INT_REG     (a2,  12, t0)
++	RESTORE_INT_REG     (a3,  13, t0)
++	RESTORE_INT_REG     (a4,  14, t0)
++	RESTORE_INT_REG     (a5,  15, t0)
++	RESTORE_INT_REG     (a6,  16, t0)
++	RESTORE_INT_REG     (a7,  17, t0)
++	RESTORE_INT_REG_CFI (s2,  18, t0)
++	RESTORE_INT_REG_CFI (s3,  19, t0)
++	RESTORE_INT_REG_CFI (s4,  20, t0)
++	RESTORE_INT_REG_CFI (s5,  21, t0)
++	RESTORE_INT_REG_CFI (s6,  22, t0)
++	RESTORE_INT_REG_CFI (s7,  23, t0)
++	RESTORE_INT_REG_CFI (s8,  24, t0)
++	RESTORE_INT_REG_CFI (s9,  25, t0)
++	RESTORE_INT_REG_CFI (s10, 26, t0)
++	RESTORE_INT_REG_CFI (s11, 27, t0)
++
++	jr	t1
++
++99:	j	__syscall_error
++
++PSEUDO_END (setcontext)
++
++LEAF (start_context)
++
++	/* Terminate call stack by noting ra == 0.  Happily, s0 == 0 here.  */
++	cfi_register (ra, s0)
++
++	/* Call the function passed to makecontext.  */
++	jalr	s1
++
++	/* Invoke subsequent context if present, else exit(0).  */
++	mv	a0, s2
++	beqz	s2, 1f
++	jal	setcontext
++1:	j	exit
++
++PSEUDO_END (start_context)
+diff --git a/libc/sysdeps/linux/riscv64/setjmp.S b/libc/sysdeps/linux/riscv64/setjmp.S
+new file mode 100644
+index 000000000..4cdb8e9c3
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/setjmp.S
+@@ -0,0 +1,73 @@
++/* setjmp for RISC-V.
++   Copyright (C) 1996-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++#include <sys/asm.h>
++
++ENTRY (_setjmp)
++  li	a1, 0
++  j	__sigsetjmp
++END (_setjmp)
++ENTRY (setjmp)
++  li	a1, 1
++  /* Fallthrough */
++END (setjmp)
++ENTRY (__sigsetjmp)
++	REG_S ra,  0*SZREG(a0)
++	REG_S s0,  1*SZREG(a0)
++	REG_S s1,  2*SZREG(a0)
++	REG_S s2,  3*SZREG(a0)
++	REG_S s3,  4*SZREG(a0)
++	REG_S s4,  5*SZREG(a0)
++	REG_S s5,  6*SZREG(a0)
++	REG_S s6,  7*SZREG(a0)
++	REG_S s7,  8*SZREG(a0)
++	REG_S s8,  9*SZREG(a0)
++	REG_S s9, 10*SZREG(a0)
++	REG_S s10,11*SZREG(a0)
++	REG_S s11,12*SZREG(a0)
++	REG_S sp, 13*SZREG(a0)
++
++#ifndef __riscv_float_abi_soft
++	FREG_S fs0, 14*SZREG+ 0*SZFREG(a0)
++	FREG_S fs1, 14*SZREG+ 1*SZFREG(a0)
++	FREG_S fs2, 14*SZREG+ 2*SZFREG(a0)
++	FREG_S fs3, 14*SZREG+ 3*SZFREG(a0)
++	FREG_S fs4, 14*SZREG+ 4*SZFREG(a0)
++	FREG_S fs5, 14*SZREG+ 5*SZFREG(a0)
++	FREG_S fs6, 14*SZREG+ 6*SZFREG(a0)
++	FREG_S fs7, 14*SZREG+ 7*SZFREG(a0)
++	FREG_S fs8, 14*SZREG+ 8*SZFREG(a0)
++	FREG_S fs9, 14*SZREG+ 9*SZFREG(a0)
++	FREG_S fs10,14*SZREG+10*SZFREG(a0)
++	FREG_S fs11,14*SZREG+11*SZFREG(a0)
++#endif
++
++#if !IS_IN_libc && IS_IN_rtld
++  /* In ld.so we never save the signal mask.  */
++  li a0, 0
++  ret
++#else
++  /* Make a tail call to __sigjmp_save; it takes the same args.  */
++  j __sigjmp_save
++#endif
++
++
++END (__sigsetjmp)
++
++hidden_def (__sigsetjmp)
++weak_alias (_setjmp, __GI__setjmp)
+diff --git a/libc/sysdeps/linux/riscv64/swapcontext.S b/libc/sysdeps/linux/riscv64/swapcontext.S
+new file mode 100644
+index 000000000..f5e12b2db
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/swapcontext.S
+@@ -0,0 +1,122 @@
++/* Save and set current context.
++   Copyright (C) 2009-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include "ucontext-macros.h"
++
++/* int swapcontext (ucontext_t *oucp, const ucontext_t *ucp) */
++
++LEAF (swapcontext)
++	mv	t0, a1			/* Save ucp into t0.  */
++
++	SAVE_INT_REG (ra,   0, a0)
++	SAVE_INT_REG (ra,   1, a0)
++	SAVE_INT_REG (sp,   2, a0)
++	SAVE_INT_REG (s0,   8, a0)
++	SAVE_INT_REG (s1,   9, a0)
++	SAVE_INT_REG (x0,  10, a0)	/* return 0 by overwriting a0.  */
++	SAVE_INT_REG (s2,  18, a0)
++	SAVE_INT_REG (s3,  19, a0)
++	SAVE_INT_REG (s4,  20, a0)
++	SAVE_INT_REG (s5,  21, a0)
++	SAVE_INT_REG (s6,  22, a0)
++	SAVE_INT_REG (s7,  23, a0)
++	SAVE_INT_REG (s8,  24, a0)
++	SAVE_INT_REG (s9,  25, a0)
++	SAVE_INT_REG (s10, 26, a0)
++	SAVE_INT_REG (s11, 27, a0)
++
++#ifndef __riscv_float_abi_soft
++	frsr a1
++
++	SAVE_FP_REG (fs0,   8, a0)
++	SAVE_FP_REG (fs1,   9, a0)
++	SAVE_FP_REG (fs2,  18, a0)
++	SAVE_FP_REG (fs3,  19, a0)
++	SAVE_FP_REG (fs4,  20, a0)
++	SAVE_FP_REG (fs5,  21, a0)
++	SAVE_FP_REG (fs6,  22, a0)
++	SAVE_FP_REG (fs7,  23, a0)
++	SAVE_FP_REG (fs8,  24, a0)
++	SAVE_FP_REG (fs9,  25, a0)
++	SAVE_FP_REG (fs10, 26, a0)
++	SAVE_FP_REG (fs11, 27, a0)
++
++	sw	a1, MCONTEXT_FSR(a0)
++#endif /* __riscv_float_abi_soft */
++
++/* rt_sigprocmask (SIG_SETMASK, &ucp->uc_sigmask, &oucp->uc_sigmask, _NSIG8) */
++	li	a3, _NSIG8
++	add	a2, a0, UCONTEXT_SIGMASK
++	add     a1, t0, UCONTEXT_SIGMASK
++	li	a0, SIG_SETMASK
++
++	li	a7, SYS_ify (rt_sigprocmask)
++	scall
++
++	bltz	a0, 99f
++
++#ifndef __riscv_float_abi_soft
++	lw	t1, MCONTEXT_FSR(t0)
++
++	RESTORE_FP_REG (fs0,   8, t0)
++	RESTORE_FP_REG (fs1,   9, t0)
++	RESTORE_FP_REG (fs2,  18, t0)
++	RESTORE_FP_REG (fs3,  19, t0)
++	RESTORE_FP_REG (fs4,  20, t0)
++	RESTORE_FP_REG (fs5,  21, t0)
++	RESTORE_FP_REG (fs6,  22, t0)
++	RESTORE_FP_REG (fs7,  23, t0)
++	RESTORE_FP_REG (fs8,  24, t0)
++	RESTORE_FP_REG (fs9,  25, t0)
++	RESTORE_FP_REG (fs10, 26, t0)
++	RESTORE_FP_REG (fs11, 27, t0)
++
++	fssr	t1
++#endif /* __riscv_float_abi_soft */
++
++	/* Note the contents of argument registers will be random
++	   unless makecontext() has been called.  */
++	RESTORE_INT_REG (t1,   0, t0)
++	RESTORE_INT_REG (ra,   1, t0)
++	RESTORE_INT_REG (sp,   2, t0)
++	RESTORE_INT_REG (s0,   8, t0)
++	RESTORE_INT_REG (s1,   9, t0)
++	RESTORE_INT_REG (a0,  10, t0)
++	RESTORE_INT_REG (a1,  11, t0)
++	RESTORE_INT_REG (a2,  12, t0)
++	RESTORE_INT_REG (a3,  13, t0)
++	RESTORE_INT_REG (a4,  14, t0)
++	RESTORE_INT_REG (a5,  15, t0)
++	RESTORE_INT_REG (a6,  16, t0)
++	RESTORE_INT_REG (a7,  17, t0)
++	RESTORE_INT_REG (s2,  18, t0)
++	RESTORE_INT_REG (s3,  19, t0)
++	RESTORE_INT_REG (s4,  20, t0)
++	RESTORE_INT_REG (s5,  21, t0)
++	RESTORE_INT_REG (s6,  22, t0)
++	RESTORE_INT_REG (s7,  23, t0)
++	RESTORE_INT_REG (s8,  24, t0)
++	RESTORE_INT_REG (s9,  25, t0)
++	RESTORE_INT_REG (s10, 26, t0)
++	RESTORE_INT_REG (s11, 27, t0)
++
++	jr	t1
++
++
++99:	j	__syscall_error
++
++PSEUDO_END (swapcontext)
+diff --git a/libc/sysdeps/linux/riscv64/sys/asm.h b/libc/sysdeps/linux/riscv64/sys/asm.h
+new file mode 100644
+index 000000000..ddb84b683
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/sys/asm.h
+@@ -0,0 +1,63 @@
++/* Miscellaneous macros.
++   Copyright (C) 2000-2018 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_ASM_H
++#define _SYS_ASM_H
++
++/* Macros to handle different pointer/register sizes for 32/64-bit code.  */
++#if __riscv_xlen == 64
++# define PTRLOG 3
++# define SZREG	8
++# define REG_S sd
++# define REG_L ld
++#elif __riscv_xlen == 32
++# error "rv32i-based targets are not supported"
++#else
++# error __riscv_xlen must equal 32 or 64
++#endif
++
++#if !defined __riscv_float_abi_soft
++/* For ABI uniformity, reserve 8 bytes for floats, even if double-precision
++   floating-point is not supported in hardware.  */
++# if defined __riscv_float_abi_double
++#  define FREG_L fld
++#  define FREG_S fsd
++#  define SZFREG 8
++# else
++#  error unsupported FLEN
++# endif
++#endif
++
++/* Declare leaf routine.  */
++#define	LEAF(symbol)				\
++		.globl	symbol;			\
++		.align	2;			\
++		.type	symbol,@function;	\
++symbol:						\
++		cfi_startproc;
++
++/* Mark end of function.  */
++#undef END
++#define END(function)				\
++		cfi_endproc;			\
++		.size	function,.-function
++
++/* Stack alignment.  */
++#define ALMASK	~15
++
++#endif /* sys/asm.h */
+diff --git a/libc/sysdeps/linux/riscv64/sys/procfs.h b/libc/sysdeps/linux/riscv64/sys/procfs.h
+new file mode 100644
+index 000000000..518de5674
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/sys/procfs.h
+@@ -0,0 +1,114 @@
++/* Core image file related definitions, RISC-V version.
++   Copyright (C) 1996-2018 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somehow modelled after the file of the same name on SysVr4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++#include <sys/ucontext.h>
++
++/* ELF register definitions */
++#define ELF_NGREG	NGREG
++#define ELF_NFPREG	NFPREG
++
++typedef unsigned long int elf_greg_t;
++typedef unsigned long int elf_gregset_t[32];
++typedef union __riscv_mc_fp_state elf_fpregset_t;
++
++__BEGIN_DECLS
++
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   gdb doesn't really use excluded.  Fields present but not used are
++   marked with "XXX".  */
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    long int pr_uid;
++    long int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore habe only ine PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/riscv64/sys/ucontext.h b/libc/sysdeps/linux/riscv64/sys/ucontext.h
+new file mode 100644
+index 000000000..2a80a853c
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/sys/ucontext.h
+@@ -0,0 +1,106 @@
++/* struct ucontext definition, RISC-V version.
++   Copyright (C) 1997-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* Don't rely on this, the interface is currently messed up and may need to
++   be broken to be fixed.  */
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++
++typedef unsigned long int __riscv_mc_gp_state[32];
++
++#ifdef __USE_MISC
++# define NGREG	32
++
++# define REG_PC 0
++# define REG_RA 1
++# define REG_SP 2
++# define REG_TP 4
++# define REG_S0 8
++# define REG_S1 9
++# define REG_A0 10
++# define REG_S2 18
++# define REG_NARGS 8
++
++typedef unsigned long int greg_t;
++
++/* Container for all general registers.  */
++typedef __riscv_mc_gp_state gregset_t;
++
++/* Container for floating-point state.  */
++typedef union __riscv_mc_fp_state fpregset_t;
++#endif
++
++struct __riscv_mc_f_ext_state
++  {
++    unsigned int __f[32];
++    unsigned int __fcsr;
++  };
++
++struct __riscv_mc_d_ext_state
++  {
++    unsigned long long int __f[32];
++    unsigned int __fcsr;
++  };
++
++struct __riscv_mc_q_ext_state
++  {
++    unsigned long long int __f[64] __attribute__ ((__aligned__ (16)));
++    unsigned int __fcsr;
++    /* Reserved for expansion of sigcontext structure.  Currently zeroed
++       upon signal, and must be zero upon sigreturn.  */
++    unsigned int __glibc_reserved[3];
++  };
++
++union __riscv_mc_fp_state
++  {
++    struct __riscv_mc_f_ext_state __f;
++    struct __riscv_mc_d_ext_state __d;
++    struct __riscv_mc_q_ext_state __q;
++  };
++
++typedef struct mcontext_t
++  {
++    __riscv_mc_gp_state __gregs;
++    union  __riscv_mc_fp_state __fpregs;
++  } mcontext_t;
++
++/* Userlevel context.  */
++typedef struct ucontext_t
++  {
++    unsigned long int  __uc_flags;
++    struct ucontext_t *uc_link;
++    stack_t            uc_stack;
++    sigset_t           uc_sigmask;
++    /* There's some padding here to allow sigset_t to be expanded in the
++       future.  Though this is unlikely, other architectures put uc_sigmask
++       at the end of this structure and explicitly state it can be
++       expanded, so we didn't want to box ourselves in here.  */
++    char               __glibc_reserved[1024 / 8 - sizeof (sigset_t)];
++    /* We can't put uc_sigmask at the end of this structure because we need
++       to be able to expand sigcontext in the future.  For example, the
++       vector ISA extension will almost certainly add ISA state.  We want
++       to ensure all user-visible ISA state can be saved and restored via a
++       ucontext, so we're putting this at the end in order to allow for
++       infinite extensibility.  Since we know this will be extended and we
++       assume sigset_t won't be extended an extreme amount, we're
++       prioritizing this.  */
++    mcontext_t uc_mcontext;
++  } ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/riscv64/sys/user.h b/libc/sysdeps/linux/riscv64/sys/user.h
+new file mode 100644
+index 000000000..c871f1a03
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/sys/user.h
+@@ -0,0 +1 @@
++/* This file is not needed, but in practice gdb might try to include it.  */
+diff --git a/libc/sysdeps/linux/riscv64/sysdep.h b/libc/sysdeps/linux/riscv64/sysdep.h
+new file mode 100644
+index 000000000..b12329332
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/sysdep.h
+@@ -0,0 +1,125 @@
++/* Assembly macros for RISC-V.
++   Copyright (C) 2011-2018
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _LINUX_RISCV_SYSDEP_H
++#define _LINUX_RISCV_SYSDEP_H 1
++
++#include <common/sysdep.h>
++
++#ifdef __ASSEMBLER__
++
++# include <sys/asm.h>
++
++# define ENTRY(name) LEAF(name)
++
++# define L(label) .L ## label
++
++/* Performs a system call, handling errors by setting errno.  Linux indicates
++   errors by setting a0 to a value between -1 and -4095.  */
++# undef PSEUDO
++# define PSEUDO(name, syscall_name, args)			\
++  .text;							\
++  .align 2;							\
++  ENTRY (name);							\
++  li a7, SYS_ify (syscall_name);				\
++  scall;							\
++  li a7, -4096;							\
++  bgtu a0, a7, .Lsyscall_error ## name;
++
++# undef PSEUDO_END
++# define PSEUDO_END(sym) 					\
++  SYSCALL_ERROR_HANDLER (sym)					\
++  ret;								\
++  END (sym)
++
++# if !IS_IN_libc
++#  if defined (__PIC__)
++#   define SYSCALL_ERROR_HANDLER(name)				\
++.Lsyscall_error ## name:					\
++        la.tls.ie t1, errno;					\
++	add t1, t1, tp;						\
++	neg a0, a0;						\
++	sw a0, 0(t1);						\
++        li a0, -1;
++#  else
++#   define SYSCALL_ERROR_HANDLER(name)				\
++.Lsyscall_error ## name:					\
++        lui t1, %tprel_hi(errno);				\
++        add t1, t1, tp, %tprel_add(errno);			\
++	neg a0, a0;						\
++        sw a0, %tprel_lo(errno)(t1);				\
++        li a0, -1;
++#  endif
++# else
++#  define SYSCALL_ERROR_HANDLER(name)				\
++.Lsyscall_error ## name:					\
++        j       __syscall_error;
++# endif
++
++/* Performs a system call, not setting errno.  */
++# undef PSEUDO_NEORRNO
++# define PSEUDO_NOERRNO(name, syscall_name, args)	\
++  .align 2;						\
++  ENTRY (name);						\
++  li a7, SYS_ify (syscall_name);			\
++  scall;
++
++# undef PSEUDO_END_NOERRNO
++# define PSEUDO_END_NOERRNO(name)			\
++  END (name)
++
++# undef ret_NOERRNO
++# define ret_NOERRNO ret
++
++/* Perfroms a system call, returning the error code.  */
++# undef PSEUDO_ERRVAL
++# define PSEUDO_ERRVAL(name, syscall_name, args) 	\
++  PSEUDO_NOERRNO (name, syscall_name, args)		\
++  neg a0, a0;
++
++# undef PSEUDO_END_ERRVAL
++# define PSEUDO_END_ERRVAL(name)			\
++  END (name)
++
++# undef ret_ERRVAL
++# define ret_ERRVAL ret
++
++#endif /* __ASSEMBLER__ */
++
++/* In order to get __set_errno() definition in INLINE_SYSCALL.  */
++#ifndef __ASSEMBLER__
++# include <errno.h>
++#endif
++
++#undef SYS_ify
++#define SYS_ify(syscall_name)	__NR_##syscall_name
++
++#ifndef __ASSEMBLER__
++
++/* List of system calls which are supported as vsyscalls.  */
++# define HAVE_CLOCK_GETRES_VSYSCALL	1
++# define HAVE_CLOCK_GETTIME_VSYSCALL	1
++# define HAVE_GETTIMEOFDAY_VSYSCALL	1
++# define HAVE_GETCPU_VSYSCALL		1
++
++
++extern long int __syscall_error (long int neg_errno);
++
++#endif /* ! __ASSEMBLER__ */
++
++#endif /* linux/riscv/sysdep.h */
+diff --git a/libc/sysdeps/linux/riscv64/vfork.S b/libc/sysdeps/linux/riscv64/vfork.S
+new file mode 100644
+index 000000000..a624f2a7c
+--- /dev/null
++++ b/libc/sysdeps/linux/riscv64/vfork.S
+@@ -0,0 +1,42 @@
++/* vfork for Linux, RISC-V version.
++   Copyright (C) 2005-2018 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* vfork() is just a special case of clone().  */
++
++#include <sys/asm.h>
++#include <sysdep.h>
++#define __ASSEMBLY__
++#include <linux/sched.h>
++#include <asm/signal.h>
++
++	.text
++LEAF (__vfork)
++
++	li	a0, (CLONE_VFORK | CLONE_VM | SIGCHLD)
++	mv	a1, sp
++
++	li	a7, __NR_clone
++	scall
++
++	bltz	a0, 1f
++	ret
++
++1:	j		__syscall_error
++END (__vfork)
++libc_hidden_def(vfork)
++
++weak_alias (__vfork, vfork)

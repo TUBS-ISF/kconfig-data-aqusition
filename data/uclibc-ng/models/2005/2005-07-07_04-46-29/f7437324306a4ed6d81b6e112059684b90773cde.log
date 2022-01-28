@@ -1,0 +1,104 @@
+"2005-07-07 04:46:29 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 606878897..743c3f554 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -264,6 +264,19 @@ config LDSO_BASE_FILENAME
+ 	  WARNING: Changing the default prefix could cause problems with
+ 	           binutils' ld !
+ 
++config LDSO_RUNPATH
++	bool "Enable ELF RUNPATH tag support"
++	depends on BUILD_UCLIBC_LDSO
++	default y
++	help
++	  ELF's may have dynamic RPATH/RUNPATH tags.  These tags list paths 
++	  which extend the library search paths.  They are really only useful 
++	  if a package installs libraries in non standard locations and 
++	  ld.so.conf support is disabled.
++
++	  Usage of RUNPATH tags is not too common, so disabling this feature 
++	  should be safe for most people.
++
+ config DL_FINI_CRT_COMPAT
+ 	bool "uClibc 0.9.27 compatibility"
+ 	default n
+diff --git a/ldso/include/dl-elf.h b/ldso/include/dl-elf.h
+index 6ecdfddfb..a3e453f58 100644
+--- a/ldso/include/dl-elf.h
++++ b/ldso/include/dl-elf.h
+@@ -106,10 +106,12 @@ void __dl_parse_dynamic_info(ElfW(Dyn) *dpnt, unsigned long dynamic_info[], void
+ 				dynamic_info[DT_BIND_NOW] = 1;
+ 			if (dpnt->d_tag == DT_TEXTREL)
+ 				dynamic_info[DT_TEXTREL] = 1;
++#ifdef __LDSO_RUNPATH__
+ 			if (dpnt->d_tag == DT_RUNPATH)
+ 				dynamic_info[DT_RPATH] = 0;
+ 			if (dpnt->d_tag == DT_RPATH && dynamic_info[DT_RUNPATH])
+ 				dynamic_info[DT_RPATH] = 0;
++#endif
+ 		} else if (dpnt->d_tag < DT_LOPROC) {
+ 			if (dpnt->d_tag == DT_RELOCCOUNT)
+ 				dynamic_info[DT_RELCONT_IDX] = dpnt->d_un.d_val;
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index d15621ea3..bf0e1bb03 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -255,7 +255,7 @@ unsigned long _dl_internal_error_number;
+ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	struct elf_resolve *tpnt, char *full_libname, int __attribute__((unused)) trace_loaded_objects)
+ {
+-	char *pnt, *pnt1;
++	char *pnt;
+ 	struct elf_resolve *tpnt1;
+ 	char *libname;
+ 
+@@ -269,9 +269,9 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 
+ 	/* Skip over any initial initial './' and '/' stuff to
+ 	 * get the short form libname with no path garbage */
+-	pnt1 = _dl_strrchr(libname, '/');
+-	if (pnt1) {
+-		libname = pnt1 + 1;
++	pnt = _dl_strrchr(libname, '/');
++	if (pnt) {
++		libname = pnt + 1;
+ 	}
+ 
+ 	/* Critical step!  Weed out duplicates early to avoid
+@@ -300,6 +300,7 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	 * The ABI specifies that RPATH is searched before LD_LIBRARY_PATH or
+ 	 * the default path of /usr/lib.  Check in rpath directories.
+ 	 */
++#ifdef __LDSO_RUNPATH__
+ 	pnt = (tpnt ? (char *) tpnt->dynamic_info[DT_RPATH] : NULL);
+ 	if (pnt) {
+ 		pnt += (unsigned long) tpnt->dynamic_info[DT_STRTAB];
+@@ -307,6 +308,7 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 		if ((tpnt1 = search_for_named_library(libname, secure, pnt, rpnt)) != NULL)
+ 			return tpnt1;
+ 	}
++#endif
+ 
+ 	/* Check in LD_{ELF_}LIBRARY_PATH, if specified and allowed */
+ 	if (_dl_library_path) {
+@@ -316,9 +318,11 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 			return tpnt1;
+ 		}
+ 	}
++
+ 	/*
+ 	 * The ABI specifies that RUNPATH is searched after LD_LIBRARY_PATH.
+ 	 */
++#ifdef __LDSO_RUNPATH__
+ 	pnt = (tpnt ? (char *)tpnt->dynamic_info[DT_RUNPATH] : NULL);
+ 	if (pnt) {
+ 		pnt += (unsigned long) tpnt->dynamic_info[DT_STRTAB];
+@@ -326,6 +330,7 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 		if ((tpnt1 = search_for_named_library(libname, secure, pnt, rpnt)) != NULL)
+ 			return tpnt1;
+ 	}
++#endif
+ 
+ 	/*
+ 	 * Where should the cache be searched?  There is no such concept in the

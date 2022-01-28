@@ -1,0 +1,184 @@
+"2015-09-03 17:20:02 -0300"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 2f064f99..9d6173d2 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -6,12 +6,28 @@ config BOARD_NAME
+             'sol_platform_get_board_name()' to improve board behavior.
+             Namely Pin Multiplexer will load modules based on the board name.
+ 
+-            Usually the board name is detected using either SOL_BOARD_NAME
+-            environment variable or the rules defined in 'board_detect.json'.
+-            Soletta searches for 'board_detect.json' first at PKGSYSCONFDIR
+-            ('/etc/soletta' in most cases) and then at '$PREFIX/share/soletta/',
+-            but some platforms such as RIOT may not provide it,
+-            then this string is used as a fallback.
++            Usually the board name is detected using either
++            SOL_BOARD_NAME environment variable or instructions from
++            'board_detect.json' if DETECT_BOARD_NAME is enabled. Both
++            have precedence over this value.
++
++            This value is good as a fallback or is the only option
++            for systems such as RIOT and Contiki, where the
++            auto-detection is not possible.
++
++config DETECT_BOARD_NAME
++	bool "Automatically detect board name"
++	default y
++	depends on FEATURE_FILESYSTEM
++	help
++            Soletta will use instructions from 'board_detect.json'
++            located at '$PREFIX/share/soletta' or '/etc/soletta' in
++            order to detect board name.
++
++            If enabled, boards auto-detected will have precedence over
++            the string set at compile time 'BOARD_NAME'. However, the
++            environment variable SOL_BOARD_NAME name has precedence
++            over auto-detection.
+ 
+ config PLATFORM_LINUX
+ 	bool
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index ecad9e6b..a19aaca5 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -51,7 +51,9 @@ obj-core-$(PLATFORM_CONTIKI) += \
+     sol-platform-impl-contiki.o
+ 
+ obj-core-$(PLATFORM_LINUX) += \
+-    sol-platform-linux-common.o \
++    sol-platform-linux-common.o
++
++obj-core-$(DETECT_BOARD_NAME) += \
+     sol-board-detect.o
+ 
+ obj-core-$(PLATFORM_SYSTEMD) += \
+diff --git a/src/lib/common/sol-board-detect.c b/src/lib/common/sol-board-detect.c
+index 73559837..cbac0cb3 100644
+--- a/src/lib/common/sol-board-detect.c
++++ b/src/lib/common/sol-board-detect.c
+@@ -266,21 +266,3 @@ end:
+     sol_file_reader_close(json_doc);
+     return board;
+ }
+-
+-bool
+-sol_board_invalid_name(const char *name)
+-{
+-    unsigned int i;
+-
+-    if (name[0] == '\0')
+-        return true;
+-
+-    for (i = 0; name[i] != '\0'; i++) {
+-        if (isalnum(name[i]) || name[i] == '_' || name[i] == '-')
+-            continue;
+-
+-        return true;
+-    }
+-
+-    return false;
+-}
+diff --git a/src/lib/common/sol-board-detect.h b/src/lib/common/sol-board-detect.h
+index 2e945ca5..db9cc781 100644
+--- a/src/lib/common/sol-board-detect.h
++++ b/src/lib/common/sol-board-detect.h
+@@ -35,4 +35,3 @@
+ #include <stdbool.h>
+ 
+ char *sol_board_detect(void);
+-bool sol_board_invalid_name(const char *name);
+diff --git a/src/lib/common/sol-platform.c b/src/lib/common/sol-platform.c
+index 26d8794e..0cb4fd20 100644
+--- a/src/lib/common/sol-platform.c
++++ b/src/lib/common/sol-platform.c
+@@ -33,6 +33,7 @@
+ #include <errno.h>
+ #include <stdbool.h>
+ #include <stdlib.h>
++#include <ctype.h>
+ 
+ #include "sol-platform-impl.h"
+ 
+@@ -89,6 +90,24 @@ sol_platform_shutdown(void)
+     sol_platform_impl_shutdown();
+ }
+ 
++static bool
++sol_board_name_is_valid(const char *name)
++{
++    unsigned int i;
++
++    if (name[0] == '\0')
++        return false;
++
++    for (i = 0; name[i] != '\0'; i++) {
++        if (isalnum(name[i]) || name[i] == '_' || name[i] == '-')
++            continue;
++
++        return false;
++    }
++
++    return true;
++}
++
+ SOL_API const char *
+ sol_platform_get_board_name(void)
+ {
+@@ -97,22 +116,48 @@ sol_platform_get_board_name(void)
+ 
+ #ifdef SOL_PLATFORM_LINUX
+     board_name = getenv(SOL_BOARD_NAME_ENVVAR);
+-    if (board_name && *board_name != '\0')
++    if (board_name && sol_board_name_is_valid(board_name)) {
+         board_name = strdup(board_name);
+-    else
+-        board_name = sol_board_detect();
+-
+-    if (board_name && sol_board_invalid_name(board_name)) {
+-        free(board_name);
++        SOL_DBG("envvar SOL_BOARD_NAME=%s", board_name);
++    } else {
++        if (board_name)
++            SOL_WRN("envvar SOL_BOARD_NAME=%s contains invalid chars.",
++                board_name);
+         board_name = NULL;
+     }
+ #endif
+ 
++#ifdef DETECT_BOARD_NAME
++    if (!board_name) {
++        board_name = sol_board_detect();
++        if (board_name && sol_board_name_is_valid(board_name))
++            SOL_DBG("detected board name=%s", board_name);
++        else if (board_name) {
++            SOL_WRN("detected board name=%s contains invalid chars.",
++                board_name);
++            free(board_name);
++            board_name = NULL;
++        }
++    }
++#endif
++
+ #ifdef BOARD_NAME
+-    if (!board_name)
+-        board_name = strdup(BOARD_NAME);
++    if (!board_name && strlen(BOARD_NAME) > 0) {
++        if (sol_board_name_is_valid(BOARD_NAME)) {
++            board_name = strdup(BOARD_NAME);
++            SOL_DBG("pre-defined BOARD_NAME=%s", board_name);
++        } else {
++            SOL_WRN("pre-defined BOARD_NAME=%s contains invalid chars.",
++                BOARD_NAME);
++        }
++    }
+ #endif
+ 
++    if (board_name)
++        SOL_DBG("using board name=%s", board_name);
++    else
++        SOL_DBG("board name is unknown");
++
+     return board_name;
+ }
+ 

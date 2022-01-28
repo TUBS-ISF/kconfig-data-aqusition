@@ -1,0 +1,839 @@
+"2007-01-22 09:03:07 +0000"
+diff --git a/include/libbb.h b/include/libbb.h
+index f990b0ebd..ede44526b 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -583,10 +583,10 @@ extern unsigned long long bb_makedev(unsigned int major, unsigned int minor);
+ #endif
+ 
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ /* It's NOT just ENABLEd or disabled. It's a number: */
+-#ifdef CONFIG_FEATURE_COMMAND_HISTORY
+-#define MAX_HISTORY (CONFIG_FEATURE_COMMAND_HISTORY + 0)
++#ifdef CONFIG_FEATURE_EDITING_HISTORY
++#define MAX_HISTORY (CONFIG_FEATURE_EDITING_HISTORY + 0)
+ #else
+ #define MAX_HISTORY 0
+ #endif
+@@ -596,16 +596,16 @@ struct line_input_t {
+ #if MAX_HISTORY
+ 	int cnt_history;
+ 	int cur_history;
+-	USE_FEATURE_COMMAND_SAVEHISTORY(const char *hist_file;)
++	USE_FEATURE_EDITING_SAVEHISTORY(const char *hist_file;)
+ 	char *history[MAX_HISTORY + 1];
+ #endif
+ };
+ enum {
+ 	DO_HISTORY = 1 * (MAX_HISTORY > 0),
+-	SAVE_HISTORY = 2 * (MAX_HISTORY > 0) * ENABLE_FEATURE_COMMAND_SAVEHISTORY,
+-	TAB_COMPLETION = 4 * ENABLE_FEATURE_COMMAND_TAB_COMPLETION,
+-	USERNAME_COMPLETION = 8 * ENABLE_FEATURE_COMMAND_USERNAME_COMPLETION,
+-	VI_MODE = 0x10 * ENABLE_FEATURE_COMMAND_EDITING_VI,
++	SAVE_HISTORY = 2 * (MAX_HISTORY > 0) * ENABLE_FEATURE_EDITING_SAVEHISTORY,
++	TAB_COMPLETION = 4 * ENABLE_FEATURE_TAB_COMPLETION,
++	USERNAME_COMPLETION = 8 * ENABLE_FEATURE_USERNAME_COMPLETION,
++	VI_MODE = 0x10 * ENABLE_FEATURE_EDITING_VI,
+ 	WITH_PATH_LOOKUP = 0x20,
+ 	FOR_SHELL = DO_HISTORY | SAVE_HISTORY | TAB_COMPLETION | USERNAME_COMPLETION,
+ };
+diff --git a/libbb/Config.in b/libbb/Config.in
+index 92ee55cbc..112a3d658 100644
+--- a/libbb/Config.in
++++ b/libbb/Config.in
+@@ -26,4 +26,63 @@ config MD5_SIZE_VS_SPEED
+ 	  2                   3.0                5088
+ 	  3 (smallest)        5.1                4912
+ 
++config FEATURE_EDITING
++	bool "Command line editing"
++	default n
++	help
++	  Enable command editing (mainly for shell).
++
++config FEATURE_EDITING_FANCY_KEYS
++	bool "Additional editing keys"
++	default n
++	depends on FEATURE_EDITING
++	help
++	  Enable additonal editing keys (Ctrl-E, Ctrl-U etc).
++	  Arrow keys, Home/End/Delete and Ctrl-W work even without this option.
++
++config FEATURE_EDITING_VI
++	bool "vi-style line editing commands"
++	default n
++	depends on FEATURE_EDITING
++	help
++	  Enable vi-style line editing.  In shells, this mode can be
++	  turned on and off with "set -o vi" and "set +o vi".
++
++config FEATURE_EDITING_HISTORY
++	int "History size"
++	range 0 99999
++	default 15
++	depends on FEATURE_EDITING
++	help
++	  Specify command history size.
++
++config FEATURE_EDITING_SAVEHISTORY
++	bool "History saving"
++	default n
++	depends on ASH && FEATURE_EDITING
++	help
++	  Enable history saving in ash shell.
++
++config FEATURE_TAB_COMPLETION
++	bool "Tab completion"
++	default n
++	depends on FEATURE_EDITING
++	help
++	  Enable tab completion.
++
++config FEATURE_USERNAME_COMPLETION
++	bool "Username completion"
++	default n
++	depends on FEATURE_TAB_COMPLETION
++	help
++	  Enable username completion.
++
++config FEATURE_EDITING_FANCY_PROMPT
++	bool "Fancy shell prompts"
++	default n
++	depends on FEATURE_EDITING
++	help
++	  Setting this option allows for prompts to use things like \w and
++	  \$ and escape codes.
++
+ endmenu
+diff --git a/libbb/Kbuild b/libbb/Kbuild
+index a6d695340..1e6b5fea7 100644
+--- a/libbb/Kbuild
++++ b/libbb/Kbuild
+@@ -46,6 +46,7 @@ lib-y += inode_hash.o
+ lib-y += isdirectory.o
+ lib-y += kernel_version.o
+ lib-y += last_char_is.o
++lib-y += lineedit.o
+ lib-y += llist.o
+ lib-y += login.o
+ lib-y += make_directory.o
+diff --git a/scripts/defconfig b/scripts/defconfig
+index 503f12a01..2c82a5358 100644
+--- a/scripts/defconfig
++++ b/scripts/defconfig
+@@ -631,14 +631,14 @@ CONFIG_FEATURE_SH_IS_NONE=y
+ # CONFIG_MSH is not set
+ # CONFIG_FEATURE_SH_EXTRA_QUIET is not set
+ # CONFIG_FEATURE_SH_STANDALONE_SHELL is not set
+-# CONFIG_FEATURE_COMMAND_EDITING is not set
++CONFIG_FEATURE_EDITING=y
+ # CONFIG_FEATURE_EDITING_FANCY_KEYS is not set
+-# CONFIG_FEATURE_COMMAND_EDITING_VI is not set
+-CONFIG_FEATURE_COMMAND_HISTORY=
+-# CONFIG_FEATURE_COMMAND_SAVEHISTORY is not set
+-# CONFIG_FEATURE_COMMAND_TAB_COMPLETION is not set
+-# CONFIG_FEATURE_COMMAND_USERNAME_COMPLETION is not set
+-# CONFIG_FEATURE_SH_FANCY_PROMPT is not set
++# CONFIG_FEATURE_EDITING_VI is not set
++CONFIG_FEATURE_EDITING_HISTORY=15
++# CONFIG_FEATURE_EDITING_SAVEHISTORY is not set
++# CONFIG_FEATURE_TAB_COMPLETION is not set
++# CONFIG_FEATURE_USERNAME_COMPLETION is not set
++# CONFIG_FEATURE_EDITING_FANCY_PROMPT is not set
+ 
+ #
+ # System Logging Utilities
+diff --git a/shell/Config.in b/shell/Config.in
+index 15c52be54..3cd7c3c5b 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -240,64 +240,4 @@ config FEATURE_SH_STANDALONE_SHELL
+ 	  that exact location with that exact name, this option will not work at
+ 	  all.
+ 
+-config FEATURE_COMMAND_EDITING
+-	bool "Command line editing"
+-	default n
+-	depends on MSH || LASH || HUSH || ASH
+-	help
+-	  Enable command editing in shell.
+-
+-config FEATURE_EDITING_FANCY_KEYS
+-	bool "Additional editing keys"
+-	default n
+-	depends on FEATURE_COMMAND_EDITING
+-	help
+-	  Enable additonal editing keys (Ctrl-E, Ctrl-U etc).
+-	  Arrow keys, Home/End/Delete and Ctrl-W work even without this option.
+-
+-config FEATURE_COMMAND_EDITING_VI
+-	bool "vi-style line editing commands"
+-	default n
+-	depends on FEATURE_COMMAND_EDITING
+-	help
+-	  Enable vi-style line editing in the shell.  This mode can be
+-	  turned on and off with "set -o vi" and "set +o vi".
+-
+-config FEATURE_COMMAND_HISTORY
+-	int "History size"
+-	range 0 99999
+-	default 15
+-	depends on FEATURE_COMMAND_EDITING
+-	help
+-	  Specify command history size in shell.
+-
+-config FEATURE_COMMAND_SAVEHISTORY
+-	bool "History saving"
+-	default n
+-	depends on ASH && FEATURE_COMMAND_EDITING
+-	help
+-	  Enable history saving in ash shell.
+-
+-config FEATURE_COMMAND_TAB_COMPLETION
+-	bool "Tab completion"
+-	default n
+-	depends on FEATURE_COMMAND_EDITING
+-	help
+-	  Enable tab completion in shell.
+-
+-config FEATURE_COMMAND_USERNAME_COMPLETION
+-	bool "Username completion"
+-	default n
+-	depends on FEATURE_COMMAND_TAB_COMPLETION
+-	help
+-	  Enable username completion in shell.
+-
+-config FEATURE_SH_FANCY_PROMPT
+-	bool "Fancy shell prompts"
+-	default n
+-	depends on FEATURE_COMMAND_EDITING
+-	help
+-	  Setting this option allows for prompts to use things like \w and
+-	  \$ and also using escape codes.
+-
+ endmenu
+diff --git a/shell/Kbuild b/shell/Kbuild
+index 9c60698f7..6b58040fc 100644
+--- a/shell/Kbuild
++++ b/shell/Kbuild
+@@ -5,7 +5,6 @@
+ # Licensed under the GPL v2, see the file LICENSE in this tarball.
+ 
+ lib-y:=
+-lib-y              += cmdedit.o
+ lib-$(CONFIG_ASH)  += ash.o
+ lib-$(CONFIG_HUSH) += hush.o
+ lib-$(CONFIG_LASH) += lash.o
+diff --git a/shell/ash.c b/shell/ash.c
+index 8afdf3d21..0f9b3288b 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -1528,7 +1528,7 @@ static struct var varinit[] = {
+ 	{0, VSTRFIXED | VTEXTFIXED | VUNSET, "LC_ALL\0", change_lc_all },
+ 	{0, VSTRFIXED | VTEXTFIXED | VUNSET, "LC_CTYPE\0", change_lc_ctype },
+ #endif
+-#if ENABLE_FEATURE_COMMAND_SAVEHISTORY
++#if ENABLE_FEATURE_EDITING_SAVEHISTORY
+ 	{0, VSTRFIXED | VTEXTFIXED | VUNSET, "HISTFILE\0", NULL },
+ #endif
+ };
+@@ -1654,7 +1654,7 @@ static void initvar(void)
+ 	/*
+ 	 * PS1 depends on uid
+ 	 */
+-#if defined(CONFIG_FEATURE_COMMAND_EDITING) && defined(CONFIG_FEATURE_SH_FANCY_PROMPT)
++#if ENABLE_FEATURE_EDITING && ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	vps1.text = "PS1=\\w \\$ ";
+ #else
+ 	if (!geteuid())
+@@ -6040,7 +6040,7 @@ static char * pfgets(char *line, int len)
+ }
+ 
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ static line_input_t *line_input_state;
+ //static SKIP_ASH_EXPAND_PRMT(const) char *cmdedit_prompt;
+ static const char *cmdedit_prompt;
+@@ -6060,7 +6060,7 @@ static void putprompt(const char *s)
+ }
+ #endif
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ #define setvimode(on) do { \
+ 	if (on) line_input_state->flags |= VI_MODE; \
+ 	else line_input_state->flags &= ~VI_MODE; \
+@@ -6077,11 +6077,11 @@ static int preadfd(void)
+ 	parsenextc = buf;
+ 
+ retry:
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	if (!iflag || parsefile->fd)
+ 		nr = safe_read(parsefile->fd, buf, BUFSIZ - 1);
+ 	else {
+-#if ENABLE_FEATURE_COMMAND_TAB_COMPLETION
++#if ENABLE_FEATURE_TAB_COMPLETION
+ 		line_input_state->path_lookup = pathval();
+ #endif
+ 		nr = read_line_input(cmdedit_prompt, buf, BUFSIZ, line_input_state);
+@@ -7916,7 +7916,7 @@ ash_main(int argc, char **argv)
+ 	monitor(4, etext, profile_buf, sizeof profile_buf, 50);
+ #endif
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	line_input_state = new_line_input_t(FOR_SHELL | WITH_PATH_LOOKUP);
+ #endif
+ 	state = 0;
+@@ -7960,7 +7960,7 @@ ash_main(int argc, char **argv)
+ 	init();
+ 	setstackmark(&smark);
+ 	procargs(argc, argv);
+-#if ENABLE_FEATURE_COMMAND_SAVEHISTORY
++#if ENABLE_FEATURE_EDITING_SAVEHISTORY
+ 	if (iflag) {
+ 		const char *hp = lookupvar("HISTFILE");
+ 
+@@ -8001,7 +8001,7 @@ state3:
+ 		evalstring(minusc, 0);
+ 
+ 	if (sflag || minusc == NULL) {
+-#if ENABLE_FEATURE_COMMAND_SAVEHISTORY
++#if ENABLE_FEATURE_EDITING_SAVEHISTORY
+ 		if ( iflag ) {
+ 			const char *hp = lookupvar("HISTFILE");
+ 
+diff --git a/shell/cmdedit.c b/shell/cmdedit.c
+index 7588922a6..e62975db3 100644
+--- a/shell/cmdedit.c
++++ b/shell/cmdedit.c
+@@ -38,9 +38,9 @@
+ 
+ #ifdef TEST
+ 
+-#define ENABLE_FEATURE_COMMAND_EDITING 0
+-#define ENABLE_FEATURE_COMMAND_TAB_COMPLETION 0
+-#define ENABLE_FEATURE_COMMAND_USERNAME_COMPLETION 0
++#define ENABLE_FEATURE_EDITING 0
++#define ENABLE_FEATURE_TAB_COMPLETION 0
++#define ENABLE_FEATURE_USERNAME_COMPLETION 0
+ #define ENABLE_FEATURE_NONPRINTABLE_INVERSE_PUT 0
+ #define ENABLE_FEATURE_CLEAN_UP 0
+ 
+@@ -48,7 +48,7 @@
+ 
+ 
+ /* Entire file (except TESTing part) sits inside this #if */
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 
+ #if ENABLE_LOCALE_SUPPORT
+ #define Isprint(c) isprint(c)
+@@ -57,7 +57,7 @@
+ #endif
+ 
+ #define ENABLE_FEATURE_GETUSERNAME_AND_HOMEDIR \
+-(ENABLE_FEATURE_COMMAND_USERNAME_COMPLETION || ENABLE_FEATURE_SH_FANCY_PROMPT)
++(ENABLE_FEATURE_USERNAME_COMPLETION || ENABLE_FEATURE_EDITING_FANCY_PROMPT)
+ 
+ 
+ static line_input_t *state;
+@@ -75,7 +75,7 @@ static unsigned command_len;
+ static char *command_ps;
+ static const char *cmdedit_prompt;
+ 
+-#if ENABLE_FEATURE_SH_FANCY_PROMPT
++#if ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ static char *hostname_buf;
+ static int num_ok_lines = 1;
+ #endif
+@@ -85,7 +85,7 @@ static char *user_buf = "";
+ static char *home_pwd_buf = "";
+ #endif
+ 
+-#if ENABLE_FEATURE_COMMAND_TAB_COMPLETION
++#if ENABLE_FEATURE_TAB_COMPLETION
+ static int my_uid;
+ static int my_gid;
+ #endif
+@@ -208,7 +208,7 @@ static void redraw(int y, int back_cursor)
+ 	input_backward(back_cursor);
+ }
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ #define DELBUFSIZ 128
+ static char *delbuf;  /* a (malloced) place to store deleted characters */
+ static char *delp;
+@@ -224,7 +224,7 @@ static void input_delete(int save)
+ 	if (j == command_len)
+ 		return;
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ 	if (save) {
+ 		if (newdelflag) {
+ 			if (!delbuf)
+@@ -245,7 +245,7 @@ static void input_delete(int save)
+ 	input_backward(cursor - j);     /* back to old pos cursor */
+ }
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ static void put(void)
+ {
+ 	int ocursor;
+@@ -280,7 +280,7 @@ static void input_forward(void)
+ }
+ 
+ 
+-#if ENABLE_FEATURE_COMMAND_TAB_COMPLETION
++#if ENABLE_FEATURE_TAB_COMPLETION
+ 
+ static char **matches;
+ static unsigned num_matches;
+@@ -305,7 +305,7 @@ static void add_match(char *matched)
+ 	num_matches++;
+ }
+ 
+-#if ENABLE_FEATURE_COMMAND_USERNAME_COMPLETION
++#if ENABLE_FEATURE_USERNAME_COMPLETION
+ static void username_tab_completion(char *ud, char *with_shash_flg)
+ {
+ 	struct passwd *entry;
+@@ -431,7 +431,7 @@ static void exe_n_cwd_tab_completion(char *command, int type)
+ 	} else {
+ 		/* dirbuf = ".../.../.../" */
+ 		safe_strncpy(dirbuf, command, (pfind - command) + 2);
+-#if ENABLE_FEATURE_COMMAND_USERNAME_COMPLETION
++#if ENABLE_FEATURE_USERNAME_COMPLETION
+ 		if (dirbuf[0] == '~')   /* ~/... or ~user/... */
+ 			username_tab_completion(dirbuf, dirbuf);
+ #endif
+@@ -749,7 +749,7 @@ static void input_tab(int *lastWasTab)
+ 		/* Free up any memory already allocated */
+ 		free_tab_completion_data();
+ 
+-#if ENABLE_FEATURE_COMMAND_USERNAME_COMPLETION
++#if ENABLE_FEATURE_USERNAME_COMPLETION
+ 		/* If the word starts with `~' and there is no slash in the word,
+ 		 * then try completing this word as a username. */
+ 		if (state->flags & USERNAME_COMPLETION)
+@@ -874,7 +874,7 @@ static int get_next_history(void)
+ 	return 0;
+ }
+ 
+-#if ENABLE_FEATURE_COMMAND_SAVEHISTORY
++#if ENABLE_FEATURE_EDITING_SAVEHISTORY
+ /* state->flags is already checked to be nonzero */
+ void load_history(const char *fromfile)
+ {
+@@ -952,7 +952,7 @@ static void remember_in_history(const char *str)
+ 	state->cnt_history = i;
+ 	if (state->flags & SAVE_HISTORY)
+ 		save_history(state->hist_file);
+-	USE_FEATURE_SH_FANCY_PROMPT(num_ok_lines++;)
++	USE_FEATURE_EDITING_FANCY_PROMPT(num_ok_lines++;)
+ }
+ 
+ #else /* MAX_HISTORY == 0 */
+@@ -977,7 +977,7 @@ static void remember_in_history(const char *str)
+  * vi mode implemented 2005 by Paul Fox <pgf@foxharp.boston.ma.us>
+  */
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ static void
+ vi_Word_motion(char *command, int eat)
+ {
+@@ -1076,7 +1076,7 @@ vi_back_motion(char *command)
+  * read_line_input and its helpers
+  */
+ 
+-#if !ENABLE_FEATURE_SH_FANCY_PROMPT
++#if !ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ static void parse_prompt(const char *prmt_ptr)
+ {
+ 	cmdedit_prompt = prmt_ptr;
+@@ -1246,7 +1246,7 @@ static void win_changed(int nsig)
+ 
+ /* leave out the "vi-mode"-only case labels if vi editing isn't
+  * configured. */
+-#define vi_case(caselabel) USE_FEATURE_COMMAND_EDITING(case caselabel)
++#define vi_case(caselabel) USE_FEATURE_EDITING(case caselabel)
+ 
+ /* convert uppercase ascii to equivalent control char, for readability */
+ #undef CTRL
+@@ -1260,7 +1260,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 	unsigned int ic;
+ 	unsigned char c;
+ 	smallint break_out = 0;
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ 	smallint vi_cmdmode = 0;
+ 	smalluint prevc;
+ #endif
+@@ -1309,7 +1309,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 		}
+ 	}
+ #endif
+-#if ENABLE_FEATURE_COMMAND_TAB_COMPLETION
++#if ENABLE_FEATURE_TAB_COMPLETION
+ 	my_uid = getuid();
+ 	my_gid = getgid();
+ #endif
+@@ -1326,7 +1326,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 
+ 		ic = c;
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ 		newdelflag = 1;
+ 		if (vi_cmdmode)
+ 			ic |= vbit;
+@@ -1453,7 +1453,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 				input_backspace();
+ 			break;
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ 		case 'i'|vbit:
+ 			vi_cmdmode = 0;
+ 			break;
+@@ -1584,7 +1584,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 
+ 		case '\x1b': /* ESC */
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ 			if (state->flags & VI_MODE) {
+ 				/* ESC: insert mode --> command mode */
+ 				vi_cmdmode = 1;
+@@ -1612,7 +1612,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 			}
+ 
+ 			switch (c) {
+-#if ENABLE_FEATURE_COMMAND_TAB_COMPLETION
++#if ENABLE_FEATURE_TAB_COMPLETION
+ 			case '\t':                      /* Alt-Tab */
+ 				input_tab(&lastWasTab);
+ 				break;
+@@ -1679,7 +1679,7 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 			} else
+ #endif
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING_VI
++#if ENABLE_FEATURE_EDITING_VI
+ 			if (vi_cmdmode)  /* Don't self-insert */
+ 				break;
+ #endif
+@@ -1722,11 +1722,11 @@ int read_line_input(const char* prompt, char* command, int maxsize, line_input_t
+ 		command[command_len] = '\0';
+ 	}
+ 
+-#if ENABLE_FEATURE_CLEAN_UP && ENABLE_FEATURE_COMMAND_TAB_COMPLETION
++#if ENABLE_FEATURE_CLEAN_UP && ENABLE_FEATURE_TAB_COMPLETION
+ 	free_tab_completion_data();
+ #endif
+ 
+-#if ENABLE_FEATURE_SH_FANCY_PROMPT
++#if ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	free((char*)cmdedit_prompt);
+ #endif
+ 	/* restore initial_settings */
+@@ -1772,7 +1772,7 @@ int main(int argc, char **argv)
+ {
+ 	char buff[BUFSIZ];
+ 	char *prompt =
+-#if ENABLE_FEATURE_SH_FANCY_PROMPT
++#if ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 		"\\[\\033[32;1m\\]\\u@\\[\\x1b[33;1m\\]\\h:"
+ 		"\\[\\033[34;1m\\]\\w\\[\\033[35;1m\\] "
+ 		"\\!\\[\\e[36;1m\\]\\$ \\[\\E[0m\\]";
+diff --git a/shell/hush.c b/shell/hush.c
+index 2c88238ae..7e274324e 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -854,7 +854,7 @@ static int static_peek(struct in_str *i)
+ 
+ static void cmdedit_set_initial_prompt(void)
+ {
+-#ifndef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if !ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	PS1 = NULL;
+ #else
+ 	PS1 = getenv("PS1");
+@@ -866,7 +866,7 @@ static void cmdedit_set_initial_prompt(void)
+ static void setup_prompt_string(int promptmode, char **prompt_str)
+ {
+ 	debug_printf("setup_prompt_string %d ",promptmode);
+-#ifndef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if !ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	/* Set up the prompt */
+ 	if (promptmode == 1) {
+ 		free(PS1);
+@@ -882,7 +882,7 @@ static void setup_prompt_string(int promptmode, char **prompt_str)
+ 	debug_printf("result %s\n",*prompt_str);
+ }
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ static line_input_t *line_input_state;
+ #endif
+ 
+@@ -892,7 +892,7 @@ static void get_user_input(struct in_str *i)
+ 	static char the_command[BUFSIZ];
+ 
+ 	setup_prompt_string(i->promptmode, &prompt_str);
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	/*
+ 	 ** enable command line editing only while a command line
+ 	 ** is actually being read; otherwise, we'll end up bequeathing
+@@ -1109,7 +1109,7 @@ static void pseudo_exec(struct child_prog *child)
+ 		 * really dislike relying on /proc for things.  We could exec ourself
+ 		 * from global_argv[0], but if we are in a chroot, we may not be able
+ 		 * to find ourself... */
+-#ifdef CONFIG_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE_SHELL
+ 		{
+ 			int argc_l;
+ 			char** argv_l=child->argv;
+@@ -2650,7 +2650,7 @@ int hush_main(int argc, char **argv)
+ 	FILE *input;
+ 	char **e = environ;
+ 
+-#ifdef CONFIG_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	line_input_state = new_line_input_t(FOR_SHELL);
+ #endif
+ 
+@@ -2672,7 +2672,8 @@ int hush_main(int argc, char **argv)
+ 
+ 	/* Initialize some more globals to non-zero values */
+ 	set_cwd();
+-	if (ENABLE_FEATURE_COMMAND_EDITING) cmdedit_set_initial_prompt();
++	if (ENABLE_FEATURE_EDITING)
++		cmdedit_set_initial_prompt();
+ 	else PS1 = NULL;
+ 	PS2 = "> ";
+ 
+@@ -2738,7 +2739,7 @@ int hush_main(int argc, char **argv)
+ 	debug_printf("\ninteractive=%d\n", interactive);
+ 	if (interactive) {
+ 		/* Looks like they want an interactive shell */
+-#ifndef CONFIG_FEATURE_SH_EXTRA_QUIET
++#if !ENABLE_FEATURE_SH_EXTRA_QUIET
+ 		printf( "\n\n%s hush - the humble shell v0.01 (testing)\n",
+ 			BB_BANNER);
+ 		printf( "Enter 'help' for a list of built-in commands.\n\n");
+@@ -2757,7 +2758,7 @@ int hush_main(int argc, char **argv)
+ 	input = xfopen(argv[optind], "r");
+ 	opt = parse_file_outer(input);
+ 
+-#ifdef CONFIG_FEATURE_CLEAN_UP
++#if ENABLE_FEATURE_CLEAN_UP
+ 	fclose(input);
+ 	if (cwd && cwd != bb_msg_unknown)
+ 		free((char*)cwd);
+diff --git a/shell/lash.c b/shell/lash.c
+index a09a9a9b1..4ea4e6763 100644
+--- a/shell/lash.c
++++ b/shell/lash.c
+@@ -365,7 +365,7 @@ static int builtin_export(struct child_prog *child)
+ 	res = putenv(v);
+ 	if (res)
+ 		bb_perror_msg("export");
+-#ifdef CONFIG_FEATURE_SH_FANCY_PROMPT
++#ifdef CONFIG_FEATURE_EDITING_FANCY_PROMPT
+ 	if (strncmp(v, "PS1=", 4)==0)
+ 		PS1 = getenv("PS1");
+ #endif
+@@ -613,7 +613,7 @@ static inline void restore_redirects(int squirrel[])
+ 
+ static inline void cmdedit_set_initial_prompt(void)
+ {
+-#ifndef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if !ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	PS1 = NULL;
+ #else
+ 	PS1 = getenv("PS1");
+@@ -624,7 +624,7 @@ static inline void cmdedit_set_initial_prompt(void)
+ 
+ static inline void setup_prompt_string(char **prompt_str)
+ {
+-#ifndef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if !ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	/* Set up the prompt */
+ 	if (shell_context == 0) {
+ 		free(PS1);
+@@ -639,7 +639,7 @@ static inline void setup_prompt_string(char **prompt_str)
+ #endif
+ }
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ static line_input_t *line_input_state;
+ #endif
+ 
+@@ -661,7 +661,7 @@ static int get_command(FILE * source, char *command)
+ 	if (source == stdin) {
+ 		setup_prompt_string(&prompt_str);
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 		/*
+ 		** enable command line editing only while a command line
+ 		** is actually being read; otherwise, we'll end up bequeathing
+@@ -1507,7 +1507,7 @@ int lash_main(int argc_l, char **argv_l)
+ 	argc = argc_l;
+ 	argv = argv_l;
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	line_input_state = new_line_input_t(FOR_SHELL);
+ #endif
+ 
+@@ -1572,7 +1572,7 @@ int lash_main(int argc_l, char **argv_l)
+ 
+ 	if (ENABLE_FEATURE_CLEAN_UP) atexit(free_memory);
+ 
+-	if (ENABLE_FEATURE_COMMAND_EDITING) cmdedit_set_initial_prompt();
++	if (ENABLE_FEATURE_EDITING) cmdedit_set_initial_prompt();
+ 	else PS1 = NULL;
+ 
+ 	return (busy_loop(input));
+diff --git a/shell/msh.c b/shell/msh.c
+index 8746e42bc..15ce9ffdd 100644
+--- a/shell/msh.c
++++ b/shell/msh.c
+@@ -58,7 +58,7 @@ int mshdbg_rc = 0;
+ #endif							/* MSHDEBUG */
+ 
+ 
+-#ifdef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ # define DEFAULT_ROOT_PROMPT "\\u:\\w> "
+ # define DEFAULT_USER_PROMPT "\\u:\\w$ "
+ #else
+@@ -776,7 +776,7 @@ void print_tree(struct op *head)
+ #endif							/* MSHDEBUG */
+ 
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ static char *current_prompt;
+ #endif
+ 
+@@ -786,7 +786,7 @@ static char *current_prompt;
+  */
+ 
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ static line_input_t *line_input_state;
+ #endif
+ 
+@@ -798,7 +798,7 @@ int msh_main(int argc, char **argv)
+ 	char *name, **ap;
+ 	int (*iof) (struct ioarg *);
+ 
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	line_input_state = new_line_input_t(FOR_SHELL);
+ #endif
+ 
+@@ -847,7 +847,7 @@ int msh_main(int argc, char **argv)
+ #endif
+ 
+ 	prompt = lookup("PS1");
+-#ifdef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	if (prompt->value == null)
+ #endif
+ 		setval(prompt, DEFAULT_USER_PROMPT);
+@@ -856,7 +856,7 @@ int msh_main(int argc, char **argv)
+ 		prompt->status &= ~EXPORT;
+ 	}
+ 	cprompt = lookup("PS2");
+-#ifdef CONFIG_FEATURE_SH_FANCY_PROMPT
++#if ENABLE_FEATURE_EDITING_FANCY_PROMPT
+ 	if (cprompt->value == null)
+ #endif
+ 		setval(cprompt, "> ");
+@@ -929,7 +929,7 @@ int msh_main(int argc, char **argv)
+ 		PUSHIO(afile, 0, iof);
+ 		if (isatty(0) && isatty(1) && !cflag) {
+ 			interactive++;
+-#ifndef CONFIG_FEATURE_SH_EXTRA_QUIET
++#if !ENABLE_FEATURE_SH_EXTRA_QUIET
+ #ifdef MSHDEBUG
+ 			printf("\n\n%s Built-in shell (msh with debug)\n", BB_BANNER);
+ #else
+@@ -971,7 +971,7 @@ int msh_main(int argc, char **argv)
+ 
+ 	for (;;) {
+ 		if (interactive && e.iop <= iostack) {
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 			current_prompt = prompt->value;
+ #else
+ 			prs(prompt->value);
+@@ -2378,7 +2378,7 @@ static int yylex(int cf)
+ 		startl = 1;
+ 		if (multiline || cf & CONTIN) {
+ 			if (interactive && e.iop <= iostack) {
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 				current_prompt = cprompt->value;
+ #else
+ 				prs(cprompt->value);
+@@ -2439,7 +2439,7 @@ static int collect(int c, int c1)
+ 			return YYERRCODE;
+ 		}
+ 		if (interactive && c == '\n' && e.iop <= iostack) {
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 			current_prompt = cprompt->value;
+ #else
+ 			prs(cprompt->value);
+@@ -3289,7 +3289,7 @@ static int dohelp(struct op *t)
+ 			col = 0;
+ 		}
+ 	}
+-#ifdef CONFIG_FEATURE_SH_STANDALONE_SHELL
++#if ENABLE_FEATURE_SH_STANDALONE_SHELL
+ 	{
+ 		int i;
+ 		const struct BB_applet *applet;
+@@ -4673,7 +4673,7 @@ static int readc(void)
+ 					return e.iop->prev = 0;
+ 				}
+ 				if (interactive && e.iop == iostack + 1) {
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 					current_prompt = prompt->value;
+ #else
+ 					prs(prompt->value);
+@@ -4905,7 +4905,7 @@ static int filechar(struct ioarg *ap)
+ 		ap->afpos++;
+ 		return *bp->bufp++ & 0177;
+ 	}
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 	if (interactive && isatty(ap->afile)) {
+ 		static char mycommand[BUFSIZ];
+ 		static int position = 0, size = 0;
+@@ -5156,7 +5156,7 @@ static void readhere(char **name, char *s, int ec)
+ 		e.iobase = e.iop;
+ 		for (;;) {
+ 			if (interactive && e.iop <= iostack) {
+-#if ENABLE_FEATURE_COMMAND_EDITING
++#if ENABLE_FEATURE_EDITING
+ 				current_prompt = cprompt->value;
+ #else
+ 				prs(cprompt->value);

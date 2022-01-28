@@ -1,0 +1,546 @@
+"2007-02-06 19:28:50 +0000"
+diff --git a/Config.in b/Config.in
+index c5f8b3c0f..d15b2673a 100644
+--- a/Config.in
++++ b/Config.in
+@@ -493,3 +493,4 @@ source procps/Config.in
+ source shell/Config.in
+ source sysklogd/Config.in
+ source runit/Config.in
++source selinux/Config.in
+diff --git a/Makefile b/Makefile
+index 0e0fef95b..ddc8b25e6 100644
+--- a/Makefile
++++ b/Makefile
+@@ -442,6 +442,7 @@ libs-y		:= \
+ 		networking/udhcp/ \
+ 		procps/ \
+ 		runit/ \
++		selinux/ \
+ 		shell/ \
+ 		sysklogd/ \
+ 		util-linux/ \
+diff --git a/Makefile.flags b/Makefile.flags
+index e4ca7c6c5..b7711f698 100644
+--- a/Makefile.flags
++++ b/Makefile.flags
+@@ -54,4 +54,8 @@ endif
+ ifeq ($(CONFIG_STATIC),y)
+ LDFLAGS += -static
+ endif
++
++ifeq ($(CONFIG_SELINUX),y)
++LDFLAGS += -lselinux -lsepol
++endif
+ #LDFLAGS += -nostdlib
+diff --git a/include/applets.h b/include/applets.h
+index 397a8b789..d1bf0f36b 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -133,7 +133,9 @@ USE_FSCK_MINIX(APPLET_ODDNAME(fsck.minix, fsck_minix, _BB_DIR_SBIN, _BB_SUID_NEV
+ USE_FTPGET(APPLET_ODDNAME(ftpget, ftpgetput, _BB_DIR_USR_BIN, _BB_SUID_NEVER,ftpget))
+ USE_FTPPUT(APPLET_ODDNAME(ftpput, ftpgetput, _BB_DIR_USR_BIN, _BB_SUID_NEVER,ftpput))
+ USE_FUSER(APPLET(fuser, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_GETENFORCE(APPLET(getenforce, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_GETOPT(APPLET(getopt, _BB_DIR_BIN, _BB_SUID_NEVER))
++USE_GETSEBOOL(APPLET(getsebool, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_GETTY(APPLET(getty, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_GREP(APPLET(grep, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_GUNZIP(APPLET(gunzip, _BB_DIR_BIN, _BB_SUID_NEVER))
+@@ -187,6 +189,7 @@ USE_LS(APPLET(ls, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_LSATTR(APPLET(lsattr, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_LSMOD(APPLET(lsmod, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_UNLZMA(APPLET_ODDNAME(lzmacat, unlzma, _BB_DIR_USR_BIN, _BB_SUID_NEVER, lzmacat))
++USE_MATCHPATHCON(APPLET(matchpathcon, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_MAKEDEVS(APPLET(makedevs, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_MD5SUM(APPLET_ODDNAME(md5sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_NEVER, md5sum))
+ USE_MDEV(APPLET(mdev, _BB_DIR_SBIN, _BB_SUID_NEVER))
+@@ -249,10 +252,12 @@ USE_RUNLEVEL(APPLET(runlevel, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_RUNSV(APPLET(runsv, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_RUNSVDIR(APPLET(runsvdir, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_RX(APPLET(rx, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_SELINUXENABLED(APPLET(selinuxenabled, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_SED(APPLET(sed, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SEQ(APPLET(seq, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SETARCH(APPLET(setarch, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SETCONSOLE(APPLET(setconsole, _BB_DIR_SBIN, _BB_SUID_NEVER))
++USE_SETENFORCE(APPLET(setenforce, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_SETKEYCODES(APPLET(setkeycodes, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_SETLOGCONS(APPLET(setlogcons, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_SETSID(APPLET(setsid, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+diff --git a/include/libbb.h b/include/libbb.h
+index babb39ba9..d6f08ff73 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -592,6 +592,7 @@ extern void run_shell(const char *shell, int loginshell, const char *command, co
+ extern void renew_current_security_context(void);
+ extern void set_current_security_context(security_context_t sid);
+ #endif
++extern void selinux_or_die(void);
+ extern int restricted_shell(const char *shell);
+ extern void setup_environment(const char *shell, int loginshell, int changeenv, const struct passwd *pw);
+ extern int correct_password(const struct passwd *pw);
+diff --git a/include/usage.h b/include/usage.h
+index 4ba540ccb..17dcf9be9 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1013,6 +1013,9 @@
+        "	-6	When using port/proto only search IPv6 space\n" \
+        "	-SIGNAL	When used with -k, this signal will be used to kill"
+ 
++#define getenforce_trivial_usage
++#define getenforce_full_usage
++
+ #define getopt_trivial_usage \
+        "[OPTIONS]..."
+ #define getopt_full_usage \
+@@ -1047,6 +1050,11 @@
+        " esac\n" \
+        "done\n"
+ 
++#define getsebool_trivial_usage \
++       "-a or getsebool boolean..."
++#define getsebool_full_usage \
++       "	-a	Show all SELinux booleans"
++
+ #define getty_trivial_usage \
+        "[OPTIONS]... baud_rate,... line [termtype]"
+ #define getty_full_usage \
+@@ -1896,6 +1904,15 @@
+        "/dev/hda[0-15]\n"
+ #endif
+ 
++#define matchpathcon_trivial_usage \
++       "[-n] [-N] [-f file_contexts_file] [-p prefix] [-V]"
++#define matchpathcon_full_usage \
++       "	-n	Do not display path" \
++       "\n	-N	Do not use translations" \
++       "\n	-f	Use alternate file_context file" \
++       "\n	-p	Use prefix to speed translations" \
++       "\n	-V	Verify file context on disk matches defaults"
++
+ #define md5sum_trivial_usage \
+        "[OPTION] [FILEs...]" \
+ 	USE_FEATURE_MD5_SHA1_SUM_CHECK("\n   or: md5sum [OPTION] -c [FILE]")
+@@ -2714,6 +2731,9 @@
+        "$ echo \"foo\" | sed -e 's/f[a-zA-Z]o/bar/g'\n" \
+        "bar\n"
+ 
++#define selinuxenabled_trivial_usage
++#define selinuxenabled_full_usage
++
+ #define seq_trivial_usage \
+        "[first [increment]] last"
+ #define seq_full_usage \
+@@ -2731,6 +2751,10 @@
+        "\n\nOptions:\n" \
+        "	-r	Reset output to /dev/console"
+ 
++#define setenforce_trivial_usage \
++       "[ Enforcing | Permissive | 1 | 0 ]"
++#define setenforce_full_usage
++
+ #define setkeycodes_trivial_usage \
+        "SCANCODE KEYCODE ..."
+ #define setkeycodes_full_usage \
+@@ -3449,12 +3473,12 @@
+ #define vconfig_full_usage \
+        "Create and remove virtual ethernet devices" \
+        "\n\nOptions:\n" \
+-       "	add             [interface-name] [vlan_id]\n" \
+-       "	rem             [vlan-name]\n" \
+-       "	set_flag        [interface-name] [flag-num]       [0 | 1]\n" \
+-       "	set_egress_map  [vlan-name]      [skb_priority]   [vlan_qos]\n" \
+-       "	set_ingress_map [vlan-name]      [skb_priority]   [vlan_qos]\n" \
+-       "	set_name_type   [name-type]"
++       "	add		[interface-name] [vlan_id]\n" \
++       "	rem		[vlan-name]\n" \
++       "	set_flag	[interface-name] [flag-num] [0 | 1]\n" \
++       "	set_egress_map	[vlan-name] [skb_priority] [vlan_qos]\n" \
++       "	set_ingress_map	[vlan-name] [skb_priority] [vlan_qos]\n" \
++       "	set_name_type	[name-type]"
+ 
+ #define vi_trivial_usage \
+        "[OPTION] [FILE]..."
+@@ -3569,9 +3593,9 @@
+ #define zcip_full_usage \
+        "Manage a ZeroConf IPv4 link-local address" \
+        "\n\nOptions:\n" \
+-       "	-f              foreground mode\n" \
+-       "	-q              quit after address (no daemon)\n" \
+-       "	-r 169.254.x.x  request this address first\n" \
+-       "	-v              verbose"
++       "	-f		Foreground mode\n" \
++       "	-q		Quit after address (no daemon)\n" \
++       "	-r 169.254.x.x	Request this address first\n" \
++       "	-v		Verbose"
+ 
+ #endif /* __BB_USAGE_H__ */
+diff --git a/libbb/xfuncs.c b/libbb/xfuncs.c
+index 3cbb0d3eb..f6444bbc6 100644
+--- a/libbb/xfuncs.c
++++ b/libbb/xfuncs.c
+@@ -570,6 +570,21 @@ void xstat(const char *name, struct stat *stat_buf)
+ 		bb_perror_msg_and_die("can't stat '%s'", name);
+ }
+ 
++// selinux_or_die() - die if SELinux is disabled.
++void selinux_or_die(void)
++{
++#if ENABLE_SELINUX
++	int rc = is_selinux_enabled();
++	if (rc == 0) {
++		bb_error_msg_and_die("SELinux is disabled");
++	} else if (rc < 0) {
++		bb_error_msg_and_die("is_selinux_enabled() failed");
++	}
++#else
++	bb_error_msg_and_die("SELinux support is disabled");
++#endif
++}
++
+ /* It is perfectly ok to pass in a NULL for either width or for
+  * height, in which case that value will not be set.  */
+ int get_terminal_width_height(const int fd, int *width, int *height)
+diff --git a/selinux/Config.in b/selinux/Config.in
+new file mode 100644
+index 000000000..b078ee59e
+--- /dev/null
++++ b/selinux/Config.in
+@@ -0,0 +1,47 @@
++#
++# For a description of the syntax of this configuration file,
++# see scripts/kbuild/config-language.txt.
++#
++
++menu "Selinux Utilities"
++	depends on SELINUX
++
++config GETENFORCE
++	bool "getenforce"
++	default n
++	depends on SELINUX
++	help
++	  Enable support to get the current mode of SELinux.
++
++config GETSEBOOL
++	bool "getsebool"
++	default n
++	depends on SELINUX
++	help
++	  Enable support to get SELinux boolean values.
++
++config MATCHPATHCON
++	bool "matchpathcon"
++	default n
++	depends on SELINUX
++	help
++	  Enable support to get default security context of the
++	  specified path from the file contexts configuration.
++
++config SELINUXENABLED
++	bool "selinuxenabled"
++	default n
++	depends on SELINUX
++	help
++	  Enable support for this command to be used within shell scripts
++	  to determine if selinux is enabled.
++
++config SETENFORCE
++	bool "setenforce"
++	default n
++	depends on SELINUX
++	help
++	  Enable support to modify the mode SELinux is running in.
++
++endmenu
++
+diff --git a/selinux/Kbuild b/selinux/Kbuild
+new file mode 100644
+index 000000000..8371df8e4
+--- /dev/null
++++ b/selinux/Kbuild
+@@ -0,0 +1,13 @@
++# Makefile for busybox
++#
++# Copyright (C) 1999-2005 by Erik Andersen <andersen@codepoet.org>
++# Copyright (C) 2007 by KaiGai Kohei <kaigai@kaigai.gr.jp>
++#
++# Licensed under the GPL v2, see the file LICENSE in this tarball.
++
++lib-y:=
++lib-$(CONFIG_GETENFORCE)	+= getenforce.o
++lib-$(CONFIG_GETSEBOOL)		+= getsebool.o
++lib-$(CONFIG_MATCHPATHCON)	+= matchpathcon.o
++lib-$(CONFIG_SELINUXENABLED)	+= selinuxenabled.o
++lib-$(CONFIG_SETENFORCE)	+= setenforce.o
+diff --git a/selinux/getenforce.c b/selinux/getenforce.c
+new file mode 100644
+index 000000000..e240e4dca
+--- /dev/null
++++ b/selinux/getenforce.c
+@@ -0,0 +1,33 @@
++/*
++ * getenforce
++ *
++ * Based on libselinux 1.33.1
++ * Port to BusyBox  Hiroshi Shinji <shiroshi@my.email.ne.jp>
++ *
++ */
++
++#include "busybox.h"
++
++int getenforce_main(int argc, char **argv)
++{
++	int rc;
++
++	rc = is_selinux_enabled();
++	if (rc < 0)
++		bb_error_msg_and_die("is_selinux_enabled() failed");
++
++	if (rc == 1) {
++		rc = security_getenforce();
++		if (rc < 0)
++			bb_error_msg_and_die("getenforce() failed");
++
++		if (rc)
++			puts("Enforcing");
++		else
++			puts("Permissive");
++	} else {
++		puts("Disabled");
++	}
++
++	return 0;
++}
+diff --git a/selinux/getsebool.c b/selinux/getsebool.c
+new file mode 100644
+index 000000000..d593937ba
+--- /dev/null
++++ b/selinux/getsebool.c
+@@ -0,0 +1,65 @@
++/*
++ * getsebool
++ *
++ * Based on libselinux 1.33.1
++ * Port to BusyBox  Hiroshi Shinji <shiroshi@my.email.ne.jp>
++ *
++ */
++
++#include "busybox.h"
++
++int getsebool_main(int argc, char **argv)
++{
++	int i, rc = 0, active, pending, len = 0;
++	char **names;
++	unsigned opt;
++
++	selinux_or_die();
++	opt = getopt32(argc, argv, "a");
++
++	if (opt) { /* -a */
++		if (argc > 2)
++			bb_show_usage();
++
++		rc = security_get_boolean_names(&names, &len);
++		if (rc)
++			bb_perror_msg_and_die("cannot get boolean names");
++
++		if (!len) {
++			puts("No booleans");
++			return 0;
++		}
++	}
++
++	if (!len) {
++		if (argc < 2)
++			bb_show_usage();
++		len = argc - 1;
++		names = xmalloc(sizeof(char *) * len);
++		for (i = 0; i < len; i++)
++			names[i] = xstrdup(argv[i + 1]);
++	}
++
++	for (i = 0; i < len; i++) {
++		active = security_get_boolean_active(names[i]);
++		if (active < 0) {
++			bb_error_msg_and_die("error getting active value for %s", names[i]);
++		}
++		pending = security_get_boolean_pending(names[i]);
++		if (pending < 0) {
++			bb_error_msg_and_die("error getting pending value for %s", names[i]);
++		}
++		printf("%s --> %s", names[i], (active ? "on" : "off"));
++		if (pending != active)
++			printf(" pending: %s", (pending ? "on" : "off"));
++		putchar('\n');
++	}
++
++	if (ENABLE_FEATURE_CLEAN_UP) {
++		for (i = 0; i < len; i++)
++			free(names[i]);
++		free(names);
++	}
++
++	return rc;
++}
+diff --git a/selinux/matchpathcon.c b/selinux/matchpathcon.c
+new file mode 100644
+index 000000000..4fa95b0ef
+--- /dev/null
++++ b/selinux/matchpathcon.c
+@@ -0,0 +1,85 @@
++/* matchpathcon  -  get the default security context for the specified
++ *                  path from the file contexts configuration.
++ *                  based on libselinux-1.32
++ * Port to busybox: KaiGai Kohei <kaigai@kaigai.gr.jp>
++ *
++ */
++#include "busybox.h"
++
++static int print_matchpathcon(char *path, int noprint)
++{
++	char *buf;
++	int rc = matchpathcon(path, 0, &buf);
++	if (rc < 0) {
++		bb_perror_msg("matchpathcon(%s) failed", path);
++		return 1;
++	}
++	if (!noprint)
++		printf("%s\t%s\n", path, buf);
++	else
++		printf("%s\n", buf);
++
++	freecon(buf);
++	return 0;
++}
++
++#define OPT_NOT_PRINT   (1<<0)  /* -n */
++#define OPT_NOT_TRANS   (1<<1)  /* -N */
++#define OPT_FCONTEXT    (1<<2)  /* -f */
++#define OPT_PREFIX      (1<<3)  /* -p */
++#define OPT_VERIFY      (1<<4)  /* -V */
++
++int matchpathcon_main(int argc, char **argv)
++{
++	int error = 0;
++	unsigned opts;
++	char *fcontext, *prefix, *path;
++
++	opt_complementary = "-1:" /* at least one param reqd */
++		"f--p:p--f"; /* mutually exclusive */
++	opts = getopt32(argc, argv, "nNf:p:V", &fcontext, &prefix);
++	argv += optind;
++
++	if (opts & OPT_NOT_TRANS) {
++		set_matchpathcon_flags(NOTRANS);
++	}
++	if (opts & OPT_FCONTEXT) {
++		if (matchpathcon_init(fcontext))
++			bb_perror_msg_and_die("error while processing %s", fcontext);
++	}
++	if (opts & OPT_PREFIX) {
++		if (matchpathcon_init_prefix(NULL, prefix))
++			bb_perror_msg_and_die("error while processing %s", prefix);
++	}
++
++	while((path = *argv++) != NULL) {
++		security_context_t con;
++		int rc;
++
++		if (!(opts & OPT_VERIFY)) {
++			error += print_matchpathcon(path, opt & OPT_NOT_PRINT);
++			continue;
++		}
++
++		if (selinux_file_context_verify(path, 0)) {
++			printf("%s verified\n", path);
++			continue;
++		}
++
++		if (opts & OPT_NOT_TRANS)
++			rc = lgetfilecon_raw(path, &con);
++		else
++			rc = lgetfilecon(path, &con);
++
++		if (rc >= 0) {
++			printf("%s has context %s, should be ", path, con);
++			error += print_matchpathcon(path, 1);
++			freecon(con);
++			continue;
++		}
++		printf("actual context unknown: %s, should be ", strerror(errno));
++		error += print_matchpathcon(path, 1);
++	}
++	matchpathcon_fini();
++	return error;
++}
+diff --git a/selinux/selinuxenabled.c b/selinux/selinuxenabled.c
+new file mode 100644
+index 000000000..b34228098
+--- /dev/null
++++ b/selinux/selinuxenabled.c
+@@ -0,0 +1,13 @@
++/*
++ * selinuxenabled
++ * 
++ * Based on libselinux 1.33.1
++ * Port to BusyBox  Hiroshi Shinji <shiroshi@my.email.ne.jp>
++ *
++ */
++#include "busybox.h"
++
++int selinuxenabled_main(int argc, char **argv)
++{
++	return !is_selinux_enabled();
++}
+diff --git a/selinux/setenforce.c b/selinux/setenforce.c
+new file mode 100644
+index 000000000..670e30086
+--- /dev/null
++++ b/selinux/setenforce.c
+@@ -0,0 +1,44 @@
++/*
++ * setenforce
++ *
++ * Based on libselinux 1.33.1
++ * Port to BusyBox  Hiroshi Shinji <shiroshi@my.email.ne.jp>
++ *
++ */
++
++#include "busybox.h"
++
++static const smallint setenforce_mode[] = {
++	0,
++	1,
++	0,
++	1,
++};
++static const char *const setenforce_cmd[] = {
++	"0",
++	"1",
++	"permissive",
++	"enforcing",
++	NULL,
++};
++
++int setenforce_main(int argc, char **argv)
++{
++	int i, rc;
++
++	if (argc != 2)
++		bb_show_usage();
++
++	selinux_or_die();
++
++	for (i = 0; setenforce_cmd[i]; i++) {
++		if (strcasecmp(argv[1], setenforce_cmd[i]) != 0)
++			continue;
++		rc = security_setenforce(setenforce_mode[i]);
++		if (rc < 0)
++			bb_perror_msg_and_die("setenforce() failed");
++		return 0;
++	}
++
++	bb_show_usage();
++}

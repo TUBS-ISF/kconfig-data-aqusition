@@ -1,0 +1,651 @@
+"2020-04-14 11:39:31 +0200"
+diff --git a/src/Kconfig b/src/Kconfig
+index 16be9e1..61422ba 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -328,6 +328,15 @@ config KERNEL_ISOLATION
+ 	  Intel CPUs during speculative execution. However, there is the
+ 	  extra TLB penalty for each system call.
+ 
++config KERNEL_NX
++	bool "Enable support for kernel RO and non-executable mappings" if AMD64
++	depends on AMD64
++	help
++	  Make kernel mappings either writable or executable, but not
++	  writable and executable at the same time. This makes certain
++	  classes of programming errors more difficult to exploit by a potential
++	  attacker.
++
+ config IA32_PCID
+ 	bool "Enable usage of Intel PCID feature"
+ 	depends on AMD64
+diff --git a/src/kern/ia32/64/entry-native.S b/src/kern/ia32/64/entry-native.S
+index d974ecb..43d0347 100644
+--- a/src/kern/ia32/64/entry-native.S
++++ b/src/kern/ia32/64/entry-native.S
+@@ -210,8 +210,24 @@ leave_from_syscall_by_iret:
+ dbf_stack_top:
+ 
+ 	.section ".text.syscall_entry"
++
++#ifdef CONFIG_KERNEL_NX
++
++/*
++ * This code shall be mapped to Kentry_cpu_page_text, exactly one page above
++ * Kentry_cpu_page, which makes it possible to refer to the data without
++ * cloberring a register.
++ */
++#define CPUE_OFFSET syscall_entry_code - 0x1000
++
++	.align 0x1000
++
++#else
++
+ /* This code shall be copied to Kentry_cpu_syscall_entry */
+ #define CPUE_OFFSET syscall_entry_code - 0x30
++
++#endif
+ 	.global syscall_entry_code
+ syscall_entry_code:
+ 	mov	%rsp, (CPUE_OFFSET + CPUE_SCRATCH_OFS)(%rip)
+diff --git a/src/kern/ia32/64/entry.S b/src/kern/ia32/64/entry.S
+index 6e50354..6811d93 100644
+--- a/src/kern/ia32/64/entry.S
++++ b/src/kern/ia32/64/entry.S
+@@ -313,7 +313,44 @@ entry_\name:
+ 
+ /**
+  * Stub array for all IRQ vector entries in the IDT
+- *
++ */
++
++#ifdef CONFIG_KERNEL_NX
++
++/*
++ * Note that the array is split into the data part and the code part because
++ * the kernel write-protects its code and prevents execution of its data.
++ */
++
++STUB_DATA_SIZE = 8
++STUB_TEXT_SIZE = 16
++
++	.section ".entry.data.irqs", "aw", @progbits
++	.global idt_irq_vector_stubs
++	.global idt_irq_vector_stubs_data
++	.align 8
++idt_irq_vector_stubs:
++idt_irq_vector_stubs_data:
++.rept APIC_IRQ_BASE - 0x28
++	.quad 0
++.endr
++
++	.section ".entry.text.irqs", "ax", @progbits
++	.global idt_irq_vector_stubs_text
++	.align 64
++idt_irq_vector_stubs_text:
++.rept APIC_IRQ_BASE - 0x28
++0:
++	push	%rdi
++	movq	(idt_irq_vector_stubs_data + STUB_DATA_SIZE * (0b - idt_irq_vector_stubs_text) / STUB_TEXT_SIZE), %rdi
++	jmp	__generic_irq_entry
++	/* the entries are not constant length, align to compensate */
++	.align 16
++.endr
++
++#else /* CONFIG_KERNEL_NX */
++
++/*
+  * The immediate in the movabs shall be patched with the
+  * address of an Irq_base object that is later attached to
+  * the corresponding IDT vector.
+@@ -328,6 +365,8 @@ idt_irq_vector_stubs:
+ 	jmp	__generic_irq_entry
+ .endr
+ 
++#endif /* CONFIG_KERNEL_NX */
++
+ 
+ 	.type __generic_irq_entry,@function
+ 	.global __generic_irq_entry
+diff --git a/src/kern/ia32/64/linking.h b/src/kern/ia32/64/linking.h
+index 2d8ac10..9c73c85 100644
+--- a/src/kern/ia32/64/linking.h
++++ b/src/kern/ia32/64/linking.h
+@@ -1,9 +1,15 @@
+ #pragma once
+ 
++#include "globalconfig.h"
++
+ #define FIASCO_MP_TRAMP_PAGE     0x1000   // must be below 1MB
+ #define FIASCO_IMAGE_PHYS_START  0x400000
+ //#define FIASCO_IMAGE_PHYS_START  0x2000
+ #define FIASCO_IMAGE_VIRT_START  0xfffffffff0000000
++#ifndef CONFIG_KERNEL_NX
+ #define FIASCO_IMAGE_VIRT_SIZE   0x400000 // must be superpage-aligned
++#else
++#define FIASCO_IMAGE_VIRT_SIZE   0x600000 // must be superpage-aligned
++#endif
+ #define FIASCO_KENTRY_SYSCALL_PAGE 0xffff817fffff8000
+ #define FIASCO_IMAGE_PHYS_OFFSET (FIASCO_IMAGE_VIRT_START - (FIASCO_IMAGE_PHYS_START & 0xffffffffffc00000))
+diff --git a/src/kern/ia32/64/low_level.h b/src/kern/ia32/64/low_level.h
+index 8f4bbaa..dabd9a0 100644
+--- a/src/kern/ia32/64/low_level.h
++++ b/src/kern/ia32/64/low_level.h
+@@ -5,12 +5,17 @@
+ #include "regdefs.h"
+ #include "shortcut.h"
+ #include "tcboffset.h"
++#include "globalconfig.h"
+ 
+ 
+ #define REGISTER_SIZE 8
+ 
+ /* Layout of Kentry_cpu_page */
++#ifndef CONFIG_KERNEL_NX
+ #define CPUE_STACK_OFS (0x30 + (((syscall_entry_code_end - syscall_entry_code) + 0xf) & ~0xf))
++#else
++#define CPUE_STACK_OFS 0x30
++#endif
+ #define CPUE_STACK_TOP_OFS (CPUE_STACK_OFS + 512)
+ #define CPUE_STACK(x, reg) (CPUE_STACK_TOP_OFS + x)(reg)
+ #define CPUE_CR3_OFS 0
+diff --git a/src/kern/ia32/64/mem_layout-ia32-64.cpp b/src/kern/ia32/64/mem_layout-ia32-64.cpp
+index 06b2898..9e46896 100644
+--- a/src/kern/ia32/64/mem_layout-ia32-64.cpp
++++ b/src/kern/ia32/64/mem_layout-ia32-64.cpp
+@@ -88,6 +88,31 @@ private:
+   static Address physmem_offs asm ("PHYSMEM_OFFS");
+ };
+ 
++//-----------------------------------------------------------
++INTERFACE [amd64 && kernel_isolation && !kernel_nx]:
++
++EXTENSION class Mem_layout
++{
++public:
++  enum : Mword
++  {
++    Kentry_cpu_syscall_entry = Kentry_cpu_page + 0x30
++  };
++};
++
++//-----------------------------------------------------------
++INTERFACE [amd64 && kernel_isolation && kernel_nx]:
++
++EXTENSION class Mem_layout
++{
++public:
++  enum : Mword
++  {
++    Kentry_cpu_page_text     = Kentry_cpu_page + Config::PAGE_SIZE,
++    Kentry_cpu_syscall_entry = Kentry_cpu_page_text
++  };
++};
++
+ //-----------------------------------------------------------
+ INTERFACE [amd64 && !kernel_isolation]:
+ 
+@@ -109,7 +134,6 @@ public:
+   enum : Mword
+   {
+     Idt = 0xffff817fffffa000UL,                  ///< IDT in Kentry area
+-    Kentry_cpu_syscall_entry = Kentry_cpu_page + 0x30
+   };
+ };
+ 
+diff --git a/src/kern/ia32/irq_chip_ia32.cpp b/src/kern/ia32/irq_chip_ia32.cpp
+index bb190b3..d41ef28 100644
+--- a/src/kern/ia32/irq_chip_ia32.cpp
++++ b/src/kern/ia32/irq_chip_ia32.cpp
+@@ -1,4 +1,23 @@
+-INTERFACE[amd64]:
++INTERFACE[amd64 && kernel_nx]:
++
++class Irq_base;
++
++/** this structure must exactly map to the entry stubs from 64/entry.S */
++struct Irq_entry_stub_text
++{
++  char _res[16];
++} __attribute__((packed));
++
++struct Irq_entry_stub_data
++{
++  Irq_base *irq;
++} __attribute__((packed));
++
++using Irq_entry_stub = Irq_entry_stub_data;
++
++
++//--------------------------------------------------------------------------
++INTERFACE[amd64 && !kernel_nx]:
+ 
+ class Irq_base;
+ 
+@@ -217,22 +236,6 @@ Irq_chip_ia32::_valloc(Mword pin, unsigned vector)
+   return vector;
+ }
+ 
+-PRIVATE
+-unsigned
+-Irq_chip_ia32::_vsetup(Irq_base *irq, Mword pin, unsigned vector)
+-{
+-  _vec[pin] = vector;
+-  extern Irq_entry_stub idt_irq_vector_stubs[];
+-  auto p = idt_irq_vector_stubs + vector - 0x20;
+-  p->irq = irq;
+-
+-  // force code to memory before setting IDT entry
+-  Mem::barrier();
+-
+-  Idt::set_entry(vector, (Address)p, false);
+-  return vector;
+-}
+-
+ /**
+  * \pre `irq->irqLock()` must be held
+  */
+@@ -284,3 +287,42 @@ Irq_chip_ia32::reserve(Mword irqn)
+   _vec[irqn] = 0xff;
+   return true;
+ }
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION[kernel_nx]:
++
++PRIVATE
++unsigned
++Irq_chip_ia32::_vsetup(Irq_base *irq, Mword pin, unsigned vector)
++{
++  _vec[pin] = vector;
++  extern Irq_entry_stub_data idt_irq_vector_stubs_data[];
++  extern Irq_entry_stub_text idt_irq_vector_stubs_text[];
++  idt_irq_vector_stubs_data[vector - 0x20].irq = irq;
++
++  // force code to memory before setting IDT entry
++  Mem::barrier();
++
++  Idt::set_entry(vector, (Address)&idt_irq_vector_stubs_text[vector - 0x20],
++                 false);
++  return vector;
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION[!kernel_nx]:
++
++PRIVATE
++unsigned
++Irq_chip_ia32::_vsetup(Irq_base *irq, Mword pin, unsigned vector)
++{
++  _vec[pin] = vector;
++  extern Irq_entry_stub idt_irq_vector_stubs[];
++  auto p = idt_irq_vector_stubs + vector - 0x20;
++  p->irq = irq;
++
++  // force code to memory before setting IDT entry
++  Mem::barrier();
++
++  Idt::set_entry(vector, (Address)p, false);
++  return vector;
++}
+diff --git a/src/kern/ia32/kmem-ia32.cpp b/src/kern/ia32/kmem-ia32.cpp
+index d9fbbee..291c892 100644
+--- a/src/kern/ia32/kmem-ia32.cpp
++++ b/src/kern/ia32/kmem-ia32.cpp
+@@ -323,6 +323,9 @@ Kmem::mmio_remap(Address phys)
+   return va + offs;
+ }
+ 
++//--------------------------------------------------------------------------
++IMPLEMENTATION [ia32 || (amd64 && !kernel_nx)]:
++
+ PRIVATE static FIASCO_INIT
+ void
+ Kmem::map_initial_ram()
+@@ -358,6 +361,90 @@ Kmem::map_kernel_virt(Kpdir *dir)
+            Pt_entry::super_level(), false, pdir_alloc(Kmem_alloc::allocator()));
+ }
+ 
++//--------------------------------------------------------------------------
++IMPLEMENTATION [amd64 && kernel_nx]:
++
++PRIVATE static FIASCO_INIT
++void
++Kmem::map_initial_ram()
++{
++  Kmem_alloc *const alloc = Kmem_alloc::allocator();
++
++  // set up the kernel mapping for physical memory.  mark all pages as
++  // referenced and modified (so when touching the respective pages
++  // later, we save the CPU overhead of marking the pd/pt entries like
++  // this)
++
++  // we also set up a one-to-one virt-to-phys mapping for two reasons:
++  // (1) so that we switch to the new page table early and re-use the
++  //     segment descriptors set up by boot_cpu.cc.  (we'll set up our
++  //     own descriptors later.) we only need the first 6MB for that.
++  // (2) a one-to-one phys-to-virt mapping in the kernel's page directory
++  //     sometimes comes in handy (mostly useful for debugging)
++
++
++  // first 2M
++
++  // Beginning of physical memory up to the realmode trampoline code is RW
++  kdir->map(0, Virt_addr(0), Virt_size(FIASCO_MP_TRAMP_PAGE),
++            Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++            | Pt_entry::Referenced,
++            Pdir::Depth, false, pdir_alloc(alloc));
++
++  // Realmode trampoline code is RWX
++  kdir->map(FIASCO_MP_TRAMP_PAGE, Virt_addr(FIASCO_MP_TRAMP_PAGE),
++            Virt_size(Config::PAGE_SIZE),
++            Pt_entry::Dirty | Pt_entry::Writable | Pt_entry::Referenced,
++            Pdir::Depth, false, pdir_alloc(alloc));
++
++  // The rest of the first 2M is RW
++  kdir->map(FIASCO_MP_TRAMP_PAGE + Config::PAGE_SIZE,
++            Virt_addr(FIASCO_MP_TRAMP_PAGE + Config::PAGE_SIZE),
++            Virt_size(Config::SUPERPAGE_SIZE - FIASCO_MP_TRAMP_PAGE
++                      - Config::PAGE_SIZE),
++            Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++            | Pt_entry::Referenced,
++            Pdir::Depth, false, pdir_alloc(alloc));
++
++  // Second 2M is RW
++  kdir->map(Config::SUPERPAGE_SIZE, Virt_addr(Config::SUPERPAGE_SIZE),
++            Virt_size(Config::SUPERPAGE_SIZE),
++            Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++            | Pt_entry::Referenced,
++            Pt_entry::super_level(), false, pdir_alloc(alloc));
++}
++
++PRIVATE static FIASCO_INIT_CPU
++void
++Kmem::map_kernel_virt(Kpdir *dir)
++{
++  Kmem_alloc *const alloc = Kmem_alloc::allocator();
++  // The first 2M of kernel are RW
++  dir->map(Mem_layout::Kernel_image_phys, Virt_addr(Mem_layout::Kernel_image),
++           Virt_size(Config::SUPERPAGE_SIZE),
++           Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++           | Pt_entry::Referenced | Pt_entry::global(),
++           Pt_entry::super_level(), false, pdir_alloc(alloc));
++
++  // Kernel text is RX
++  dir->map(Mem_layout::Kernel_image_phys + Config::SUPERPAGE_SIZE,
++           Virt_addr(Mem_layout::Kernel_image + Config::SUPERPAGE_SIZE),
++           Virt_size(Config::SUPERPAGE_SIZE),
++           Pt_entry::Referenced | Pt_entry::global(), Pt_entry::super_level(),
++           false, pdir_alloc(alloc));
++
++  // Kernel data is RW
++  dir->map(Mem_layout::Kernel_image_phys + 2 * Config::SUPERPAGE_SIZE,
++           Virt_addr(Mem_layout::Kernel_image + 2 * Config::SUPERPAGE_SIZE),
++           Virt_size(Config::SUPERPAGE_SIZE),
++           Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++           | Pt_entry::Referenced | Pt_entry::global(),
++           Pt_entry::super_level(), false, pdir_alloc(alloc));
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [ia32, amd64]:
++
+ PUBLIC static FIASCO_INIT
+ void
+ Kmem::init_mmu()
+@@ -387,17 +474,17 @@ Kmem::init_mmu()
+   map_kernel_virt(kdir);
+ 
+   if (!Mem_layout::Adap_in_kernel_image)
+-    kdir->map(Mem_layout::Adap_image_phys,
+-              Virt_addr(Mem_layout::Adap_image),
++    kdir->map(Mem_layout::Adap_image_phys, Virt_addr(Mem_layout::Adap_image),
+               Virt_size(Config::SUPERPAGE_SIZE),
+-              Pt_entry::Dirty | Pt_entry::Writable | Pt_entry::Referenced
+-              | Pt_entry::global(), Pt_entry::super_level(),
+-              false, pdir_alloc(alloc));
++              Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++              | Pt_entry::Referenced | Pt_entry::global(),
++              Pt_entry::super_level(), false, pdir_alloc(alloc));
+ 
+   // map the last 64MB of physical memory as kernel memory
+   kdir->map(Mem_layout::pmem_to_phys(Mem_layout::Physmem),
+             Virt_addr(Mem_layout::Physmem), Virt_size(Mem_layout::pmem_size),
+-            Pt_entry::Writable | Pt_entry::Referenced | Pt_entry::global(),
++            Pt_entry::XD | Pt_entry::Writable | Pt_entry::Referenced
++            | Pt_entry::global(),
+             Pt_entry::super_level(), false, pdir_alloc(alloc));
+ 
+   // The service page directory entry points to an universal usable
+@@ -608,7 +695,7 @@ Kmem::setup_global_cpu_structures(bool superpages)
+                           Pdir::Super_level, false, pdir_alloc(alloc));
+ 
+       e.set_page(tss_mem_pm & Config::SUPERPAGE_MASK,
+-                 Pt_entry::Writable | Pt_entry::Referenced
++                 Pt_entry::XD | Pt_entry::Writable | Pt_entry::Referenced
+                  | Pt_entry::Dirty | Pt_entry::global());
+ 
+       tss_mem_vm = cxx::Simple_alloc(
+@@ -625,8 +712,8 @@ Kmem::setup_global_cpu_structures(bool superpages)
+                               Pdir::Depth, false, pdir_alloc(alloc));
+ 
+           e.set_page(tss_mem_pm + i * Config::PAGE_SIZE,
+-                     Pt_entry::Writable | Pt_entry::Referenced | Pt_entry::Dirty
+-                     | Pt_entry::global());
++                     Pt_entry::XD | Pt_entry::Writable | Pt_entry::Referenced
++                     | Pt_entry::Dirty | Pt_entry::global());
+         }
+ 
+       tss_mem_vm = cxx::Simple_alloc(
+@@ -740,6 +827,38 @@ Kmem::setup_cpu_structures_isolation(Cpu &cpu, Kpdir *cpu_dir, cxx::Simple_alloc
+   cpu.get_tss()->_rsp0 = (Address)(estack + estack_sz);
+ }
+ 
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && kernel_isolation && kernel_nx]:
++
++PRIVATE static
++void
++Kmem::prepare_kernel_entry_points(cxx::Simple_alloc *, Kpdir *cpu_dir)
++{
++  extern char _kernel_data_entry_start[];
++  extern char _kernel_data_entry_end[];
++  Address kd_page = ((Address)_kernel_data_entry_start) & ~(Config::PAGE_SIZE - 1);
++  Address kde_page = (((Address)_kernel_data_entry_end) + (Config::PAGE_SIZE - 1)) & ~(Config::PAGE_SIZE - 1);
++
++  if (Print_info)
++    printf("kernel entry data: %p(%lx)-%p(%lx)\n", _kernel_data_entry_start,
++           kd_page, _kernel_data_entry_end, kde_page);
++
++  cpu_dir[1].map(kd_page - Kernel_image_offset, Virt_addr(kd_page),
++                 Virt_size(kde_page - kd_page),
++                 Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Referenced
++                 | Pt_entry::global(),
++                 Pdir::Depth, false, pdir_alloc(Kmem_alloc::allocator()));
++
++  extern char const syscall_entry_code[];
++  cpu_dir[1].map(virt_to_phys(syscall_entry_code),
++                 Virt_addr(Kentry_cpu_page_text), Virt_size(Config::PAGE_SIZE),
++                 Pt_entry::Referenced | Pt_entry::global(), Pdir::Depth, false,
++                 pdir_alloc(Kmem_alloc::allocator()));
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && kernel_isolation && !kernel_nx]:
++
+ PRIVATE static
+ void
+ Kmem::prepare_kernel_entry_points(cxx::Simple_alloc *cpu_m, Kpdir *)
+@@ -751,6 +870,22 @@ Kmem::prepare_kernel_entry_points(cxx::Simple_alloc *cpu_m, Kpdir *)
+   memcpy(sccode, syscall_entry_code, syscall_entry_code_end - syscall_entry_code);
+ }
+ 
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && kernel_nx]:
++
++PRIVATE static inline NEEDS["paging.h"]
++Pte_ptr::Entry
++Kmem::conf_xd()
++{ return Pt_entry::XD; }
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && !kernel_nx]:
++
++PRIVATE static inline NEEDS["paging.h"]
++Pte_ptr::Entry
++Kmem::conf_xd()
++{ return 0; }
++
+ //--------------------------------------------------------------------------
+ IMPLEMENTATION [(amd64 || ia32) && cpu_local_map]:
+ 
+@@ -883,31 +1018,27 @@ Kmem::init_cpu(Cpu &cpu)
+ 
+   map_kernel_virt(cpu_dir);
+ 
+-   if (!Adap_in_kernel_image)
+-     cpu_dir->map(Adap_image_phys,
+-                  Virt_addr(Adap_image),
+-                  Virt_size(Config::SUPERPAGE_SIZE),
+-                  Pt_entry::Dirty | Pt_entry::Writable | Pt_entry::Referenced
+-                  | Pt_entry::global(), Pt_entry::super_level(),
+-                  false, pdir_alloc(alloc));
++  if (!Adap_in_kernel_image)
++    cpu_dir->map(Adap_image_phys, Virt_addr(Adap_image),
++                 Virt_size(Config::SUPERPAGE_SIZE),
++                 Pt_entry::XD | Pt_entry::Dirty | Pt_entry::Writable
++                 | Pt_entry::Referenced | Pt_entry::global(),
++                 Pt_entry::super_level(), false, pdir_alloc(alloc));
+ 
+   Address cpu_dir_pa = Mem_layout::pmem_to_phys(cpu_dir);
+-  cpu_dir->map(cpu_dir_pa, Virt_addr(Kentry_cpu_pdir),
+-               Virt_size(cpu_dir_sz),
+-               Pt_entry::Writable | Pt_entry::Referenced
+-               | Pt_entry::Dirty  | Pt_entry::global(),
+-               Pdir::Depth,
+-               false, pdir_alloc(alloc));
++  cpu_dir->map(cpu_dir_pa, Virt_addr(Kentry_cpu_pdir), Virt_size(cpu_dir_sz),
++               Pt_entry::XD | Pt_entry::Writable | Pt_entry::Referenced
++               | Pt_entry::Dirty | Pt_entry::global(),
++               Pdir::Depth, false, pdir_alloc(alloc));
+ 
+   unsigned const cpu_mx_sz = Config::PAGE_SIZE;
+   void *cpu_mx = alloc->unaligned_alloc(cpu_mx_sz);
+   auto cpu_mx_pa = Mem_layout::pmem_to_phys(cpu_mx);
+ 
+   cpu_dir->map(cpu_mx_pa, Virt_addr(Kentry_cpu_page), Virt_size(cpu_mx_sz),
+-               Pt_entry::Writable | Pt_entry::Referenced
+-               | Pt_entry::Dirty  | Pt_entry::global(),
+-               Pdir::Depth,
+-               false, pdir_alloc(alloc));
++               conf_xd() | Pt_entry::Writable
++               | Pt_entry::Referenced | Pt_entry::Dirty | Pt_entry::global(),
++               Pdir::Depth, false, pdir_alloc(alloc));
+ 
+   _per_cpu_dir.cpu(cpu.id()) = cpu_dir;
+   Cpu::set_pdbr(cpu_dir_pa);
+@@ -919,7 +1050,7 @@ Kmem::init_cpu(Cpu &cpu)
+   // [3] = CPU dir pa + 0x1000 (PCID: + bit63 + ASID)
+   // [4] = entry scratch register
+   // [5] = unused
+-  // [6] = here starts the syscall entry code
++  // [6] = here starts the syscall entry code (NX: unused)
+   Mword *p = cpu_m.alloc<Mword>(6);
+   // With PCID enabled set bit 63 to prevent flushing of any TLB entries or
+   // paging-structure caches during the page table switch. In that case TLB
+diff --git a/src/kernel.amd64.ld b/src/kernel.amd64.ld
+index 207e2cb..826922e 100644
+--- a/src/kernel.amd64.ld
++++ b/src/kernel.amd64.ld
+@@ -76,9 +76,10 @@ SECTIONS {
+     *(.koptions)
+   } :koptions :l4_koptions = 0
+ 
+-#ifdef CONFIG_ALLOW_RO_TEXT
+-  . = ALIGN(4K);
++#ifdef CONFIG_KERNEL_NX
++  . = ALIGN(2M);
+ #endif
++
+   .text : AT (ADDR(.text) - _fiasco_image_offset) {
+     PROVIDE ( _kernel_text_start = . );
+     *(SORT(.entry.text.*))
+@@ -90,6 +91,14 @@ SECTIONS {
+     *(.fixup .fixup.*)
+ /*    *(.fini) */
+ 
++#ifdef CONFIG_KERNEL_NX
++    /*
++     * We don't want to have another executable superpage in the kernel, so we
++     * keep the initcall text here.
++     */
++    *(.initcall.text*)
++#endif
++
+     PROVIDE (_ecode = .);
+ 
+     *(.rodata .rodata.* .gnu.linkonce.r.*)
+@@ -104,8 +113,6 @@ SECTIONS {
+     KEEP(*(.intel_microcode))
+     PROVIDE (ia32_intel_microcode_end = .);
+ 
+-    . = ALIGN(8);
+-    JDB_TABLE(log);
+     . = ALIGN(8);
+     JDB_TABLE(typeinfo);
+ 
+@@ -114,16 +121,30 @@ SECTIONS {
+     PROVIDE (_etext = .);
+   } : ktext = 0x90909090
+ 
+-#ifdef CONFIG_ALLOW_RO_TEXT
+-  . = ALIGN(4K);
+-#else
+-  . = ALIGN(0x10);
++#ifdef CONFIG_KERNEL_NX
++  /*
++   * This section serves the purpose of taking up the remainder of the last 2M
++   * up to a new 2M boundary without taking up any space in the file (the linker
++   * script can apparently do this only for writable sections). This way we tell
++   * the kernel this memory (i.e. the executable part of the kernel address
++   * space) is reserved and should not be used for anything.
++   */
++  .fill_kernel : AT (ADDR(.fill_kernel) - _fiasco_image_offset) {
++    . = ALIGN(2M);
++  }
+ #endif
++
+   .data : AT (ADDR(.data) - _fiasco_image_offset) {
+     PROVIDE (_kernel_data_start = .);
+     *(.data .data.* .gnu.linkonce.d.*)
+     *(.anno)
+ 
++#ifdef CONFIG_KERNEL_NX
++    PROVIDE (_kernel_data_entry_start = .);
++    *(SORT(.entry.data.*));
++    PROVIDE (_kernel_data_entry_end = .);
++#endif
++
+     /* Constructor and destructor lists, ordered by priority.  The lists
+        are traversed from end to start, therefore the *_END__ symbols
+        precede the *_LIST__ symbols. */
+@@ -203,6 +224,9 @@ SECTIONS {
+     KEEP (*(.dtors))
+     __DTOR_LIST__ = .;
+ 
++    . = ALIGN(8);
++    JDB_TABLE(log);
++
+     PROVIDE (_edata = .);
+   } : kdata
+ 
+@@ -231,7 +255,9 @@ SECTIONS {
+   . = ALIGN(4096);
+   PROVIDE (_initcall_start = .);
+   .initcall.text : AT (ADDR(.initcall.text) - _fiasco_image_offset) {
++#ifndef CONFIG_KERNEL_NX
+     *(.initcall.text*)
++#endif
+   } : kitext = 0x90909090
+ 
+   .initcall.data : AT (ADDR(.initcall.data) - _fiasco_image_offset) {

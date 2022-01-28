@@ -1,0 +1,337 @@
+"2010-06-05 23:11:07 +0200"
+diff --git a/Config.in b/Config.in
+index a5d20038a..8baf565db 100644
+--- a/Config.in
++++ b/Config.in
+@@ -83,7 +83,7 @@ config SHOW_USAGE
+ config FEATURE_VERBOSE_USAGE
+ 	bool "Show verbose applet usage messages"
+ 	default n
+-	select SHOW_USAGE
++	depends on SHOW_USAGE
+ 	help
+ 	  All BusyBox applets will show more verbose help messages when
+ 	  busybox is invoked with --help. This will add a lot of text to the
+diff --git a/applets/usage.c b/applets/usage.c
+index d4fd12f9b..46adbf475 100644
+--- a/applets/usage.c
++++ b/applets/usage.c
+@@ -5,9 +5,9 @@
+  * Licensed under GPLv2, see file LICENSE in this tarball for details.
+  */
+ #include <unistd.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+-/* Just #include "autoconf.h" doesn't work for builds in separate
+- * object directory */
+ #include "autoconf.h"
+ 
+ /* Since we can't use platform.h, have to do this again by hand: */
+@@ -21,14 +21,35 @@
+ # define USE_FOR_MMU(...) __VA_ARGS__
+ #endif
+ 
+-static const char usage_messages[] = ""
+-#define MAKE_USAGE
+ #include "usage.h"
++#define MAKE_USAGE(aname, usage) { aname, usage },
++static struct usage_data {
++	const char *aname;
++	const char *usage;
++} usage_array[] = {
+ #include "applets.h"
+-;
++};
++
++static int compare_func(const void *a, const void *b)
++{
++	const struct usage_data *ua = a;
++	const struct usage_data *ub = b;
++	return strcmp(ua->aname, ub->aname);
++}
+ 
+ int main(void)
+ {
+-	write(STDOUT_FILENO, usage_messages, sizeof(usage_messages));
++	int i;
++	int num_messages = sizeof(usage_array) / sizeof(usage_array[0]);
++
++	if (num_messages == 0)
++		return 0;
++
++	qsort(usage_array,
++		num_messages, sizeof(usage_array[0]),
++		compare_func);
++	for (i = 0; i < num_messages; i++)
++		write(STDOUT_FILENO, usage_array[i].usage, strlen(usage_array[i].usage) + 1);
++
+ 	return 0;
+ }
+diff --git a/applets/usage_compressed b/applets/usage_compressed
+index 8d343529d..12efd2c9c 100755
+--- a/applets/usage_compressed
++++ b/applets/usage_compressed
+@@ -9,12 +9,19 @@ test -x "$loc/usage" || exit 1
+ test "$SED" || SED=sed
+ test "$DD" || DD=dd
+ 
+-sz=`"$loc/usage" | wc -c` || exit 1
+-
+ exec >"$target"
+ 
+-echo 'static const char packed_usage[] ALIGN1 = {'
++echo '#define UNPACKED_USAGE \'
++"$loc/usage" | od -v -t x1 \
++| $SED -e 's/^[^ ]*//' \
++	-e 's/ //g' \
++	-e '/^$/d' \
++	-e 's/\(..\)/\\x\1/g' \
++	-e 's/^/"/' \
++	-e 's/$/" \\/'
++echo ''
+ 
++echo '#define PACKED_USAGE \'
+ ## Breaks on big-endian systems!
+ ## # Extra effort to avoid using "od -t x1": -t is not available
+ ## # in non-CONFIG_DESKTOPed busybox od
+@@ -24,12 +31,11 @@ echo 'static const char packed_usage[] ALIGN1 = {'
+ ##	-e 's/ //g' \
+ ##	-e '/^$/d' \
+ ##	-e 's/\(..\)\(..\)/0x\2,0x\1,/g'
+-
++##	-e 's/$/ \\/'
+ "$loc/usage" | bzip2 -1 | $DD bs=2 skip=1 2>/dev/null | od -v -t x1 \
+ | $SED -e 's/^[^ ]*//' \
+ 	-e 's/ //g' \
+ 	-e '/^$/d' \
+-	-e 's/\(..\)/0x\1,/g'
+-
+-echo '};'
+-echo '#define SIZEOF_usage_messages' `expr 0 + $sz`
++	-e 's/\(..\)/0x\1,/g' \
++	-e 's/$/ \\/'
++echo ''
+diff --git a/applets/usage_pod.c b/applets/usage_pod.c
+index ee3729d7b..85a2a8ec4 100644
+--- a/applets/usage_pod.c
++++ b/applets/usage_pod.c
+@@ -6,11 +6,10 @@
+  */
+ #include <unistd.h>
+ #include <stdint.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <stdio.h>
+ 
+-/* Just #include "autoconf.h" doesn't work for builds in separate
+- * object directory */
+ #include "autoconf.h"
+ 
+ #define SKIP_applet_main
+@@ -29,22 +28,39 @@
+ # define USE_FOR_MMU(...) __VA_ARGS__
+ #endif
+ 
+-static const char usage_messages[] = ""
+-#define MAKE_USAGE
+ #include "usage.h"
++#define MAKE_USAGE(aname, usage) { aname, usage },
++static struct usage_data {
++        const char *aname;
++        const char *usage;
++} usage_array[] = {
+ #include "applets.h"
+-;
++};
++
++static int compare_func(const void *a, const void *b)
++{
++	const struct usage_data *ua = a;
++	const struct usage_data *ub = b;
++	return strcmp(ua->aname, ub->aname);
++}
+ 
+ int main(void)
+ {
+-	const char *names;
+-	const char *usage;
+ 	int col, len2;
+ 
++	int i;
++	int num_messages = sizeof(usage_array) / sizeof(usage_array[0]);
++
++	if (num_messages == 0)
++		return 0;
++
++	qsort(usage_array,
++		num_messages, sizeof(usage_array[0]),
++		compare_func);
++
+ 	col = 0;
+-	names = applet_names;
+-	while (*names) {
+-		len2 = strlen(names) + 2;
++	for (i = 0; i < num_messages; i++) {
++		len2 = strlen(usage_array[i].aname) + 2;
+ 		if (col >= 76 - len2) {
+ 			printf(",\n");
+ 			col = 0;
+@@ -55,29 +71,24 @@ int main(void)
+ 		} else {
+ 			printf(", ");
+ 		}
+-		printf(names);
++		printf(usage_array[i].aname);
+ 		col += len2;
+-		names += len2 - 1;
+ 	}
+ 	printf("\n\n");
+ 
+ 	printf("=head1 COMMAND DESCRIPTIONS\n\n");
+ 	printf("=over 4\n\n");
+ 
+-	names = applet_names;
+-	usage = usage_messages;
+-	while (*names) {
+-		if (*names >= 'a' && *names <= 'z'
+-		 && *usage != NOUSAGE_STR[0]
++	for (i = 0; i < num_messages; i++) {
++		if (usage_array[i].aname[0] >= 'a' && usage_array[i].aname[0] <= 'z'
++		 && usage_array[i].usage[0] != NOUSAGE_STR[0]
+ 		) {
+-			printf("=item B<%s>\n\n", names);
+-			if (*usage)
+-				printf("%s %s\n\n", names, usage);
++			printf("=item B<%s>\n\n", usage_array[i].aname);
++			if (usage_array[i].usage[0])
++				printf("%s %s\n\n", usage_array[i].aname, usage_array[i].usage);
+ 			else
+-				printf("%s\n\n", names);
++				printf("%s\n\n", usage_array[i].aname);
+ 		}
+-		names += strlen(names) + 1;
+-		usage += strlen(usage) + 1;
+ 	}
+ 	return 0;
+ }
+diff --git a/include/applets.h b/include/applets.h
+index d8a706b44..cf8de8eb6 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -4,11 +4,6 @@
+  *
+  * If you write a new applet, you need to add an entry to this list to make
+  * busybox aware of it.
+- *
+- * It is CRUCIAL that this listing be kept in ascii order, otherwise the binary
+- * search lookup contributed by Gaute B Strokkenes stops working. If you value
+- * your kneecaps, you'll be sure to *make sure* that any changes made to this
+- * file result in the listing remaining in ascii order. You have been warned.
+  */
+ 
+ /*
+@@ -36,16 +31,16 @@ s     - suid type:
+ # define APPLET_NOFORK(name,main,l,s,name2)  name main##_main name2
+ 
+ #elif defined(MAKE_USAGE) && ENABLE_FEATURE_VERBOSE_USAGE
+-# define APPLET(name,l,s)                    name##_trivial_usage name##_full_usage "\0"
+-# define APPLET_ODDNAME(name,main,l,s,name2) name2##_trivial_usage name2##_full_usage "\0"
+-# define APPLET_NOEXEC(name,main,l,s,name2)  name2##_trivial_usage name2##_full_usage "\0"
+-# define APPLET_NOFORK(name,main,l,s,name2)  name2##_trivial_usage name2##_full_usage "\0"
++# define APPLET(name,l,s)                    MAKE_USAGE(#name, name##_trivial_usage name##_full_usage)
++# define APPLET_ODDNAME(name,main,l,s,name2) MAKE_USAGE(#name, name2##_trivial_usage name2##_full_usage)
++# define APPLET_NOEXEC(name,main,l,s,name2)  MAKE_USAGE(#name, name2##_trivial_usage name2##_full_usage)
++# define APPLET_NOFORK(name,main,l,s,name2)  MAKE_USAGE(#name, name2##_trivial_usage name2##_full_usage)
+ 
+ #elif defined(MAKE_USAGE) && !ENABLE_FEATURE_VERBOSE_USAGE
+-# define APPLET(name,l,s)                    name##_trivial_usage "\0"
+-# define APPLET_ODDNAME(name,main,l,s,name2) name2##_trivial_usage "\0"
+-# define APPLET_NOEXEC(name,main,l,s,name2)  name2##_trivial_usage "\0"
+-# define APPLET_NOFORK(name,main,l,s,name2)  name2##_trivial_usage "\0"
++# define APPLET(name,l,s)                    MAKE_USAGE(#name, name##_trivial_usage)
++# define APPLET_ODDNAME(name,main,l,s,name2) MAKE_USAGE(#name, name2##_trivial_usage)
++# define APPLET_NOEXEC(name,main,l,s,name2)  MAKE_USAGE(#name, name2##_trivial_usage)
++# define APPLET_NOFORK(name,main,l,s,name2)  MAKE_USAGE(#name, name2##_trivial_usage)
+ 
+ #elif defined(MAKE_LINKS)
+ # define APPLET(name,l,c)                    LINK l name
+diff --git a/libbb/appletlib.c b/libbb/appletlib.c
+index a8cd8e65f..6267f2673 100644
+--- a/libbb/appletlib.c
++++ b/libbb/appletlib.c
+@@ -43,35 +43,30 @@
+ #include "applets.h"
+ #undef PROTOTYPES
+ 
+-#if ENABLE_SHOW_USAGE && !ENABLE_FEATURE_COMPRESS_USAGE
+-/* Define usage_messages[] */
+-static const char usage_messages[] ALIGN1 = ""
+-# define MAKE_USAGE
+-# include "usage.h"
+-# include "applets.h"
+-;
+-# undef MAKE_USAGE
+-#else
+-# define usage_messages 0
+-#endif /* SHOW_USAGE */
+-
+ 
+ /* Include generated applet names, pointers to <applet>_main, etc */
+ #include "applet_tables.h"
+ /* ...and if applet_tables generator says we have only one applet... */
+ #ifdef SINGLE_APPLET_MAIN
+-#undef ENABLE_FEATURE_INDIVIDUAL
+-#define ENABLE_FEATURE_INDIVIDUAL 1
+-#undef IF_FEATURE_INDIVIDUAL
+-#define IF_FEATURE_INDIVIDUAL(...) __VA_ARGS__
++# undef ENABLE_FEATURE_INDIVIDUAL
++# define ENABLE_FEATURE_INDIVIDUAL 1
++# undef IF_FEATURE_INDIVIDUAL
++# define IF_FEATURE_INDIVIDUAL(...) __VA_ARGS__
+ #endif
+ 
+ 
+-#if ENABLE_FEATURE_COMPRESS_USAGE
+-
+ #include "usage_compressed.h"
+-#include "unarchive.h"
+ 
++#if ENABLE_SHOW_USAGE && !ENABLE_FEATURE_COMPRESS_USAGE
++static const char usage_messages[] ALIGN1 = UNPACKED_USAGE;
++#else
++# define usage_messages 0
++#endif /* SHOW_USAGE */
++
++#if ENABLE_FEATURE_COMPRESS_USAGE
++
++static const char packed_usage[] = { PACKED_USAGE };
++# include "unarchive.h"
+ static const char *unpack_usage_messages(void)
+ {
+ 	char *outbuf = NULL;
+@@ -86,19 +81,19 @@ static const char *unpack_usage_messages(void)
+ 	 * end up here with i != 0 on read data errors! Not trivial */
+ 	if (!i) {
+ 		/* Cannot use xmalloc: will leak bd in NOFORK case! */
+-		outbuf = malloc_or_warn(SIZEOF_usage_messages);
++		outbuf = malloc_or_warn(sizeof(UNPACKED_USAGE));
+ 		if (outbuf)
+-			read_bunzip(bd, outbuf, SIZEOF_usage_messages);
++			read_bunzip(bd, outbuf, sizeof(UNPACKED_USAGE));
+ 	}
+ 	dealloc_bunzip(bd);
+ 	return outbuf;
+ }
+-#define dealloc_usage_messages(s) free(s)
++# define dealloc_usage_messages(s) free(s)
+ 
+ #else
+ 
+-#define unpack_usage_messages() usage_messages
+-#define dealloc_usage_messages(s) ((void)(s))
++# define unpack_usage_messages() usage_messages
++# define dealloc_usage_messages(s) ((void)(s))
+ 
+ #endif /* FEATURE_COMPRESS_USAGE */
+ 

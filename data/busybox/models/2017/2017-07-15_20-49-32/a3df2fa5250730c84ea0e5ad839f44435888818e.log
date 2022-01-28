@@ -1,0 +1,223 @@
+"2017-07-15 20:49:32 +0200"
+diff --git a/Config.in b/Config.in
+index 892c1d79d..45ddc4377 100644
+--- a/Config.in
++++ b/Config.in
+@@ -90,10 +90,14 @@ config BUSYBOX
+ 	help
+ 	  The busybox applet provides general help regarding busybox and
+ 	  allows the included applets to be listed.  It's also required
+-	  if applet links are to be installed at runtime.
++	  if applet links are to be installed at runtime. If you unselect
++	  this option, running busybox without any arguments will give
++	  just a cryptic error message:
+ 
+-	  If you can live without these features disabling this will save
+-	  some space.
++	  $ busybox
++	  busybox: applet not found
++
++	  Running "busybox APPLET [ARGS...]" will still work, of course.
+ 
+ config FEATURE_INSTALLER
+ 	bool "Support --install [-s] to install applet links at runtime"
+@@ -112,6 +116,17 @@ config INSTALL_NO_USR
+ 	  will install applets only to /bin and /sbin,
+ 	  never to /usr/bin or /usr/sbin.
+ 
++config LFS
++	bool "Build with Large File Support (for accessing files > 2 GB)"
++	default y
++	help
++	  If you want to build BusyBox with large file support, then enable
++	  this option. This will have no effect if your kernel or your C
++	  library lacks large file support for large files. Some of the
++	  programs that can benefit from large file support include dd, gzip,
++	  cp, mount, tar, and many others. If you want to access files larger
++	  than 2 Gigabytes, enable this option. Otherwise, leave it set to 'N'.
++
+ config PAM
+ 	bool "Support PAM (Pluggable Authentication Modules)"
+ 	default n
+@@ -136,18 +151,6 @@ config FEATURE_DEVPTS
+ 	  /dev/ttyp<number> will be used. To use this option, you should have
+ 	  devpts mounted.
+ 
+-config FEATURE_CLEAN_UP
+-	bool "Clean up all memory before exiting (usually not needed)"
+-	default n
+-	help
+-	  As a size optimization, busybox normally exits without explicitly
+-	  freeing dynamically allocated memory or closing files. This saves
+-	  space since the OS will clean up for us, but it can confuse debuggers
+-	  like valgrind, which report tons of memory and resource leaks.
+-
+-	  Don't enable this unless you have a really good reason to clean
+-	  things up manually.
+-
+ config FEATURE_UTMP
+ 	bool "Support utmp file"
+ 	default y
+@@ -177,7 +180,7 @@ config FEATURE_PIDFILE
+ 	  on applets which require pidfiles to run.
+ 
+ config PID_FILE_PATH
+-	string "Path to directory for pidfile"
++	string "Directory for pidfiles"
+ 	default "/var/run"
+ 	depends on FEATURE_PIDFILE
+ 	help
+@@ -269,24 +272,6 @@ config FEATURE_SUID_CONFIG_QUIET
+ 	  check this option to avoid users to be notified about missing
+ 	  permissions.
+ 
+-config SELINUX
+-	bool "Support NSA Security Enhanced Linux"
+-	default n
+-	select PLATFORM_LINUX
+-	help
+-	  Enable support for SELinux in applets ls, ps, and id. Also provide
+-	  the option of compiling in SELinux applets.
+-
+-	  If you do not have a complete SELinux userland installed, this stuff
+-	  will not compile.  Specifially, libselinux 1.28 or better is
+-	  directly required by busybox. If the installation is located in a
+-	  non-standard directory, provide it by invoking make as follows:
+-		CFLAGS=-I<libselinux-include-path> \
+-		LDFLAGS=-L<libselinux-lib-path> \
+-		make
+-
+-	  Most people will leave this set to 'N'.
+-
+ config FEATURE_PREFER_APPLETS
+ 	bool "exec prefers applets"
+ 	default n
+@@ -311,6 +296,36 @@ config BUSYBOX_EXEC_PATH
+ 	  executable. If you haven't got /proc, set this to wherever you
+ 	  want to run BusyBox from.
+ 
++config SELINUX
++	bool "Support NSA Security Enhanced Linux"
++	default n
++	select PLATFORM_LINUX
++	help
++	  Enable support for SELinux in applets ls, ps, and id. Also provide
++	  the option of compiling in SELinux applets.
++
++	  If you do not have a complete SELinux userland installed, this stuff
++	  will not compile.  Specifially, libselinux 1.28 or better is
++	  directly required by busybox. If the installation is located in a
++	  non-standard directory, provide it by invoking make as follows:
++		CFLAGS=-I<libselinux-include-path> \
++		LDFLAGS=-L<libselinux-lib-path> \
++		make
++
++	  Most people will leave this set to 'N'.
++
++config FEATURE_CLEAN_UP
++	bool "Clean up all memory before exiting (usually not needed)"
++	default n
++	help
++	  As a size optimization, busybox normally exits without explicitly
++	  freeing dynamically allocated memory or closing files. This saves
++	  space since the OS will clean up for us, but it can confuse debuggers
++	  like valgrind, which report tons of memory and resource leaks.
++
++	  Don't enable this unless you have a really good reason to clean
++	  things up manually.
++
+ # These are auto-selected by other options
+ 
+ config FEATURE_SYSLOG
+@@ -452,17 +467,6 @@ config FEATURE_SHARED_BUSYBOX
+ ###
+ ###	  Say 'N' unless you know what you are doing.
+ 
+-config LFS
+-	bool "Build with Large File Support (for accessing files > 2 GB)"
+-	default y
+-	help
+-	  If you want to build BusyBox with large file support, then enable
+-	  this option. This will have no effect if your kernel or your C
+-	  library lacks large file support for large files. Some of the
+-	  programs that can benefit from large file support include dd, gzip,
+-	  cp, mount, tar, and many others. If you want to access files larger
+-	  than 2 Gigabytes, enable this option. Otherwise, leave it set to 'N'.
+-
+ config CROSS_COMPILER_PREFIX
+ 	string "Cross Compiler prefix"
+ 	default ""
+@@ -669,10 +673,10 @@ config EFENCE
+ 
+ endchoice
+ 
+-endmenu
+-
+ source libbb/Config.in
+ 
++endmenu
++
+ comment "Applets"
+ 
+ source archival/Config.in
+diff --git a/libbb/Config.src b/libbb/Config.src
+index c51640305..16c79dbf0 100644
+--- a/libbb/Config.src
++++ b/libbb/Config.src
+@@ -3,7 +3,7 @@
+ # see scripts/kbuild/config-language.txt.
+ #
+ 
+-menu "Busybox Library Tuning"
++comment "Library Tuning"
+ 
+ INSERT
+ 
+@@ -66,7 +66,7 @@ config FEATURE_FAST_TOP
+ 	bool "Faster /proc scanning code (+100 bytes)"
+ 	default n  # all "fast or small" options default to small
+ 	help
+-	  This option makes top (and ps) ~20% faster (or 20% less CPU hungry),
++	  This option makes top and ps ~20% faster (or 20% less CPU hungry),
+ 	  but code size is slightly bigger.
+ 
+ config FEATURE_ETC_NETWORKS
+@@ -302,13 +302,17 @@ config FEATURE_VERBOSE_CP_MESSAGE
+ 	default n
+ 	help
+ 	  Error messages with this feature enabled:
++
+ 	    $ cp file /does_not_exist/file
+ 	    cp: cannot create '/does_not_exist/file': Path does not exist
+ 	    $ cp file /vmlinuz/file
+ 	    cp: cannot stat '/vmlinuz/file': Path has non-directory component
++
+ 	  If this feature is not enabled, they will be, respectively:
++
+ 	    cp: cannot create '/does_not_exist/file': No such file or directory
+ 	    cp: cannot stat '/vmlinuz/file': Not a directory
++
+ 	  This will cost you ~60 bytes.
+ 
+ config FEATURE_USE_SENDFILE
+@@ -376,7 +380,4 @@ config FEATURE_HWIB
+ 	bool "Support infiniband HW"
+ 	default y
+ 	help
+-	  Support for printing infiniband addresses in
+-	  network applets.
+-
+-endmenu
++	  Support for printing infiniband addresses in network applets.
+diff --git a/libbb/common_bufsiz.c b/libbb/common_bufsiz.c
+index 2847eb57d..f1124ba0e 100644
+--- a/libbb/common_bufsiz.c
++++ b/libbb/common_bufsiz.c
+@@ -19,6 +19,7 @@
+ //config:
+ //config:	  At link time, "text" is padded to a full page. At runtime, all "text"
+ //config:	  pages are mapped RO and executable.
++//config:
+ //config:	  "Data" starts on the next page boundary, but is not padded
+ //config:	  to a full page at the end. "Bss" starts wherever "data" ends.
+ //config:	  At runtime, "data" pages are mapped RW and they are file-backed

@@ -1,0 +1,392 @@
+"2010-09-14 14:36:00 +0200"
+diff --git a/Makefile.in b/Makefile.in
+index 1c0e30571..fe8e98398 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -211,7 +211,6 @@ HEADERS_RM- := \
+ 	bits/kernel_types.h \
+ 	bits/syscalls.h \
+ 	bits/syscalls-common.h \
+-	bits/utmpx.h \
+ 	bits/uClibc_errno.h \
+ 	bits/uClibc_uintmaxtostr.h \
+ 	bits/sigcontextinfo.h \
+@@ -220,6 +219,9 @@ HEADERS_RM- := \
+ 	rpc/des_crypt.h \
+ 	rpc/key_prot.h \
+ 	rpc/rpc_des.h
++HEADERS_RM-$(UCLIBC_HAS_UTMPX) += \
++	bits/utmpx.h \
++	utmpx.h
+ HEADERS_RM-$(UCLIBC_HAS_FLOATS) += \
+ 	complex.h \
+ 	fpu_control.h \
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 431d1f6b2..7f0ac9db6 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1913,6 +1913,15 @@ config UCLIBC_HAS_GNU_GLOB
+ 
+ 	  Most people will answer N.
+ 
++config UCLIBC_HAS_UTMPX
++       bool "utmpx based support for tracking login/logouts to/from the system"
++       default n
++       help
++         Answer y to enable support for accessing user accounting database.
++         It can be used to track all login/logout to the system.
++
++         If unsure, just answer N.
++
+ endmenu
+ 
+ 
+diff --git a/include/utmp.h b/include/utmp.h
+index 27454a66a..e80b65b7d 100644
+--- a/include/utmp.h
++++ b/include/utmp.h
+@@ -57,12 +57,15 @@ extern void logwtmp (__const char *__ut_line, __const char *__ut_name,
+ /* Append entry UTMP to the wtmp-like file WTMP_FILE.  */
+ extern void updwtmp (__const char *__wtmp_file, __const struct utmp *__utmp)
+      __THROW;
++libc_hidden_proto(updwtmp)
+ 
+ /* Change name of the utmp file to be examined.  */
+ extern int utmpname (__const char *__file) __THROW;
++libc_hidden_proto(utmpname)
+ 
+ /* Read next entry from a utmp-like file.  */
+ extern struct utmp *getutent (void) __THROW;
++libc_hidden_proto(getutent)
+ 
+ /* Reset the input stream to the beginning of the file.  */
+ extern void setutent (void) __THROW;
+@@ -70,6 +73,7 @@ libc_hidden_proto(setutent)
+ 
+ /* Close the current open file.  */
+ extern void endutent (void) __THROW;
++libc_hidden_proto(endutent)
+ 
+ /* Search forward from the current point in the utmp file until the
+    next entry with a ut_type matching ID->ut_type.  */
+@@ -78,9 +82,11 @@ extern struct utmp *getutid (__const struct utmp *__id) __THROW;
+ /* Search forward from the current point in the utmp file until the
+    next entry with a ut_line matching LINE->ut_line.  */
+ extern struct utmp *getutline (__const struct utmp *__line) __THROW;
++libc_hidden_proto(getutline)
+ 
+ /* Write out entry pointed to by UTMP_PTR into the utmp file.  */
+ extern struct utmp *pututline (__const struct utmp *__utmp_ptr) __THROW;
++libc_hidden_proto(pututline)
+ 
+ 
+ #if 0 /* def	__USE_MISC */
+diff --git a/include/utmpx.h b/include/utmpx.h
+new file mode 100644
+index 000000000..8622916a9
+--- /dev/null
++++ b/include/utmpx.h
+@@ -0,0 +1,127 @@
++/* Copyright (C) 1997, 1998, 1999, 2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_UTMPX_H
++#define	_UTMPX_H	1
++
++#include <features.h>
++#include <sys/time.h>
++
++/* Required according to Unix98.  */
++#ifndef __pid_t_defined
++typedef __pid_t pid_t;
++# define __pid_t_defined
++#endif
++
++/* Get system dependent values and data structures.  */
++#include <bits/utmpx.h>
++
++#ifdef __USE_GNU
++/* Compatibility names for the strings of the canonical file names.  */
++# define UTMPX_FILE	_PATH_UTMPX
++# define UTMPX_FILENAME	_PATH_UTMPX
++# define WTMPX_FILE	_PATH_WTMPX
++# define WTMPX_FILENAME	_PATH_WTMPX
++#endif
++
++/* For the getutmp{,x} functions we need the `struct utmp'.  */
++#ifdef __USE_GNU
++struct utmp;
++#endif
++
++
++__BEGIN_DECLS
++
++/* Open user accounting database.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern void setutxent (void);
++
++/* Close user accounting database.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern void endutxent (void);
++
++/* Get the next entry from the user accounting database.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern struct utmpx *getutxent (void);
++
++/* Get the user accounting database entry corresponding to ID.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern struct utmpx *getutxid (__const struct utmpx *__id);
++
++/* Get the user accounting database entry corresponding to LINE.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern struct utmpx *getutxline (__const struct utmpx *__line);
++
++/* Write the entry UTMPX into the user accounting database.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern struct utmpx *pututxline (__const struct utmpx *__utmpx);
++
++
++#ifdef __USE_GNU
++/* Change name of the utmpx file to be examined.
++
++   This function is not part of POSIX and therefore no official
++   cancellation point.  But due to similarity with an POSIX interface
++   or due to the implementation it is a cancellation point and
++   therefore not marked with __THROW.  */
++extern int utmpxname (__const char *__file);
++
++/* Append entry UTMP to the wtmpx-like file WTMPX_FILE.
++
++   This function is not part of POSIX and therefore no official
++   cancellation point.  But due to similarity with an POSIX interface
++   or due to the implementation it is a cancellation point and
++   therefore not marked with __THROW.  */
++extern void updwtmpx (__const char *__wtmpx_file,
++		      __const struct utmpx *__utmpx);
++
++
++/* Copy the information in UTMPX to UTMP.
++
++   This function is not part of POSIX and therefore no official
++   cancellation point.  But due to similarity with an POSIX interface
++   or due to the implementation it is a cancellation point and
++   therefore not marked with __THROW.  */
++extern void getutmp (__const struct utmpx *__utmpx,
++		     struct utmp *__utmp);
++
++/* Copy the information in UTMP to UTMPX.
++
++   This function is not part of POSIX and therefore no official
++   cancellation point.  But due to similarity with an POSIX interface
++   or due to the implementation it is a cancellation point and
++   therefore not marked with __THROW.  */
++extern void getutmpx (__const struct utmp *__utmp,
++		      struct utmpx *__utmpx);
++#endif
++
++__END_DECLS
++
++#endif /* utmpx.h  */
+diff --git a/libc/misc/utmp/Makefile.in b/libc/misc/utmp/Makefile.in
+index b209a4587..49ae5a503 100644
+--- a/libc/misc/utmp/Makefile.in
++++ b/libc/misc/utmp/Makefile.in
+@@ -9,6 +9,10 @@ subdirs += libc/misc/utmp
+ 
+ CSRC := utent.c wtent.c
+ 
++ifeq ($(UCLIBC_HAS_UTMPX),y)
++CSRC += utxent.c
++endif
++
+ MISC_UTMP_DIR := $(top_srcdir)libc/misc/utmp
+ MISC_UTMP_OUT := $(top_builddir)libc/misc/utmp
+ 
+diff --git a/libc/misc/utmp/utent.c b/libc/misc/utmp/utent.c
+index a678130a3..bf265c2a3 100644
+--- a/libc/misc/utmp/utent.c
++++ b/libc/misc/utmp/utent.c
+@@ -98,6 +98,7 @@ struct utmp *getutent(void)
+     __UCLIBC_MUTEX_UNLOCK(utmplock);
+     return ret;
+ }
++libc_hidden_def(getutent)
+ #endif
+ 
+ void endutent(void)
+@@ -108,6 +109,7 @@ void endutent(void)
+     static_fd = -1;
+     __UCLIBC_MUTEX_UNLOCK(utmplock);
+ }
++libc_hidden_def(endutent)
+ 
+ /* This function must be called with the LOCK held */
+ static_if_threaded struct utmp *__getutid(const struct utmp *utmp_entry)
+@@ -160,6 +162,7 @@ struct utmp *getutline(const struct utmp *utmp_entry)
+     __UCLIBC_MUTEX_UNLOCK(utmplock);
+     return lutmp;
+ }
++libc_hidden_def(getutline)
+ 
+ struct utmp *pututline(const struct utmp *utmp_entry)
+ {
+@@ -178,6 +181,7 @@ struct utmp *pututline(const struct utmp *utmp_entry)
+     __UCLIBC_MUTEX_UNLOCK(utmplock);
+     return (struct utmp *)utmp_entry;
+ }
++libc_hidden_def(pututline)
+ 
+ int utmpname(const char *new_ut_name)
+ {
+@@ -200,3 +204,4 @@ int utmpname(const char *new_ut_name)
+     __UCLIBC_MUTEX_UNLOCK(utmplock);
+     return 0; /* or maybe return -(static_ut_name != new_ut_name)? */
+ }
++libc_hidden_def(utmpname)
+diff --git a/libc/misc/utmp/utxent.c b/libc/misc/utmp/utxent.c
+new file mode 100644
+index 000000000..3c59f1c48
+--- /dev/null
++++ b/libc/misc/utmp/utxent.c
+@@ -0,0 +1,105 @@
++/*
++ * utexent.c : Support for accessing user accounting database.
++ * Copyright (C) 2010 STMicroelectronics Ltd.
++ *
++ * Author: Salvatore Cro <salvatore.cro@st.com>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ *
++ */
++
++#include <features.h>
++#include <string.h>
++#include <utmpx.h>
++#include <utmp.h>
++
++void setutxent(void)
++{
++	setutent ();
++}
++
++void endutxent(void)
++{
++	endutent ();
++}
++
++struct utmpx *getutxent(void)
++{
++	return (struct utmpx *) getutent ();
++}
++
++struct utmpx *getutxid(const struct utmpx *utmp_entry)
++{
++	return (struct utmpx *) getutid ((const struct utmp *) utmp_entry);
++}
++
++struct utmpx *getutxline(const struct utmpx *utmp_entry)
++{
++	return (struct utmpx *) getutline ((const struct utmp *) utmp_entry);
++}
++
++struct utmpx *pututxline (const struct utmpx *utmp_entry)
++{
++	return (struct utmpx *) pututline ((const struct utmp *) utmp_entry);
++}
++
++int utmpxname (const char *new_ut_name)
++{
++	return utmpname (new_ut_name);
++}
++
++void updwtmpx (const char *wtmpx_file, const struct utmpx *utmpx)
++{
++	updwtmp (wtmpx_file, (const struct utmp *) utmpx);
++}
++
++/* Copy the information in UTMPX to UTMP. */
++void getutmp (const struct utmpx *utmpx, struct utmp *utmp)
++{
++#if _HAVE_UT_TYPE - 0
++	utmp->ut_type = utmpx->ut_type;
++#endif
++#if _HAVE_UT_PID - 0
++	utmp->ut_pid = utmpx->ut_pid;
++#endif
++	memcpy (utmp->ut_line, utmpx->ut_line, sizeof (utmp->ut_line));
++	memcpy (utmp->ut_user, utmpx->ut_user, sizeof (utmp->ut_user));
++#if _HAVE_UT_ID - 0
++	memcpy (utmp->ut_id, utmpx->ut_id, sizeof (utmp->ut_id));
++#endif
++#if _HAVE_UT_HOST - 0
++	memcpy (utmp->ut_host, utmpx->ut_host, sizeof (utmp->ut_host));
++#endif
++#if _HAVE_UT_TV - 0
++	utmp->ut_tv = utmpx->ut_tv;
++#else
++	utmp->ut_time = utmpx->ut_time;
++#endif
++}
++
++/* Copy the information in UTMP to UTMPX. */
++void getutmpx (const struct utmp *utmp, struct utmpx *utmpx)
++{
++	memset (utmpx, 0, sizeof (struct utmpx));
++
++#if _HAVE_UT_TYPE - 0
++	utmpx->ut_type = utmp->ut_type;
++#endif
++#if _HAVE_UT_PID - 0
++	utmpx->ut_pid = utmp->ut_pid;
++#endif
++	memcpy (utmpx->ut_line, utmp->ut_line, sizeof (utmp->ut_line));
++	memcpy (utmpx->ut_user, utmp->ut_user, sizeof (utmp->ut_user));
++#if _HAVE_UT_ID - 0
++	memcpy (utmpx->ut_id, utmp->ut_id, sizeof (utmp->ut_id));
++#endif
++#if _HAVE_UT_HOST - 0
++	memcpy (utmpx->ut_host, utmp->ut_host, sizeof (utmp->ut_host));
++#endif
++#if _HAVE_UT_TV - 0
++	utmpx->ut_tv = utmp->ut_tv;
++#else
++	utmpx->ut_time = utmp->ut_time;
++#endif
++}
++
+diff --git a/libc/misc/utmp/wtent.c b/libc/misc/utmp/wtent.c
+index 5ab743d9b..c97f89cff 100644
+--- a/libc/misc/utmp/wtent.c
++++ b/libc/misc/utmp/wtent.c
+@@ -46,3 +46,4 @@ void updwtmp(const char *wtmp_file, const struct utmp *lutmp)
+ 	}
+     }
+ }
++libc_hidden_def(updwtmp)

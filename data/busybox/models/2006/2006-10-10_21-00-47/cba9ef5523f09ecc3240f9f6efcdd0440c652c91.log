@@ -1,0 +1,419 @@
+"2006-10-10 21:00:47 +0000"
+diff --git a/Makefile b/Makefile
+index c1103cf95..5117c4550 100644
+--- a/Makefile
++++ b/Makefile
+@@ -563,9 +563,17 @@ busybox-all  := $(core-y) $(libs-y)
+ # Rule to link busybox - also used during CONFIG_KALLSYMS
+ # May be overridden by arch/$(ARCH)/Makefile
+ quiet_cmd_busybox__ ?= LINK    $@
++ifdef CONFIG_STATIC
++      cmd_busybox__ ?= $(srctree)/scripts/trylink $(CC) \
++      -static \
++      -o $@ \
++      -Wl,--warn-common -Wl,--sort-common -Wl,--gc-sections \
++      -Wl,--start-group $(busybox-all) -Wl,--end-group
++else
+       cmd_busybox__ ?= $(srctree)/scripts/trylink $(CC) -o $@ \
+       -Wl,--warn-common -Wl,--sort-common -Wl,--gc-sections \
+-      -Wl,--start-group $(busybox-all) -Wl,--end-group \
++      -Wl,--start-group $(busybox-all) -Wl,--end-group
++endif
+ 
+ # Generate System.map
+ quiet_cmd_sysmap = SYSMAP 
+diff --git a/archival/libunarchive/data_extract_all.c b/archival/libunarchive/data_extract_all.c
+index b1c66a4a2..67f8f3534 100644
+--- a/archival/libunarchive/data_extract_all.c
++++ b/archival/libunarchive/data_extract_all.c
+@@ -14,15 +14,18 @@ void data_extract_all(archive_handle_t *archive_handle)
+ 
+ 	if (archive_handle->flags & ARCHIVE_CREATE_LEADING_DIRS) {
+ 		char *name = xstrdup(file_header->name);
+-		bb_make_directory (dirname(name), -1, FILEUTILS_RECUR);
++		bb_make_directory(dirname(name), -1, FILEUTILS_RECUR);
+ 		free(name);
+ 	}
+ 
+ 	/* Check if the file already exists */
+ 	if (archive_handle->flags & ARCHIVE_EXTRACT_UNCONDITIONAL) {
+ 		/* Remove the existing entry if it exists */
+-		if (((file_header->mode & S_IFMT) != S_IFDIR) && (unlink(file_header->name) == -1) && (errno != ENOENT)) {
+-			bb_perror_msg_and_die("Couldnt remove old file");
++		if (((file_header->mode & S_IFMT) != S_IFDIR)
++		 && (unlink(file_header->name) == -1)
++		 && (errno != ENOENT)
++		) {
++			bb_perror_msg_and_die("cannot remove old file");
+ 		}
+ 	}
+ 	else if (archive_handle->flags & ARCHIVE_EXTRACT_NEWER) {
+@@ -30,64 +33,77 @@ void data_extract_all(archive_handle_t *archive_handle)
+ 		struct stat statbuf;
+ 		if (lstat(file_header->name, &statbuf) == -1) {
+ 			if (errno != ENOENT) {
+-				bb_perror_msg_and_die("Couldnt stat old file");
++				bb_perror_msg_and_die("cannot stat old file");
+ 			}
+ 		}
+ 		else if (statbuf.st_mtime <= file_header->mtime) {
+ 			if (!(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)) {
+-				bb_error_msg("%s not created: newer or same age file exists", file_header->name);
++				bb_error_msg("%s not created: newer or "
++					"same age file exists", file_header->name);
+ 			}
+ 			data_skip(archive_handle);
+ 			return;
+ 		}
+ 		else if ((unlink(file_header->name) == -1) && (errno != EISDIR)) {
+-			bb_perror_msg_and_die("Couldnt remove old file %s", file_header->name);
++			bb_perror_msg_and_die("cannot remove old file %s",
++					file_header->name);
+ 		}
+ 	}
+ 
+ 	/* Handle hard links separately
+ 	 * We identified hard links as regular files of size 0 with a symlink */
+-	if (S_ISREG(file_header->mode) && (file_header->link_name) && (file_header->size == 0)) {
++	if (S_ISREG(file_header->mode) && (file_header->link_name)
++	 && (file_header->size == 0)
++	) {
+ 		/* hard link */
+ 		res = link(file_header->link_name, file_header->name);
+ 		if ((res == -1) && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)) {
+-			bb_perror_msg("Couldnt create hard link");
++			bb_perror_msg("cannot create hard link");
+ 		}
+ 	} else {
+ 		/* Create the filesystem entry */
+ 		switch (file_header->mode & S_IFMT) {
+-			case S_IFREG: {
+-				/* Regular file */
+-				dst_fd = xopen3(file_header->name, O_WRONLY | O_CREAT | O_EXCL,
+-								file_header->mode);
+-				bb_copyfd_size(archive_handle->src_fd, dst_fd, file_header->size);
+-				close(dst_fd);
+-				break;
+-				}
+-			case S_IFDIR:
+-				res = mkdir(file_header->name, file_header->mode);
+-				if ((errno != EISDIR) && (res == -1) && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)) {
+-					bb_perror_msg("extract_archive: %s", file_header->name);
+-				}
+-				break;
+-			case S_IFLNK:
+-				/* Symlink */
+-				res = symlink(file_header->link_name, file_header->name);
+-				if ((res == -1) && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)) {
+-					bb_perror_msg("Cannot create symlink from %s to '%s'", file_header->name, file_header->link_name);
+-				}
+-				break;
+-			case S_IFSOCK:
+-			case S_IFBLK:
+-			case S_IFCHR:
+-			case S_IFIFO:
+-				res = mknod(file_header->name, file_header->mode, file_header->device);
+-				if ((res == -1) && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)) {
+-					bb_perror_msg("Cannot create node %s", file_header->name);
+-				}
+-				break;
+-			default:
+-				bb_error_msg_and_die("Unrecognised file type");
++		case S_IFREG: {
++			/* Regular file */
++			dst_fd = xopen3(file_header->name, O_WRONLY | O_CREAT | O_EXCL,
++							file_header->mode);
++			bb_copyfd_size(archive_handle->src_fd, dst_fd, file_header->size);
++			close(dst_fd);
++			break;
++			}
++		case S_IFDIR:
++			res = mkdir(file_header->name, file_header->mode);
++			if ((errno != EISDIR) && (res == -1)
++			 && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)
++			) {
++				bb_perror_msg("extract_archive: %s", file_header->name);
++			}
++			break;
++		case S_IFLNK:
++			/* Symlink */
++			res = symlink(file_header->link_name, file_header->name);
++			if ((res == -1)
++			 && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)
++			) {
++				bb_perror_msg("cannot create symlink "
++					"from %s to '%s'",
++					file_header->name,
++					file_header->link_name);
++			}
++			break;
++		case S_IFSOCK:
++		case S_IFBLK:
++		case S_IFCHR:
++		case S_IFIFO:
++			res = mknod(file_header->name, file_header->mode, file_header->device);
++			if ((res == -1)
++			 && !(archive_handle->flags & ARCHIVE_EXTRACT_QUIET)
++			) {
++				bb_perror_msg("cannot create node %s", file_header->name);
++			}
++			break;
++		default:
++			bb_error_msg_and_die("unrecognized file type");
+ 		}
+ 	}
+ 
+diff --git a/archival/libunarchive/get_header_cpio.c b/archival/libunarchive/get_header_cpio.c
+index bc766c6aa..56862f137 100644
+--- a/archival/libunarchive/get_header_cpio.c
++++ b/archival/libunarchive/get_header_cpio.c
+@@ -61,13 +61,13 @@ char get_header_cpio(archive_handle_t *archive_handle)
+ 	}
+ 
+ 	{
+-	    unsigned long tmpsize;
+-	    sscanf(cpio_header, "%6c%8x%8x%8x%8x%8x%8lx%8lx%16c%8x%8x%8x%8c",
++		unsigned long tmpsize;
++		sscanf(cpio_header, "%6c%8x%8x%8x%8x%8x%8lx%8lx%16c%8x%8x%8x%8c",
+ 		    dummy, &inode, (unsigned int*)&file_header->mode,
+ 		    (unsigned int*)&file_header->uid, (unsigned int*)&file_header->gid,
+ 		    &nlink, &file_header->mtime, &tmpsize,
+ 		    dummy, &major, &minor, &namesize, dummy);
+-	    file_header->size = tmpsize;
++		file_header->size = tmpsize;
+ 	}
+ 
+ 	file_header->name = (char *) xzalloc(namesize + 1);
+diff --git a/archival/libunarchive/get_header_tar.c b/archival/libunarchive/get_header_tar.c
+index d3cd96d0c..f78377e28 100644
+--- a/archival/libunarchive/get_header_tar.c
++++ b/archival/libunarchive/get_header_tar.c
+@@ -74,12 +74,12 @@ char get_header_tar(archive_handle_t *archive_handle)
+ 	 */
+ 	if (strncmp(tar.formatted.magic, "ustar", 5) != 0) {
+ #ifdef CONFIG_FEATURE_TAR_OLDGNU_COMPATIBILITY
+-		if (strncmp(tar.formatted.magic, "\0\0\0\0\0", 5) != 0)
++		if (memcmp(tar.formatted.magic, "\0\0\0\0", 5) != 0)
+ #endif
+ 			bb_error_msg_and_die("invalid tar magic");
+ 	}
+ 	/* Do checksum on headers */
+-	for (i =  0; i < 148 ; i++) {
++	for (i = 0; i < 148 ; i++) {
+ 		sum += tar.raw[i];
+ 	}
+ 	sum += ' ' * 8;
+@@ -111,13 +111,14 @@ char get_header_tar(archive_handle_t *archive_handle)
+ 
+ 	file_header->uid = xstrtoul(tar.formatted.uid, 8);
+ 	file_header->gid = xstrtoul(tar.formatted.gid, 8);
+-	// TODO: LFS support
+-	file_header->size = xstrtoul(tar.formatted.size, 8);
++	file_header->size = XSTRTOUOFF(tar.formatted.size, 8);
+ 	file_header->mtime = xstrtoul(tar.formatted.mtime, 8);
+ 	file_header->link_name = tar.formatted.linkname[0] ?
+ 	                         xstrdup(tar.formatted.linkname) : NULL;
+-	file_header->device = makedev(xstrtoul(tar.formatted.devmajor, 8),
+-	                              xstrtoul(tar.formatted.devminor, 8));
++	if (tar.formatted.devmajor[0]) {
++		file_header->device = makedev(xstrtoul(tar.formatted.devmajor, 8),
++	                                      xstrtoul(tar.formatted.devminor, 8));
++	}
+ 
+ 	/* Set bits 0-11 of the files mode */
+ 	file_header->mode = 07777 & xstrtoul(tar.formatted.mode, 8);
+diff --git a/archival/libunarchive/init_handle.c b/archival/libunarchive/init_handle.c
+index 96bb1dbc9..beda1b462 100644
+--- a/archival/libunarchive/init_handle.c
++++ b/archival/libunarchive/init_handle.c
+@@ -3,8 +3,8 @@
+  * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  */
+ 
+-#include <unistd.h>
+-#include <string.h>
++//#include <unistd.h>
++//#include <string.h>
+ #include "libbb.h"
+ #include "unarchive.h"
+ 
+@@ -12,7 +12,7 @@ archive_handle_t *init_handle(void)
+ {
+ 	archive_handle_t *archive_handle;
+ 
+-	/* Initialise default values */
++	/* Initialize default values */
+ 	archive_handle = xzalloc(sizeof(archive_handle_t));
+ 	archive_handle->file_header = xmalloc(sizeof(file_header_t));
+ 	archive_handle->action_header = header_skip;
+@@ -20,5 +20,5 @@ archive_handle_t *init_handle(void)
+ 	archive_handle->filter = filter_accept_all;
+ 	archive_handle->seek = seek_by_jump;
+ 
+-	return(archive_handle);
++	return archive_handle;
+ }
+diff --git a/e2fsprogs/e2p/Kbuild b/e2fsprogs/e2p/Kbuild
+index 64e462170..c0ff824e3 100644
+--- a/e2fsprogs/e2p/Kbuild
++++ b/e2fsprogs/e2p/Kbuild
+@@ -5,9 +5,9 @@
+ # Licensed under the GPL v2, see the file LICENSE in this tarball.
+ 
+ NEEDED-$(CONFIG_CHATTR) = y
+-NEEDED-$(LSATTR) = y
+-NEEDED-$(MKE2FS) = y
+-NEEDED-$(TUNE2FS) = y
++NEEDED-$(CONFIG_LSATTR) = y
++NEEDED-$(CONFIG_MKE2FS) = y
++NEEDED-$(CONFIG_TUNE2FS) = y
+ 
+ lib-y:=
+ lib-$(NEEDED-y) += fgetsetflags.o fgetsetversion.o pf.o iod.o mntopts.o \
+diff --git a/include/libbb.h b/include/libbb.h
+index 7b9b83908..e4e67aa5a 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -89,23 +89,27 @@
+ /* "long" is long enough on this system */
+ #  define STRTOOFF strtol
+ #  define SAFE_STRTOOFF safe_strtol
++#  define XSTRTOUOFF xstrtoul
+ #  define OFF_FMT "%ld"
+ # else
+-/* "long" is too short, need "lomg long" */
++/* "long" is too short, need "long long" */
+ #  define STRTOOFF strtoll
+ #  define SAFE_STRTOOFF safe_strtoll
++#  define XSTRTOUOFF xstrtoull
+ #  define OFF_FMT "%lld"
+ # endif
+ #else
+-# if 0 /* UINT_MAX == 0xffffffff */
++# if 0 /* #if UINT_MAX == 0xffffffff */
+ /* Doesn't work. off_t is a long. gcc will throw warnings on printf("%d", off_t)
+  * even if long==int on this arch. Crap... */
+ #  define STRTOOFF strtol
+ #  define SAFE_STRTOOFF safe_strtoi
++#  define XSTRTOUOFF xstrtou
+ #  define OFF_FMT "%d"
+ # else
+ #  define STRTOOFF strtol
+ #  define SAFE_STRTOOFF safe_strtol
++#  define XSTRTOUOFF xstrtoul
+ #  define OFF_FMT "%ld"
+ # endif
+ #endif
+@@ -313,6 +317,8 @@ struct suffix_mult {
+ 	unsigned int mult;
+ };
+ 
++unsigned long long xstrtoull(const char *numstr, int base);
++unsigned long long xatoull(const char *numstr);
+ unsigned long xstrtoul_range_sfx(const char *numstr, int base,
+ 		unsigned long lower,
+ 		unsigned long upper,
+@@ -331,7 +337,6 @@ unsigned long xatoul_range(const char *numstr,
+ 		unsigned long lower,
+ 		unsigned long upper);
+ unsigned long xatoul(const char *numstr);
+-unsigned long long xatoull(const char *numstr);
+ long xstrtol_range_sfx(const char *numstr, int base,
+ 		long lower,
+ 		long upper,
+diff --git a/libbb/xatol.c b/libbb/xatol.c
+index 3316c3d06..1b71e9ca8 100644
+--- a/libbb/xatol.c
++++ b/libbb/xatol.c
+@@ -9,7 +9,7 @@
+ 
+ #include "libbb.h"
+ 
+-unsigned long long xatoull(const char *numstr)
++unsigned long long xstrtoull(const char *numstr, int base)
+ {
+ 	unsigned long long r;
+ 	int old_errno;
+@@ -18,7 +18,7 @@ unsigned long long xatoull(const char *numstr)
+ 		bb_error_msg_and_die("invalid number '%s'", numstr);
+ 	old_errno = errno;
+ 	errno = 0;
+-	r = strtoull(numstr, &e, 10);
++	r = strtoull(numstr, &e, base);
+ 	if (errno || (numstr == e) || *e)
+ 		/* Error / no digits / illegal trailing chars */
+ 		bb_error_msg_and_die("invalid number '%s'", numstr);
+@@ -27,6 +27,11 @@ unsigned long long xatoull(const char *numstr)
+ 	return r;
+ }
+ 
++unsigned long long xatoull(const char *numstr)
++{
++	return xstrtoull(numstr, 10);
++}
++
+ unsigned long xstrtoul_range_sfx(const char *numstr, int base,
+ 		unsigned long lower,
+ 		unsigned long upper,
+diff --git a/modutils/Config.in b/modutils/Config.in
+index b28c66d24..c8bd61996 100644
+--- a/modutils/Config.in
++++ b/modutils/Config.in
+@@ -43,7 +43,7 @@ config FEATURE_INSMOD_LOADINKMEM
+ config FEATURE_INSMOD_LOAD_MAP
+ 	bool "Enable load map (-m) option"
+ 	default n
+-	depends on INSMOD && FEATURE_2_4_MODULES
++	depends on INSMOD && ( FEATURE_2_4_MODULES || FEATURE_2_6_MODULES )
+ 	help
+ 	  Enabling this, one would be able to get a load map
+ 	  output on stdout. This makes kernel module debugging
+diff --git a/networking/wget.c b/networking/wget.c
+index 74feccc36..264ae4483 100644
+--- a/networking/wget.c
++++ b/networking/wget.c
+@@ -31,7 +31,9 @@ static int ftpcmd(char *s1, char *s2, FILE *fp, char *buf);
+ /* Globals (can be accessed from signal handlers */
+ static off_t content_len;        /* Content-length of the file */
+ static off_t beg_range;          /* Range at which continue begins */
++#ifdef CONFIG_FEATURE_WGET_STATUSBAR
+ static off_t transferred;        /* Number of bytes transferred so far */
++#endif
+ static int chunked;                     /* chunked transfer encoding */
+ #ifdef CONFIG_FEATURE_WGET_STATUSBAR
+ static void progressmeter(int flag);
+diff --git a/runit/chpst.c b/runit/chpst.c
+index 5f30b8815..1b6f37849 100644
+--- a/runit/chpst.c
++++ b/runit/chpst.c
+@@ -223,7 +223,7 @@ int chpst_main(int argc, char **argv)
+ 
+ 	{
+ 		char *m,*d,*o,*p,*f,*c,*r,*t,*n;
+-		getopt32(argc, argv, "u:U:e:m:d:o:p:f:c:r:t:/:n:vP012",
++		getopt32(argc, argv, "+u:U:e:m:d:o:p:f:c:r:t:/:n:vP012",
+ 				&set_user,&env_user,&env_dir,
+ 				&m,&d,&o,&p,&f,&c,&r,&t,&root,&n);
+ 		// if (option_mask32 & 0x1) // -u
+@@ -310,7 +310,7 @@ static void envdir(int argc, char **argv)
+ static void softlimit(int argc, char **argv)
+ {
+ 	char *a,*c,*d,*f,*l,*m,*o,*p,*r,*s,*t;
+-	getopt32(argc, argv, "a:c:d:f:l:m:o:p:r:s:t:",
++	getopt32(argc, argv, "+a:c:d:f:l:m:o:p:r:s:t:",
+ 			&a,&c,&d,&f,&l,&m,&o,&p,&r,&s,&t);
+ 	if (option_mask32 & 0x001) limita = xatoul(a); // -a
+ 	if (option_mask32 & 0x002) limitc = xatoul(c); // -c
+diff --git a/shell/ash.c b/shell/ash.c
+index 3564044b2..1260d5e9a 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -12542,7 +12542,7 @@ static int
+ letcmd(int argc, char **argv)
+ {
+ 	char **ap;
+-	arith_t i;
++	arith_t i = 0;
+ 
+ 	ap = argv + 1;
+ 	if(!*ap)

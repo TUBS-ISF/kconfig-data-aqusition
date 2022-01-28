@@ -1,0 +1,545 @@
+"2012-08-25 14:25:22 -0500"
+diff --git a/Config.in b/Config.in
+index 7378fbcc..02137d85 100644
+--- a/Config.in
++++ b/Config.in
+@@ -1,6 +1,6 @@
+ mainmenu "ToyBox Configuration"
+ 
+-menu "Global settings"
++menu "Toybox global settings"
+ 
+ config TOYBOX
+ 	bool
+@@ -46,6 +46,6 @@ endmenu
+ 
+ source generated/Config.probed
+ 
+-menu "Toys"
++comment ""
++
+ source generated/Config.in
+-endmenu
+diff --git a/Makefile b/Makefile
+index b224f3e3..bbab258e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -3,7 +3,7 @@
+ 
+ all: toybox
+ 
+-toybox toybox_unstripped: .config *.[ch] lib/*.[ch] toys/*.[ch] scripts/*.sh
++toybox toybox_unstripped: .config *.[ch] lib/*.[ch] toys/*.h toys/*/*.c scripts/*.sh
+ 	scripts/make.sh
+ 
+ .PHONY: clean distclean baseline bloatcheck install install_flat \
+@@ -12,7 +12,7 @@ toybox toybox_unstripped: .config *.[ch] lib/*.[ch] toys/*.[ch] scripts/*.sh
+ include kconfig/Makefile
+ 
+ $(KCONFIG_TOP): generated/Config.in
+-generated/Config.in: toys/*.c scripts/genconfig.sh
++generated/Config.in: toys/*/*.c scripts/genconfig.sh
+ 	scripts/genconfig.sh
+ 
+ HOSTCC?=cc
+diff --git a/scripts/genconfig.sh b/scripts/genconfig.sh
+index 2334d8a9..accf0dba 100755
+--- a/scripts/genconfig.sh
++++ b/scripts/genconfig.sh
+@@ -26,14 +26,25 @@ EOF
+ 
+ genconfig()
+ {
+-  # extract config stanzas from each command source file, in alphabetical order
+-
+-  for i in $(ls -1 toys/*.c)
++  # I could query the directory here, but I want to control the order
++  # and capitalization in the menu
++  for j in Posix LSB Other
+   do
+-    # Grab the config block for Config.in
+-    echo "# $i"
+-    sed -n '/^\*\//q;/^config [A-Z]/,$p' $i || return 1
++    echo "menu \"$j commands\""
+     echo
++
++    DIR=$(echo $j | tr A-Z a-z)
++
++    # extract config stanzas from each source file, in alphabetical order
++    for i in $(ls -1 toys/$DIR/*.c)
++    do
++      # Grab the config block for Config.in
++      echo "# $i"
++      sed -n '/^\*\//q;/^config [A-Z]/,$p' $i || return 1
++      echo
++    done
++
++    echo endmenu
+   done
+ }
+ 
+diff --git a/scripts/make.sh b/scripts/make.sh
+index b61d5b9b..2f52b21b 100755
+--- a/scripts/make.sh
++++ b/scripts/make.sh
+@@ -4,19 +4,27 @@
+ 
+ source ./configure
+ 
++if [ -z ".config" ]
++then
++  echo "No .config (see "make help" for configuration options)."
++  exit 1
++fi
++
+ echo "Extract configuration information from toys/*.c files..."
+ scripts/genconfig.sh
+ 
+-echo "Generate headers from toys/*.c..."
++echo "Generate headers from toys/*/*.c..."
+ 
+ # Create a list of all the applets toybox can provide.  Note that the first
+ # entry is out of order on purpose (the toybox multiplexer applet must be the
+ # first element of the array).  The rest must be sorted in alphabetical order
+ # for fast binary search.
+ 
++echo "generated/newtoys.h"
++
+ function newtoys()
+ {
+-  for i in toys/*.c
++  for i in toys/*/*.c
+   do
+     sed -n -e '1,/^config [A-Z]/s/^USE_/&/p' $i || exit 1
+   done
+@@ -25,13 +33,13 @@ echo "NEWTOY(toybox, NULL, TOYFLAG_STAYROOT)" > generated/newtoys.h
+ newtoys | sed 's/\(.*TOY(\)\([^,]*\),\(.*\)/\2 \1\2,\3/' | sort -k 1,1 \
+ 	| sed 's/[^ ]* //'  >> generated/newtoys.h
+ 
+-# Extract global structure definitions and flag definitions from toys/*.c
++# Extract global structure definitions and flag definitions from toys/*/*.c
+ 
+ function getglobals()
+ {
+-  for i in toys/*.c
++  for i in toys/*/*.c
+   do
+-    NAME="$(echo $i | sed 's@toys/\(.*\)\.c@\1@')"
++    NAME="$(echo $i | sed 's@.*/\(.*\)\.c@\1@')"
+ 
+     echo -e "// $i\n"
+     sed -n -e '/^DEFINE_GLOBALS(/,/^)/b got;b;:got' \
+@@ -58,6 +66,8 @@ function getglobals()
+   done
+ }
+ 
++echo "generated/globals.h"
++
+ GLOBSTRUCT="$(getglobals)"
+ (
+   echo "$GLOBSTRUCT"
+@@ -67,6 +77,7 @@ GLOBSTRUCT="$(getglobals)"
+   echo "} this;"
+ ) > generated/globals.h
+ 
++echo "generated/help.h"
+ # Only recreate generated/help.h if python is installed
+ if [ ! -z "$(which python)" ] && [ ! -z "$(grep 'CONFIG_HELP=y' .config)" ]
+ then
+@@ -100,20 +111,24 @@ sed -n \
+   -e 's/.*/#define USE_&(...) __VA_ARGS__/p' \
+   .config > generated/config.h || exit 1
+ 
+-# Extract a list of toys/*.c files to compile from the data in ".config" with
+-# sed, sort, and tr:
++# Extract a list of toys/*/*.c files to compile from the data in ".config":
+ 
+ # 1) Grab the XXX part of all CONFIG_XXX entries, removing everything after the
+ # second underline
+ # 2) Sort the list, keeping only one of each entry.
+ # 3) Convert to lower case.
+ # 4) Remove toybox itself from the list (as that indicates global symbols).
+-# 5) Add "toys/" prefix and ".c" suffix.
++# 5) Add "toys/*/" prefix and ".c" suffix.
+ 
+-TOYFILES=$(cat .config | sed -nre 's/^CONFIG_(.*)=y/\1/;t skip;b;:skip;s/_.*//;p' | sort -u | tr A-Z a-z | grep -v '^toybox$' | sed 's@\(.*\)@toys/\1.c@' )
++TOYFILES=$(sed -nre 's/^CONFIG_(.*)=y/\1/;t skip;b;:skip;s/_.*//;p' < .config | sort -u | tr A-Z a-z | grep -v '^toybox$' | sed 's@\(.*\)@toys/\*/\1.c@')
+ 
+ echo "Library probe..."
+ 
++# We trust --as-needed to remove each library if we don't use any symbols
++# out of it, this loop is because the compiler has no way to ignore a library
++# that doesn't exist, so we have to detect and skip nonexistent libraries
++# for it.
++
+ OPTLIBS="$(for i in util crypt m; do echo "int main(int argc, char *argv[]) {return 0;}" | ${CROSS_COMPILE}${CC} -xc - -o /dev/null -Wl,--as-needed -l$i > /dev/null 2>/dev/null && echo -l$i; done)"
+ 
+ echo "Compile toybox..."
+diff --git a/toys/dmesg.c b/toys/lsb/dmesg.c
+similarity index 100%
+rename from toys/dmesg.c
+rename to toys/lsb/dmesg.c
+diff --git a/toys/hostname.c b/toys/lsb/hostname.c
+similarity index 100%
+rename from toys/hostname.c
+rename to toys/lsb/hostname.c
+diff --git a/toys/killall.c b/toys/lsb/killall.c
+similarity index 100%
+rename from toys/killall.c
+rename to toys/lsb/killall.c
+diff --git a/toys/mknod.c b/toys/lsb/mknod.c
+similarity index 100%
+rename from toys/mknod.c
+rename to toys/lsb/mknod.c
+diff --git a/toys/mktemp.c b/toys/lsb/mktemp.c
+similarity index 100%
+rename from toys/mktemp.c
+rename to toys/lsb/mktemp.c
+diff --git a/toys/passwd.c b/toys/lsb/passwd.c
+similarity index 100%
+rename from toys/passwd.c
+rename to toys/lsb/passwd.c
+diff --git a/toys/pidof.c b/toys/lsb/pidof.c
+similarity index 100%
+rename from toys/pidof.c
+rename to toys/lsb/pidof.c
+diff --git a/toys/seq.c b/toys/lsb/seq.c
+similarity index 100%
+rename from toys/seq.c
+rename to toys/lsb/seq.c
+diff --git a/toys/sync.c b/toys/lsb/sync.c
+similarity index 100%
+rename from toys/sync.c
+rename to toys/lsb/sync.c
+diff --git a/toys/bzcat.c b/toys/other/bzcat.c
+similarity index 100%
+rename from toys/bzcat.c
+rename to toys/other/bzcat.c
+diff --git a/toys/catv.c b/toys/other/catv.c
+similarity index 100%
+rename from toys/catv.c
+rename to toys/other/catv.c
+diff --git a/toys/chroot.c b/toys/other/chroot.c
+similarity index 100%
+rename from toys/chroot.c
+rename to toys/other/chroot.c
+diff --git a/toys/chvt.c b/toys/other/chvt.c
+similarity index 100%
+rename from toys/chvt.c
+rename to toys/other/chvt.c
+diff --git a/toys/clear.c b/toys/other/clear.c
+similarity index 100%
+rename from toys/clear.c
+rename to toys/other/clear.c
+diff --git a/toys/count.c b/toys/other/count.c
+similarity index 100%
+rename from toys/count.c
+rename to toys/other/count.c
+diff --git a/toys/dos2unix.c b/toys/other/dos2unix.c
+similarity index 100%
+rename from toys/dos2unix.c
+rename to toys/other/dos2unix.c
+diff --git a/toys/free.c b/toys/other/free.c
+similarity index 100%
+rename from toys/free.c
+rename to toys/other/free.c
+diff --git a/toys/hello.c b/toys/other/hello.c
+similarity index 100%
+rename from toys/hello.c
+rename to toys/other/hello.c
+diff --git a/toys/help.c b/toys/other/help.c
+similarity index 100%
+rename from toys/help.c
+rename to toys/other/help.c
+diff --git a/toys/insmod.c b/toys/other/insmod.c
+similarity index 100%
+rename from toys/insmod.c
+rename to toys/other/insmod.c
+diff --git a/toys/login.c b/toys/other/login.c
+similarity index 100%
+rename from toys/login.c
+rename to toys/other/login.c
+diff --git a/toys/lsmod.c b/toys/other/lsmod.c
+similarity index 100%
+rename from toys/lsmod.c
+rename to toys/other/lsmod.c
+diff --git a/toys/mdev.c b/toys/other/mdev.c
+similarity index 100%
+rename from toys/mdev.c
+rename to toys/other/mdev.c
+diff --git a/toys/mke2fs.c b/toys/other/mke2fs.c
+similarity index 100%
+rename from toys/mke2fs.c
+rename to toys/other/mke2fs.c
+diff --git a/toys/mkswap.c b/toys/other/mkswap.c
+similarity index 100%
+rename from toys/mkswap.c
+rename to toys/other/mkswap.c
+diff --git a/toys/modinfo.c b/toys/other/modinfo.c
+similarity index 100%
+rename from toys/modinfo.c
+rename to toys/other/modinfo.c
+diff --git a/toys/mountpoint.c b/toys/other/mountpoint.c
+similarity index 100%
+rename from toys/mountpoint.c
+rename to toys/other/mountpoint.c
+diff --git a/toys/netcat.c b/toys/other/netcat.c
+similarity index 100%
+rename from toys/netcat.c
+rename to toys/other/netcat.c
+diff --git a/toys/oneit.c b/toys/other/oneit.c
+similarity index 100%
+rename from toys/oneit.c
+rename to toys/other/oneit.c
+diff --git a/toys/printenv.c b/toys/other/printenv.c
+similarity index 100%
+rename from toys/printenv.c
+rename to toys/other/printenv.c
+diff --git a/toys/readlink.c b/toys/other/readlink.c
+similarity index 100%
+rename from toys/readlink.c
+rename to toys/other/readlink.c
+diff --git a/toys/realpath.c b/toys/other/realpath.c
+similarity index 100%
+rename from toys/realpath.c
+rename to toys/other/realpath.c
+diff --git a/toys/rmmod.c b/toys/other/rmmod.c
+similarity index 100%
+rename from toys/rmmod.c
+rename to toys/other/rmmod.c
+diff --git a/toys/setsid.c b/toys/other/setsid.c
+similarity index 100%
+rename from toys/setsid.c
+rename to toys/other/setsid.c
+diff --git a/toys/sha1sum.c b/toys/other/sha1sum.c
+similarity index 100%
+rename from toys/sha1sum.c
+rename to toys/other/sha1sum.c
+diff --git a/toys/swapoff.c b/toys/other/swapoff.c
+similarity index 100%
+rename from toys/swapoff.c
+rename to toys/other/swapoff.c
+diff --git a/toys/swapon.c b/toys/other/swapon.c
+similarity index 100%
+rename from toys/swapon.c
+rename to toys/other/swapon.c
+diff --git a/toys/tac.c b/toys/other/tac.c
+similarity index 100%
+rename from toys/tac.c
+rename to toys/other/tac.c
+diff --git a/toys/taskset.c b/toys/other/taskset.c
+similarity index 100%
+rename from toys/taskset.c
+rename to toys/other/taskset.c
+diff --git a/toys/toysh.c b/toys/other/toysh.c
+similarity index 100%
+rename from toys/toysh.c
+rename to toys/other/toysh.c
+diff --git a/toys/truncate.c b/toys/other/truncate.c
+similarity index 100%
+rename from toys/truncate.c
+rename to toys/other/truncate.c
+diff --git a/toys/unshare.c b/toys/other/unshare.c
+similarity index 100%
+rename from toys/unshare.c
+rename to toys/other/unshare.c
+diff --git a/toys/uptime.c b/toys/other/uptime.c
+similarity index 100%
+rename from toys/uptime.c
+rename to toys/other/uptime.c
+diff --git a/toys/usleep.c b/toys/other/usleep.c
+similarity index 100%
+rename from toys/usleep.c
+rename to toys/other/usleep.c
+diff --git a/toys/vmstat.c b/toys/other/vmstat.c
+similarity index 100%
+rename from toys/vmstat.c
+rename to toys/other/vmstat.c
+diff --git a/toys/w.c b/toys/other/w.c
+similarity index 100%
+rename from toys/w.c
+rename to toys/other/w.c
+diff --git a/toys/which.c b/toys/other/which.c
+similarity index 100%
+rename from toys/which.c
+rename to toys/other/which.c
+diff --git a/toys/whoami.c b/toys/other/whoami.c
+similarity index 100%
+rename from toys/whoami.c
+rename to toys/other/whoami.c
+diff --git a/toys/yes.c b/toys/other/yes.c
+similarity index 100%
+rename from toys/yes.c
+rename to toys/other/yes.c
+diff --git a/toys/basename.c b/toys/posix/basename.c
+similarity index 100%
+rename from toys/basename.c
+rename to toys/posix/basename.c
+diff --git a/toys/cal.c b/toys/posix/cal.c
+similarity index 100%
+rename from toys/cal.c
+rename to toys/posix/cal.c
+diff --git a/toys/cat.c b/toys/posix/cat.c
+similarity index 100%
+rename from toys/cat.c
+rename to toys/posix/cat.c
+diff --git a/toys/chgrp.c b/toys/posix/chgrp.c
+similarity index 100%
+rename from toys/chgrp.c
+rename to toys/posix/chgrp.c
+diff --git a/toys/chmod.c b/toys/posix/chmod.c
+similarity index 100%
+rename from toys/chmod.c
+rename to toys/posix/chmod.c
+diff --git a/toys/cksum.c b/toys/posix/cksum.c
+similarity index 100%
+rename from toys/cksum.c
+rename to toys/posix/cksum.c
+diff --git a/toys/cmp.c b/toys/posix/cmp.c
+similarity index 100%
+rename from toys/cmp.c
+rename to toys/posix/cmp.c
+diff --git a/toys/comm.c b/toys/posix/comm.c
+similarity index 100%
+rename from toys/comm.c
+rename to toys/posix/comm.c
+diff --git a/toys/cp.c b/toys/posix/cp.c
+similarity index 100%
+rename from toys/cp.c
+rename to toys/posix/cp.c
+diff --git a/toys/date.c b/toys/posix/date.c
+similarity index 100%
+rename from toys/date.c
+rename to toys/posix/date.c
+diff --git a/toys/df.c b/toys/posix/df.c
+similarity index 100%
+rename from toys/df.c
+rename to toys/posix/df.c
+diff --git a/toys/dirname.c b/toys/posix/dirname.c
+similarity index 100%
+rename from toys/dirname.c
+rename to toys/posix/dirname.c
+diff --git a/toys/echo.c b/toys/posix/echo.c
+similarity index 100%
+rename from toys/echo.c
+rename to toys/posix/echo.c
+diff --git a/toys/env.c b/toys/posix/env.c
+similarity index 100%
+rename from toys/env.c
+rename to toys/posix/env.c
+diff --git a/toys/false.c b/toys/posix/false.c
+similarity index 100%
+rename from toys/false.c
+rename to toys/posix/false.c
+diff --git a/toys/head.c b/toys/posix/head.c
+similarity index 100%
+rename from toys/head.c
+rename to toys/posix/head.c
+diff --git a/toys/id.c b/toys/posix/id.c
+similarity index 100%
+rename from toys/id.c
+rename to toys/posix/id.c
+diff --git a/toys/kill.c b/toys/posix/kill.c
+similarity index 100%
+rename from toys/kill.c
+rename to toys/posix/kill.c
+diff --git a/toys/link.c b/toys/posix/link.c
+similarity index 100%
+rename from toys/link.c
+rename to toys/posix/link.c
+diff --git a/toys/ln.c b/toys/posix/ln.c
+similarity index 100%
+rename from toys/ln.c
+rename to toys/posix/ln.c
+diff --git a/toys/logname.c b/toys/posix/logname.c
+similarity index 100%
+rename from toys/logname.c
+rename to toys/posix/logname.c
+diff --git a/toys/ls.c b/toys/posix/ls.c
+similarity index 100%
+rename from toys/ls.c
+rename to toys/posix/ls.c
+diff --git a/toys/mkdir.c b/toys/posix/mkdir.c
+similarity index 100%
+rename from toys/mkdir.c
+rename to toys/posix/mkdir.c
+diff --git a/toys/mkfifo.c b/toys/posix/mkfifo.c
+similarity index 100%
+rename from toys/mkfifo.c
+rename to toys/posix/mkfifo.c
+diff --git a/toys/nice.c b/toys/posix/nice.c
+similarity index 100%
+rename from toys/nice.c
+rename to toys/posix/nice.c
+diff --git a/toys/nohup.c b/toys/posix/nohup.c
+similarity index 100%
+rename from toys/nohup.c
+rename to toys/posix/nohup.c
+diff --git a/toys/od.c b/toys/posix/od.c
+similarity index 100%
+rename from toys/od.c
+rename to toys/posix/od.c
+diff --git a/toys/patch.c b/toys/posix/patch.c
+similarity index 100%
+rename from toys/patch.c
+rename to toys/posix/patch.c
+diff --git a/toys/pwd.c b/toys/posix/pwd.c
+similarity index 100%
+rename from toys/pwd.c
+rename to toys/posix/pwd.c
+diff --git a/toys/rmdir.c b/toys/posix/rmdir.c
+similarity index 100%
+rename from toys/rmdir.c
+rename to toys/posix/rmdir.c
+diff --git a/toys/sed.c b/toys/posix/sed.c
+similarity index 100%
+rename from toys/sed.c
+rename to toys/posix/sed.c
+diff --git a/toys/sleep.c b/toys/posix/sleep.c
+similarity index 100%
+rename from toys/sleep.c
+rename to toys/posix/sleep.c
+diff --git a/toys/sort.c b/toys/posix/sort.c
+similarity index 100%
+rename from toys/sort.c
+rename to toys/posix/sort.c
+diff --git a/toys/tail.c b/toys/posix/tail.c
+similarity index 100%
+rename from toys/tail.c
+rename to toys/posix/tail.c
+diff --git a/toys/tee.c b/toys/posix/tee.c
+similarity index 100%
+rename from toys/tee.c
+rename to toys/posix/tee.c
+diff --git a/toys/true.c b/toys/posix/true.c
+similarity index 100%
+rename from toys/true.c
+rename to toys/posix/true.c
+diff --git a/toys/tty.c b/toys/posix/tty.c
+similarity index 100%
+rename from toys/tty.c
+rename to toys/posix/tty.c
+diff --git a/toys/uname.c b/toys/posix/uname.c
+similarity index 100%
+rename from toys/uname.c
+rename to toys/posix/uname.c
+diff --git a/toys/uniq.c b/toys/posix/uniq.c
+similarity index 100%
+rename from toys/uniq.c
+rename to toys/posix/uniq.c
+diff --git a/toys/unlink.c b/toys/posix/unlink.c
+similarity index 100%
+rename from toys/unlink.c
+rename to toys/posix/unlink.c
+diff --git a/toys/wc.c b/toys/posix/wc.c
+similarity index 100%
+rename from toys/wc.c
+rename to toys/posix/wc.c
+diff --git a/toys/who.c b/toys/posix/who.c
+similarity index 100%
+rename from toys/who.c
+rename to toys/posix/who.c
+diff --git a/toys/xargs.c b/toys/posix/xargs.c
+similarity index 100%
+rename from toys/xargs.c
+rename to toys/posix/xargs.c

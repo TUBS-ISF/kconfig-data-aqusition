@@ -1,0 +1,121 @@
+"2015-09-30 20:58:45 -0300"
+diff --git a/Kconfig b/Kconfig
+index 458c95b6..d93d3907 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -103,22 +103,36 @@ config CONFIG_LDFLAGS
+ 
+ config CC_SANITIZE
+ 	bool "Compiler sanitize"
+-	depends on FEATURE_CC_SANITIZE && (HAVE_SANITIZE_UNDEFINED || HAVE_SANITIZE_ADDRESS)
+-	default y
++	depends on FEATURE_CC_SANITIZE && ((SHARED_LIBRARY && (HAVE_DYNAMIC_SANITIZE_UNDEFINED || HAVE_DYNAMIC_SANITIZE_ADDRESS)) || (STATIC_LIBRARY && (HAVE_STATIC_SANITIZE_UNDEFINED || HAVE_STATIC_SANITIZE_ADDRESS)))
++	default y if BUILD_TYPE_DEBUG
+ 
+ choice CC_SANITIZE_TYPE
+ 	prompt "Compiler sanitize type"
+ 	depends on CC_SANITIZE
+-	default CC_SANITIZE_UNDEFINED if HAVE_SANITIZE_UNDEFINED
+-	default CC_SANITIZE_ADDRESS if HAVE_SANITIZE_ADDRESS
++	default CC_SANITIZE_UNDEFINED if ((SHARED_LIBRARY && HAVE_DYNAMIC_SANITIZE_UNDEFINED) || (STATIC_LIBRARY && HAVE_STATIC_SANITIZE_UNDEFINED))
++	default CC_SANITIZE_ADDRESS if ((SHARED_LIBRARY && HAVE_DYNAMIC_SANITIZE_ADDRESS) || (STATIC_LIBRARY && HAVE_STATIC_SANITIZE_ADDRESS))
++	help
++	    Enable compiler sanitizer instrumentation to be used during debug.
+ 
+ config CC_SANITIZE_UNDEFINED
+ 	bool "undefined"
+-	depends on HAVE_SANITIZE_UNDEFINED
++	depends on (SHARED_LIBRARY && HAVE_DYNAMIC_SANITIZE_UNDEFINED) || (STATIC_LIBRARY && HAVE_STATIC_SANITIZE_UNDEFINED)
++	help
++            Enable UndefinedBehaviorSanitizer, a fast undefined behavior
++            detector.  Various computations are instrumented to detect
++            undefined behavior at runtime.
++
++            Since GCC 4.9, see http://developerblog.redhat.com/2014/10/16/gcc-undefined-behavior-sanitizer-ubsan/
+ 
+ config CC_SANITIZE_ADDRESS
+ 	bool "address"
+-	depends on HAVE_SANITIZE_ADDRESS
++	depends on (SHARED_LIBRARY && HAVE_DYNAMIC_SANITIZE_ADDRESS) || (STATIC_LIBRARY && HAVE_STATIC_SANITIZE_ADDRESS)
++	help
++            Enable AddressSanitizer, a fast memory error detector.  Memory
++            access instructions are instrumented to detect out-of-bounds and
++            use-after-free bugs.
++
++            Since GCC 4.8, see http://code.google.com/p/address-sanitizer/
+ endchoice
+ endmenu
+ 
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 716504d7..37dbfe1f 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -412,7 +412,17 @@
+       "atleast-version": "7.32.0"
+     },
+     {
+-      "dependency": "sanitize_undefined",
++      "dependency": "dynamic_sanitize_undefined",
++      "type": "ccode",
++      "cflags": {
++        "value": "-fsanitize=undefined"
++      },
++      "ldflags": {
++        "value": "-fsanitize=undefined"
++      }
++    },
++    {
++      "dependency": "static_sanitize_undefined",
+       "type": "ccode",
+       "cflags": {
+         "value": "-fsanitize=undefined"
+@@ -429,7 +439,17 @@
+       }
+     },
+     {
+-      "dependency": "sanitize_address",
++      "dependency": "dynamic_sanitize_address",
++      "type": "ccode",
++      "cflags": {
++        "value": "-fsanitize=address"
++      },
++      "ldflags": {
++        "value": "-fsanitize=address"
++      }
++    },
++    {
++      "dependency": "static_sanitize_address",
+       "type": "ccode",
+       "cflags": {
+         "value": "-fsanitize=address"
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index e8724c2b..21b5d50d 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -152,12 +152,22 @@ COMMON_LDFLAGS += $(LDFLAGS)
+ 
+ ifeq (y,$(CC_SANITIZE))
+ ifeq (y,$(CC_SANITIZE_UNDEFINED))
+-COMMON_CFLAGS += $(SANITIZE_UNDEFINED_CFLAGS)
+-COMMON_LDFLAGS += $(SANITIZE_UNDEFINED_LDFLAGS)
++ifeq (y,$(SHARED_LIBRARY))
++COMMON_CFLAGS += $(DYNAMIC_SANITIZE_UNDEFINED_CFLAGS)
++COMMON_LDFLAGS += $(DYNAMIC_SANITIZE_UNDEFINED_LDFLAGS)
++else
++COMMON_CFLAGS += $(STATIC_SANITIZE_UNDEFINED_CFLAGS)
++COMMON_LDFLAGS += $(STATIC_SANITIZE_UNDEFINED_LDFLAGS)
++endif
+ endif
+ ifeq (y,$(CC_SANITIZE_ADDRESS))
+-COMMON_CFLAGS += $(SANITIZE_ADDRESS_CFLAGS)
+-COMMON_LDFLAGS += $(SANITIZE_ADDRESS_LDFLAGS)
++ifeq (y,$(SHARED_LIBRARY))
++COMMON_CFLAGS += $(DYNAMIC_SANITIZE_ADDRESS_CFLAGS)
++COMMON_LDFLAGS += $(DYNAMIC_SANITIZE_ADDRESS_LDFLAGS)
++else
++COMMON_CFLAGS += $(STATIC_SANITIZE_ADDRESS_CFLAGS)
++COMMON_LDFLAGS += $(STATIC_SANITIZE_ADDRESS_LDFLAGS)
++endif
+ endif
+ endif
+ 

@@ -1,0 +1,352 @@
+"2015-09-14 11:45:27 -0300"
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index 956d4512..8184cbbf 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -70,3 +70,8 @@ config HTTP_SERVER
+ 	depends on NETWORK && FEATURE_HTTP_SERVER
+ 	help
+             Server API for both HTTP and HTTPS.
++
++config HTTP_SERVER_PORT
++	depends on HTTP_SERVER
++	int "Default server port"
++	default "80"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index a22aae0f..6e22b949 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -76,4 +76,5 @@ source "src/modules/flow/trigonometry/Kconfig"
+ source "src/modules/flow/udev/Kconfig"
+ source "src/modules/flow/unix-socket/Kconfig"
+ source "src/modules/flow/wallclock/Kconfig"
++source "src/modules/flow/http-server/Kconfig"
+ endmenu
+diff --git a/src/modules/flow/http-server/Kconfig b/src/modules/flow/http-server/Kconfig
+new file mode 100644
+index 00000000..d522af93
+--- /dev/null
++++ b/src/modules/flow/http-server/Kconfig
+@@ -0,0 +1,6 @@
++config FLOW_NODE_TYPE_HTTP_SERVER
++	tristate "Node type: http_server"
++	depends on HTTP_SERVER
++	default m
++	help
++		Provides an HTTP server for basic packet types.
+diff --git a/src/modules/flow/http-server/Makefile b/src/modules/flow/http-server/Makefile
+new file mode 100644
+index 00000000..2c262a81
+--- /dev/null
++++ b/src/modules/flow/http-server/Makefile
+@@ -0,0 +1,3 @@
++obj-$(FLOW_NODE_TYPE_HTTP_SERVER) += http-server.mod
++obj-http-server-$(FLOW_NODE_TYPE_HTTP_SERVER) := http-server.json http-server.o
++obj-http-server-$(FLOW_NODE_TYPE_HTTP_SERVER)-type := flow
+diff --git a/src/modules/flow/http-server/http-server.c b/src/modules/flow/http-server/http-server.c
+new file mode 100644
+index 00000000..1abdf739
+--- /dev/null
++++ b/src/modules/flow/http-server/http-server.c
+@@ -0,0 +1,198 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "sol-flow/http-server.h"
++#include "sol-flow.h"
++#include "sol-http.h"
++#include "sol-http-server.h"
++#include "sol-mainloop.h"
++#include "sol-util.h"
++#include "sol-vector.h"
++#include "sol_config.h"
++
++struct http_data {
++    struct sol_flow_node *node;
++    union {
++        bool b;
++    } value;
++
++    char *path;
++};
++
++static struct sol_http_server *server = NULL;
++static int init_count = 0;
++
++static int
++start_server(struct http_data *http, const char *path,
++    int (*handler)(void *data, struct sol_http_request *request))
++{
++    int r;
++
++    if (!server) {
++        server = sol_http_server_new(HTTP_SERVER_PORT);
++        SOL_NULL_CHECK(server, -1);
++    }
++
++    init_count++;
++
++    http->path = strdup(path);
++    SOL_NULL_CHECK_GOTO(http->path, err);
++
++    r = sol_http_server_register_handler(server, http->path, handler, http);
++    SOL_INT_CHECK_GOTO(r, < 0, err_handler);
++
++    return 0;
++
++err_handler:
++    free(http->path);
++err:
++    init_count--;
++    if (!init_count) {
++        sol_http_server_del(server);
++        server = NULL;
++    }
++    return -1;
++}
++
++static void
++stop_server(struct http_data *http)
++{
++    sol_http_server_unregister_handler(server, http->path);
++    free(http->path);
++    init_count--;
++    if (!init_count) {
++        sol_http_server_del(server);
++        server = NULL;
++    }
++}
++
++static int
++boolean_response_cb(void *data, struct sol_http_request *request)
++{
++    int r = 0;
++    uint16_t idx;
++    enum sol_http_method method;
++    struct http_data *mdata = data;
++    char str[] = "false";
++    struct sol_http_param_value *value;
++    struct sol_http_response response = {
++        .api_version = SOL_HTTP_RESPONSE_API_VERSION,
++        .content = SOL_BUFFER_INIT_EMPTY,
++        .param = SOL_HTTP_REQUEST_PARAM_INIT,
++        .response_code = SOL_HTTP_STATUS_OK
++    };
++
++    method = sol_http_request_get_method(request);
++    response.url = sol_http_request_get_url(request);
++
++    SOL_HTTP_PARAM_FOREACH_IDX (sol_http_request_get_params(request), value, idx) {
++        switch (value->type) {
++        case SOL_HTTP_PARAM_POST_FIELD:
++            if (streq(value->value.key_value.key, "value")) {
++                if (streq(value->value.key_value.value, "true"))
++                    mdata->value.b = true;
++                else if (streq(value->value.key_value.value, "false"))
++                    mdata->value.b = false;
++            }
++            break;
++        case SOL_HTTP_PARAM_HEADER:
++        default:
++            break;
++        }
++    }
++
++    r = snprintf(str, sizeof(str), "%s", mdata->value.b == true ? "true" : "false");
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++    r = sol_buffer_set_slice(&response.content, sol_str_slice_from_str(str));
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++    r = sol_http_server_send_response(request, &response);
++    SOL_INT_CHECK_GOTO(r, < 0, end);
++
++    if (method == SOL_HTTP_METHOD_POST) {
++        sol_flow_send_boolean_packet(mdata->node,
++            SOL_FLOW_NODE_TYPE_HTTP_SERVER_BOOLEAN__OUT__OUT,
++            mdata->value.b);
++    }
++
++end:
++    sol_buffer_fini(&response.content);
++    sol_http_param_free(&response.param);
++
++    return 0;
++}
++
++static int
++boolean_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    struct http_data *mdata = data;
++    int r;
++
++    r = sol_flow_packet_get_boolean(packet, &mdata->value.b);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++static void
++boolean_close(struct sol_flow_node *node, void *data)
++{
++    struct http_data *mdata = data;
++
++    stop_server(mdata);
++}
++
++static int
++boolean_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    int r;
++    struct http_data *mdata = data;
++    struct sol_flow_node_type_http_server_boolean_options *opts =
++        (struct sol_flow_node_type_http_server_boolean_options *)options;
++
++    r = start_server(mdata, opts->path, boolean_response_cb);
++    SOL_INT_CHECK(r, < 0, r);
++
++    mdata->value.b = opts->value;
++    mdata->node = node;
++
++    return 0;
++}
++
++#include "http-server-gen.c"
+diff --git a/src/modules/flow/http-server/http-server.json b/src/modules/flow/http-server/http-server.json
+new file mode 100644
+index 00000000..70eebafb
+--- /dev/null
++++ b/src/modules/flow/http-server/http-server.json
+@@ -0,0 +1,56 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "http-server",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "BSD 3-Clause",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "output/network",
++      "description": "HTTP Server for boolean",
++      "methods": {
++        "close": "boolean_close",
++        "open": "boolean_open"
++      },
++      "name": "http-server/boolean",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++	    "default": "boolean",
++            "description": "The http path where it will be served",
++            "name": "path"
++          },
++	  {
++            "data_type": "boolean",
++	    "default": true,
++            "description": "The initial node's value",
++            "name": "value"
++          }
++        ],
++        "version": 1
++      },
++      "in_ports": [
++	{
++	  "data_type": "boolean",
++	  "description": "The value that will be give on a GET",
++          "methods": {
++            "process": "boolean_process"
++          },
++          "name": "IN"
++        }
++      ],
++      "out_ports": [
++	{
++          "data_type": "boolean",
++          "description": "The value received on a POST",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "http_data",
++      "url": "http://solettaproject.org/doc/latest/node_types/http-server/boolean.html"
++    }
++  ]
++}
+diff --git a/src/samples/flow/http-server/boolean.fbp b/src/samples/flow/http-server/boolean.fbp
+new file mode 100644
+index 00000000..4c423d9a
+--- /dev/null
++++ b/src/samples/flow/http-server/boolean.fbp
+@@ -0,0 +1,35 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Reads key 'a' (code 97) from keyboard (stdin) and toggles state,
++
++keyboard(keyboard/boolean:binary_code=97,toggle=true) OUT -> IN boolean(http-server/boolean:path=/boolean,value=false)
++boolean OUT -> IN console(console)

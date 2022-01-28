@@ -1,0 +1,821 @@
+"2015-07-02 18:39:42 -0300"
+diff --git a/Kconfig b/Kconfig
+index 3001c963..7acd8e95 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -5,44 +5,60 @@ source "Kconfig.gen"
+ menu "Basic"
+ # backward compatibility with autotools vars
+ config ENABLE_DYNAMIC_MODULES
+-        bool
++	bool
+ 	default n
+ 
+ config MODULES
+-        bool "Enable loadable module support"
++	bool "Enable loadable module support"
+ 	option modules
+ 	select ENABLE_DYNAMIC_MODULES
++	depends on SOL_PLATFORM_LINUX
+ 	default y
++	help
++            This option enables dynamically loadable modules to be
++            created and used by Soletta. These modules can be created
++            and installed post libsoletta creation and when removed
++            shouldn't impact those that do not use such
++            functionality.
++
++            Modules are usually distributed as ".so" (shared objects)
++            and are usually loaded by libc (libdl) function
++            dlopen(). The modules are commonly installed at
++            $PREFIX/lib/soletta/modules/<subsystem>/<module>.
++
++            One would disable the modules support only when doing
++            single-binary static builds, in this case all modules
++            would be known at compile time, thus the code path can be
++            avoided and the dependency on extra libraries (ie: -ldl
++            on Linux) is not needed.
++
++            If unsure, say Y.
+ 
+ config PREFIX
+-        string "Installation prefix"
++	string "Installation prefix"
+ 	default "/usr"
++	help
++            This path is the intended installation prefix for the
++            binaries. It is used by code paths that need to look for
++            further resources, such as loadable module support (see
++            MODULES configuration help).
++
+ endmenu
+ 
+ menu "Core library"
+ source "src/lib/common/Kconfig"
+-source "src/lib/coap/Kconfig"
+ source "src/lib/datatypes/Kconfig"
+-source "src/lib/flow/Kconfig"
+ source "src/lib/io/Kconfig"
+ source "src/lib/parsers/Kconfig"
+ endmenu
+ 
+-menuconfig LINUX_MICRO
+-       bool "Linux micro"
+-       depends on PLATFORM_LINUX_MICRO
+-       default n
+-
+-source "src/modules/linux-micro/bluetooth/Kconfig"
+-source "src/modules/linux-micro/console/Kconfig"
+-source "src/modules/linux-micro/dbus/Kconfig"
+-source "src/modules/linux-micro/fstab/Kconfig"
+-source "src/modules/linux-micro/hostname/Kconfig"
+-source "src/modules/linux-micro/locale/Kconfig"
+-source "src/modules/linux-micro/network-up/Kconfig"
+-source "src/modules/linux-micro/rc-d/Kconfig"
+-source "src/modules/linux-micro/sysctl/Kconfig"
+-source "src/modules/linux-micro/watchdog/Kconfig"
++menu "Flow Based Programming (FBP)"
++source "src/lib/flow/Kconfig"
++endmenu
++
++menu "Networking"
++source "src/lib/coap/Kconfig"
++endmenu
+ 
+ menu "Tools"
+ source "src/bin/sol-fbp-generator/Kconfig"
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 214b5739..3eba4d9e 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -49,6 +49,13 @@
+ 	    ],
+             "ldflags": "-lpthread"
+ 	},
++	{
++	    "dependency": "linux",
++	    "type": "ccode",
++	    "headers": [
++		"<linux/ioctl.h>"
++	    ]
++	},
+ 	{
+ 	    "dependency": "riotos",
+ 	    "type": "ccode",
+diff --git a/src/lib/coap/Kconfig b/src/lib/coap/Kconfig
+index 73d5dfb6..18e2ebf1 100644
+--- a/src/lib/coap/Kconfig
++++ b/src/lib/coap/Kconfig
+@@ -1,3 +1,28 @@
+ config COAP
+ 	bool "CoAP"
+-	default y
+\ No newline at end of file
++	default y
++	help
++            The Constrained Application Protocol (CoAP) is a
++            specialized web transfer protocol for use with constrained
++            nodes and constrained (e.g., low-power, lossy) networks.
++            The nodes often have 8-bit microcontrollers with small
++            amounts of ROM and RAM, while constrained networks such as
++            IPv6 over Low-Power Wireless Personal Area Networks
++            (6LoWPANs) often have high packet error rates and a
++            typical throughput of 10s of kbit/s.  The protocol is
++            designed for machine- to-machine (M2M) applications such
++            as smart energy and building automation.
++
++            CoAP provides a request/response interaction model between
++            application endpoints, supports built-in discovery of
++            services and resources, and includes key concepts of the
++            Web such as URIs and Internet media types.  CoAP is
++            designed to easily interface with HTTP for integration
++            with the Web while meeting specialized requirements such
++            as multicast support, very low overhead, and simplicity
++            for constrained environments.
++
++            It is used by Open Inter Connect (OIC -
++            http://openinterconnect.org/)
++
++            See https://tools.ietf.org/html/rfc7252
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 08234ee4..4c13d249 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -2,6 +2,20 @@ config CORE
+ 	bool
+ 	default y
+ 
++config PLATFORM_NAME
++	string "Platform Name"
++	default ""
++	help
++            Some parts of Soletta uses a "platform name" string from
++            sol_platform_get_name() to improve platform
++            behavior. Namely Pin Multiplexer will load modules based
++            on the platform name.
++
++            Usually the platform name is detected using rules defined
++            at $PREFIX/share/soletta/platform_detect.json, but some
++            platforms such as RIOT may not provide it, then this
++            string is used as a fallback.
++
+ config SOL_PLATFORM_LINUX
+ 	bool
+ 	default n
+@@ -10,57 +24,231 @@ choice
+ 	prompt "Target platform"
+ 	default PLATFORM_DUMMY
+ 	help
+-	  The platform of your target.
++
++            Soletta abstracts your target platform basics such as
++            state and services. The functionality is exposed via C API
++            in sol-platform.h and allows one to change the state (ie:
++            reboot, poweroff) or start services (ie: network,
++            bluetooth).
++
++            While Soletta tries to provide a common API, the behavior
++            will always change slightly as some behavior does not make
++            sense everywhere.
++
++            Linux, for instance, provides a complete implementation on
++            top of systemd, benefiting from all of its
++            goodness. Alternatively, a linux-micro platform is
++            provided to allow single binary userspace, where the
++            Soletta application handles basic setup.
++
++            Each platform should document what is supported and
++            behavior changes.
+ 
+ config PLATFORM_DUMMY
+ 	bool "dummy"
++	depends on !HAVE_RIOTOS
+ 	select SOL_PLATFORM_LINUX
++	help
++            This platform is an empty stub and will not do any state
++            transition or manage any service.
++
++            It is highly recommended to use either linux-micro or
++            systemd if running on Linux. Small OSes will provide their
++            own platform as well.
++
+ 
+ config PLATFORM_LINUX_MICRO
+ 	select SOL_PLATFORM_LINUX
++	depends on HAVE_LINUX
+ 	bool "micro-linux"
++	help
++            This platform allows using a Soletta application as PID1
++            (/init). In this case some extra care needs to be done,
++            such as mounting /dev, /proc, /sys and handling children
++            processes.
+ 
+-config PLATFORM_RIOTOS
+-	bool "riotos"
++            It also offer basic services written in native C code,
++            either builtin libsoletta or as dynamically loadable
++            modules at
++            $PREFIX/lib/soletta/modules/linux-micro/<module>.so. See
++            Linux Micro Platform Modules.
++
++            This platform is only recommended for really small Linux
++            systems. For those with more capabilities we recommend
++            using systemd.
+ 
+ config PLATFORM_SYSTEMD
+ 	bool "systemd"
+ 	depends on HAVE_SYSTEMD
+ 	select SOL_PLATFORM_LINUX
+ 	select KDBUS
++	help
++            This platform uses systemd.
++
++            Platform state changes are translated to D-Bus calls to
++            systemd in order to isolate the <state>.target. Then all
++            systemd targets are allowed, such as basic, emergency,
++            halt, hibernate, poweroff and so on, see
++            /usr/lib/systemd/system/*.target.
++
++            Services are managed analogously, issuing D-Bus calls to
++            start, stop and monitor <service>.service. Then all
++            systemd services are allowed, such as systemd-sysct,
++            systemd-localed, systemd-journald and son on, see
++            /usr/lib/systemd/system/*.service.
++
++            One can write more than one Soletta application to be used
++            in systemd and they can be sandboxed using SELinux, SMACK
++            or SECCOMP for syscall filtering. A sample is provided at
++            src/samples/flow/systemd/.
++
++config PLATFORM_RIOTOS
++	bool "riotos"
++	depends on HAVE_RIOTOS
++	help
++            This platform is to be used with RIOT Small OS.
++
++            RIOT (http://www.riot-os.org/) is an operating system
++            targeted at Internet of Things (IoT) devices. It is
++            resource friendly and can run on microcontrollers. The
++            minimum RAM requirement is around 1.5Kb, with ROM at 5Kb.
++
++            One can compile RIOT using standard GCC under Linux or
++            MacOS. It offers partial POSIX compliance.
++
++            Soletta will do its best to offer the same experience on
++            all platforms, including RIOt.
++
+ endchoice
+ 
++source "src/modules/linux-micro/Kconfig"
++
+ choice
+ 	prompt "Mainloop"
+ 	help
+-	  The mainloop implementation.
++            The main loop is used to provide uniform event delivering
++            accross multiple operating systems.
++
++            Some operating systems will deliver events from an
++            userspace handle (ie: Linux does so via file descriptors),
++            while others will call from Interruption Handler
++            (ISR). These two environments are widely different,
++            particularly some primitives are usually forbidden from
++            ISRs, thus the programmer should be very careful.
++
++            Timers also varies a lot from one operating system to
++            another. With Linux one can use both an alarm() or a
++            timerfd(), as well as using timeout for some functions. On
++            the other hand, RIOT will call from a timer interruption.
++
++            Threads may not be supported in some systems and when they
++            do, they differ in behavior. Thus having multiple
++            functions to execute at once is a source of pain.
++
++            Main loop come to rescue as it provides a common interface
++            that works the same way everywhere. It does so by
++            scheduling events, timers and co-routines all in a single
++            thread and in a predictable, non-preemptive way. It will
++            queue events, time outs and idlers to be dispatched one
++            after another.
++
++            On Linux we provide two implementations, one on top of
++            well-known Glib and another on top of poll(2). Other
++            systems provide their specific mainloops, all tied to
++            their platforms (see Core Library > Target Platforms).
+ 
+ config MAINLOOP_GLIB
+ 	bool "glib"
+ 	depends on SOL_PLATFORM_LINUX && HAVE_GLIB
++	help
++            The mainloop is implementated on top of Glib.
++
++            When using this mainloop, other libraries that uses
++            GMainLoop will work even if they are not aware of
++            Soletta. This is recommended for larger systems where the
++            Glib footprint doesn't matter, but integration with other
++            libraries does.
++
++            An alternative main loop for Linux is "posix", that is
++            lightweight and relies only on poll(2) syscall.
+ 
+ config MAINLOOP_POSIX
+ 	bool "posix"
+ 	depends on SOL_PLATFORM_LINUX
++	help
++            The mainloop is implementated on top of poll(2) syscall.
++
++            This mainloop is very lightweight and does not rely on
++            external libraries. However, when integrating with other
++            libraries one must be sure to translate timer/timeout
++            requests to sol_timeout_add(), file descriptor monitoring
++            to sol_fd_add() and so on.
++
++            An alternative main loop for Linux is "glib", that allows
++            libraries interacting to GMainLoop to work with Soletta.
+ 
+ config MAINLOOP_RIOTOS
+ 	bool "riotos"
+ 	depends on PLATFORM_RIOTOS && HAVE_RIOTOS
++	help
++            The mainloop to be used in RIOT platform.
+ 
+ endchoice
+ 
+ config PTHREAD
+-        bool "Pthread"
+-        depends on HAVE_PTHREAD_H && SOL_PLATFORM_LINUX
+-        default y
++	bool "POSIX threads (pthread)"
++	depends on HAVE_PTHREAD_H && SOL_PLATFORM_LINUX
++	default y
++	help
++            Allow usage of POSIX threads (pthreads) in Soletta applications.
++
++            While Soletta doesn't use threads extensively, it needs to
++            be aware that threads would be used to make some
++            primitives thread-aware.
++
++            For instance, the main thread will be the one that called
++            sol_init() and sol_log_print() will detect other threads
++            and print their thread-id in the log messages, as well as
++            locking so log messages from different threads are
++            serialized properly.
++
++            Main loop primitives such as sol_fd_add(), sol_idle_add()
++            and sol_timeout_add() (and destructors) can be called from
++            secondary threads and they will behave properly.
++
++            This switch also enables exposing the sol-worker-thread.h
++            primitives to abstract creation and management of
++            secondary, low priority threads.
++
++            The only valid case to disable threads support is when the
++            Soletta application will never use threads, both
++            internally or via external modules or libraries. For
++            generic deployments it is recommended to enable threads.
++
++            If unsure, say Y.
+ 
+ config LOG
+ 	bool "Log"
+ 	default y
++	help
++            Log (sol-log.h) implements a flexible message logging for
++            applications and modules.
++
++            Logs have a domain name (or "category") and different
++            levels so it's easier to filter and trace problems.
++
++            However, log messages increase binary size and they may be
++            disabled altogether (with this switch) or starting from a
++            specific level (the "Maximum allowed log level" below).
++
++            The only reason to disable log is to save space on product
++            deployment builds.
++
++            If unsure, say Y.
+ 
+ choice
+ 	prompt "Maximum allowed log level"
+-	default DEFAULT_LOG_LEVEL_ERROR
++	default MAXIMUM_LOG_LEVEL_UNLIMITED
+ 	depends on LOG
+ 	help
+           Maximum log level that will be allowed.
+@@ -72,20 +260,25 @@ choice
+           Log level ordering is:
+           critical < error < warning < info < debug.
+ 
+-config DEFAULT_LOG_LEVEL_CRITICAL
++          The default is to not limit log levels.
++
++config MAXIMUM_LOG_LEVEL_CRITICAL
+ 	bool "critical"
+ 
+-config DEFAULT_LOG_LEVEL_ERROR
++config MAXIMUM_LOG_LEVEL_ERROR
+ 	bool "error"
+ 
+-config DEFAULT_LOG_LEVEL_WARNING
++config MAXIMUM_LOG_LEVEL_WARNING
+ 	bool "warning"
+ 
+-config DEFAULT_LOG_LEVEL_INFO
++config MAXIMUM_LOG_LEVEL_INFO
+ 	bool "info"
+ 
+-config DEFAULT_LOG_LEVEL_DEBUG
++config MAXIMUM_LOG_LEVEL_DEBUG
+ 	bool "debug"
++
++config MAXIMUM_LOG_LEVEL_UNLIMITED
++	bool "unlimited"
+ endchoice
+ 
+ config KDBUS
+@@ -100,13 +293,23 @@ config SOCKET_LINUX
+ 
+ menuconfig HAVE_PIN_MUX
+         bool "Pin Multiplexer"
+-        default n
++        default y
+         help
+           Pin Multiplexer is a feature that helps to setup
+           physical pins shared by more than one feature in
+           some platforms.
+ 
+-          If unsure, say N.
++          This switch enables the logic to handle pin multiplexers,
++          but the multiplexer logic is to be defined in separate
++          pin-mux modules that can be built-in libsoletta or installed
++          as dynamically loadable modules at
++          $PREFIX/lib/soletta/modules/pin-mux/<module>.so
++
++          Pin mux modules are used based on the platform-detect logic
++          defined in $PREFIX/share/soletta/platform_detect.json or
++          statically defined PLATFORM_NAME.
++
++          If unsure, say Y.
+ 
+ source "src/modules/pin-mux/intel-galileo-rev-d/Kconfig"
+ source "src/modules/pin-mux/intel-galileo-rev-g/Kconfig"
+diff --git a/src/modules/linux-micro/Kconfig b/src/modules/linux-micro/Kconfig
+new file mode 100644
+index 00000000..3d984d76
+--- /dev/null
++++ b/src/modules/linux-micro/Kconfig
+@@ -0,0 +1,40 @@
++menuconfig LINUX_MICRO
++	bool "Linux Micro Platform Modules"
++	depends on PLATFORM_LINUX_MICRO
++	default y
++	help
++
++            Soletta can be compiled to use linux-micro as a target
++            platform (Core Library > Target platform) and in this case
++            the applications using it can be used as PID1 (the /init
++            binary). In this case some extra care needs to be done,
++            such as mounting /dev, /proc, /sys and handling children
++            processes.
++
++            The linux-micro platform will provide services
++            (sol_platform_start_service()) to extend its functionality
++            via modules. Modules can be built-in to the library or
++            dynamically loadable modules (if Basics > MODULES=y), in
++            this case they can be provided by third-parties. These
++            modules will be looked at
++            $PREFIX/lib/soletta/modules/linux-micro/<module>.so, where
++            PREFIX is defined at Basics > Installation Prefix.
++
++            Services can be automatically started if they are listed
++            in /etc/soletta/initial-services or
++            $PREFIX/lib/soletta/modules/linux-micro/initial-services. The
++            format is one service (module) name per line. If a service
++            fail to start, then the platform start will fail as a
++            whole unless the line contains a suffix '?', making that
++            service optional (may fail to start).
++
++source "src/modules/linux-micro/bluetooth/Kconfig"
++source "src/modules/linux-micro/console/Kconfig"
++source "src/modules/linux-micro/dbus/Kconfig"
++source "src/modules/linux-micro/fstab/Kconfig"
++source "src/modules/linux-micro/hostname/Kconfig"
++source "src/modules/linux-micro/locale/Kconfig"
++source "src/modules/linux-micro/network-up/Kconfig"
++source "src/modules/linux-micro/rc-d/Kconfig"
++source "src/modules/linux-micro/sysctl/Kconfig"
++source "src/modules/linux-micro/watchdog/Kconfig"
+diff --git a/src/modules/linux-micro/bluetooth/Kconfig b/src/modules/linux-micro/bluetooth/Kconfig
+index 249e0efc..62838394 100644
+--- a/src/modules/linux-micro/bluetooth/Kconfig
++++ b/src/modules/linux-micro/bluetooth/Kconfig
+@@ -1,4 +1,8 @@
+ config LINUX_MICRO_BLUETOOTH
+ 	tristate "bluetooth"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Start and monitor bluetoothd (from BlueZ project). This
++            daemon is required for most bluetooth connectivity on the
++            Linux platform.
+diff --git a/src/modules/linux-micro/console/Kconfig b/src/modules/linux-micro/console/Kconfig
+index 70e2e223..582230bf 100644
+--- a/src/modules/linux-micro/console/Kconfig
++++ b/src/modules/linux-micro/console/Kconfig
+@@ -1,4 +1,19 @@
+ config LINUX_MICRO_CONSOLE
+ 	tristate "console"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Spawns agetty (or getty or /bin/sh) on consoles defined by
++            kernel, respawning as they exit.
++
++            This service is useful during development or devices that
++            should allow maintenance access using a serial console.
++
++            The consoles are defined by the kernel as it reads the
++            kernel command line for "console=XXX" statements, see
++            https://www.kernel.org/doc/Documentation/serial-console.txt
++
++            If agetty or getty binaries exist, they will be
++            executed. Otherwise /bin/sh is spawned and no login will
++            be prompted (be careful to only use this during
++            development).
+diff --git a/src/modules/linux-micro/dbus/Kconfig b/src/modules/linux-micro/dbus/Kconfig
+index 70e788dc..bc0d87f1 100644
+--- a/src/modules/linux-micro/dbus/Kconfig
++++ b/src/modules/linux-micro/dbus/Kconfig
+@@ -1,4 +1,20 @@
+ config LINUX_MICRO_DBUS
+ 	tristate "dbus"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Start and monitor dbus-daemon. D-Bus is a message bus
++            system, a simple way for applications to talk to one
++            another. In addition to interprocess communication, D-Bus
++            helps coordinate process lifecycle; it makes it simple and
++            reliable to code a "single instance" application or
++            daemon, and to launch applications and daemons on demand
++            when their services are needed.
++
++            There is an ongoing effort to merge D-Bus in the Linux
++            Kernel (so called 'kdbus'), in this case the dbus-daemon
++            will be required only to coordinate process lifecycle
++            (such as spawning processes that implement a given
++            service).
++
++            http://www.freedesktop.org/wiki/Software/dbus/
+diff --git a/src/modules/linux-micro/fstab/Kconfig b/src/modules/linux-micro/fstab/Kconfig
+index a2cb624d..e71e8a84 100644
+--- a/src/modules/linux-micro/fstab/Kconfig
++++ b/src/modules/linux-micro/fstab/Kconfig
+@@ -1,4 +1,13 @@
+ config LINUX_MICRO_FSTAB
+ 	tristate "fstab"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Mounts filesystems in /etc/fstab.
++
++            This is a simple implementation that will mount entries,
++            however no filesystem check (fsck) is done, the fifth and
++            sixth fields (fs_freq and fs_passno) are not used.
++
++            The file /etc/fstab is optional, if it doesn't exist the
++            service starts but nothing is mounted.
+diff --git a/src/modules/linux-micro/hostname/Kconfig b/src/modules/linux-micro/hostname/Kconfig
+index 187f2e9e..1bc23223 100644
+--- a/src/modules/linux-micro/hostname/Kconfig
++++ b/src/modules/linux-micro/hostname/Kconfig
+@@ -1,4 +1,12 @@
+ config LINUX_MICRO_HOSTNAME
+ 	tristate "hostname"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Reads /etc/hostname and sets machine hostname.
++
++            The file is read, leading and trailing spaces are ignored
++            and then the resulting string is sent directly to
++            sethostname(2).
++
++            The file /etc/hostname must exist.
+diff --git a/src/modules/linux-micro/locale/Kconfig b/src/modules/linux-micro/locale/Kconfig
+index 6284f788..4df59229 100644
+--- a/src/modules/linux-micro/locale/Kconfig
++++ b/src/modules/linux-micro/locale/Kconfig
+@@ -1,4 +1,28 @@
+ config LINUX_MICRO_LOCALE
+ 	tristate "locale"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Sets locale environment variables.
++
++            This service will mimic systemd-localed.service and read
++            the locale setting from /etc/locale.conf or kernel command
++            line, then setting the environment variables in the
++            current and children processes.
++
++            The format of /etc/locale.conf is key=value, with key
++            being one of: LANG, LANGUAGE, LC_CTYPE, LC_NUMERIC,
++            LC_TIME, LC_COLLATE, LC_MONETARY, LC_MESSAGES, LC_PAPER,
++            LC_NAME, LC_ADDRESS, LC_TELEPHONE, LC_MEASUREMENT,
++            LC_IDENTIFICATION. For details about semantic refer to
++            man:locale(7).
++
++            The same variables may be set from kernel command line by
++            using a prefix "locale.", then to set LANG to en_US.UTF-8
++            use: "locale.LANG=en_US.UTF-8".
++
++            In order to use locales your libc must be compiled with
++            such support and locales to be used must be included in
++            the device disk image (ie: for glibc /usr/lib/locale).
++
++            See http://www.freedesktop.org/software/systemd/man/locale.conf.html
+diff --git a/src/modules/linux-micro/network-up/Kconfig b/src/modules/linux-micro/network-up/Kconfig
+index 7b970456..98b86833 100644
+--- a/src/modules/linux-micro/network-up/Kconfig
++++ b/src/modules/linux-micro/network-up/Kconfig
+@@ -1,4 +1,13 @@
+ config LINUX_MICRO_NETWORK_UP
+ 	tristate "network-up"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            This service will enumerate all network interfaces using
++            netlink and then bring up all of them.
++
++            If the kernel is configured for IPv6 (CONFIG_IPV6=y) then
++            an automatic address is assigned based on the MAC address.
++
++            This service relies on netlink communication with the
++            kernel.
+diff --git a/src/modules/linux-micro/rc-d/Kconfig b/src/modules/linux-micro/rc-d/Kconfig
+index 06f5d785..2e4262ba 100644
+--- a/src/modules/linux-micro/rc-d/Kconfig
++++ b/src/modules/linux-micro/rc-d/Kconfig
+@@ -1,4 +1,28 @@
+ config LINUX_MICRO_RC_D
+ 	tristate "rc-d"
+-	depends on LINUX_MICRO
+-	default n
++	depends on LINUX_MICRO && MODULES=y && m
++	default m if MODULES=y
++	help
++            This is a meta-service that offers rc.d (init.d) like
++            functionality to Soletta's linux-micro platform.
++
++            This service is not to be used directly, instead one must
++            compile it as a dynamically loadable module and create
++            links to it in order to offer new services that will be
++            managed by executing /etc/init.d or /etc/rc.d binaries
++            with known arguments.
++
++            Example: to expose /etc/init.d/atd service to Soletta
++            (sol_platform_start_service("atd")), then:
++
++            $ cd $PREFIX/lib/soletta/modules/linux-micro
++            $ ln -s rc-d.so atd.so # enables the service 'atd' using rc.d
++
++            The /etc/init.d/atd will be then called with the following
++            arguments: start, stop, restart and status. The "status"
++            is called periodically (every 5s) if there is a service
++            monitor (sol_platform_add_service_monitor()).
++
++            Ideally these services are only used during development,
++            for final products we recommend creating a native service
++            implemented in C.
+diff --git a/src/modules/linux-micro/sysctl/Kconfig b/src/modules/linux-micro/sysctl/Kconfig
+index e9b03929..e57e174b 100644
+--- a/src/modules/linux-micro/sysctl/Kconfig
++++ b/src/modules/linux-micro/sysctl/Kconfig
+@@ -1,4 +1,13 @@
+ config LINUX_MICRO_SYSCTL
+ 	tristate "sysctl"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Sets kernel parameters from sysctl.conf files.
++
++            This service will mimic systemd-sysctl.service and read
++            the settings from /etc/sysctl.conf or /run/sysctl.d,
++            /etc/sysctl.d, /usr/local/lib/sysctl.d, /usr/lib/sysctl.d,
++            /lib/sysctl.d. Files are processed in alphabetical order.
++
++            See http://www.freedesktop.org/software/systemd/man/systemd-sysctl.service.html
+diff --git a/src/modules/linux-micro/watchdog/Kconfig b/src/modules/linux-micro/watchdog/Kconfig
+index 3a7d36a5..bd5cb022 100644
+--- a/src/modules/linux-micro/watchdog/Kconfig
++++ b/src/modules/linux-micro/watchdog/Kconfig
+@@ -1,4 +1,18 @@
+ config LINUX_MICRO_WATCHDOG
+ 	tristate "watchdog"
+ 	depends on LINUX_MICRO
+-	default n
++	default m if MODULES=y
++	help
++            Start and keep alive the kernel watchdog.
++
++            Linux provides a watchdog API with both software and
++            hardware implementations. The software implementation may
++            be used to protect against userspace hangups, while the
++            hardware may protect from kernel hangups as well.
++
++            This module will open /dev/watchdog, check the period and
++            start a timer to keep the watchdog alive, avoiding the
++            system to be rebooted. If the application hangs for more
++            than such period, the watchdog will reboot the device.
++
++            See https://www.kernel.org/doc/Documentation/watchdog/watchdog-api.txt
+diff --git a/src/modules/pin-mux/intel-galileo-rev-d/Kconfig b/src/modules/pin-mux/intel-galileo-rev-d/Kconfig
+index 5c632ece..446b9205 100644
+--- a/src/modules/pin-mux/intel-galileo-rev-d/Kconfig
++++ b/src/modules/pin-mux/intel-galileo-rev-d/Kconfig
+@@ -1,4 +1,4 @@
+ config PIN_MUX_INTEL_GALILEO_REV_D
+         tristate "Intel Galileo (Rev D)"
+         depends on HAVE_PIN_MUX
+-        default n
++        default m
+diff --git a/src/modules/pin-mux/intel-galileo-rev-g/Kconfig b/src/modules/pin-mux/intel-galileo-rev-g/Kconfig
+index 82101f13..9d6eaa39 100644
+--- a/src/modules/pin-mux/intel-galileo-rev-g/Kconfig
++++ b/src/modules/pin-mux/intel-galileo-rev-g/Kconfig
+@@ -1,4 +1,4 @@
+ config PIN_MUX_INTEL_GALILEO_REV_G
+         tristate "Intel Galileo Gen 2 (Rev G)"
+         depends on HAVE_PIN_MUX
+-        default n
++        default m
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 0c367eb6..46da8ff5 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -148,30 +148,45 @@ INT_LIB_AR := $(INT_LIBDIR)libshared.a
+ COMMON_CFLAGS ?= $(CFLAGS)
+ 
+ ifeq (y,$(LOG))
+-ifeq (y,$(DEFAULT_LOG_LEVEL_CRITICAL))
+-DEFAULT_LOG_LEVEL := 0
++ifeq (y,$(MAXIMUM_LOG_LEVEL_CRITICAL))
++MAXIMUM_LOG_LEVEL := 0
+ endif
+ 
+-ifeq (y,$(DEFAULT_LOG_LEVEL_ERROR))
+-DEFAULT_LOG_LEVEL := 1
++ifeq (y,$(MAXIMUM_LOG_LEVEL_ERROR))
++MAXIMUM_LOG_LEVEL := 1
+ endif
+ 
+-ifeq (y,$(DEFAULT_LOG_LEVEL_WARNING))
+-DEFAULT_LOG_LEVEL := 2
++ifeq (y,$(MAXIMUM_LOG_LEVEL_WARNING))
++MAXIMUM_LOG_LEVEL := 2
+ endif
+ 
+-ifeq (y,$(DEFAULT_LOG_LEVEL_INFO))
+-DEFAULT_LOG_LEVEL := 3
++ifeq (y,$(MAXIMUM_LOG_LEVEL_INFO))
++MAXIMUM_LOG_LEVEL := 3
+ endif
+ 
+-ifeq (y,$(DEFAULT_LOG_LEVEL_DEBUG))
+-DEFAULT_LOG_LEVEL := 4
++ifeq (y,$(MAXIMUM_LOG_LEVEL_DEBUG))
++MAXIMUM_LOG_LEVEL := 4
+ endif
+ 
+-COMMON_CFLAGS += -DSOL_LOG_LEVEL_MAXIMUM=$(DEFAULT_LOG_LEVEL)
++ifneq (y,$(MAXIMUM_LOG_LEVEL_UNLIMITED))
++COMMON_CFLAGS += -DSOL_LOG_LEVEL_MAXIMUM=$(MAXIMUM_LOG_LEVEL)
++endif
+ 
+ endif #LOG
+ 
++ifeq (,$(PLATFORM_NAME))
++ifeq (y,$(SOL_PLATFORM_LINUX))
++PLATFORM_NAME = linux
++endif
++ifeq (y,$(PLATFORM_RIOTOS))
++PLATFORM_NAME = riotos
++endif
++endif #!PLATFORM_NAME
++
++ifneq (,$(PLATFORM_NAME))
++COMMON_CFLAGS += -D PLATFORM_NAME=\"$(PLATFORM_NAME)\"
++endif
++
+ COMMON_CFLAGS += -D_GNU_SOURCE=1 -DHAVE_DECL_STRNDUPA=1 -DHAVE_ACCEPT4=1
+ 
+ ## since we no other flow resolver, couldn't we remove this parametrization?

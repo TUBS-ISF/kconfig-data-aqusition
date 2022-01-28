@@ -1,0 +1,144 @@
+"2007-05-18 09:45:36 +0000"
+diff --git a/coreutils/sleep.c b/coreutils/sleep.c
+index b758de33b..592005bab 100644
+--- a/coreutils/sleep.c
++++ b/coreutils/sleep.c
+@@ -61,8 +61,6 @@ int sleep_main(int argc, char **argv)
+ #endif /* FEATURE_FANCY_SLEEP */
+ 
+ 	if (sleep(duration)) {
+-//for hush debugging:
+-sleep(1);
+ 		bb_perror_nomsg_and_die();
+ 	}
+ 
+diff --git a/include/applets.h b/include/applets.h
+index 99e6aceb5..e4dff119a 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -102,6 +102,7 @@ USE_CPIO(APPLET(cpio, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CROND(APPLET(crond, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_CRONTAB(APPLET(crontab, _BB_DIR_USR_BIN, _BB_SUID_ALWAYS))
+ USE_CRYPTPW(APPLET(cryptpw, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_CTTYHACK(APPLET_NOUSAGE(cttyhack, cttyhack, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_CUT(APPLET_NOEXEC(cut, cut, _BB_DIR_USR_BIN, _BB_SUID_NEVER, cut))
+ USE_DATE(APPLET(date, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_DC(APPLET(dc, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+diff --git a/shell/Config.in b/shell/Config.in
+index 027993483..253752bc3 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -270,4 +270,24 @@ config FEATURE_SH_STANDALONE
+ #	  that exact location with that exact name, this option will not work at
+ #	  all.
+ 
++config CTTYHACK
++	bool "cttyhack"
++	default n
++	help
++	  One common problem reported on the mailing list is "can't access tty;
++	  job control turned off" error message which typically appears when
++	  one tries to use shell with stdin/stdout opened to /dev/console.
++	  This device is special - it cannot be a controlling tty.
++
++	  Proper solution is to use correct device instead of /dev/console.
++
++	  cttyhack provides "quick and dirty" solution to this problem.
++	  It analyzes stdin with various ioctls, trying to determine whether
++	  it is a /dev/ttyN or /dev/ttySN (virtual terminal or serial line).
++	  If it detects one, it closes stdin/out/err and reopens that device.
++	  Then it executes given program. Usage example for /etc/inittab
++	  (for busybox init):
++
++	  ::respawn:/bin/cttyhack /bin/sh
++
+ endmenu
+diff --git a/shell/Kbuild b/shell/Kbuild
+index 6b58040fc..944eaff51 100644
+--- a/shell/Kbuild
++++ b/shell/Kbuild
+@@ -9,3 +9,5 @@ lib-$(CONFIG_ASH)  += ash.o
+ lib-$(CONFIG_HUSH) += hush.o
+ lib-$(CONFIG_LASH) += lash.o
+ lib-$(CONFIG_MSH)  += msh.o
++
++lib-$(CONFIG_CTTYHACK) += cttyhack.o
+diff --git a/shell/cttyhack.c b/shell/cttyhack.c
+new file mode 100644
+index 000000000..cdd0ed1d6
+--- /dev/null
++++ b/shell/cttyhack.c
+@@ -0,0 +1,73 @@
++/* This code is adapted from busybox project
++ *
++ * Licensed under GPLv2
++ */
++#include "libbb.h"
++
++/* From <linux/vt.h> */
++struct vt_stat {
++	unsigned short v_active;	/* active vt */
++	unsigned short v_signal;	/* signal to send */
++	unsigned short v_state;	/* vt bitmask */
++};
++enum { VT_GETSTATE = 0x5603 };	/* get global vt state info */
++
++/* From <linux/serial.h> */
++struct serial_struct {
++	int	type;
++	int	line;
++	unsigned int	port;
++	int	irq;
++	int	flags;
++	int	xmit_fifo_size;
++	int	custom_divisor;
++	int	baud_base;
++	unsigned short	close_delay;
++	char	io_type;
++	char	reserved_char[1];
++	int	hub6;
++	unsigned short	closing_wait; /* time to wait before closing */
++	unsigned short	closing_wait2; /* no longer used... */
++	unsigned char	*iomem_base;
++	unsigned short	iomem_reg_shift;
++	unsigned int	port_high;
++	unsigned long	iomap_base;	/* cookie passed into ioremap */
++	int	reserved[1];
++};
++
++int cttyhack_main(int argc, char **argv) ATTRIBUTE_NORETURN;
++int cttyhack_main(int argc, char **argv)
++{
++	int fd;
++	char console[sizeof(int)*3 + 16];
++	union {
++		struct vt_stat vt;
++		struct serial_struct sr;
++		char paranoia[sizeof(struct serial_struct) * 3];
++	} u;
++
++	if (!*++argv) {
++		bb_show_usage();
++	}
++
++	strcpy(console, "/dev/tty");
++	if (ioctl(0, TIOCGSERIAL, &u.sr) == 0) {
++		/* this is a serial console */
++		sprintf(console + 8, "S%d", u.sr.line);
++	} else if (ioctl(0, VT_GETSTATE, &u.vt) == 0) {
++		/* this is linux virtual tty */
++		sprintf(console + 8, "S%d" + 1, u.vt.v_active);
++	}
++
++	if (console[8]) {
++		fd = xopen(console, O_RDWR);
++		//bb_error_msg("switching to '%s'", console);
++		dup2(fd, 0);
++		dup2(fd, 1);
++		dup2(fd, 2);
++		while (fd > 2) close(fd--);
++	}
++
++	execvp(argv[0], argv);
++	bb_perror_msg_and_die("cannot exec '%s'", argv[0]);
++}

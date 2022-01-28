@@ -1,0 +1,189 @@
+"2005-10-27 22:55:50 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index a814ce1b1..883e55990 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -625,6 +625,9 @@
+ #ifdef CONFIG_SWAPONOFF
+ 	APPLET(swapon, swap_on_off_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_SWITCH_ROOT
++	APPLET(switch_root, switch_root_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_SYNC
+ 	APPLET(sync, sync_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index bef6a4dd2..69c50b97b 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2735,6 +2735,12 @@
+ 	"Options:\n" \
+ 	"\t-a\tStart swapping on all swap devices"
+ 
++#define switch_root_trivial_usage \
++	"NEW_ROOT NEW_INIT [ARGUMENTS_TO_INIT]"
++#define switch_root_full_usage \
++	"Use from PID 1 under initramfs to free initramfs, chroot to NEW_ROOT,\n" \
++	"and exec NEW_INIT.\n"
++
+ #define sync_trivial_usage \
+ 	""
+ #define sync_full_usage \
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index dc6d8fdad..fe71dac2c 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -288,6 +288,28 @@ config CONFIG_PIVOT_ROOT
+ 	  of wild and crazy things with your Linux system and is far more
+ 	  powerful than 'chroot'.
+ 
++	  Note: This is for initrd in linux 2.4.  Under initramfs (introduced
++	  in linux 2.6) use switch_root instead.
++
++config CONFIG_SWITCH_ROOT
++	bool "switch_root"
++	default n
++	help
++	  The switch_root utility is used from initramfs to select a new
++	  root device.  Under initramfs, you have to use this instead of
++	  pivot_root.  (Stop reading here if you don't care why.)
++
++	  Booting with initramfs extracts a gzipped cpio archive into rootfs
++	  (which is a variant of ramfs/tmpfs).  Because rootfs can't be moved
++	  or unmounted*, pivot_root will not work from initramfs.  Instead,
++	  switch_root deletes everything out of rootfs (including itself),
++	  does a mount --move that overmounts rootfs with the new root, and
++	  then execs the specified init program.
++
++	  * Because the Linux kernel uses rootfs internally as the starting
++	  and ending point for searching through the kernel's doubly linked
++	  list of active mount points.  That's why.
++
+ config CONFIG_RDATE
+ 	bool "rdate"
+ 	default n
+diff --git a/util-linux/switch_root.c b/util-linux/switch_root.c
+new file mode 100644
+index 000000000..242699560
+--- /dev/null
++++ b/util-linux/switch_root.c
+@@ -0,0 +1,118 @@
++/* vi:set ts=4:*/
++
++#include <dirent.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <sys/mount.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <sys/vfs.h>
++#include <unistd.h>
++
++#include "busybox.h"
++
++// Make up for header deficiencies.
++
++#ifndef RAMFS_MAGIC
++#define RAMFS_MAGIC		0x858458f6
++#endif
++
++#ifndef TMPFS_MAGIC
++#define TMPFS_MAGIC		0x01021994
++#endif
++
++#ifndef MS_MOVE
++#define MS_MOVE			8192
++#endif
++
++dev_t rootdev;
++
++// Recursively delete contents of rootfs.
++
++static void delete_contents(char *directory)
++{
++	DIR *dir;
++	struct dirent *d;
++	struct stat st;
++
++	// Don't descend into other filesystems
++	if (stat(directory,&st) || st.st_dev != rootdev) return;
++
++	// Recursively delete the contents of directories.
++	if (S_ISDIR(st.st_mode)) {
++		if((dir = opendir(directory))) {
++			while ((d = readdir(dir))) {
++				char *newdir=d->d_name;
++
++				// Skip . and ..
++				if(*newdir=='.' && (!newdir[1] || (newdir[1]=='.' && !newdir[2])))
++					continue;
++				
++				// Recurse to delete contents
++				newdir = alloca(strlen(directory) + strlen(d->d_name) + 2);
++				sprintf(newdir, "%s/%s", directory, d->d_name);
++				delete_contents(newdir);
++			}
++			closedir(dir);
++			
++			// Directory should now be empty.  Zap it.
++			printf("rmdir %s\n",directory); // rmdir(directory);
++		}
++		
++	// It wasn't a directory.  Zap it.
++		
++	} else printf("unlink %s\n",directory); //unlink(directory);
++}
++
++int switch_root_main(int argc, char *argv[])
++{
++	char *newroot, *console="/dev/console";
++	struct stat st1, st2;
++	struct statfs stfs;
++
++	// Parse args (-c console)
++
++	bb_opt_complementally="-2";
++	bb_getopt_ulflags(argc,argv,"c:",&console);
++	
++	// Change to new root directory and verify it's a different fs.
++
++	newroot=argv[optind++];
++	
++	if (chdir(newroot) || stat(".", &st1) || stat("/", &st2) ||
++		st1.st_dev == st2.st_dev)
++	{
++		bb_error_msg_and_die("bad newroot %s",newroot);
++	}
++	rootdev=st2.st_dev;
++	
++	// Additional sanity checks: we're about to rm -rf /,  so be REALLY SURE
++	// we mean it.  (I could make this a CONFIG option, but I would get email
++	// from all the people who WILL eat their filesystemss.)
++
++	if (stat("/init", &st1) || !S_ISREG(st1.st_mode) || statfs("/", &stfs) ||
++		(stfs.f_type != RAMFS_MAGIC && stfs.f_type != TMPFS_MAGIC) ||
++		getpid() != 1)
++	{
++		bb_error_msg_and_die("not rootfs");
++	}
++
++	// Zap everything out of rootdev
++	delete_contents("/");
++	
++	// Overmount / with newdir
++
++	if (mount(".", "/", NULL, MS_MOVE, NULL) || chdir("/"))
++		bb_error_msg_and_die("moving root");
++	
++	// Reopen stdin/stdout/stderr to /dev/console
++	close(0);
++	if(open(console, O_RDWR) < 0)
++		bb_error_msg_and_die("Bad console '%s'",console);
++	dup2(0, 1);
++	dup2(0, 2);
++
++	// Exec real init.  (This is why we must be pid 1.)
++	execv(argv[optind],argv+optind+1);
++	bb_error_msg_and_die("Bad init '%s'",argv[optind]);
++}

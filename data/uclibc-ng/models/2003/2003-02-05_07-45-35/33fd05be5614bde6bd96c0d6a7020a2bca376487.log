@@ -1,0 +1,91 @@
+"2003-02-05 07:45:35 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 6dd0c4e20..c02c28c8f 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -27,6 +27,23 @@ config HAVE_SHARED
+ 	  answer Y here.  If you only want to build uClibc as a static library,
+ 	  then answer N.
+ 
++config ADD_LIBGCC_FUNCTIONS
++	bool "Add unresolved libgcc symbols to uClibc"
++	depends on HAVE_SHARED
++	default n
++	help
++	  If you answer Y here, all unresolved functions provided by the libgcc
++	  library that are used by uClibc will be added directly into the
++	  uClibc library.  If your gcc compiler only provides a static libgcc
++	  library, then enabling this option can reduce the size of your
++	  binaries by preventing these functions from being staticly linked
++	  into every binary.  If you have compiled uClibc as PIC code, one
++	  potential size effect of this option is that you may end up adding
++	  non-PIC libgcc code into your shared uClibc library, resulting in a
++	  non shareable text segment (thereby wasting a bunch of ram).  If your
++	  compiler supports a shared libgcc library, you should certainly leave
++	  this option disabled.  Regardless, the safest answer is N.
++
+ config BUILD_UCLIBC_LDSO
+ 	bool "Compile native shared library loader"
+ 	depends on HAVE_SHARED
+@@ -39,7 +56,7 @@ config BUILD_UCLIBC_LDSO
+ 
+ config FORCE_SHAREABLE_TEXT_SEGMENTS
+ 	bool "Only load shared libraries which can share their text segment"
+-	depends on BUILD_UCLIBC_LDSO && UCLIBC_COMPLETELY_PIC
++	depends on BUILD_UCLIBC_LDSO && UCLIBC_COMPLETELY_PIC && !ADD_LIBGCC_SYMBOLS
+ 	default n
+ 	help
+ 	  If you answer Y here, the uClibc native shared library loader will
+diff --git a/libc/Makefile b/libc/Makefile
+index 04f8e674e..a9a7e3244 100644
+--- a/libc/Makefile
++++ b/libc/Makefile
+@@ -36,6 +36,12 @@ else
+ CRTOBJS="../../lib/crt0.o"
+ endif
+ 
++ifeq ($(strip $(ADD_LIBGCC_FUNCTIONS)),y)
++LIBGCC_NEED=./tmp/libgcc-need.a
++else
++LIBGCC=
++endif
++
+ DIRS = misc pwd_grp stdio string termios inet signal stdlib sysdeps unistd
+ 
+ # Check if the target architecture has a version script for
+@@ -54,17 +60,11 @@ ar-target:
+ $(LIBNAME): subdirs ar-target
+ 
+ 
+-shared: $(TOPDIR)lib/$(LIBNAME)
+-	@rm -rf tmp
+-	@mkdir tmp
+-	$(AR) rv ./tmp/libgcc-need.a
+-	@(cd tmp && CC=$(CC) LD=$(LD) LDFLAGS=$(CPU_LDFLAGS-y) NM=$(NM) AR=$(AR) \
+-		LIBGCC=$(LIBGCC) CRTOBJS=$(CRTOBJS) \
+-		/bin/sh $(TOPDIR)../extra/scripts/get-needed-libgcc-objects.sh)
++shared: $(TOPDIR)lib/$(LIBNAME) $(LIBGCC_NEED)
+ 	$(LD) $(LDFLAGS) $(VERSION_SCRIPT) -soname=$(SHARED_MAJORNAME) -o $(SHARED_FULLNAME) \
+-		--whole-archive ./tmp/libgcc-need.a $(LIBNAME) --no-whole-archive \
+-		-init __uClibc_init $(TOPDIR)/libc/misc/internals/interp.o \
+-		$(LIBGCC)
++		--whole-archive $(LIBGCC_NEED) $(LIBNAME) \
++		$(TOPDIR)/libc/misc/internals/interp.o --no-whole-archive \
++		-init __uClibc_init $(LIBGCC)
+ 	@true #rm -rf tmp
+ 	install -d $(TOPDIR)lib
+ 	rm -f $(TOPDIR)lib/$(SHARED_FULLNAME)
+@@ -72,6 +72,13 @@ shared: $(TOPDIR)lib/$(LIBNAME)
+ 	(cd ../lib && ln -sf $(SHARED_FULLNAME) libc.so);
+ 	(cd ../lib && ln -sf $(SHARED_FULLNAME) $(SHARED_MAJORNAME));
+ 
++$(LIBGCC_NEED): $(TOPDIR)lib/$(LIBNAME)
++	@rm -rf tmp
++	@mkdir tmp
++	$(AR) rv $@
++	@(cd tmp && CC=$(CC) LD=$(LD) LDFLAGS=$(CPU_LDFLAGS-y) NM=$(NM) AR=$(AR) \
++		LIBGCC=$(LIBGCC) CRTOBJS=$(CRTOBJS) \
++		/bin/sh $(TOPDIR)../extra/scripts/get-needed-libgcc-objects.sh)
+ 
+ halfclean:
+ 	@rm -f $(LIBNAME) uClibc_config.h

@@ -1,0 +1,175 @@
+"2006-11-22 16:39:48 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 80ee222d8..d3e38d813 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -284,6 +284,7 @@ USE_BB_SYSCTL(APPLET(sysctl, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_SYSLOGD(APPLET(syslogd, _BB_DIR_SBIN, _BB_SUID_NEVER))
+ USE_TAIL(APPLET(tail, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TAR(APPLET(tar, _BB_DIR_BIN, _BB_SUID_NEVER))
++USE_TASKSET(APPLET(taskset, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TEE(APPLET(tee, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TELNET(APPLET(telnet, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_TELNETD(APPLET(telnetd, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 69e958d68..7ba79ff87 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -3001,6 +3001,23 @@ USE_FEATURE_START_STOP_DAEMON_FANCY( \
+ 	"$ zcat /tmp/tarball.tar.gz | tar -xf -\n" \
+ 	"$ tar -cf /tmp/tarball.tar /usr/local\n"
+ 
++#define taskset_trivial_usage \
++	        "[OPTIONS] [mask] [pid | command [arg]...]"
++#define taskset_full_usage \
++	        "Set or get CPU affinity.\n\n" \
++        "Options:\n" \
++        "\t-p\toperate on an existing PID"
++#define taskset_example_usage \
++	        "$ taskset 0x7 ./dgemm_test&\n" \
++        "$ taskset -p 0x1 $!\n" \
++        "pid 4790's current affinity mask: 7\n" \
++        "pid 4790's new affinity mask: 1\n" \
++        "$ taskset 0x7 /bin/sh -c './taskset -p 0x1 $$'\n" \
++        "pid 6671's current affinity mask: 1\n" \
++        "pid 6671's new affinity mask: 1\n" \
++        "$ taskset -p 1\n"
++        "pid 1's current affinity mask: 3\n"
++
+ #define tee_trivial_usage \
+ 	"[OPTION]... [FILE]..."
+ #define tee_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index e093924d7..90e2b6fb1 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -340,6 +340,16 @@ config TASKSET
+ 	default n
+ 	help
+ 	  Retrieve or set a processes's CPU affinity.
++	  This requires sched_{g,s}etaffinity support in your libc.
++
++config FEATURE_TASKSET_FANCY
++	bool "fancy output"
++	default y
++	depends on TASKSET
++	help
++	  Add code for fancy output. This merely silences a compiler-warning
++	  and adds about 135 Bytes. May be needed for machines with alot
++	  of CPUs.
+ 
+ config TIME
+ 	bool "time"
+diff --git a/miscutils/Kbuild b/miscutils/Kbuild
+index 16c76fa38..8d1b9f484 100644
+--- a/miscutils/Kbuild
++++ b/miscutils/Kbuild
+@@ -25,5 +25,6 @@ lib-$(CONFIG_RUNLEVEL)    += runlevel.o
+ lib-$(CONFIG_RX)          += rx.o
+ lib-$(CONFIG_SETSID)      += setsid.o
+ lib-$(CONFIG_STRINGS)     += strings.o
++lib-$(CONFIG_TASKSET)     += taskset.o
+ lib-$(CONFIG_TIME)        += time.o
+ lib-$(CONFIG_WATCHDOG)    += watchdog.o
+diff --git a/miscutils/taskset.c b/miscutils/taskset.c
+new file mode 100644
+index 000000000..4496aa5b4
+--- /dev/null
++++ b/miscutils/taskset.c
+@@ -0,0 +1,96 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * taskset - retrieve or set a processes' CPU affinity
++ * Copyright (c) 2006 Bernhard Fischer
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++
++#include "busybox.h"
++#include <sched.h>
++#include <unistd.h>
++#include <getopt.h> /* optind */
++
++#if ENABLE_FEATURE_TASKSET_FANCY
++#define TASKSET_PRINTF_MASK "%s"
++#define from_cpuset(x) __from_cpuset(&x)
++/* craft a string from the mask */
++static char *__from_cpuset(cpu_set_t *mask) {
++	int i;
++	char *ret = 0, *str = xzalloc(9);
++
++	for (i = CPU_SETSIZE - 4; i >= 0; i -= 4) {
++		char val = 0;
++		int off;
++		for (off = 0; off <= 3; ++off)
++			if (CPU_ISSET(i+off, mask))
++				val |= 1<<off;
++
++		if (!ret && val)
++			ret = str;
++		*str++ = (val-'0'<=9) ? (val+48) : (val+87);
++	}
++	return ret;
++}
++#else
++#define TASKSET_PRINTF_MASK "%x"
++#define from_cpuset(mask) mask
++#endif
++
++#define TASKSET_OPT_p (1)
++
++int taskset_main(int argc, char** argv)
++{
++	cpu_set_t mask, new_mask;
++	pid_t pid = 0;
++	unsigned long ul;
++	const char *state = "current\0new";
++	char *p_opt = NULL, *aff = NULL;
++
++	ul = getopt32(argc, argv, "+p:", &p_opt);
++
++	if (ul & TASKSET_OPT_p) {
++		if (argc == optind+1) { /* -p <aff> <pid> */
++			aff = p_opt;
++			p_opt = argv[optind];
++		}
++		argv += optind; /* me -p <arg> */
++		pid = xatoul_range(p_opt, 1, ULONG_MAX); /* -p <pid> */
++	} else
++		aff = *++argv; /* <aff> <cmd...> */
++	if (aff) {
++		unsigned i = 0;
++		unsigned long l = xstrtol_range(aff, 16, 1, ULONG_MAX);
++
++		CPU_ZERO(&new_mask);
++		while (i < CPU_SETSIZE && l >= (1<<i)) {
++			if ((1<<i) & l)
++				CPU_SET(i, &new_mask);
++			++i;
++		}
++	}
++
++	if (ul & TASKSET_OPT_p) {
++print_aff:
++		if (sched_getaffinity(pid, sizeof (mask), &mask) < 0)
++			bb_perror_msg_and_die("Failed to %cet pid %d's affinity", 'g', pid);
++		printf("pid %d's %s affinity mask: "TASKSET_PRINTF_MASK"\n",
++				pid, state, from_cpuset(mask));
++		if (!*argv) /* no new affinity given or we did print already, done. */
++			return EXIT_SUCCESS;
++	}
++
++	if (sched_setaffinity(pid, sizeof (new_mask), &new_mask))
++		bb_perror_msg_and_die("Failed to %cet pid %d's affinity", 's', pid);
++	if (ul & TASKSET_OPT_p) {
++		state += 8;
++		++argv;
++		goto print_aff;
++	}
++	++argv;
++	execvp(*argv, argv);
++	bb_perror_msg_and_die("%s", *argv);
++}
++#undef TASKSET_OPT_p
++#undef TASKSET_PRINTF_MASK
++#undef from_cpuset

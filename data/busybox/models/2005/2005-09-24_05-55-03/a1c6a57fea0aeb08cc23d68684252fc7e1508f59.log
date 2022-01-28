@@ -1,0 +1,116 @@
+"2005-09-24 05:55:03 +0000"
+diff --git a/e2fsprogs/Config.in b/e2fsprogs/Config.in
+index c4022bb89..4a564df60 100644
+--- a/e2fsprogs/Config.in
++++ b/e2fsprogs/Config.in
+@@ -25,15 +25,25 @@ config CONFIG_MKE2FS
+ 	  symlinks 'mkfs.ext2' and 'mkfs.ext3' are also provided.
+ 
+ config CONFIG_TUNE2FS
+-	bool "tune2fs (and e2label/findfs)"
++	bool "tune2fs"
+ 	default n
+ 	help
+ 	  tune2fs allows the system administrator to adjust various tunable 
+ 	  filesystem parameters on Linux ext2/ext3 filesystems.
+ 
++config CONFIG_E2LABEL
++	bool "e2label"
++	default n
++	depends on CONFIG_TUNE2FS
++	help
+ 	  e2label will display or change the filesystem label on the ext2 
+ 	  filesystem located on device.
+ 
++config CONFIG_FINDFS
++	bool "findfs"
++	default n
++	depends on CONFIG_TUNE2FS
++	help
+ 	  findfs will search the disks in the system looking for a filesystem 
+ 	  which has a label matching label or a UUID equal to uuid.
+ 
+diff --git a/e2fsprogs/tune2fs.c b/e2fsprogs/tune2fs.c
+index e4f904ea0..24c4db3c2 100644
+--- a/e2fsprogs/tune2fs.c
++++ b/e2fsprogs/tune2fs.c
+@@ -375,7 +375,7 @@ err:
+ 	exit(1);
+ }
+ 
+-
++#ifdef CONFIG_E2LABEL
+ static void parse_e2label_options(int argc, char ** argv)
+ {
+ 	if ((argc < 2) || (argc > 3))
+@@ -393,6 +393,7 @@ static void parse_e2label_options(int argc, char ** argv)
+ 	} else 
+ 		print_label++;
+ }
++#endif
+ 
+ static time_t parse_time(char *str)
+ {
+@@ -613,6 +614,7 @@ static void parse_tune2fs_options(int argc, char **argv)
+ 		bb_error_msg_and_die("Unable to resolve '%s'", argv[optind]);
+ }
+ 
++#ifdef CONFIG_FINDFS
+ static void do_findfs(int argc, char **argv)
+ {
+ 	char *dev;
+@@ -624,8 +626,9 @@ static void do_findfs(int argc, char **argv)
+ 	if (!dev)
+ 		bb_error_msg_and_die("Unable to resolve '%s'", argv[1]);
+ 	puts(dev);
+-	exit(0);
++	return 0;
+ }
++#endif
+ 
+ int tune2fs_main(int argc, char **argv)
+ {
+@@ -633,13 +636,20 @@ int tune2fs_main(int argc, char **argv)
+ 	ext2_filsys fs;
+ 	struct ext2_super_block *sb;
+ 	io_manager io_ptr;
++#if defined(CONFIG_FINDFS) || defined(CONFIG_E2LABEL)
+ 	char *program_name = basename(argv[0]);
++#endif
+ 
++#ifdef CONFIG_FINDFS
+ 	if (strcmp(program_name, "findfs") == 0)
+-		do_findfs(argc, argv);
++		return do_findfs(argc, argv);
++#endif
++
++#ifdef CONFIG_E2LABEL
+ 	if (strcmp(program_name, "e2label") == 0)
+ 		parse_e2label_options(argc, argv);
+ 	else
++#endif
+ 		parse_tune2fs_options(argc, argv);
+ 
+ 	io_ptr = unix_io_manager;
+diff --git a/include/applets.h b/include/applets.h
+index 56ec0a6de..0b4faacaa 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -182,7 +182,7 @@
+ #ifdef CONFIG_DUMPLEASES
+ 	APPLET(dumpleases, dumpleases_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+-#ifdef CONFIG_TUNE2FS
++#ifdef CONFIG_E2LABEL
+ 	APPLET_NOUSAGE("e2label", tune2fs_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
+ #endif
+ #ifdef CONFIG_ECHO
+@@ -227,7 +227,7 @@
+ #ifdef CONFIG_FIND
+ 	APPLET(find, find_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+-#ifdef CONFIG_TUNE2FS
++#ifdef CONFIG_FINDFS
+ 	APPLET_NOUSAGE("findfs", tune2fs_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
+ #endif
+ #ifdef CONFIG_FOLD

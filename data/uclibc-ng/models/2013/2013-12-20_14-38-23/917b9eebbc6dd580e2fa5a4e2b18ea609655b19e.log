@@ -1,0 +1,1628 @@
+"2013-12-20 14:38:23 +0100"
+diff --git a/Rules.mak b/Rules.mak
+index bab3fc5b5..82a166c92 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -280,6 +280,7 @@ GCC_VER := $(subst ., ,$(GCC_VER))
+ GCC_MAJOR_VER ?= $(word 1,$(GCC_VER))
+ #GCC_MINOR_VER ?= $(word 2,$(GCC_VER))
+ 
++ifneq ($(TARGET_ARCH),arc)
+ ifeq ($(GCC_MAJOR_VER),4)
+ # shrinks code, results are from 4.0.2
+ # 0.36%
+@@ -292,7 +293,7 @@ OPTIMIZATION += $(CFLAG_-fno-tree-dominator-opts)
+ $(eval $(call check-gcc-var,-fno-strength-reduce))
+ OPTIMIZATION += $(CFLAG_-fno-strength-reduce)
+ endif
+-
++endif
+ 
+ # CPU_CFLAGS-y contain options which are not warnings,
+ # not include or library paths, and not optimizations.
+@@ -551,6 +552,12 @@ ifeq ($(TARGET_ARCH),c6x)
+ 	CPU_LDFLAGS-y += $(CPU_CFLAGS)
+ endif
+ 
++ifeq ($(TARGET_ARCH),arc)
++	CPU_CFLAGS-y += -mlock -mswape
++	CPU_CFLAGS-$(CONFIG_ARC_CPU_700) += -mA7
++	CPU_LDFLAGS-y += $(CPU_CFLAGS) -marclinux
++endif
++
+ $(eval $(call check-gcc-var,$(PIEFLAG_NAME)))
+ PIEFLAG := $(CFLAG_$(PIEFLAG_NAME))
+ ifeq ($(PIEFLAG),)
+diff --git a/extra/Configs/Config.arc b/extra/Configs/Config.arc
+new file mode 100644
+index 000000000..40ff114cf
+--- /dev/null
++++ b/extra/Configs/Config.arc
+@@ -0,0 +1,23 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++config TARGET_ARCH
++	default "arc"
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_ANY_ENDIAN
++
++choice
++	prompt "Target Processor Type"
++	default CONFIG_ARC_CPU_700
++
++config CONFIG_ARC_CPU_700
++	bool "ARC700"
++	select ARCH_HAS_MMU
++	help
++	  ARCompact ISA based ARC CPU
++
++endchoice
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index fced1df2d..778900269 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -16,6 +16,7 @@ config VERSION
+ choice
+ 	prompt "Target Architecture"
+ 	default TARGET_alpha if DESIRED_TARGET_ARCH = "alpha"
++	default TARGET_arc if DESIRED_TARGET_ARCH = "arc"
+ 	default TARGET_arm if DESIRED_TARGET_ARCH = "arm"
+ 	default TARGET_avr32 if DESIRED_TARGET_ARCH = "avr32"
+ 	default TARGET_bfin if DESIRED_TARGET_ARCH = "bfin"
+@@ -47,6 +48,9 @@ choice
+ config TARGET_alpha
+ 	bool "alpha"
+ 
++config TARGET_arc
++	bool "arc"
++
+ config TARGET_arm
+ 	bool "arm"
+ 
+@@ -238,6 +242,10 @@ if TARGET_c6x
+ source "extra/Configs/Config.c6x"
+ endif
+ 
++if TARGET_arc
++source "extra/Configs/Config.arc"
++endif
++
+ config TARGET_SUBARCH
+ 	string
+ 	default "e500" if CONFIG_E500
+diff --git a/libc/sysdeps/linux/arc/Makefile b/libc/sysdeps/linux/arc/Makefile
+new file mode 100644
+index 000000000..94b43e117
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/arc/Makefile.arch b/libc/sysdeps/linux/arc/Makefile.arch
+new file mode 100644
+index 000000000..656ea3518
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/Makefile.arch
+@@ -0,0 +1,11 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++CSRC-y := syscall.c sigaction.c __syscall_error.c cacheflush.c
++
++SSRC-y := sigrestorer.S __longjmp.S setjmp.S bsd-setjmp.S bsd-_setjmp.S \
++	vfork.S clone.S
+diff --git a/libc/sysdeps/linux/arc/__longjmp.S b/libc/sysdeps/linux/arc/__longjmp.S
+new file mode 100644
+index 000000000..91d1852af
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/__longjmp.S
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sysdep.h>
++
++;@ r0 = jump buffer from which regs will be restored
++;@ r1 = value that setjmp( ) will return due to this longjmp
++
++ENTRY(__longjmp)
++
++	ld_s r13, [r0]
++	ld_s r14, [r0,4]
++	ld   r15, [r0,8]
++	ld   r16, [r0,12]
++	ld   r17, [r0,16]
++	ld   r18, [r0,20]
++	ld   r19, [r0,24]
++	ld   r20, [r0,28]
++	ld   r21, [r0,32]
++	ld   r22, [r0,36]
++	ld   r23, [r0,40]
++	ld   r24, [r0,44]
++	ld   r25, [r0,48]
++
++	ld   blink, [r0,60]	; load it early enough to not stall the pipeline
++	ld   fp,    [r0,52]
++	ld   sp,    [r0,56]
++
++	mov.f  r0, r1	; get the setjmp return value(due to longjmp) in place
++
++	j.d    [blink]	; to caller of setjmp location, right after the call
++	mov.z  r0, 1	; can't let setjmp return 0 when it is due to longjmp
++
++END(__longjmp)
++libc_hidden_def(__longjmp)
+diff --git a/libc/sysdeps/linux/arc/__syscall_error.c b/libc/sysdeps/linux/arc/__syscall_error.c
+new file mode 100644
+index 000000000..962d743e4
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/__syscall_error.c
+@@ -0,0 +1,15 @@
++/* Wrapper for setting errno.
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <sys/syscall.h>
++
++int __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/arc/bits/byteswap.h b/libc/sysdeps/linux/arc/bits/byteswap.h
+new file mode 100644
+index 000000000..75fa3590d
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/byteswap.h
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ *
++ */
++
++#ifndef _ASM_BITS_BYTESWAP_H
++#define _ASM_BITS_BYTESWAP_H 1
++
++#ifdef __Xswape	/* gcc defined if -mswape is enabled */
++
++#define __bswap_non_constant_32(x)			\
++	__extension__ 					\
++	({ unsigned int __bswap_32_v = x; 		\
++	__asm__ ("swape %0, %0" : "+r" (__bswap_32_v));	\
++	__bswap_32_v; })
++
++#endif	/* __Xswape */
++
++#endif	/* _ASM_BITS_BYTESWAP_H */
++
++#include <bits/byteswap-common.h>
+diff --git a/libc/sysdeps/linux/arc/bits/endian.h b/libc/sysdeps/linux/arc/bits/endian.h
+new file mode 100755
+index 000000000..41163c8ca
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/endian.h
+@@ -0,0 +1,15 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++/* ARC support either endianness.  */
++#ifdef __BIG_ENDIAN__
++#define __BYTE_ORDER __BIG_ENDIAN
++#else
++#define __BYTE_ORDER __LITTLE_ENDIAN
++#endif
+diff --git a/libc/sysdeps/linux/arc/bits/fcntl.h b/libc/sysdeps/linux/arc/bits/fcntl.h
+new file mode 100755
+index 000000000..71136daee
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/fcntl.h
+@@ -0,0 +1,223 @@
++/* O_*, F_*, FD_* bit values for Linux.
++ *
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	  0003
++#define O_RDONLY	    00
++#define O_WRONLY	    01
++#define O_RDWR		    02
++#define O_CREAT		  0100	/* not fcntl */
++#define O_EXCL		  0200	/* not fcntl */
++#define O_NOCTTY	  0400	/* not fcntl */
++#define O_TRUNC		 01000	/* not fcntl */
++#define O_APPEND	 02000
++#define O_NONBLOCK	 04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		010000
++#define O_FSYNC		O_SYNC
++#define O_ASYNC		020000
++
++#ifdef __USE_GNU
++# define O_DIRECT	040000	/* Direct disk access.	*/
++# define O_DIRECTORY   0200000	/* Must be a directory.	 */
++# define O_NOFOLLOW    0400000	/* Do not follow links.	 */
++# define O_NOATIME    01000000	/* Do not set atime.  */
++# define O_CLOEXEC    02000000	/* Set close_on_exec.  */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE   0100000
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	12	/* Get record locking info.  */
++#define F_SETLK64	13	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	14	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_XOPEN2K
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++# define F_DUPFD_CLOEXEC 1030	/* Duplicate file descriptor with
++				   close-on-exit set on new fd.  */
++#endif
++
++/* For F_[GET|SET]FL.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++/* Flags for SYNC_FILE_RANGE.  */
++# define SYNC_FILE_RANGE_WAIT_BEFORE	1 /* Wait upon writeout of all pages
++					     in the range before performing the
++					     write.  */
++# define SYNC_FILE_RANGE_WRITE		2 /* Initiate writeout of all those
++					     dirty pages in the range which are
++					     not presently under writeback.  */
++# define SYNC_FILE_RANGE_WAIT_AFTER	4 /* Wait upon writeout of all pages in
++					     the range after performing the
++					     write.  */
++
++/* Flags for SPLICE and VMSPLICE.  */
++# define SPLICE_F_MOVE		1	/* Move pages instead of copying.  */
++# define SPLICE_F_NONBLOCK	2	/* Don't block on the pipe splicing
++					   (but we may still block on the fd
++					   we splice from/to).  */
++# define SPLICE_F_MORE		4	/* Expect more data.  */
++# define SPLICE_F_GIFT		8	/* Pages passed in are a gift.  */
++#endif
++
++__BEGIN_DECLS
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++/* Selective file content synch'ing.  */
++extern int sync_file_range (int __fd, __off64_t __from, __off64_t __to,
++			    unsigned int __flags);
++
++/* Splice address range into a pipe.  */
++extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
++			 size_t __count, unsigned int __flags);
++
++/* Splice two files together.  */
++extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
++		       __off64_t *__offout, size_t __len,
++		       unsigned int __flags);
++
++/* In-kernel implementation of tee for pipe buffers.  */
++extern ssize_t tee (int __fdin, int __fdout, size_t __len,
++		    unsigned int __flags);
++
++#endif
++__END_DECLS
+diff --git a/libc/sysdeps/linux/arc/bits/kernel_types.h b/libc/sysdeps/linux/arc/bits/kernel_types.h
+new file mode 100755
+index 000000000..45aff7d1d
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/kernel_types.h
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts
++ * with the posix_types.h kernel header, and will ensure that
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ *
++ * Update: ARC Linux 3.2 ABI change - asm-generic/posix_types.h used now.
++ * for which ARCH wrapper (asm/posix_types.h) is generated, so need to use
++ * the asm-generic file's gaurd.
++ *
++ * Based on asm-generic/stat.h
++ */
++
++#ifndef __ASM_GENERIC_POSIX_TYPES_H
++#define __ASM_GENERIC_POSIX_TYPES_H
++
++typedef unsigned long		__kernel_dev_t;
++typedef unsigned long		__kernel_ino_t;
++typedef unsigned int		__kernel_mode_t;
++typedef unsigned int		__kernel_nlink_t;
++typedef long			__kernel_off_t;
++typedef int			__kernel_pid_t;
++typedef int			__kernel_ipc_pid_t;
++typedef unsigned int		__kernel_uid_t;
++typedef unsigned int		__kernel_gid_t;
++typedef unsigned int		__kernel_size_t;
++typedef int			__kernel_ssize_t;
++typedef int			__kernel_ptrdiff_t;
++typedef long			__kernel_time_t;
++typedef long			__kernel_suseconds_t;
++typedef long			__kernel_clock_t;
++typedef int			__kernel_daddr_t;
++typedef char *			__kernel_caddr_t;
++typedef unsigned short		__kernel_uid16_t;
++typedef unsigned short		__kernel_gid16_t;
++typedef __kernel_uid_t		__kernel_uid32_t;
++typedef __kernel_gid_t		__kernel_gid32_t;
++typedef	__kernel_uid_t		__kernel_old_uid_t;
++typedef __kernel_gid_t		__kernel_old_gid_t;
++typedef long long		__kernel_loff_t;
++typedef unsigned int		__kernel_old_dev_t;
++typedef long			__kernel_long_t;
++typedef unsigned long		__kernel_ulong_t;
++
++typedef struct {
++#ifdef __USE_ALL
++	int val[2];
++#else
++	int __val[2];
++#endif
++} __kernel_fsid_t;
++
++#endif /* _ASM_ARC_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/arc/bits/setjmp.h b/libc/sysdeps/linux/arc/bits/setjmp.h
+new file mode 100644
+index 000000000..a8dbdd494
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/setjmp.h
+@@ -0,0 +1,16 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H 1
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++typedef int __jmp_buf[13+1+1+1];    /*r13-r25, fp, sp, blink */
++
++#endif
+diff --git a/libc/sysdeps/linux/arc/bits/sigcontextinfo.h b/libc/sysdeps/linux/arc/bits/sigcontextinfo.h
+new file mode 100755
+index 000000000..ac5cfa966
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/sigcontextinfo.h
+@@ -0,0 +1,15 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <features.h>
++#define SIGCONTEXT struct sigcontext *
++#define SIGCONTEXT_EXTRA_ARGS
++
++#define GET_PC(ctx)	((void *) ctx->regs.scratch.ret)
++#define GET_FRAME(ctx)	((void *) ctx->regs.scratch.fp)
++#define GET_STACK(ctx)	((void *) ctx->regs.scratch.sp)
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libc/sysdeps/linux/arc/bits/stackinfo.h b/libc/sysdeps/linux/arc/bits/stackinfo.h
+new file mode 100755
+index 000000000..9d68226b8
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/stackinfo.h
+@@ -0,0 +1,13 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++/* On ARC, the stack grows down.  */
++#define _STACK_GROWS_DOWN	1
++
++#endif	/* stackinfo.h */
+diff --git a/libc/sysdeps/linux/arc/bits/syscalls.h b/libc/sysdeps/linux/arc/bits/syscalls.h
+new file mode 100644
+index 000000000..06d2cf926
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/syscalls.h
+@@ -0,0 +1,192 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ *
++ */
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++#error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++#ifndef __ASSEMBLER__
++
++#include <errno.h>
++
++/*
++ * Fine tuned code for errno handling in syscall wrappers.
++ *
++ * 1. __syscall_error(raw_syscall_ret_val) is used to set the errno (vs.
++ *    the typical __set_errno). This helps elide the generated code for
++ *    GOT fetch for __errno_location pointer etc, in each wrapper.
++ *
++ * 2. The call to above is also disguised in inline asm. This elides
++ *    unconditional save/restore of a few callee regs which gcc almost
++ *    always generates if the call is exposed
++ *
++ * 3. The function can't be hidden because wrappers from librt et all also
++ *    call it. However hidden is not really needed to bypass PLT for
++ *    intra-libc calls as the branch insn w/o @plt is sufficient.
++ */
++
++#ifdef IS_IN_rtld
++/* ldso doesn't have real errno */
++#define ERRNO_ERRANDS(_sys_result)
++#else /* !IS_IN_rtld */
++extern int __syscall_error (int);
++#ifndef IS_IN_libc
++/* Inter-libc callers use PLT */
++#define CALL_ERRNO_SETTER   "bl   __syscall_error@plt    \n\t"
++#else
++/* intra-libc callers, despite PIC can bypass PLT */
++#define CALL_ERRNO_SETTER   "bl   __syscall_error    \n\t"
++#endif
++
++#define ERRNO_ERRANDS(_sys_result)          \
++        __asm__ volatile (                  \
++        "st.a blink, [sp, -4] \n\t"         \
++        CALL_ERRNO_SETTER                   \
++        "ld.ab blink, [sp, 4] \n\t"         \
++        :"+r" (_sys_result)                 \
++        :                                   \
++        :"r1","r2","r3","r4","r5","r6",     \
++         "r7","r8","r9","r10","r11","r12"   \
++        );
++
++#endif /* IS_IN_rtld */
++
++/* Invoke the syscall and return unprocessed kernel status */
++#define INTERNAL_SYSCALL(nm, err, nr, args...)		\
++	INTERNAL_SYSCALL_NCS(SYS_ify (nm), err, nr, args)
++
++/* -1 to -1023 as valid error values will suffice for some time */
++#define INTERNAL_SYSCALL_ERROR_P(val, err)		\
++	((unsigned int) (val) > (unsigned int) -1024)
++
++/*
++ * Standard sycall wrapper:
++ *  -"const" syscall number @nm, sets errno, return success/error-codes
++ */
++#define INLINE_SYSCALL(nm, nr_args, args...)				\
++({									\
++	register int __res __asm__("r0");				\
++	__res = INTERNAL_SYSCALL(nm, , nr_args, args);			\
++	if (__builtin_expect (INTERNAL_SYSCALL_ERROR_P ((__res), ), 0))	\
++	{								\
++		ERRNO_ERRANDS(__res);					\
++	}								\
++	__res;								\
++})
++
++/* Non const syscall number @nm
++ * Ideally this could be folded within INLINE_SYSCALL with
++ * __builtin_constant_p in INTERNAL_SYSCALL but that fails for syscall.c
++ */
++#define INLINE_SYSCALL_NCS(nm, nr_args, args...)			\
++({									\
++	register int __res __asm__("r0");				\
++	__res = INTERNAL_SYSCALL_NCS(nm, , nr_args, args);		\
++	if (__builtin_expect (INTERNAL_SYSCALL_ERROR_P ((__res), ), 0))	\
++	{								\
++		ERRNO_ERRANDS(__res);					\
++	}								\
++	__res;								\
++})
++
++#define INLINE_SYSCALL_NOERR(name, nr, args...)				   \
++  ({ unsigned int _inline_sys_result = INTERNAL_SYSCALL (name, , nr, args);\
++     (int) _inline_sys_result; })
++
++/*-------------------------------------------------------------------------
++ * Mechanics of Trap - specific to ARC700
++ *
++ * Note the memory clobber is not strictly needed for intended semantics of
++ * the inline asm. However some of the cases, such as old-style 6 arg mmap
++ * gcc was generating code for inline syscall ahead of buffer packing needed
++ * for syscall itself.
++ *-------------------------------------------------------------------------*/
++
++#define ARC_TRAP_INSN  "trap0	\n\t"
++
++#define INTERNAL_SYSCALL_NCS(nm, err, nr_args, args...)	\
++({							\
++	/* Per ABI, r0 is 1st arg and return reg */	\
++	register int __ret __asm__("r0");		\
++	register int _sys_num __asm__("r8");		\
++							\
++	LOAD_ARGS_##nr_args (nm, args)			\
++							\
++        __asm__ volatile (				\
++		ARC_TRAP_INSN				\
++		: "+r" (__ret)				\
++		: "r"(_sys_num) ASM_ARGS_##nr_args	\
++		: "memory");				\
++                                                        \
++	__ret;						\
++})
++
++/* Macros for setting up inline __asm__ input regs */
++#define ASM_ARGS_0
++#define ASM_ARGS_1	ASM_ARGS_0, "r" (__ret)
++#define ASM_ARGS_2	ASM_ARGS_1, "r" (_arg2)
++#define ASM_ARGS_3	ASM_ARGS_2, "r" (_arg3)
++#define ASM_ARGS_4	ASM_ARGS_3, "r" (_arg4)
++#define ASM_ARGS_5	ASM_ARGS_4, "r" (_arg5)
++#define ASM_ARGS_6	ASM_ARGS_5, "r" (_arg6)
++#define ASM_ARGS_7	ASM_ARGS_6, "r" (_arg7)
++
++/* Macros for converting sys-call wrapper args into sys call args */
++#define LOAD_ARGS_0(nm, arg)					\
++	_sys_num = (int) (nm);					\
++
++#define LOAD_ARGS_1(nm, arg1) 					\
++	__ret = (int) (arg1);					\
++	LOAD_ARGS_0 (nm, arg1)
++
++/*
++ * Note that the use of _tmpX might look superflous, however it is needed
++ * to ensure that register variables are not clobbered if arg happens to be
++ * a function call itself. e.g. sched_setaffinity() calling getpid() for arg2
++ *
++ * Also this specific order of recursive calling is important to segregate
++ * the tmp args evaluation (function call case described above) and assigment
++ * of register variables
++ */
++#define LOAD_ARGS_2(nm, arg1, arg2)				\
++	int _tmp2 = (int) (arg2);				\
++	LOAD_ARGS_1 (nm, arg1)					\
++	register int _arg2 __asm__ ("r1") = _tmp2;
++
++#define LOAD_ARGS_3(nm, arg1, arg2, arg3)			\
++	int _tmp3 = (int) (arg3);				\
++	LOAD_ARGS_2 (nm, arg1, arg2)				\
++	register int _arg3 __asm__ ("r2") = _tmp3;
++
++#define LOAD_ARGS_4(nm, arg1, arg2, arg3, arg4)			\
++	int _tmp4 = (int) (arg4);				\
++	LOAD_ARGS_3 (nm, arg1, arg2, arg3)			\
++	register int _arg4 __asm__ ("r3") = _tmp4;
++
++#define LOAD_ARGS_5(nm, arg1, arg2, arg3, arg4, arg5)		\
++	int _tmp5 = (int) (arg5);				\
++	LOAD_ARGS_4 (nm, arg1, arg2, arg3, arg4)		\
++	register int _arg5 __asm__ ("r4") = _tmp5;
++
++#define LOAD_ARGS_6(nm,  arg1, arg2, arg3, arg4, arg5, arg6)	\
++	int _tmp6 = (int) (arg6);				\
++	LOAD_ARGS_5 (nm, arg1, arg2, arg3, arg4, arg5)		\
++	register int _arg6 __asm__ ("r5") = _tmp6;
++
++#define LOAD_ARGS_7(nm, arg1, arg2, arg3, arg4, arg5, arg6, arg7)\
++	int _tmp7 = (int) (arg7);				\
++	LOAD_ARGS_6 (nm, arg1, arg2, arg3, arg4, arg5, arg6)	\
++	register int _arg7 __asm__ ("r6") = _tmp7;
++
++#else
++
++#define ARC_TRAP_INSN	trap0
++
++#endif /* __ASSEMBLER__ */
++
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h b/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h
+new file mode 100755
+index 000000000..9313ee8f2
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/uClibc_arch_features.h
+@@ -0,0 +1,53 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++/* instruction used when calling abort() to kill yourself */
++#define __UCLIBC_ABORT_INSTRUCTION__ "flag 0"
++
++/* can your target use syscall6() for mmap ? */
++#undef __UCLIBC_MMAP_HAS_6_ARGS__
++
++/* does your target use syscall4() for truncate64 ? (32bit arches only) */
++#undef __UCLIBC_TRUNCATE64_HAS_4_ARGS__
++
++/* does your target have a broken create_module() ? */
++#undef __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#undef __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target doesn't like .global */
++#undef __UCLIBC_ASM_GLOBAL_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* needed probably only for ppc64 */
++#undef __UCLIBC_HAVE_ASM_GLOBAL_DOT_NAME__
++
++/* define if target supports CFI pseudo ops */
++#undef __UCLIBC_HAVE_ASM_CFI_DIRECTIVES__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++/* The default ';' is a comment on ARC. */
++#define __UCLIBC_ASM_LINE_SEP__ `
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/arc/bits/uClibc_page.h b/libc/sysdeps/linux/arc/bits/uClibc_page.h
+new file mode 100755
+index 000000000..26cec54c9
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/uClibc_page.h
+@@ -0,0 +1,26 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _UCLIBC_PAGE_H
++#define _UCLIBC_PAGE_H
++
++/*
++ * ARC700/linux supports 4k, 8k, 16k pages (build time).
++ * We rely on the kernel exported header (aka uapi headers since 3.8)
++ * for PAGE_SIZE and friends. This avoids hand-editing here when building
++ * toolchain.
++ *
++ * Although uClibc determines page size dynamically, from kernel's auxv which
++ * ARC Linux does pass, still the generic code needs a fall back
++ *  _dl_pagesize = auxvt[AT_PAGESZ].a_un.a_val ? : PAGE_SIZE
++ *
++ */
++#include <asm/page.h>
++
++/* TBD: fix this with runtime value for a PAGE_SIZE agnostic uClibc */
++#define MMAP2_PAGE_SHIFT PAGE_SHIFT
++
++#endif /* _UCLIBC_PAGE_H */
+diff --git a/libc/sysdeps/linux/arc/bits/wordsize.h b/libc/sysdeps/linux/arc/bits/wordsize.h
+new file mode 100755
+index 000000000..c7480332c
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bits/wordsize.h
+@@ -0,0 +1,7 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#define __WORDSIZE	32
+diff --git a/libc/sysdeps/linux/arc/bsd-_setjmp.S b/libc/sysdeps/linux/arc/bsd-_setjmp.S
+new file mode 100644
+index 000000000..d166cb8ca
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bsd-_setjmp.S
+@@ -0,0 +1,20 @@
++/* BSD `_setjmp' entry point to `sigsetjmp (..., 0)'.  ARC version.
++ *
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++/* This just does a tail-call to `__sigsetjmp (ARG, 1)'.
++   We cannot do it in C because it must be a tail-call, so frame-unwinding
++   in setjmp doesn't clobber the state restored by longjmp.  */
++
++#include <sysdep.h>
++
++;@ r0 = jump buffer into which regs will be saved
++
++ENTRY(_setjmp)
++	b.d	__sigsetjmp
++	mov	r1, 0		; don't save signals
++END(_setjmp)
++libc_hidden_def(_setjmp)
+diff --git a/libc/sysdeps/linux/arc/bsd-setjmp.S b/libc/sysdeps/linux/arc/bsd-setjmp.S
+new file mode 100644
+index 000000000..46745958e
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/bsd-setjmp.S
+@@ -0,0 +1,20 @@
++/* BSD `setjmp' entry point to `sigsetjmp (..., 1)'.  ARC version.
++ *
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++/* This just does a tail-call to `__sigsetjmp (ARG, 1)'.
++   We cannot do it in C because it must be a tail-call, so frame-unwinding
++   in setjmp doesn't clobber the state restored by longjmp.  */
++
++#include <sysdep.h>
++
++;@ r0 = jump buffer into which regs will be saved
++
++ENTRY(setjmp)
++	b.d	__sigsetjmp
++	mov	r1, 1		; save signals
++END(setjmp)
++libc_hidden_def(setjmp)
+diff --git a/libc/sysdeps/linux/arc/cacheflush.c b/libc/sysdeps/linux/arc/cacheflush.c
+new file mode 100644
+index 000000000..d33353d83
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/cacheflush.c
+@@ -0,0 +1,11 @@
++/* cacheflush syscall for ARC
++ *
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sys/syscall.h>
++#include <sys/cachectl.h>
++
++_syscall3(int, cacheflush, void *, addr, int, nbytes, int, op)
+diff --git a/libc/sysdeps/linux/arc/clone.S b/libc/sysdeps/linux/arc/clone.S
+new file mode 100644
+index 000000000..79ebd065a
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/clone.S
+@@ -0,0 +1,71 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <asm/errno.h>
++#include <sys/syscall.h>
++#include <sysdep.h>
++
++; Per man, libc clone( ) is as follows
++;
++; int clone(int (*fn)(void *), void *child_stack,
++;           int flags, void *arg, ...
++;           /* pid_t *ptid, struct user_desc *tls, pid_t *ctid */);
++;
++; NOTE: I'm assuming that the last 3 args are NOT var-args and in case all
++;	3 are not relevant, caller will nevertheless pass those as NULL.
++;       Current (Jul 2012) upstream powerpc/clone.S assumes similarly.
++;	Our LTP (from 2007) doesn't seem to have tests to prove otherwise
++
++; clone syscall in kernel
++;
++; int sys_clone(unsigned long clone_flags, unsigned long newsp,
++;		int __user *parent_tidptr, void *tls,
++;		int __user *child_tidptr)
++
++
++ENTRY(clone)
++	cmp	r0, 0		; @fn can't be NULL
++	cmp.ne	r1, 0		; @child_stack can't be NULL
++	bz	.L__sys_err
++
++	; @fn and @args needed after the syscall for child
++	; However r3 containing @arg will be clobbered BEFORE syscall
++	; r0 containg @fn will be clobbered AFTER syscall (with ret val)
++	mov	r10, r0
++	mov	r11, r3
++
++	; adjust libc args for syscall
++	mov 	r0, r2		; libc @flags is 1st syscall arg
++	mov	r2, r4		; libc @ptid
++	mov	r3, r5		; libc @tls
++	mov	r4, r6		; libc @ctid
++	mov	r8, __NR_clone
++	ARC_TRAP_INSN
++
++	cmp	r0, 0		; return code : 0 new process, !0 parent
++	blt	.L__sys_err2	; < 0 (signed) error
++	jnz	[blink]		; Parent returns
++
++	; child jumps off to @fn with @arg as argument
++	j.d	[r10]
++	mov	r0, r11
++
++	; falls thru to _exit() with result from @fn (already in r0)
++	b	HIDDEN_JUMPTARGET(_exit)
++
++.L__sys_err:
++	mov	r0, -EINVAL
++.L__sys_err2:
++	; (1) No need to make -ve kernel error code as positive errno
++	;   __syscall_error expects the -ve error code returned by kernel
++	; (2) r0 still had orig -ve kernel error code
++	; (3) Tail call to __syscall_error so we dont have to come back
++	;     here hence instead of jmp-n-link (reg push/pop) we do jmp
++	; (4) No need to route __syscall_error via PLT, B is inherently
++	;     position independent
++	b   __syscall_error
++END(clone)
++libc_hidden_def(clone)
+diff --git a/libc/sysdeps/linux/arc/crt1.S b/libc/sysdeps/linux/arc/crt1.S
+new file mode 100644
+index 000000000..d78a96dcc
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/crt1.S
+@@ -0,0 +1,54 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <features.h>
++#include <sysdep.h>
++
++.text
++
++#ifndef __UCLIBC_CTOR_DTOR__
++	.weak	_init
++	.weak	_fini
++#endif
++
++/* Stick in a dummy reference to main(), so that if an application
++ * is linking when the main() function is in a static library (.a)
++ * we can be sure that main() actually gets linked in
++ */
++	.type	main,@function
++	.type	_main,@function
++
++
++/* When we enter this piece of code, the program stack looks like this:
++        argc            argument counter (integer)
++        argv[0]         program name (pointer)
++        argv[1...N]     program args (pointers)
++        argv[argc-1]    end of args (integer)
++	NULL
++        env[0...N]      environment variables (pointers)
++        NULL
++*/
++ENTRY(__start)
++	mov	fp, 0
++	ld_s	r1, [sp]	; argc
++
++	mov_s	r5, r0		; rltd_fini
++	add_s	r2, sp, 4	; argv
++
++	mov_s	r0, main
++	mov_s	r3, _init
++	mov	r4, _fini
++
++	and	sp, sp, -8
++	mov	r6, sp
++
++	/* __uClibc_main (main, argc, argv, init, fini, rtld_fini, stack_end) */
++	bl	__uClibc_main
++
++	/* Should never get here....  */
++	flag    1
++END(__start)
++libc_hidden_def(__start)
+diff --git a/libc/sysdeps/linux/arc/crti.S b/libc/sysdeps/linux/arc/crti.S
+new file mode 100644
+index 000000000..da8fc2a2a
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/crti.S
+@@ -0,0 +1,27 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++___gnu_compiled_c:
++
++	.section .init
++	.align 4
++	.global	_init
++	.type	 _init,@function
++_init:
++	st.a blink,[sp,-4]
++	st.a fp,[sp,-4]
++	mov fp,sp
++
++
++	.section .fini
++	.align 4
++	.global	_fini
++	.type	 _fini,@function
++_fini:
++	st.a blink,[sp,-4]
++	st.a fp,[sp,-4]
++	mov fp,sp
++	.align 4
+diff --git a/libc/sysdeps/linux/arc/crtn.S b/libc/sysdeps/linux/arc/crtn.S
+new file mode 100644
+index 000000000..f507080b3
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/crtn.S
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++___gnu_compiled_c:
++
++	.section .init
++	.align 4
++	.global	_init
++	.type	 _init,@function
++	; EPILOGUE
++	ld.ab fp,[sp,4]
++	ld blink,[sp,0]
++	j.d [blink]
++	add sp,sp,4
++;	.size	 _init,.-_init
++
++	.section .fini
++	.align 4
++	.global	_fini
++	.type	 _fini,@function
++	; EPILOGUE
++	ld.ab fp,[sp,4]
++	ld blink,[sp,0]
++	j.d [blink]
++	add sp,sp,4
++;	.size	 _fini,.-_fini
+diff --git a/libc/sysdeps/linux/arc/jmpbuf-offsets.h b/libc/sysdeps/linux/arc/jmpbuf-offsets.h
+new file mode 100644
+index 000000000..314e03110
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/jmpbuf-offsets.h
+@@ -0,0 +1,7 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#define __JMP_BUF_SP 	(13+1)
+diff --git a/libc/sysdeps/linux/arc/jmpbuf-unwind.h b/libc/sysdeps/linux/arc/jmpbuf-unwind.h
+new file mode 100644
+index 000000000..e4ed8fe75
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/jmpbuf-unwind.h
+@@ -0,0 +1,13 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <setjmp.h>
++#include <jmpbuf-offsets.h>
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(jmpbuf, address) \
++  ((void *) (address) < (void *) (jmpbuf[__JMP_BUF_SP]))
+diff --git a/libc/sysdeps/linux/arc/setjmp.S b/libc/sysdeps/linux/arc/setjmp.S
+new file mode 100644
+index 000000000..b6a65f579
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/setjmp.S
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sysdep.h>
++
++;@ r0 = jump buffer into which regs will be saved
++;@ r1 = do we need to save signals
++
++ENTRY(__sigsetjmp)
++
++	st_s r13, [r0]
++	st_s r14, [r0,4]
++	st   r15, [r0,8]
++	st   r16, [r0,12]
++	st   r17, [r0,16]
++	st   r18, [r0,20]
++	st   r19, [r0,24]
++	st   r20, [r0,28]
++	st   r21, [r0,32]
++	st   r22, [r0,36]
++	st   r23, [r0,40]
++	st   r24, [r0,44]
++	st   r25, [r0,48]
++	st   fp,  [r0,52]
++	st   sp,  [r0,56]
++
++	; make a note of where longjmp will return to.
++	; that will be right next to this setjmp call-site which will be
++	; contained in blink, since "C" caller of this routine will do
++	; a branch-n-link
++
++	st   blink, [r0,60]
++	b    __sigjmp_save
++
++END(__sigsetjmp)
++libc_hidden_def(__sigsetjmp)
+diff --git a/libc/sysdeps/linux/arc/sigaction.c b/libc/sysdeps/linux/arc/sigaction.c
+new file mode 100644
+index 000000000..a4bc5f34b
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sigaction.c
+@@ -0,0 +1,47 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <signal.h>
++#include <string.h>
++#include <sys/syscall.h>
++#include <bits/kernel_sigaction.h>
++
++extern void __default_rt_sa_restorer(void);
++//libc_hidden_proto(__default_rt_sa_restorer);
++
++#define SA_RESTORER	0x04000000
++
++/* If @act is not NULL, change the action for @sig to @act.
++   If @oact is not NULL, put the old action for @sig in @oact.  */
++int
++__libc_sigaction (int sig, const struct sigaction *act, struct sigaction *oact)
++{
++	struct sigaction kact;
++
++	/* !act means caller only wants to know @oact
++	 * Hence only otherwise, do SA_RESTORER stuff
++	 *
++	 * For the normal/default cases (user not providing SA_RESTORER) use
++	 * a real sigreturn stub to avoid kernel synthesizing one on user stack
++	 * at runtime, which needs PTE permissions update (hence TLB entry
++	 * update) and costly cache line flushes for code modification
++	 */
++	if (act && !(act->sa_flags & SA_RESTORER)) {
++		memcpy(&kact, act, sizeof(kact));
++		kact.sa_restorer = __default_rt_sa_restorer;
++		kact.sa_flags |= SA_RESTORER;
++
++		act = &kact;
++	}
++
++	return __syscall_rt_sigaction(sig, act, oact, sizeof(act->sa_mask));
++}
++
++#ifndef LIBC_SIGACTION
++weak_alias(__libc_sigaction,sigaction)
++libc_hidden_weak(sigaction)
++#endif
+diff --git a/libc/sysdeps/linux/arc/sigrestorer.S b/libc/sysdeps/linux/arc/sigrestorer.S
+new file mode 100644
+index 000000000..24531d89d
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sigrestorer.S
+@@ -0,0 +1,21 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sysdep.h>
++#include <sys/syscall.h>
++
++/*
++ * Provide a real sigreturn stub to avoid kernel synthesizing one
++ * on user stack at runtime, which needs PTE permissions update
++ * (hence TLB entry update) and costly cache line flushes for
++ * code modification
++ */
++
++ENTRY(__default_rt_sa_restorer)
++    mov r8, __NR_rt_sigreturn
++    ARC_TRAP_INSN
++END(__default_rt_sa_restorer)
++libc_hidden_def(__default_rt_sa_restorer)
+diff --git a/libc/sysdeps/linux/arc/sys/cachectl.h b/libc/sysdeps/linux/arc/sys/cachectl.h
+new file mode 100644
+index 000000000..e9a783bdc
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sys/cachectl.h
+@@ -0,0 +1,21 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _SYS_CACHECTL_H
++#define _SYS_CACHECTL_H	1
++
++/*
++ * Get the kernel definition for the flag bits
++ */
++#include <asm/cachectl.h>
++
++__BEGIN_DECLS
++
++extern int cacheflush(void *addr, int nbytes, int flags);
++
++__END_DECLS
++
++#endif	/* sys/cachectl.h */
+diff --git a/libc/sysdeps/linux/arc/sys/procfs.h b/libc/sysdeps/linux/arc/sys/procfs.h
+new file mode 100755
+index 000000000..44676e197
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sys/procfs.h
+@@ -0,0 +1,108 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++
++/* And the whole bunch of them.  We could have used `struct
++   user_regs' directly in the typedef, but tradition says that
++   the register set is an array, which does have some peculiar
++   semantics, so leave it that way.  */
++#define ELF_NGREG 20
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned short int pr_uid;
++    unsigned short int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_gregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/arc/sys/ucontext.h b/libc/sysdeps/linux/arc/sys/ucontext.h
+new file mode 100755
+index 000000000..23d928562
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sys/ucontext.h
+@@ -0,0 +1,22 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++#include <bits/sigcontext.h>
++
++typedef struct ucontext {
++	unsigned long	  uc_flags;
++	struct ucontext  *uc_link;
++	stack_t		  uc_stack;
++	struct sigcontext uc_mcontext;
++	sigset_t	  uc_sigmask;	/* mask last for extensibility */
++} ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/arc/sys/user.h b/libc/sysdeps/linux/arc/sys/user.h
+new file mode 100755
+index 000000000..e340074ce
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sys/user.h
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _SYS_USER_H
++#define _SYS_USER_H	1
++
++/* The whole purpose of this file is for GDB and GDB only.  Don't read
++   too much into it.  Don't use it for anything other than GDB unless
++   you know what you are doing.  */
++
++
++/* Actually apps like strace also expect a struct user, so it's better to
++ * have a dummy implementation
++ */
++
++struct user {
++	int dummy;
++};
++
++#endif  /* sys/user.h */
+diff --git a/libc/sysdeps/linux/arc/syscall.c b/libc/sysdeps/linux/arc/syscall.c
+new file mode 100644
+index 000000000..5648b0e1f
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/syscall.c
+@@ -0,0 +1,17 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <features.h>
++#include <errno.h>
++#include <sys/types.h>
++#include <sys/syscall.h>
++
++extern long syscall(long int sysnum, long a, long b, long c, long d, long e, long f);
++
++long syscall(long int sysnum, long a, long b, long c, long d, long e, long f)
++{
++	return INLINE_SYSCALL_NCS(sysnum, 6, a, b, c, d, e, f);
++}
+diff --git a/libc/sysdeps/linux/arc/sysdep.h b/libc/sysdeps/linux/arc/sysdep.h
+new file mode 100644
+index 000000000..76d3788e5
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/sysdep.h
+@@ -0,0 +1,22 @@
++#ifndef _LINUX_ARC_SYSDEP_H
++#define _LINUX_ARC_SYSDEP_H 1
++
++#include <features.h>
++#include <libc-internal.h>
++
++#ifdef	__ASSEMBLER__
++
++#define ENTRY(nm)		\
++	.text `			\
++	.align 4 `		\
++	.globl nm `		\
++	.type nm,@function `	\
++nm:
++
++#define END(name)	.size name,.-name
++
++#endif /* __ASSEMBLER __*/
++
++#include <common/sysdep.h>
++
++#endif
+diff --git a/libc/sysdeps/linux/arc/vfork.S b/libc/sysdeps/linux/arc/vfork.S
+new file mode 100644
+index 000000000..542239fb8
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/vfork.S
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (C) 2013 Synopsys, Inc. (www.synopsys.com)
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sys/syscall.h>
++#include <sysdep.h>
++
++/* No legacy syscall ABI means NR_vfork is not available at all, use clone */
++#define _SIGNAL_H
++#include <bits/signum.h>       /* For SIGCHLD */
++
++#define CLONE_VM		0x00000100
++#define CLONE_VFORK		0x00004000
++#define CLONE_FLAGS_FOR_VFORK	(CLONE_VM|CLONE_VFORK|SIGCHLD)
++
++ENTRY(vfork)
++	mov	r0, CLONE_FLAGS_FOR_VFORK
++	mov_s	r1, sp
++	mov	r8, __NR_clone
++	ARC_TRAP_INSN
++
++	cmp	r0, 0
++	jge	[blink]	; pid >=0 return, else detour via tailcall to errno
++
++	b   __syscall_error
++END(vfork)
++libc_hidden_def(vfork)
+diff --git a/libc/sysdeps/linux/arc/xstatconv.c b/libc/sysdeps/linux/arc/xstatconv.c
+new file mode 100644
+index 000000000..d7948c075
+--- /dev/null
++++ b/libc/sysdeps/linux/arc/xstatconv.c
+@@ -0,0 +1 @@
++/* We don't need any of this.  */

@@ -1,0 +1,351 @@
+"2015-07-14 13:31:24 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index 82c382b8..7c4d6204 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -45,6 +45,7 @@ source "src/modules/flow/gyroscope/Kconfig"
+ source "src/modules/flow/hub/Kconfig"
+ source "src/modules/flow/int/Kconfig"
+ source "src/modules/flow/keyboard/Kconfig"
++source "src/modules/flow/led-strip/Kconfig"
+ source "src/modules/flow/network/Kconfig"
+ source "src/modules/flow/oic/Kconfig"
+ source "src/modules/flow/piezo-speaker/Kconfig"
+diff --git a/src/modules/flow/led-strip/Kconfig b/src/modules/flow/led-strip/Kconfig
+new file mode 100644
+index 00000000..eff509b0
+--- /dev/null
++++ b/src/modules/flow/led-strip/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_LED_STRIP
++	tristate "Node type: led-strip"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/led-strip/Makefile b/src/modules/flow/led-strip/Makefile
+new file mode 100644
+index 00000000..e85bf244
+--- /dev/null
++++ b/src/modules/flow/led-strip/Makefile
+@@ -0,0 +1,4 @@
++obj-$(FLOW_NODE_TYPE_LED_STRIP) += led-strip.mod
++obj-led-strip-$(FLOW_NODE_TYPE_LED_STRIP) := \
++	led-strip.json \
++	lpd8806.o
+diff --git a/src/modules/flow/led-strip/led-strip.json b/src/modules/flow/led-strip/led-strip.json
+new file mode 100644
+index 00000000..b705d802
+--- /dev/null
++++ b/src/modules/flow/led-strip/led-strip.json
+@@ -0,0 +1,69 @@
++{
++  "name": "led-strip",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "BSD 3-Clause",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "output/hw",
++      "description": "LPD8806 RGB led strip controller.",
++      "in_ports": [
++          {
++            "data_type": "int",
++            "description": "Pixel position to have its colour set. See node description to understand details of how pixel colours are set.",
++            "name": "PIXEL",
++            "methods": {
++                "process": "pixel_process"
++            }
++          },
++          {
++            "data_type": "rgb",
++            "description": "Colour of current pixel position. See node description to understand details of how pixel colours are set.",
++            "name": "COLOR",
++            "methods": {
++                "process": "color_process"
++            }
++          },
++          {
++            "data_type": "any",
++            "description": "Flushes current colour setting to device, effectively applying them.",
++            "name": "FLUSH",
++            "methods": {
++                "process": "flush_process"
++            }
++          }
++      ],
++      "methods": {
++         "close": "led_strip_controler_close",
++         "open": "led_strip_controler_open"
++      },
++      "name": "led-strip/lpd8806",
++      "options": {
++        "members": [
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "SPI Bus number.",
++            "name": "bus"
++          },
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "SPI chip to operate.",
++            "name": "chip_select"
++          },
++          {
++            "data_type": "int",
++            "default": 32,
++            "description": "Pixel count. How many LEDs are on the strip.",
++            "name": "pixel_count"
++          }
++        ],
++        "version": 1
++      },
++      "private_data_type": "lcd_strip_lpd8806_data"
++    }
++  ]
++}
+diff --git a/src/modules/flow/led-strip/lpd8806.c b/src/modules/flow/led-strip/lpd8806.c
+new file mode 100644
+index 00000000..32974a94
+--- /dev/null
++++ b/src/modules/flow/led-strip/lpd8806.c
+@@ -0,0 +1,167 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "led-strip-gen.h"
++#include "sol-flow-internal.h"
++
++#include <sol-spi.h>
++#include <sol-util.h>
++#include <errno.h>
++
++struct lcd_strip_lpd8806_data {
++    struct sol_spi *spi;
++    uint8_t *pixels;
++    int last_set_pixel;
++    int last_set_color;
++    uint16_t pixel_count;
++    uint16_t pixel_array_length;
++};
++
++static void
++led_strip_controler_close(struct sol_flow_node *node, void *data)
++{
++    struct lcd_strip_lpd8806_data *mdata = data;
++
++    if (mdata->spi)
++        sol_spi_close(mdata->spi);
++
++    free(mdata->pixels);
++}
++
++static int
++led_strip_controler_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    struct lcd_strip_lpd8806_data *mdata = data;
++    const struct sol_flow_node_type_led_strip_lpd8806_options *opts;
++    uint32_t data_bytes, pixel_array_length;
++    uint8_t latch_bytes;
++
++    opts = (const struct sol_flow_node_type_led_strip_lpd8806_options *)options;
++
++    SOL_INT_CHECK(opts->pixel_count.val, < 0, -EINVAL);
++    mdata->pixel_count = opts->pixel_count.val;
++
++    data_bytes = mdata->pixel_count * 3;
++    SOL_INT_CHECK(data_bytes, > UINT16_MAX, -EINVAL);
++
++    latch_bytes = (mdata->pixel_count + 31) / 32;
++    pixel_array_length = data_bytes + latch_bytes;
++    SOL_INT_CHECK(pixel_array_length, > UINT16_MAX, -EINVAL);
++
++    mdata->pixel_array_length = pixel_array_length;
++
++    mdata->pixels = malloc(mdata->pixel_array_length);
++    SOL_NULL_CHECK(mdata->pixels, -ENOMEM);
++    memset(mdata->pixels, 0x80, data_bytes); // Init to RGB 'off' state
++    memset(&mdata->pixels[data_bytes], 0, latch_bytes); // Clear latch bytes
++
++    mdata->spi = sol_spi_open(opts->bus.val, opts->chip_select.val);
++    if (mdata->spi) {
++        sol_spi_set_transfer_mode(mdata->spi, 0);
++
++        // Initial reset
++        sol_spi_transfer(mdata->spi, &mdata->pixels[mdata->pixel_count * 3], NULL, latch_bytes);
++    }
++
++    return 0;
++}
++
++static void
++_set_pixel_color(struct lcd_strip_lpd8806_data *mdata)
++{
++    uint8_t r, g, b;
++    uint8_t *pixel;
++
++    r = 0xff & (mdata->last_set_color >> 16);
++    g = 0xff & (mdata->last_set_color >> 8);
++    b = 0xff & mdata->last_set_color;
++
++    pixel = &mdata->pixels[mdata->last_set_pixel * 3];
++    // Strip color order is GRB, not RGB, hence the order below.
++    *pixel++ = g | 0x80;
++    *pixel++ = r | 0x80;
++    *pixel++ = b | 0x80;
++
++    mdata->last_set_pixel = -1;
++    mdata->last_set_color = -1;
++}
++
++static int
++pixel_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct lcd_strip_lpd8806_data *mdata = data;
++    int r;
++    struct sol_irange in_value;
++
++    r = sol_flow_packet_get_irange(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    if (in_value.val >= mdata->pixel_count) {
++        SOL_WRN("Invalid pixel %d. Expected pixel ranging from 0 to %d", in_value.val, mdata->pixel_count - 1);
++        return -EINVAL;
++    }
++
++    mdata->last_set_pixel = in_value.val;
++    if (mdata->last_set_color != -1)
++        _set_pixel_color(mdata);
++
++    return 0;
++}
++
++static int
++color_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct lcd_strip_lpd8806_data *mdata = data;
++    int r;
++    struct sol_rgb in_value;
++
++    r = sol_flow_packet_get_rgb(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    mdata->last_set_color = (in_value.red << 16) | (in_value.green) << 8 | in_value.blue;
++    if (mdata->last_set_pixel != -1)
++        _set_pixel_color(mdata);
++
++    return 0;
++}
++
++static int
++flush_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct lcd_strip_lpd8806_data *mdata = data;
++
++    sol_spi_transfer(mdata->spi, mdata->pixels, NULL, mdata->pixel_array_length);
++
++    return 0;
++}
++
++#include "led-strip-gen.c"
+diff --git a/src/samples/flow/led-strip/lpd8806.fbp b/src/samples/flow/led-strip/lpd8806.fbp
+new file mode 100644
+index 00000000..a4f5e115
+--- /dev/null
++++ b/src/samples/flow/led-strip/lpd8806.fbp
+@@ -0,0 +1,64 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Maps temperature readings (here, fake ones) to led colours on a
++# led-strip. The hotter the temperature, the more led will be red. The
++# remaining ones will be blue.
++
++# These three fake the output of a temperature sensor
++timer(timer)
++random(random/int)
++temp(int/map:output_range=min:-40|max:100|step:1)
++
++# These are the ones needed to our flow
++# led_map maps the expected temperature readings, from -40 to 100, to
++# a number up to 31, meaning how many leds will be red.
++led_map(int/map:use_input_range=false,input_range=min:-40|max:100,output_range=min:0|max:31|step:1)
++less(int/less)
++counter(int/accumulator:setup_value=max:31)
++blue(converter/empty-to-rgb:output_value=blue:200,green:0,red:0)
++red(converter/empty-to-rgb:output_value=red:200,green:0,blue:0)
++led_strip(led-strip/lpd8806)
++
++temp OUT -> IN led_map
++led_map OUT -> INC counter
++
++led_map OUT -> IN[0] less
++counter OUT -> IN _(int/filter:min=1,max=31) OUT -> IN[1] less
++counter OUT -> PIXEL led_strip
++
++less OUT -> IN _(boolean/filter) TRUE -> IN red OUT -> COLOR led_strip
++less OUT -> IN _(boolean/filter) FALSE -> IN blue OUT -> COLOR led_strip
++
++less OUT ->  INC counter
++
++counter OVERFLOW -> FLUSH led_strip
++counter OVERFLOW -> RESET counter

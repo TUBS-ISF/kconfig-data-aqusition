@@ -1,0 +1,238 @@
+"2018-11-01 09:46:44 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index 18cf6de..5014694 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -191,14 +191,6 @@ config MP_MAX_CPUS
+ 	help
+ 	  The maximum number of CPUs the kernel supports.
+ 
+-#config ASSEMBLER_IPC_SHORTCUT
+-#	bool "Assembler IPC shortcut"
+-#	default y
+-#	depends on (PF_PC || PF_UX) && !MP
+-#	help
+-#	  Use the assembler IPC shortcut to get even better short IPC
+-#	  performance in the common case.
+-
+ config CONTEXT_8K
+ 	bool #"TCB size of 8k"
+ 	default n
+diff --git a/src/jdb/arm/jdb_trace_set-arm.cpp b/src/jdb/arm/jdb_trace_set-arm.cpp
+index 47ee6d3..b9ad57b 100644
+--- a/src/jdb/arm/jdb_trace_set-arm.cpp
++++ b/src/jdb/arm/jdb_trace_set-arm.cpp
+@@ -12,7 +12,6 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+     case Off:
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 0;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc_entry(sys_ipc_wrapper);
+       break;
+@@ -20,7 +19,6 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 1;
+       Jdb_ipc_trace::_log_to_buf = 0;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc_entry(sys_ipc_log_wrapper);
+       break;
+@@ -28,19 +26,15 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 1;
+       Jdb_ipc_trace::_log_to_buf = 1;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc_entry(sys_ipc_log_wrapper);
+       break;
+     case Trace:
+       Jdb_ipc_trace::_trace = 1;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_log = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc_entry(sys_ipc_trace_wrapper);
+       break;
+-    case Use_c_short_cut:
+-      break;
+     case Use_slow_path:
+       Jdb_ipc_trace::_slow_ipc = 1;
+       set_ipc_entry(sys_ipc_wrapper);
+diff --git a/src/jdb/ia32/jdb-ia32-amd64.cpp b/src/jdb/ia32/jdb-ia32-amd64.cpp
+index f10b399..410b987 100644
+--- a/src/jdb/ia32/jdb-ia32-amd64.cpp
++++ b/src/jdb/ia32/jdb-ia32-amd64.cpp
+@@ -471,10 +471,8 @@ Jdb::is_adapter_memory(Address virt, Space *task)
+ #define WEAK __attribute__((weak))
+ extern "C" char in_slowtrap, in_page_fault, in_handle_fputrap;
+ extern "C" char in_interrupt, in_timer_interrupt, in_timer_interrupt_slow;
+-extern "C" char i30_ret_switch WEAK, se_ret_switch WEAK, in_slow_ipc1 WEAK;
+-extern "C" char in_slow_ipc2 WEAK, in_slow_ipc4;
+-extern "C" char in_slow_ipc5, in_sc_ipc1 WEAK;
+-extern "C" char in_sc_ipc2 WEAK, in_syscall WEAK;
++extern "C" char in_slow_ipc4, in_slow_ipc5;
++extern "C" char in_sc_ipc1 WEAK, in_sc_ipc2 WEAK, in_syscall WEAK;
+ #undef WEAK
+ 
+ // Try to guess the thread state of t by walking down the kernel stack and
+@@ -493,13 +491,9 @@ Jdb::guess_thread_state(Thread *t)
+ 	{
+ 	  if (ktop[i] == (Mword)&in_page_fault)
+ 	    state = s_pagefault;
+-	  if ((ktop[i] == (Mword)&i30_ret_switch) ||// shortcut.S, int 0x30
+-	      (ktop[i] == (Mword)&in_slow_ipc1) ||  // shortcut.S, int 0x30
+-	      (ktop[i] == (Mword)&se_ret_switch) || // shortcut.S, sysenter
+-	      (ktop[i] == (Mword)&in_slow_ipc2) ||  // shortcut.S, sysenter
+-	      (ktop[i] == (Mword)&in_slow_ipc4) ||  // entry.S, int 0x30 log
++	  if ((ktop[i] == (Mword)&in_slow_ipc4) ||  // entry.S, int 0x30 log
+ 	      (ktop[i] == (Mword)&in_slow_ipc5) ||  // entry.S, sysenter log
+-#if defined (CONFIG_JDB_LOGGING) || !defined(CONFIG_ASSEMBLER_IPC_SHORTCUT)
++#if defined (CONFIG_JDB_LOGGING)
+ 	      (ktop[i] == (Mword)&in_sc_ipc1)   ||  // entry.S, int 0x30
+ 	      (ktop[i] == (Mword)&in_sc_ipc2)   ||  // entry.S, sysenter
+ #endif
+diff --git a/src/jdb/ia32/jdb_trace_set-ia32-ux.cpp b/src/jdb/ia32/jdb_trace_set-ia32-ux.cpp
+index 7f67fae..9ed0692 100644
+--- a/src/jdb/ia32/jdb_trace_set-ia32-ux.cpp
++++ b/src/jdb/ia32/jdb_trace_set-ia32-ux.cpp
+@@ -58,32 +58,25 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+     case Off:
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 0;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       break;
+     case Log:
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 1;
+       Jdb_ipc_trace::_log_to_buf = 0;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       break;
+     case Log_to_buf:
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 1;
+       Jdb_ipc_trace::_log_to_buf = 1;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       break;
+     case Trace:
+       Jdb_ipc_trace::_trace = 1;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_log = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       break;
+-    case Use_c_short_cut:
+-      Jdb_ipc_trace::_cshortcut = 1;
+-      break;
+     case Use_slow_path:
+       Jdb_ipc_trace::_slow_ipc = 1;
+       break;
+diff --git a/src/jdb/jdb_trace.cpp b/src/jdb/jdb_trace.cpp
+index f209d36..0fd12e7 100644
+--- a/src/jdb/jdb_trace.cpp
++++ b/src/jdb/jdb_trace.cpp
+@@ -21,8 +21,6 @@ public:
+   static int         _log_result;
+   static int         _trace;
+   static int         _slow_ipc;
+-  static int         _cpath;
+-  static int         _cshortcut;
+   friend class Jdb_set_trace;
+ };
+ 
+@@ -58,8 +56,6 @@ int         Jdb_ipc_trace::_log_to_buf;
+ int         Jdb_ipc_trace::_log_result;
+ int         Jdb_ipc_trace::_trace;
+ int         Jdb_ipc_trace::_slow_ipc;
+-int         Jdb_ipc_trace::_cpath;
+-int         Jdb_ipc_trace::_cshortcut;
+ 
+ int         Jdb_pf_trace::_other_thread;
+ Mword       Jdb_pf_trace::_gthread;
+@@ -98,7 +94,7 @@ Jdb_ipc_trace::clear_restriction()
+   _gthread      = 0;
+   _other_task   = 0;
+   _task         = 0;
+-  _snd_only    = 0;
++  _snd_only     = 0;
+ }
+ 
+ PUBLIC static
+diff --git a/src/jdb/jdb_trace_set.cpp b/src/jdb/jdb_trace_set.cpp
+index ceba68b..9bf8f65 100644
+--- a/src/jdb/jdb_trace_set.cpp
++++ b/src/jdb/jdb_trace_set.cpp
+@@ -14,7 +14,7 @@ IMPLEMENTATION:
+ class Jdb_set_trace : public Jdb_module
+ {
+ public:
+-  enum Mode { Off, Log, Log_to_buf, Trace, Use_c_short_cut, Use_slow_path };
++  enum Mode { Off, Log, Log_to_buf, Trace, Use_slow_path };
+ 
+   Jdb_set_trace() FIASCO_INIT;
+   void ipc_tracing(Mode mode);
+@@ -122,15 +122,6 @@ Jdb_set_trace::action(int cmd, void *&args, char const *&fmt, int &)
+ 		return ERROR;
+ 	      putchar(second_char);
+ 	      break;
+-	    case 'C':
+-	      if (second_char == '+')
+-		ipc_tracing(Use_c_short_cut);
+-	      else if (second_char == '-')
+-		ipc_tracing(Off);
+-	      else
+-		return ERROR;
+-	      putchar(second_char);
+-	      break;
+ 	    case 'T':
+ 	      if (second_char == '+')
+ 		ipc_tracing(Trace);
+@@ -238,7 +229,6 @@ Jdb_set_trace::cmds() const
+ 	  "I{+|-|*|R{+|-}|T{+|-}}\ton/off/buffer ipc logging, on/off result, "
+ 	  "tracing\n"
+ 	  "IS{+|-}\tipc \033[1mwithout\033[m shortcut on/off\n"
+-	  "IC{+|-}\tipc with C fast path / IPC with Assembler fast path\n"
+ 	  "Ir{t|T|a|A|s|-}\trestrict ipc log to (!)thread/(!)task/snd-only/"
+ 	  "clr",
+ 	  &first_char },
+diff --git a/src/jdb/mips/jdb_trace_set-mips.cpp b/src/jdb/mips/jdb_trace_set-mips.cpp
+index d828e51..eaea330 100644
+--- a/src/jdb/mips/jdb_trace_set-mips.cpp
++++ b/src/jdb/mips/jdb_trace_set-mips.cpp
+@@ -28,7 +28,6 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+     case Off:
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 0;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc(sys_ipc_wrapper);
+       break;
+@@ -36,7 +35,6 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 1;
+       Jdb_ipc_trace::_log_to_buf = 0;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc(sys_ipc_log_wrapper);
+       break;
+@@ -44,19 +42,15 @@ Jdb_set_trace::ipc_tracing(Mode mode)
+       Jdb_ipc_trace::_trace = 0;
+       Jdb_ipc_trace::_log = 1;
+       Jdb_ipc_trace::_log_to_buf = 1;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc(sys_ipc_log_wrapper);
+       break;
+     case Trace:
+       Jdb_ipc_trace::_trace = 1;
+-      Jdb_ipc_trace::_cshortcut = 0;
+       Jdb_ipc_trace::_log = 0;
+       Jdb_ipc_trace::_slow_ipc = 0;
+       set_ipc(sys_ipc_trace_wrapper);
+       break;
+-    case Use_c_short_cut:
+-      break;
+     case Use_slow_path:
+       Jdb_ipc_trace::_slow_ipc = 1;
+       set_ipc(sys_ipc_wrapper);

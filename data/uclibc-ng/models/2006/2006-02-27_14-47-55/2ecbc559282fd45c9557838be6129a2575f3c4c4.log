@@ -1,0 +1,486 @@
+"2006-02-27 14:47:55 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index f556a4993..b0334d078 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1165,12 +1165,27 @@ config UCLIBC_HAS_GLOB
+ 	default y
+ 	help
+ 
+-	  The glob interface is somewhat large (weighing in at about 4k).  It
++	  The glob interface is somewhat large (weighing in at about 2,5k).  It
+ 	  is used fairly often, but is an option since people wanting to go for
+ 	  absolute minimum size may wish to omit it.
+ 
+ 	  Most people will answer Y.
+ 
++config UCLIBC_HAS_GNU_GLOB
++	bool "Support gnu glob() interface"
++	depends on UCLIBC_HAS_GLOB
++	default y
++	help
++	  The gnu glob interface is somewhat larger (weighing in at about 4,2k) than
++	  it's SuSv3 counterpart (and is out of date). It is an old copy from glibc and
++	  does not support all the GNU specific options.
++
++	  Answer Y if you want to include full gnu glob() instead of the smaller SUSv3
++	  compatible glob().
++	  It is only default, because it is the old/stable version.
++
++	  Most people will answer N.
++
+ endmenu
+ 
+ 
+diff --git a/include/glob.h b/include/glob.h
+index 0592f34cf..a8b76523e 100644
+--- a/include/glob.h
++++ b/include/glob.h
+@@ -53,7 +53,7 @@ typedef __SIZE_TYPE__ size_t;
+ #define	GLOB_NOESCAPE	(1 << 6)/* Backslashes don't quote metacharacters.  */
+ #define	GLOB_PERIOD	(1 << 7)/* Leading `.' can be matched by metachars.  */
+ 
+-#if !defined __USE_POSIX2 || defined __USE_BSD || defined __USE_GNU
++#if ( !defined __USE_POSIX2 || defined __USE_BSD || defined __USE_GNU ) && defined __UCLIBC_HAS_GNU_GLOB__
+ # define GLOB_MAGCHAR	 (1 << 8)/* Set in gl_flags if any metachars seen.  */
+ #if 0 /* uClibc's gnu glob does not support these */
+ # define GLOB_ALTDIRFUNC (1 << 9)/* Use gl_opendir et al functions.  */
+@@ -83,14 +83,14 @@ typedef __SIZE_TYPE__ size_t;
+ #define	GLOB_ABORTED	2	/* Read error.  */
+ #define	GLOB_NOMATCH	3	/* No matches found.  */
+ #define GLOB_NOSYS	4	/* Not implemented.  */
+-#ifdef __USE_GNU
++#if defined __USE_GNU && defined __UCLIBC_HAS_GNU_GLOB__
+ /* Previous versions of this file defined GLOB_ABEND instead of
+    GLOB_ABORTED.  Provide a compatibility definition here.  */
+ # define GLOB_ABEND GLOB_ABORTED
+ #endif
+ 
+ /* Structure describing a globbing run.  */
+-#ifdef __USE_GNU
++#if defined __USE_GNU && defined __UCLIBC_HAS_GNU_GLOB__
+ struct stat;
+ #endif
+ typedef struct
+@@ -98,6 +98,7 @@ typedef struct
+     __size_t gl_pathc;		/* Count of paths matched by the pattern.  */
+     char **gl_pathv;		/* List of matched pathnames.  */
+     __size_t gl_offs;		/* Slots to reserve in `gl_pathv'.  */
++#ifdef __UCLIBC_HAS_GNU_GLOB__
+     int gl_flags;		/* Set to FLAGS, maybe | GLOB_MAGCHAR.  */
+ 
+     /* If the GLOB_ALTDIRFUNC flag is set, the following functions
+@@ -116,10 +117,11 @@ typedef struct
+     int (*gl_lstat) (__const char *__restrict, void *__restrict);
+     int (*gl_stat) (__const char *__restrict, void *__restrict);
+ #endif
++#endif /* __UCLIBC_HAS_GNU_GLOB__ */
+   } glob_t;
+ 
+ #ifdef __USE_LARGEFILE64
+-# ifdef __USE_GNU
++# if defined __USE_GNU && defined __UCLIBC_HAS_GNU_GLOB__
+ struct stat64;
+ # endif
+ typedef struct
+@@ -127,6 +129,7 @@ typedef struct
+     __size_t gl_pathc;
+     char **gl_pathv;
+     __size_t gl_offs;
++#ifdef __UCLIBC_HAS_GNU_GLOB__
+     int gl_flags;
+ 
+     /* If the GLOB_ALTDIRFUNC flag is set, the following functions
+@@ -145,6 +148,7 @@ typedef struct
+     int (*gl_lstat) (__const char *__restrict, void *__restrict);
+     int (*gl_stat) (__const char *__restrict, void *__restrict);
+ # endif
++#endif /* __UCLIBC_HAS_GNU_GLOB__ */
+   } glob64_t;
+ #endif
+ 
+@@ -186,7 +190,7 @@ extern void globfree64 (glob64_t *__pglob) __THROW;
+ #endif
+ 
+ 
+-#ifdef __USE_GNU
++#if defined __USE_GNU && defined __UCLIBC_HAS_GNU_GLOB__
+ /* Return nonzero if PATTERN contains any metacharacters.
+    Metacharacters can be quoted with backslashes if QUOTE is nonzero.
+ 
+diff --git a/libc/misc/glob/Makefile.in b/libc/misc/glob/Makefile.in
+index 7a4fa79f1..2eda3dea2 100644
+--- a/libc/misc/glob/Makefile.in
++++ b/libc/misc/glob/Makefile.in
+@@ -6,10 +6,17 @@
+ # Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+ #
+ 
++ifeq ($(UCLIBC_HAS_GNU_GLOB),y)
+ CSRC := glob.c glob-hooks.c
+ ifeq ($(UCLIBC_HAS_LFS),y)
+ CSRC += glob64.c
+ endif
++else
++CSRC := glob-susv3.c
++ifeq ($(UCLIBC_HAS_LFS),y)
++CSRC += glob64-susv3.c
++endif
++endif
+ 
+ MISC_GLOB_DIR := $(top_srcdir)libc/misc/glob
+ MISC_GLOB_OUT := $(top_builddir)libc/misc/glob
+diff --git a/libc/misc/glob/glob-susv3.c b/libc/misc/glob/glob-susv3.c
+new file mode 100644
+index 000000000..e5b48cac3
+--- /dev/null
++++ b/libc/misc/glob/glob-susv3.c
+@@ -0,0 +1,322 @@
++/*
++ * Copyright (C) 2006 Rich Felker <dalias@aerifal.cx>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <features.h>
++
++#ifdef __UCLIBC_HAS_LFS__
++# define BUILD_GLOB64
++#endif
++
++#include <glob.h>
++#include <fnmatch.h>
++#include <sys/stat.h>
++#include <dirent.h>
++#include <limits.h>
++#include <string.h>
++#include <stdlib.h>
++#include <errno.h>
++#include <stddef.h>
++
++#include <unistd.h>
++#include <stdio.h>
++
++libc_hidden_proto(memcpy)
++libc_hidden_proto(strcat)
++libc_hidden_proto(strchr)
++libc_hidden_proto(strcmp)
++libc_hidden_proto(strcpy)
++libc_hidden_proto(strlen)
++libc_hidden_proto(opendir)
++libc_hidden_proto(closedir)
++libc_hidden_proto(qsort)
++libc_hidden_proto(fnmatch)
++
++struct match
++{
++	struct match *next;
++	char name[1];
++};
++
++#ifdef BUILD_GLOB64
++extern int __glob_is_literal(const char *p, int useesc) attribute_hidden;
++extern int __glob_append(struct match **tail, const char *name, size_t len, int mark) attribute_hidden;
++extern int __glob_ignore_err(const char *path, int err) attribute_hidden;
++extern void __glob_freelist(struct match *head) attribute_hidden;
++extern int __glob_sort(const void *a, const void *b) attribute_hidden;
++extern int __glob_match_in_dir(const char *d, const char *p, int flags, int (*errfunc)(const char *path, int err), struct match **tail) attribute_hidden;
++#endif
++
++#ifdef __UCLIBC_HAS_LFS__
++# define stat stat64
++# define readdir_r readdir64_r
++# define dirent dirent64
++libc_hidden_proto(readdir64_r)
++libc_hidden_proto(stat64)
++# define struct_stat struct stat64
++#else
++libc_hidden_proto(readdir_r)
++libc_hidden_proto(stat)
++# define struct_stat struct stat
++#endif
++
++/* keep only one copy of these */
++#ifndef __GLOB64
++
++# ifndef BUILD_GLOB64
++static
++# endif
++int __glob_is_literal(const char *p, int useesc)
++{
++	int bracket = 0;
++	for (; *p; p++) {
++		switch (*p) {
++		case '\\':
++			if (!useesc) break;
++		case '?':
++		case '*':
++			return 0;
++		case '[':
++			bracket = 1;
++			break;
++		case ']':
++			if (bracket) return 0;
++			break;
++		}
++	}
++	return 1;
++}
++
++# ifndef BUILD_GLOB64
++static
++# endif
++int __glob_append(struct match **tail, const char *name, size_t len, int mark)
++{
++	struct match *new = malloc(sizeof(struct match) + len + 1);
++	if (!new) return -1;
++	(*tail)->next = new;
++	new->next = NULL;
++	strcpy(new->name, name);
++	if (mark) strcat(new->name, "/");
++	*tail = new;
++	return 0;
++}
++
++# ifndef BUILD_GLOB64
++static
++# endif
++int __glob_match_in_dir(const char *d, const char *p, int flags, int (*errfunc)(const char *path, int err), struct match **tail)
++{
++	DIR *dir;
++	long long de_buf[(sizeof(struct dirent) + NAME_MAX + sizeof(long long))/sizeof(long long)];
++	struct dirent *de;
++	char pat[strlen(p)+1];
++	char *p2;
++	size_t l = strlen(d);
++	int literal;
++	int fnm_flags= ((flags & GLOB_NOESCAPE) ? FNM_NOESCAPE : 0) | FNM_PERIOD;
++	int error;
++
++	if ((p2 = strchr(p, '/'))) {
++		strcpy(pat, p);
++		pat[p2-p] = 0;
++		for (; *p2 == '/'; p2++);
++		p = pat;
++	}
++	literal = __glob_is_literal(p, !(flags & GLOB_NOESCAPE));
++	if (*d == '/' && !*(d+1)) l = 0;
++
++	/* rely on opendir failing for nondirectory objects */
++	dir = opendir(*d ? d : ".");
++	error = errno;
++	if (!dir) {
++		/* this is not an error -- we let opendir call stat for us */
++		if (error == ENOTDIR) return 0;
++		if (error == EACCES && !*p) {
++			struct_stat st;
++			if (!stat(d, &st) && S_ISDIR(st.st_mode)) {
++				if (__glob_append(tail, d, l, l))
++					return GLOB_NOSPACE;
++				return 0;
++			}
++		}
++		if (errfunc(d, error) || (flags & GLOB_ERR))
++			return GLOB_ABORTED;
++		return 0;
++	}
++	if (!*p) {
++		error = __glob_append(tail, d, l, l) ? GLOB_NOSPACE : 0;
++		closedir(dir);
++		return error;
++	}
++	while (!(error = readdir_r(dir, (void *)de_buf, &de)) && de) {
++		char namebuf[l+de->d_reclen+2], *name = namebuf;
++		if (!literal && fnmatch(p, de->d_name, fnm_flags))
++			continue;
++		if (literal && strcmp(p, de->d_name))
++			continue;
++		if (p2 && de->d_type && !S_ISDIR(de->d_type<<12) && !S_ISLNK(de->d_type<<12))
++			continue;
++		if (*d) {
++			memcpy(name, d, l);
++			name[l] = '/';
++			strcpy(name+l+1, de->d_name);
++		} else {
++			name = de->d_name;
++		}
++		if (p2) {
++			if ((error = __glob_match_in_dir(name, p2, flags, errfunc, tail))) {
++				closedir(dir);
++				return error;
++			}
++		} else {
++			int mark = 0;
++			if (flags & GLOB_MARK) {
++				if (de->d_type)
++					mark = S_ISDIR(de->d_type<<12);
++				else {
++					struct_stat st;
++					stat(name, &st);
++					mark = S_ISDIR(st.st_mode);
++				}
++			}
++			if (__glob_append(tail, name, l+de->d_reclen+1, mark)) {
++				closedir(dir);
++				return GLOB_NOSPACE;
++			}
++		}
++	}
++	closedir(dir);
++	if (error && (errfunc(d, error) || (flags & GLOB_ERR)))
++		return GLOB_ABORTED;
++	return 0;
++}
++
++# ifndef BUILD_GLOB64
++static
++# endif
++int __glob_ignore_err(const char *path, int err)
++{
++	return 0;
++}
++
++# ifndef BUILD_GLOB64
++static
++# endif
++void __glob_freelist(struct match *head)
++{
++	struct match *match, *next;
++	for (match=head->next; match; match=next) {
++		next = match->next;
++		free(match);
++	}
++}
++
++# ifndef BUILD_GLOB64
++static
++# endif
++int __glob_sort(const void *a, const void *b)
++{
++	return strcmp(*(const char **)a, *(const char **)b);
++}
++#endif /* !__GLOB64 */
++
++#ifdef __GLOB64
++libc_hidden_proto(glob64)
++#else
++libc_hidden_proto(glob)
++#endif
++int glob(const char *pat, int flags, int (*errfunc)(const char *path, int err), glob_t *g)
++{
++	const char *p=pat, *d;
++	struct match head = { .next = NULL }, *tail = &head;
++	size_t cnt, i;
++	size_t offs = (flags & GLOB_DOOFFS) ? g->gl_offs : 0;
++	int error = 0;
++	
++	if (*p == '/') {
++		for (; *p == '/'; p++);
++		d = "/";
++	} else {
++		d = "";
++	}
++
++	if (!errfunc) errfunc = __glob_ignore_err;
++
++	if (!(flags & GLOB_APPEND)) {
++		g->gl_offs = offs;
++		g->gl_pathc = 0;
++		g->gl_pathv = NULL;
++	}
++
++	if (*p) error = __glob_match_in_dir(d, p, flags, errfunc, &tail);
++	if (error == GLOB_NOSPACE) {
++		__glob_freelist(&head);
++		return error;
++	}
++	
++	for (cnt=0, tail=head.next; tail; tail=tail->next, cnt++);
++	if (!cnt) {
++		if (flags & GLOB_NOCHECK) {
++			tail = &head;
++			if (__glob_append(&tail, pat, strlen(pat), 0))
++				return GLOB_NOSPACE;
++			cnt++;
++		} else
++			return GLOB_NOMATCH;
++	}
++
++	if (flags & GLOB_APPEND) {
++		char **pathv = realloc(g->gl_pathv, (offs + g->gl_pathc + cnt + 1) * sizeof(char *));
++		if (!pathv) {
++			__glob_freelist(&head);
++			return GLOB_NOSPACE;
++		}
++		g->gl_pathv = pathv;
++		offs += g->gl_pathc;
++	} else {
++		g->gl_pathv = malloc((offs + cnt + 1) * sizeof(char *));
++		if (!g->gl_pathv) {
++			__glob_freelist(&head);
++			return GLOB_NOSPACE;
++		}
++		for (i=0; i<offs; i++)
++			g->gl_pathv[i] = NULL;
++	}
++	for (i=0, tail=head.next; i<cnt; tail=tail->next, i++)
++		g->gl_pathv[offs + i] = tail->name;
++	g->gl_pathv[offs + i] = NULL;
++	g->gl_pathc += cnt;
++
++	if (!(flags & GLOB_NOSORT))
++		qsort(g->gl_pathv+offs, cnt, sizeof(char *), __glob_sort);
++	
++	return error;
++}
++#ifdef __GLOB64
++libc_hidden_def(glob64)
++#else
++libc_hidden_def(glob)
++#endif
++
++#ifdef __GLOB64
++libc_hidden_proto(globfree64)
++#else
++libc_hidden_proto(globfree)
++#endif
++void globfree(glob_t *g)
++{
++	size_t i;
++	for (i=0; i<g->gl_pathc; i++)
++		free(g->gl_pathv[g->gl_offs + i] - offsetof(struct match, name));
++	free(g->gl_pathv);
++	g->gl_pathc = 0;
++	g->gl_pathv = NULL;
++}
++#ifdef __GLOB64
++libc_hidden_def(globfree64)
++#else
++libc_hidden_def(globfree)
++#endif
+diff --git a/libc/misc/glob/glob64-susv3.c b/libc/misc/glob/glob64-susv3.c
+new file mode 100644
+index 000000000..cc633cd88
+--- /dev/null
++++ b/libc/misc/glob/glob64-susv3.c
+@@ -0,0 +1,20 @@
++/*
++ * Copyright (C) 2006 Rich Felker <dalias@aerifal.cx>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <_lfs_64.h>
++
++#include <dirent.h>
++#include <glob.h>
++#include <sys/stat.h>
++
++#define glob_t glob64_t
++#define glob(pattern, flags, errfunc, pglob) \
++  glob64 (pattern, flags, errfunc, pglob)
++#define globfree(pglob) globfree64 (pglob)
++
++#define __GLOB64    1
++    
++#include "glob-susv3.c"

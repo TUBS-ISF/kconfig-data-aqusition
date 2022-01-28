@@ -1,0 +1,347 @@
+"2010-09-17 16:13:17 +0200"
+diff --git a/Makerules b/Makerules
+index 2e9ca05bf..435ccfd9e 100644
+--- a/Makerules
++++ b/Makerules
+@@ -294,6 +294,15 @@ endef
+ cmd_hcompile.u = $(HOSTCC) $(filter-out $(PHONY),$^) $(DEPS-$(notdir $@)) -o $@ $(BUILD_LDFLAGS) $(BUILD_LDFLAGS-$(notdir $(^D))) $(BUILD_LDFLAGS-$(notdir $@)) $(BUILD_CFLAGS) $(BUILD_CFLAGS-$(notdir $(^D))) $(BUILD_CFLAGS-$(notdir $@))
+ cmd_hcompile.o = $(HOSTCC) $(filter-out $(PHONY),$<) $(DEPS-$(notdir $@)) -c -o $@ $(BUILD_CFLAGS) $(BUILD_CFLAGS-$(notdir $(^D))) $(BUILD_CFLAGS-$(notdir $@))
+ 
++define create-lds
++	$(Q)$(RM) $@.lds
++	$(Q)$(CC) -nostdlib -nostartfiles -shared -Wl,-z,combreloc \
++	-Wl,-z,relro -Wl,--hash-style=gnu -Wl,-z,defs \
++	-Wl,--verbose 2>&1 | LC_ALL=C \
++	sed -e '/^=========/,/^=========/!d;/^=========/d' \
++	-e 's/\. = .* + SIZEOF_HEADERS;/& _begin = . - SIZEOF_HEADERS;/' > $@.lds
++endef
++
+ define link.so
+ 	$(Q)$(RM) $@ $@.$(2) $(dir $@)$(1)
+ 	@$(disp_ld)
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 97211864b..801669a17 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -359,6 +359,17 @@ config LDSO_STANDALONE_SUPPORT
+ 	  capabilities to uClibc dynamic linker, as well useful for testing an
+ 	  updated version of the dynamic linker without breaking the system.
+ 
++config LDSO_PRELINK_SUPPORT
++	bool "Dynamic linker prelink support"
++	depends on HAVE_SHARED
++	default n
++	select LDSO_STANDALONE_SUPPORT
++	help
++	  The dynamic linker can be used in stand-alone mode by the prelink tool
++	  for prelinking ELF shared libraries and binaries to speed up startup
++	  time. It also is able to load and handle prelinked libraries and
++	  binaries at runtime.
++
+ config UCLIBC_STATIC_LDCONFIG
+ 	bool "Link ldconfig statically"
+ 	depends on HAVE_SHARED
+diff --git a/ldso/include/dl-elf.h b/ldso/include/dl-elf.h
+index 3e8586444..40c88b9da 100644
+--- a/ldso/include/dl-elf.h
++++ b/ldso/include/dl-elf.h
+@@ -85,24 +85,47 @@ extern void _dl_protect_relro (struct elf_resolve *l);
+ #endif
+ 
+ /* OS and/or GNU dynamic extensions */
++
++#define OS_NUM_BASE 1			/* for DT_RELOCCOUNT */
++
+ #ifdef __LDSO_GNU_HASH_SUPPORT__
+-# define OS_NUM 2 /* for DT_RELOCCOUNT and DT_GNU_HASH entries */
++# define OS_NUM_GNU_HASH	1   /* for DT_GNU_HASH entry */
++#else
++# define OS_NUM_GNU_HASH	0
++#endif
++
++#ifdef __LDSO_PRELINK_SUPPORT__
++# define OS_NUM_PRELINK		6   /* for DT_GNU_PRELINKED entry */
+ #else
+-# define OS_NUM 1 /* for DT_RELOCCOUNT entry */
++# define OS_NUM_PRELINK	0
+ #endif
+ 
++#define OS_NUM	  (OS_NUM_BASE + OS_NUM_GNU_HASH + OS_NUM_PRELINK)
++
+ #ifndef ARCH_DYNAMIC_INFO
+   /* define in arch specific code, if needed */
+ # define ARCH_NUM 0
+ #endif
+ 
+-#define DYNAMIC_SIZE (DT_NUM+OS_NUM+ARCH_NUM)
++#define DYNAMIC_SIZE (DT_NUM + OS_NUM + ARCH_NUM)
+ /* Keep ARCH specific entries into dynamic section at the end of the array */
+ #define DT_RELCONT_IDX (DYNAMIC_SIZE - OS_NUM - ARCH_NUM)
+ 
+ #ifdef __LDSO_GNU_HASH_SUPPORT__
+ /* GNU hash comes just after the relocation count */
+ # define DT_GNU_HASH_IDX (DT_RELCONT_IDX + 1)
++#else
++# define DT_GNU_HASH_IDX DT_RELCONT_IDX
++#endif
++
++#ifdef __LDSO_PRELINK_SUPPORT__
++/* GNU prelink comes just after the GNU hash if present */
++#define DT_GNU_PRELINKED_IDX  (DT_GNU_HASH_IDX + 1)
++#define DT_GNU_CONFLICT_IDX   (DT_GNU_HASH_IDX + 2)
++#define DT_GNU_CONFLICTSZ_IDX (DT_GNU_HASH_IDX + 3)
++#define DT_GNU_LIBLIST_IDX    (DT_GNU_HASH_IDX + 4)
++#define DT_GNU_LIBLISTSZ_IDX  (DT_GNU_HASH_IDX + 5)
++#define DT_CHECKSUM_IDX       (DT_GNU_HASH_IDX + 6)
+ #endif
+ 
+ extern unsigned int _dl_parse_dynamic_info(ElfW(Dyn) *dpnt, unsigned long dynamic_info[],
+@@ -150,6 +173,20 @@ unsigned int __dl_parse_dynamic_info(ElfW(Dyn) *dpnt, unsigned long dynamic_info
+ #ifdef __LDSO_GNU_HASH_SUPPORT__
+ 			if (dpnt->d_tag == DT_GNU_HASH)
+ 				dynamic_info[DT_GNU_HASH_IDX] = dpnt->d_un.d_ptr;
++#endif
++#ifdef __LDSO_PRELINK_SUPPORT__
++			if (dpnt->d_tag == DT_GNU_PRELINKED)
++				dynamic_info[DT_GNU_PRELINKED_IDX] = dpnt->d_un.d_val;
++			if (dpnt->d_tag == DT_GNU_CONFLICT)
++				dynamic_info[DT_GNU_CONFLICT_IDX] = dpnt->d_un.d_ptr;
++			if (dpnt->d_tag == DT_GNU_CONFLICTSZ)
++				dynamic_info[DT_GNU_CONFLICTSZ_IDX] = dpnt->d_un.d_val;
++			if (dpnt->d_tag == DT_GNU_LIBLIST)
++				dynamic_info[DT_GNU_LIBLIST_IDX] = dpnt->d_un.d_ptr;
++			if (dpnt->d_tag == DT_GNU_LIBLISTSZ)
++				dynamic_info[DT_GNU_LIBLISTSZ_IDX] = dpnt->d_un.d_val;
++			if (dpnt->d_tag == DT_CHECKSUM)
++				dynamic_info[DT_CHECKSUM_IDX] = dpnt->d_un.d_val;
+ #endif
+ 		}
+ #ifdef ARCH_DYNAMIC_INFO
+diff --git a/ldso/ldso/Makefile.in b/ldso/ldso/Makefile.in
+index e71ae1563..c9dcebd60 100644
+--- a/ldso/ldso/Makefile.in
++++ b/ldso/ldso/Makefile.in
+@@ -62,8 +62,16 @@ ldso-y := $($(UCLIBC_LDSO_NAME)_OBJS:.o=.oS)
+ lib-so-y += $(ldso)
+ objclean-y += CLEAN_ldso/ldso
+ 
++ifeq ($(LDSO_PRELINK_SUPPORT),y)
++# Use a specific linker script for ld.so
++LDFLAGS-$(UCLIBC_LDSO_NAME).so += -T $(ldso:.$(ABI_VERSION)=).lds
++endif
++
+ $(ldso): $(ldso:.$(ABI_VERSION)=)
+ $(ldso:.$(ABI_VERSION)=): $($(UCLIBC_LDSO_NAME)_OUT)/$(UCLIBC_LDSO_NAME)_so.a
++ifeq ($(LDSO_PRELINK_SUPPORT),y)
++	$(call create-lds)
++endif
+ 	$(call link.so,$(ldso_FULL_NAME),$(ABI_VERSION))
+ 
+ $($(UCLIBC_LDSO_NAME)_OUT)/$(UCLIBC_LDSO_NAME)_so.a: $(ldso-y)
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index a8ccc5e91..9625f5ae5 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -343,7 +343,7 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 	size_t relro_size = 0;
+ 	struct stat st;
+ 	uint32_t *p32;
+-	DL_LOADADDR_TYPE lib_loadaddr;
++	DL_LOADADDR_TYPE lib_loadaddr = 0;
+ 	DL_INIT_LOADADDR_EXTRA_DECLS
+ 
+ 	libaddr = 0;
+@@ -880,7 +880,12 @@ int _dl_fixup(struct dyn_elf *rpnt, struct r_scope_elem *scope, int now_flag)
+ 		relative_count = tpnt->dynamic_info[DT_RELCONT_IDX];
+ 		if (relative_count) { /* Optimize the XX_RELATIVE relocations if possible */
+ 			reloc_size -= relative_count * sizeof(ELF_RELOC);
+-			elf_machine_relative(tpnt->loadaddr, reloc_addr, relative_count);
++			if (tpnt->loadaddr
++#ifdef __LDSO_PRELINK_SUPPORT__
++				|| (!tpnt->dynamic_info[DT_GNU_PRELINKED_IDX])
++#endif
++				)
++				elf_machine_relative(tpnt->loadaddr, reloc_addr, relative_count);
+ 			reloc_addr += relative_count * sizeof(ELF_RELOC);
+ 		}
+ 		goof += _dl_parse_relocation_information(rpnt, scope,
+diff --git a/ldso/ldso/dl-hash.c b/ldso/ldso/dl-hash.c
+index 2e2111fa9..f0683c60f 100644
+--- a/ldso/ldso/dl-hash.c
++++ b/ldso/ldso/dl-hash.c
+@@ -145,7 +145,11 @@ struct elf_resolve *_dl_add_elf_hash_table(const char *libname,
+ 		hash_addr += tpnt->nbucket;
+ 		tpnt->chains = hash_addr;
+ 	}
++#ifdef __LDSO_PRELINK_SUPPORT__
++	tpnt->loadaddr = dynamic_info[DT_GNU_PRELINKED_IDX] ? 0 : loadaddr;
++#else
+ 	tpnt->loadaddr = loadaddr;
++#endif
+ 	tpnt->mapaddr = DL_RELOC_ADDR(loadaddr, 0);
+ 	for (i = 0; i < DYNAMIC_SIZE; i++)
+ 		tpnt->dynamic_info[i] = dynamic_info[i];
+diff --git a/ldso/ldso/dl-startup.c b/ldso/ldso/dl-startup.c
+index feffa787b..4799846ee 100644
+--- a/ldso/ldso/dl-startup.c
++++ b/ldso/ldso/dl-startup.c
+@@ -94,6 +94,11 @@
+ /* Pull in all the arch specific stuff */
+ #include "dl-startup.h"
+ 
++#ifdef __LDSO_PRELINK_SUPPORT__
++/* These defined magically in the linker script.  */
++extern char _begin[] attribute_hidden;
++#endif
++
+ /* Static declarations */
+ static int (*_dl_elf_main) (int, char **, char **);
+ 
+@@ -164,11 +169,26 @@ DL_START(unsigned long args)
+ 		aux_dat += 2;
+ 	}
+ 
+-	/* locate the ELF header.   We need this done as soon as possible
+-	 * (esp since SEND_STDERR() needs this on some platforms... */
++	/*
++	 * Locate the dynamic linker ELF header. We need this done as soon as
++	 * possible (esp since SEND_STDERR() needs this on some platforms...
++	 */
++
++#ifdef __LDSO_PRELINK_SUPPORT__
++	/*
++	 * The `_begin' symbol created by the linker script points to ld.so ELF
++	 * We use it if the kernel is not passing a valid address through the auxvt.
++	 */
++
++	if (!auxvt[AT_BASE].a_un.a_val)
++		auxvt[AT_BASE].a_un.a_val =  (Elf32_Addr) &_begin;
++	/* Note: if the dynamic linker itself is prelinked, the load_addr is 0 */
++	DL_INIT_LOADADDR_BOOT(load_addr, elf_machine_load_address());
++#else
+ 	if (!auxvt[AT_BASE].a_un.a_val)
+ 		auxvt[AT_BASE].a_un.a_val = elf_machine_load_address();
+ 	DL_INIT_LOADADDR_BOOT(load_addr, auxvt[AT_BASE].a_un.a_val);
++#endif
+ 	header = (ElfW(Ehdr) *) auxvt[AT_BASE].a_un.a_val;
+ 
+ 	/* Check the ELF header to make sure everything looks ok.  */
+@@ -183,7 +203,7 @@ DL_START(unsigned long args)
+ 		_dl_exit(0);
+ 	}
+ 	SEND_EARLY_STDERR_DEBUG("ELF header=");
+-	SEND_ADDRESS_STDERR_DEBUG(DL_LOADADDR_BASE(load_addr), 1);
++	SEND_ADDRESS_STDERR_DEBUG(DL_LOADADDR_BASE(header), 1);
+ 
+ 	/* Locate the global offset table.  Since this code must be PIC
+ 	 * we can take advantage of the magic offset register, if we
+@@ -258,7 +278,12 @@ DL_START(unsigned long args)
+ 
+ 			if (!indx && relative_count) {
+ 				rel_size -= relative_count * sizeof(ELF_RELOC);
+-				elf_machine_relative(load_addr, rel_addr, relative_count);
++				if (load_addr
++#ifdef __LDSO_PRELINK_SUPPORT__
++					|| !tpnt->dynamic_info[DT_GNU_PRELINKED_IDX]
++#endif
++					)
++					elf_machine_relative(load_addr, rel_addr, relative_count);
+ 				rel_addr += relative_count * sizeof(ELF_RELOC);
+ 			}
+ 
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index 4a7b6398f..b056f8af2 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -61,6 +61,7 @@ void (*_dl_free_function) (void *p) = NULL;
+ char *_dl_trace_prelink                      = NULL;	/* Library for prelinking trace */
+ struct elf_resolve *_dl_trace_prelink_map    = NULL;	/* Library module for prelinking trace */
+ bool _dl_verbose				= true;					/* On by default */
++bool prelinked					= false;
+ #endif
+ static int _dl_secure = 1; /* Are we dealing with setuid stuff? */
+ 
+@@ -1189,8 +1190,75 @@ of this helper program; chances are you did not intend to run this program.\n\
+ 					_dl_exit(-1);
+ 		_dl_exit(0);
+ 	}
++
++	if (_dl_loaded_modules->dynamic_info[DT_GNU_LIBLIST_IDX]) {
++		ElfW(Lib) *liblist, *liblistend;
++		struct elf_resolve **r_list, **r_listend, *l;
++		const char *strtab = (const char *)_dl_loaded_modules->dynamic_info[DT_STRTAB];
++
++		_dl_assert (_dl_loaded_modules->dynamic_info[DT_GNU_LIBLISTSZ_IDX] != 0);
++		liblist = (ElfW(Lib) *) _dl_loaded_modules->dynamic_info[DT_GNU_LIBLIST_IDX];
++		liblistend = (ElfW(Lib) *)
++		((char *) liblist + _dl_loaded_modules->dynamic_info[DT_GNU_LIBLISTSZ_IDX]);
++		r_list = _dl_loaded_modules->symbol_scope.r_list;
++		r_listend = r_list + nscope_elem;
++
++		for (; r_list < r_listend && liblist < liblistend; r_list++) {
++			l = *r_list;
++
++			if (l == _dl_loaded_modules)
++				continue;
++
++			/* If the library is not mapped where it should, fail.  */
++			if (l->loadaddr)
++				break;
++
++			/* Next, check if checksum matches.  */
++			if (l->dynamic_info[DT_CHECKSUM_IDX] == 0 ||
++				l->dynamic_info[DT_CHECKSUM_IDX] != liblist->l_checksum)
++				break;
++
++			if (l->dynamic_info[DT_GNU_PRELINKED_IDX] == 0 ||
++				(l->dynamic_info[DT_GNU_PRELINKED_IDX] != liblist->l_time_stamp))
++				break;
++
++			if (_dl_strcmp(strtab + liblist->l_name, _dl_get_last_path_component(l->libname)) != 0)
++				break;
++
++			++liblist;
++		}
++
++
++		if (r_list == r_listend && liblist == liblistend)
++			prelinked = true;
++
++	}
++
++	_dl_debug_early ("\nprelink checking: %s\n", prelinked ? "ok" : "failed");
++
++	if (prelinked) {
++		if (_dl_loaded_modules->dynamic_info[DT_GNU_CONFLICT_IDX]) {
++			ELF_RELOC *conflict;
++			unsigned long conflict_size;
++
++			_dl_assert (_dl_loaded_modules->dynamic_info[DT_GNU_CONFLICTSZ_IDX] != 0);
++			conflict = (ELF_RELOC *) _dl_loaded_modules->dynamic_info[DT_GNU_CONFLICT_IDX];
++			conflict_size = _dl_loaded_modules->dynamic_info[DT_GNU_CONFLICTSZ_IDX];
++			_dl_parse_relocation_information(_dl_symbol_tables, global_scope,
++				(unsigned long) conflict, conflict_size);
++		}
++
++		/* Mark all the objects so we know they have been already relocated.  */
++		for (tpnt = _dl_loaded_modules; tpnt; tpnt = tpnt->next) {
++			tpnt->init_flag |= RELOCS_DONE;
++			if (tpnt->relro_size)
++				_dl_protect_relro (tpnt);
++		}
++	} else
+ #endif
+ 
++	{
++
+ 	_dl_debug_early("Beginning relocation fixups\n");
+ 
+ #ifdef __mips__
+@@ -1215,6 +1283,7 @@ of this helper program; chances are you did not intend to run this program.\n\
+ 		if (tpnt->relro_size)
+ 			_dl_protect_relro (tpnt);
+ 	}
++	} /* not prelinked */
+ 
+ #if defined(USE_TLS) && USE_TLS
+ 	if (!was_tls_init_tp_called && _dl_tls_max_dtv_idx > 0)

@@ -1,0 +1,91 @@
+"2018-02-09 09:07:53 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index ae76fe9..4a4a513 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -328,6 +328,15 @@ config NO_IO_PAGEFAULT
+ 	  eanbled the kernel does not generate page-fault IPC for failed
+ 	  IO-Port accesses instead an excpetion IPC with a #GP is generated.
+ 
++config NO_LDT
++	bool "Disable support for the LDT" if IA32 || AMD64
++	depends on IA32 || AMD64
++	default y if IA32 || AMD64
++	help
++	  This option disables support for the X86 local descriptor
++	  table (LDT).  This reduces some overhead. However, this
++	  also makes the use of the LDT in L4Linux impossible.
++
+ # PF_SECTION: KERNEL
+ 
+ endmenu # kernel options
+diff --git a/src/jdb/ia32/jdb_misc-ia32-amd64.cpp b/src/jdb/ia32/jdb_misc-ia32-amd64.cpp
+index f2a481d..edba4e4 100644
+--- a/src/jdb/ia32/jdb_misc-ia32-amd64.cpp
++++ b/src/jdb/ia32/jdb_misc-ia32-amd64.cpp
+@@ -234,6 +234,18 @@ Jdb_misc_debug::Jdb_misc_debug()
+ static Jdb_misc_debug jdb_misc_debug INIT_PRIORITY(JDB_MODULE_INIT_PRIO);
+ 
+ 
++// --------------------------------------------------------
++IMPLEMENTATION[(ia32 || amd64) && no_ldt]:
++
++static inline void
++Jdb_misc_debug::show_ldt()
++{
++  printf(" -- no LDT support\n");
++}
++
++// --------------------------------------------------------
++IMPLEMENTATION[(ia32 || amd64) && !no_ldt]:
++
+ static void
+ Jdb_misc_debug::show_ldt()
+ {
+@@ -269,6 +281,9 @@ Jdb_misc_debug::show_ldt()
+     }
+ }
+ 
++// --------------------------------------------------------
++IMPLEMENTATION[ia32 || amd64]:
++
+ class Jdb_misc_info : public Jdb_module
+ {
+ public:
+diff --git a/src/kern/ia32/space-ia32.cpp b/src/kern/ia32/space-ia32.cpp
+index 273a53d..921429e 100644
+--- a/src/kern/ia32/space-ia32.cpp
++++ b/src/kern/ia32/space-ia32.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [ia32 || amd64]:
++INTERFACE [(ia32 || amd64) && !no_ldt]:
+ 
+ #include "spin_lock.h"
+ 
+@@ -28,7 +28,7 @@ protected:
+ };
+ 
+ // ---------------------------------------------------------------
+-IMPLEMENTATION [ia32 || amd64]:
++IMPLEMENTATION [(ia32 || amd64) && !no_ldt]:
+ 
+ #include "cpu.h"
+ #include "globals.h"
+diff --git a/src/kern/ia32/task-ia32-amd64.cpp b/src/kern/ia32/task-ia32-amd64.cpp
+index da04e5b..3a9e7cf 100644
+--- a/src/kern/ia32/task-ia32-amd64.cpp
++++ b/src/kern/ia32/task-ia32-amd64.cpp
+@@ -1,4 +1,12 @@
+-IMPLEMENTATION [ia32 || amd64]:
++IMPLEMENTATION [(ia32 || amd64) && no_ldt]:
++
++PRIVATE inline
++bool
++Task::invoke_arch(L4_msg_tag, Utcb *)
++{ return false; }
++
++
++IMPLEMENTATION [(ia32 || amd64) && !no_ldt]:
+ 
+ #include "gdt.h"
+ #include "std_macros.h"

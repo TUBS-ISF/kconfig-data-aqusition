@@ -1,0 +1,876 @@
+"2016-05-03 18:52:16 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index 0cc26190..22b2c0fd 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -87,6 +87,7 @@ source "src/modules/flow/power-supply/Kconfig"
+ source "src/modules/flow/process/Kconfig"
+ source "src/modules/flow/pwm/Kconfig"
+ source "src/modules/flow/random/Kconfig"
++source "src/modules/flow/regexp/Kconfig"
+ source "src/modules/flow/robotics/Kconfig"
+ source "src/modules/flow/servo-motor/Kconfig"
+ source "src/modules/flow/si114x/Kconfig"
+diff --git a/src/modules/flow/regexp/Kconfig b/src/modules/flow/regexp/Kconfig
+new file mode 100644
+index 00000000..e8b87717
+--- /dev/null
++++ b/src/modules/flow/regexp/Kconfig
+@@ -0,0 +1,14 @@
++config FLOW_NODE_TYPE_REGEXP
++	tristate "Node type: regexp"
++        depends on HAVE_LIBPCRE
++	default y
++	help
++		The regexp (regular expressions) family of nodes
++		provides regular expression facilities on your flow,
++		acting on the strings contained in string packets:
++
++		 - replace regular expression patterns in a string
++		 - search for regular expression patterns in a string
++
++		Only one regular expressions backend is supported, for
++		now: libpcre.
+diff --git a/src/modules/flow/regexp/Makefile b/src/modules/flow/regexp/Makefile
+new file mode 100644
+index 00000000..8668a57a
+--- /dev/null
++++ b/src/modules/flow/regexp/Makefile
+@@ -0,0 +1,8 @@
++obj-$(FLOW_NODE_TYPE_REGEXP) += regexp.mod
++obj-regexp-$(FLOW_NODE_TYPE_REGEXP) := regexp.json regexp.o
++obj-regexp-$(FLOW_NODE_TYPE_REGEXP)-extra-cflags += $(LOCALE_CFLAGS)
++obj-regexp-$(FLOW_NODE_TYPE_REGEXP)-extra-cflags += $(LIBPCRE_CFLAGS)
++obj-regexp-$(FLOW_NODE_TYPE_REGEXP)-extra-ldflags += $(LOCALE_LDFLAGS)
++obj-regexp-$(FLOW_NODE_TYPE_REGEXP)-extra-ldflags += $(LIBPCRE_LDFLAGS)
++obj-regexp-$(FLOW_NODE_TYPE_REGEXP)-type := flow
++requires-private-$(FLOW_NODE_TYPE_REGEXP) := $(LIBPCRE_REQUIRES_PRIVATE)
+diff --git a/src/modules/flow/string/string-regexp.c b/src/modules/flow/regexp/regexp.c
+similarity index 90%
+rename from src/modules/flow/string/string-regexp.c
+rename to src/modules/flow/regexp/regexp.c
+index 07bd0cae..700bdc85 100644
+--- a/src/modules/flow/string/string-regexp.c
++++ b/src/modules/flow/regexp/regexp.c
+@@ -19,16 +19,29 @@
+ #include <ctype.h>
+ #include <errno.h>
+ 
+-#ifdef USE_LIBPCRE
+ #include <pcre.h>
+-#endif
+ 
+-#include "sol-flow/string.h"
++#include "sol-flow/regexp.h"
+ #include "sol-flow-internal.h"
+ 
+-#include "string-regexp.h"
++struct string_regexp_search_data {
++    struct sol_flow_node *node;
++    struct sol_vector substrings;
++    size_t max_regexp_search;
++    char *string;
++    char *regexp;
++    int index;
++};
++
++struct string_regexp_replace_data {
++    struct sol_flow_node *node;
++    char *orig_string;
++    char *regexp;
++    char *to_regexp;
++    int32_t max_regexp_replace;
++    bool forward_on_no_match;
++};
+ 
+-#ifdef USE_LIBPCRE
+ static int
+ pcre_compile_do(struct sol_flow_node *node,
+     const char *regexp,
+@@ -162,7 +175,7 @@ calculate_regexp_substrings(struct string_regexp_search_data *mdata,
+     mdata->substrings = string_regexp_search_and_split(mdata);
+ 
+     return sol_flow_send_irange_value_packet(node,
+-        SOL_FLOW_NODE_TYPE_STRING_REGEXP_SEARCH__OUT__LENGTH,
++        SOL_FLOW_NODE_TYPE_REGEXP_SEARCH__OUT__LENGTH,
+         mdata->substrings.len);
+ }
+ 
+@@ -185,7 +198,7 @@ send_regexp_substring(struct string_regexp_search_data *mdata)
+     sub_slice = sol_vector_get(&mdata->substrings, mdata->index);
+ 
+     return sol_flow_send_string_slice_packet(mdata->node,
+-        SOL_FLOW_NODE_TYPE_STRING_REGEXP_SEARCH__OUT__OUT, *sub_slice);
++        SOL_FLOW_NODE_TYPE_REGEXP_SEARCH__OUT__OUT, *sub_slice);
+ }
+ 
+ static int
+@@ -331,20 +344,18 @@ err:
+     return r;
+ }
+ 
+-#endif
+-
+-int
++static int
+ string_regexp_search_open(struct sol_flow_node *node,
+     void *data,
+     const struct sol_flow_node_options *options)
+ {
+     struct string_regexp_search_data *mdata = data;
+-    const struct sol_flow_node_type_string_regexp_search_options *opts;
++    const struct sol_flow_node_type_regexp_search_options *opts;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK
+-        (options, SOL_FLOW_NODE_TYPE_STRING_REGEXP_SEARCH_OPTIONS_API_VERSION,
++        (options, SOL_FLOW_NODE_TYPE_REGEXP_SEARCH_OPTIONS_API_VERSION,
+         -EINVAL);
+-    opts = (const struct sol_flow_node_type_string_regexp_search_options *)options;
++    opts = (const struct sol_flow_node_type_regexp_search_options *)options;
+ 
+     if (opts->index < 0) {
+         SOL_WRN("Index (%" PRId32 ") must be a non-negative value",
+@@ -372,7 +383,7 @@ string_regexp_search_open(struct sol_flow_node *node,
+     return 0;
+ }
+ 
+-void
++static void
+ string_regexp_search_close(struct sol_flow_node *node, void *data)
+ {
+     struct string_regexp_search_data *mdata = data;
+@@ -382,14 +393,13 @@ string_regexp_search_close(struct sol_flow_node *node, void *data)
+     free(mdata->regexp);
+ }
+ 
+-int
++static int
+ string_regexp_search(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+     uint16_t conn_id,
+     const struct sol_flow_packet *packet)
+ {
+-#ifdef USE_LIBPCRE
+     struct string_regexp_search_data *mdata = data;
+     const char *in_value;
+     int r;
+@@ -408,22 +418,15 @@ string_regexp_search(struct sol_flow_node *node,
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     return send_regexp_substring(mdata);
+-#else
+-    sol_flow_send_error_packet(node, ENOTSUP, "The string/regexp-search"
+-        " can't work on this Soletta build -- libpcre dependency is needed "
+-        "in order for this node to work");
+-    return -EINVAL;
+-#endif
+ }
+ 
+-int
++static int
+ set_string_regexp_pattern(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+     uint16_t conn_id,
+     const struct sol_flow_packet *packet)
+ {
+-#ifdef USE_LIBPCRE
+     struct string_regexp_search_data *mdata = data;
+     const char *in_value;
+     int r;
+@@ -443,22 +446,15 @@ set_string_regexp_pattern(struct sol_flow_node *node,
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     return send_regexp_substring(mdata);
+-#else
+-    sol_flow_send_error_packet(node, ENOTSUP, "The string/regexp-search"
+-        " can't work on this Soletta build -- libpcre dependency is needed "
+-        "in order for this node to work");
+-    return -EINVAL;
+-#endif
+ }
+ 
+-int
++static int
+ set_string_regexp_index(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+     uint16_t conn_id,
+     const struct sol_flow_packet *packet)
+ {
+-#ifdef USE_LIBPCRE
+     struct string_regexp_search_data *mdata = data;
+     int32_t in_value;
+     int r;
+@@ -473,22 +469,15 @@ set_string_regexp_index(struct sol_flow_node *node,
+     mdata->index = in_value;
+ 
+     return send_regexp_substring(mdata);
+-#else
+-    sol_flow_send_error_packet(node, ENOTSUP, "The string/regexp-search"
+-        " can't work on this Soletta build -- libpcre dependency is needed "
+-        "in order for this node to work");
+-    return -EINVAL;
+-#endif
+ }
+ 
+-int
++static int
+ set_string_regexp_max_match(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+     uint16_t conn_id,
+     const struct sol_flow_packet *packet)
+ {
+-#ifdef USE_LIBPCRE
+     struct string_regexp_search_data *mdata = data;
+     int32_t in_value;
+     int r;
+@@ -507,26 +496,20 @@ set_string_regexp_max_match(struct sol_flow_node *node,
+     SOL_INT_CHECK(r, < 0, r);
+ 
+     return send_regexp_substring(mdata);
+-#else
+-    sol_flow_send_error_packet(node, ENOTSUP, "The string/regexp-search"
+-        " can't work on this Soletta build -- libpcre dependency is needed "
+-        "in order for this node to work");
+-    return -EINVAL;
+-#endif
+ }
+ 
+-int
++static int
+ string_regexp_replace_open(struct sol_flow_node *node,
+     void *data,
+     const struct sol_flow_node_options *options)
+ {
+     struct string_regexp_replace_data *mdata = data;
+-    const struct sol_flow_node_type_string_regexp_replace_options *opts;
++    const struct sol_flow_node_type_regexp_replace_options *opts;
+ 
+     SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK
+-        (options, SOL_FLOW_NODE_TYPE_STRING_REGEXP_REPLACE_OPTIONS_API_VERSION,
++        (options, SOL_FLOW_NODE_TYPE_REGEXP_REPLACE_OPTIONS_API_VERSION,
+         -EINVAL);
+-    opts = (const struct sol_flow_node_type_string_regexp_replace_options *)options;
++    opts = (const struct sol_flow_node_type_regexp_replace_options *)options;
+ 
+     mdata->node = node;
+     mdata->forward_on_no_match = opts->forward_on_no_match;
+@@ -552,7 +535,7 @@ string_regexp_replace_open(struct sol_flow_node *node,
+     return 0;
+ }
+ 
+-void
++static void
+ string_regexp_replace_close(struct sol_flow_node *node, void *data)
+ {
+     struct string_regexp_replace_data *mdata = data;
+@@ -562,14 +545,13 @@ string_regexp_replace_close(struct sol_flow_node *node, void *data)
+     free(mdata->to_regexp);
+ }
+ 
+-int
++static int
+ string_regexp_replace(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+     uint16_t conn_id,
+     const struct sol_flow_packet *packet)
+ {
+-#ifdef USE_LIBPCRE
+     struct string_regexp_replace_data *mdata = data;
+     struct sol_buffer repl_buf, final_buf = { 0 };
+     size_t pos = 0, str_len, count;
+@@ -658,7 +640,7 @@ end:
+     *(char *)sol_buffer_at(&final_buf, final_buf.used) = '\0';
+ 
+     r = sol_flow_send_string_slice_packet(mdata->node,
+-        SOL_FLOW_NODE_TYPE_STRING_REGEXP_REPLACE__OUT__OUT,
++        SOL_FLOW_NODE_TYPE_REGEXP_REPLACE__OUT__OUT,
+         sol_buffer_get_slice(&final_buf));
+ 
+ err:
+@@ -672,17 +654,15 @@ forward:
+     sol_buffer_fini(&final_buf);
+ 
+     return sol_flow_send_string_packet(mdata->node,
+-        SOL_FLOW_NODE_TYPE_STRING_REGEXP_REPLACE__OUT__OUT,
++        SOL_FLOW_NODE_TYPE_REGEXP_REPLACE__OUT__OUT,
+         mdata->orig_string);
+-#else
+     sol_flow_send_error_packet(node, ENOTSUP, "The string/regexp-search"
+         " can't work on this Soletta build -- libpcre dependency is needed "
+         "in order for this node to work");
+     return -EINVAL;
+-#endif
+ }
+ 
+-int
++static int
+ set_string_regexp_replace_pattern(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+@@ -692,7 +672,7 @@ set_string_regexp_replace_pattern(struct sol_flow_node *node,
+     return 0;
+ }
+ 
+-int
++static int
+ set_string_regexp_replace_to(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+@@ -702,7 +682,7 @@ set_string_regexp_replace_to(struct sol_flow_node *node,
+     return 0;
+ }
+ 
+-int
++static int
+ set_string_regexp_replace_max_match(struct sol_flow_node *node,
+     void *data,
+     uint16_t port,
+@@ -711,3 +691,5 @@ set_string_regexp_replace_max_match(struct sol_flow_node *node,
+ {
+     return 0;
+ }
++
++#include "regexp-gen.c"
+diff --git a/src/modules/flow/regexp/regexp.json b/src/modules/flow/regexp/regexp.json
+new file mode 100644
+index 00000000..f36614a7
+--- /dev/null
++++ b/src/modules/flow/regexp/regexp.json
+@@ -0,0 +1,175 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "regexp",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "Apache-2.0",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "string",
++      "description": "Search a given regular expression pattern on a given string. This node expects the same syntax and semantics as Perl 5 on regular expressions. When dealing the UTF-8 characters, remember to use the 'p{}' family of escape sequences (Unicode character properties).",
++      "in_ports": [
++        {
++          "data_type": "string",
++          "description": "String to be searched.",
++          "methods": {
++            "process": "string_regexp_search"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "string",
++          "description": "Regular expression pattern to search the string received on 'IN' port with.",
++          "methods": {
++            "process": "set_string_regexp_pattern"
++          },
++          "name": "REGEXP"
++        },
++        {
++          "data_type": "int",
++          "description": "This value defines which substring match (by index, starting from 0) inside the one that was fed to the 'IN' port should be output in the 'OUT' port. It must be non-negative. The first substring will always identify the portion of the subject string matched by the entire pattern. The next one will be the first capturing subpattern, and so on.",
++          "methods": {
++            "process": "set_string_regexp_index"
++          },
++          "name": "INDEX"
++        },
++        {
++          "data_type": "int",
++          "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to generate and make available for selection by the 'INDEX' port. It must be non-negative. The value of zero will be interpreted as to generate all possible matches.",
++          "methods": {
++            "process": "set_string_regexp_max_match"
++          },
++          "name": "MAX_REGEXP_SEARCH"
++        }
++      ],
++      "methods": {
++        "close": "string_regexp_search_close",
++        "open": "string_regexp_search_open"
++      },
++      "name": "regexp/search",
++      "aliases": [
++          "string/regexp-search"
++      ],
++      "options": {
++        "members": [
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "This value defines which substring match (by index, starting from 0) inside the one that was fed to the 'IN' port should be output in the 'OUT' port. It must be non-negative. It can be overriden by values received on 'INDEX' port.",
++            "name": "index"
++          },
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to generate and make available for selection by the 'INDEX' port. This option can be overriden by values received on the 'MAX_REGEXP_SEARCH' port. The value of zero (default one) will be interpreted as to generate all possible matches.",
++            "name": "max_regexp_search"
++          },
++          {
++            "data_type": "string",
++            "description": "Regular expression pattern to search the string received on 'IN' port with. It can be overriden by values received on 'REGEXP' port.",
++            "name": "regexp"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "int",
++          "description": "Number of regular expression match substrings. The first substring will always identify the portion of the subject string matched by the entire pattern. The next one will be the first capturing subpattern, and so on.",
++          "name": "LENGTH"
++        },
++        {
++          "data_type": "string",
++          "description": "Outputs the regular expression match substring at the selected index. With regard to indices, the first substring (index 0) will always identify the portion of the subject string matched by the entire pattern. The next one will be the first capturing subpattern, and so on.",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "string_regexp_search_data",
++      "url": "http://solettaproject.org/doc/latest/node_types/regexp/search.html"
++    },
++    {
++      "category": "string",
++      "description": "Replace a regular expression pattern in a string for another. This node expects the same syntax and semantics as Perl 5 on regular expressions. When dealing the UTF-8 characters, remember to use the 'p{}' family of escape sequences (Unicode character properties).",
++      "in_ports": [
++        {
++          "data_type": "string",
++          "description": "String to be replaced.",
++          "methods": {
++            "process": "string_regexp_replace"
++          },
++          "name": "IN"
++        },
++        {
++          "data_type": "string",
++          "description": "Regular expression pattern to match the string received on 'IN' port with. If groups are used, they may be referred back on the string coming in the 'TO' port.",
++          "methods": {
++            "process": "set_string_regexp_replace_pattern"
++          },
++          "name": "REGEXP"
++        },
++        {
++          "data_type": "string",
++          "description": "String substitution for the pattern match (may be a regular expression as well). Groups present on the string provided to the port 'REGEXP' may be referred here on the substitution.",
++          "methods": {
++            "process": "set_string_regexp_replace_to"
++          },
++          "name": "TO"
++        },
++        {
++          "data_type": "int",
++          "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to exchange for the string given in the 'TO' port. It must be non-negative. The value of zero will be interpreted as to replace all possible matches.",
++          "methods": {
++            "process": "set_string_regexp_replace_max_match"
++          },
++          "name": "MAX_REGEXP_REPLACE"
++        }
++      ],
++      "methods": {
++        "close": "string_regexp_replace_close",
++        "open": "string_regexp_replace_open"
++      },
++      "name": "regexp/replace",
++      "aliases": [
++          "string/regexp-replace"
++      ],
++      "options": {
++        "members": [
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to replace for the string given in the 'to' option. This option can be overriden by values received on the 'MAX_REGEXP_REPLACE' port. The value of zero (default one) will be interpreted as to replace all possible matches.",
++            "name": "max_regexp_replace"
++          },
++          {
++            "data_type": "string",
++            "description": "Regular expression pattern to match the string received on 'IN' port with. If groups are used, they may be referred back on the string coming in the 'TO' port. It must not be an empty string. It may be overriden by values received on 'REGEXP' port.",
++            "name": "regexp"
++          },
++          {
++            "data_type": "string",
++            "description": "String substitution for the pattern match. Groups present on the string provided to the port 'REGEXP' may be referred here on the substitution (e.g. \\\\g1 or \\\\1 for the first matching group). It may be an empty string. It can be overriden by values received on 'TO' port.",
++            "name": "to"
++          },
++          {
++            "data_type": "boolean",
++            "default": true,
++            "description": "Whether to only forward the input string as is to the output port when no matches occur (true) or to generate error packets (false)",
++            "name": "forward_on_no_match"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "The original string coming in the 'IN' port with the due replacements made.",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "string_regexp_replace_data",
++      "url": "http://solettaproject.org/doc/latest/node_types/regexp/replace.html"
++    }
++  ]
++}
+diff --git a/src/modules/flow/string/Kconfig b/src/modules/flow/string/Kconfig
+index 89eb19ea..dd9d5110 100644
+--- a/src/modules/flow/string/Kconfig
++++ b/src/modules/flow/string/Kconfig
+@@ -15,19 +15,11 @@ config FLOW_NODE_TYPE_STRING
+ 		 - measure the lenght of the string
+ 		 - change a string to lower/uppercase
+ 		 - check whether a string stards/ends with another
+-		 - replace regular expression patterns in a string
+-		 - search for regular expression patterns in a string
+ 
+-		For the nodes dealing with regular expressions, only
+-		one RE backend is supported: libpcre. If that
+-		dependency is not present, those nodes will be built
+-		but made useless -- they will always generate error
+-		packets after any input ones.
+-
+-		For each of the remaining string nodes, there may be
+-		two implementations (depending on the presence of the
+-		ICU library or not). We strongly recommend that you
+-		build Soletta with ICU, so that the full UTF-8 set of
++		For most of string nodes, there may be two
++		implementations (depending on the presence of the ICU
++		library or not). We strongly recommend that you build
++		Soletta with ICU, so that the full UTF-8 set of
+ 		characters is properly handled by the string nodes.
+ 
+ # This is the sole user of ICU. If it gets wider use, move it up in the
+@@ -36,10 +28,3 @@ config USE_ICU
+ 	bool "Use ICU library"
+ 	depends on HAVE_ICU && FLOW_NODE_TYPE_STRING
+ 	default y
+-
+-# This is the sole user of LIBPCRE. If it gets wider use, move it up in
+-# the hierarchy.
+-config USE_LIBPCRE
+-	bool "Use LIBPCRE library"
+-	depends on HAVE_LIBPCRE && FLOW_NODE_TYPE_STRING
+-	default y
+diff --git a/src/modules/flow/string/Makefile b/src/modules/flow/string/Makefile
+index 1639c2ca..120a23ef 100644
+--- a/src/modules/flow/string/Makefile
++++ b/src/modules/flow/string/Makefile
+@@ -1,28 +1,16 @@
+ #  The string node implementation is split in the following files:
+ #  - string-{icu,ascii}.c
+-#  - string-replace-{icu,ascii}.c
+-#  - string-regexp.c
++#  - string-replace-{icu,ascii}.c (this has CPython-licensed code)
+ #  - string-uuid.c
+ #
+-#  string-regexp.c contains the code for nodes dealing with regular
+-#  expressions and only one RE backend is supported: libpcre. If that
+-#  dependency is not present, the RE nodes will be built but made
+-#  useless -- they will always generate error packets after any input
+-#  ones.
+-#
+-#  For each of the remaining string nodes, there may be two
+-#  implementations (depending on the presence of the ICU library or
+-#  not), thus ICU or ASCII. We could have these remaining nodes put on
+-#  a single file per implementation, but since the string replacing
+-#  nodes have a different license than the others, we kept them split
+-#  like that.
+-
+-ifeq (,$(USE_LIBPCRE))
+-warning-msg := "You're building the string nodes module without Perl regular expressions support. That way, the string module will still be built, but the regular expression nodes will be made useless -- any input packet on them only issue an error output packet. Please re-configure after you have LIBPCRE development packages installed to get the intended string nodes behavior.\n\n"
+-endif
++#  For many of the string nodes, there may be two implementations
++#  (depending on the presence of the ICU library or not), thus ICU or
++#  ASCII. We could have these remaining nodes put on a single file per
++#  implementation, but since the string replacing nodes have a
++#  different license than the others, we kept them split like that.
+ 
+ obj-$(FLOW_NODE_TYPE_STRING) += string.mod
+-obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string-regexp.o string-uuid.o string-common.o
++obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string-uuid.o string-common.o
+ 
+ ifeq (y,$(USE_ICU))
+ obj-string-$(FLOW_NODE_TYPE_STRING) += string-icu.o string-replace-icu.o
+@@ -33,14 +21,11 @@ endif
+ 
+ obj-string-$(FLOW_NODE_TYPE_STRING)-extra-cflags += $(LOCALE_CFLAGS)
+ obj-string-$(USE_ICU)-extra-cflags += $(ICU_CFLAGS)
+-obj-string-$(USE_LIBPCRE)-extra-cflags += $(LIBPCRE_CFLAGS)
+ 
+ obj-string-$(FLOW_NODE_TYPE_STRING)-extra-ldflags += $(LOCALE_LDFLAGS)
+ obj-string-$(USE_ICU)-extra-ldflags += $(ICU_LDFLAGS)
+-obj-string-$(USE_LIBPCRE)-extra-ldflags += $(LIBPCRE_LDFLAGS)
+ 
+ obj-string-$(FLOW_NODE_TYPE_STRING)-type := flow
+ 
+ requires-private-$(FLOW_NODE_TYPE_STRING) := \
+-    $(ICU_REQUIRES_PRIVATE) \
+-    $(LIBPCRE_REQUIRES_PRIVATE)
++    $(ICU_REQUIRES_PRIVATE)
+diff --git a/src/modules/flow/string/string-ascii.c b/src/modules/flow/string/string-ascii.c
+index 05b46663..a15d8efd 100644
+--- a/src/modules/flow/string/string-ascii.c
++++ b/src/modules/flow/string/string-ascii.c
+@@ -28,7 +28,6 @@
+ 
+ #include "string-ascii.h"
+ #include "string-common.h"
+-#include "string-regexp.h"
+ #include "string-uuid.h"
+ 
+ struct string_data {
+diff --git a/src/modules/flow/string/string-icu.c b/src/modules/flow/string/string-icu.c
+index 3e254176..07489d74 100644
+--- a/src/modules/flow/string/string-icu.c
++++ b/src/modules/flow/string/string-icu.c
+@@ -24,7 +24,6 @@
+ 
+ #include "string-common.h"
+ #include "string-icu.h"
+-#include "string-regexp.h"
+ #include "string-uuid.h"
+ 
+ //ret_icu_str must be freed after usage
+diff --git a/src/modules/flow/string/string-regexp.h b/src/modules/flow/string/string-regexp.h
+deleted file mode 100644
+index f887393b..00000000
+--- a/src/modules/flow/string/string-regexp.h
++++ /dev/null
+@@ -1,63 +0,0 @@
+-/*
+- * This file is part of the Soletta Project
+- *
+- * Copyright (C) 2015 Intel Corporation. All rights reserved.
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#pragma once
+-
+-#include "sol-flow.h"
+-
+-int string_regexp_search_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options);
+-
+-void string_regexp_search_close(struct sol_flow_node *node, void *data);
+-
+-int string_regexp_search(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-int set_string_regexp_pattern(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-int set_string_regexp_index(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-int set_string_regexp_max_match(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-struct string_regexp_search_data {
+-    struct sol_flow_node *node;
+-    struct sol_vector substrings;
+-    size_t max_regexp_search;
+-    char *string;
+-    char *regexp;
+-    int index;
+-};
+-
+-int string_regexp_replace_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options);
+-
+-void string_regexp_replace_close(struct sol_flow_node *node, void *data);
+-
+-int string_regexp_replace(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-int set_string_regexp_replace_pattern(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-int set_string_regexp_replace_to(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-int set_string_regexp_replace_max_match(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
+-
+-struct string_regexp_replace_data {
+-    struct sol_flow_node *node;
+-    char *orig_string;
+-    char *regexp;
+-    char *to_regexp;
+-    int32_t max_regexp_replace;
+-    bool forward_on_no_match;
+-};
+diff --git a/src/modules/flow/string/string.json b/src/modules/flow/string/string.json
+index f64d662a..16acccdf 100644
+--- a/src/modules/flow/string/string.json
++++ b/src/modules/flow/string/string.json
+@@ -552,164 +552,6 @@
+       "private_data_type": "string_replace_data",
+       "url": "http://solettaproject.org/doc/latest/node_types/string/replace.html"
+     },
+-    {
+-      "category": "string",
+-      "description": "Search a given regular expression pattern on a given string. This node expects the same syntax and semantics as Perl 5 on regular expressions. When dealing the UTF-8 characters, remember to use the 'p{}' family of escape sequences (Unicode character properties).",
+-      "in_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "String to be searched.",
+-          "methods": {
+-            "process": "string_regexp_search"
+-          },
+-          "name": "IN"
+-        },
+-        {
+-          "data_type": "string",
+-          "description": "Regular expression pattern to search the string received on 'IN' port with.",
+-          "methods": {
+-            "process": "set_string_regexp_pattern"
+-          },
+-          "name": "REGEXP"
+-        },
+-        {
+-          "data_type": "int",
+-          "description": "This value defines which substring match (by index, starting from 0) inside the one that was fed to the 'IN' port should be output in the 'OUT' port. It must be non-negative. The first substring will always identify the portion of the subject string matched by the entire pattern. The next one will be the first capturing subpattern, and so on.",
+-          "methods": {
+-            "process": "set_string_regexp_index"
+-          },
+-          "name": "INDEX"
+-        },
+-        {
+-          "data_type": "int",
+-          "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to generate and make available for selection by the 'INDEX' port. It must be non-negative. The value of zero will be interpreted as to generate all possible matches.",
+-          "methods": {
+-            "process": "set_string_regexp_max_match"
+-          },
+-          "name": "MAX_REGEXP_SEARCH"
+-        }
+-      ],
+-      "methods": {
+-        "close": "string_regexp_search_close",
+-        "open": "string_regexp_search_open"
+-      },
+-      "name": "string/regexp-search",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "int",
+-            "default": 0,
+-            "description": "This value defines which substring match (by index, starting from 0) inside the one that was fed to the 'IN' port should be output in the 'OUT' port. It must be non-negative. It can be overriden by values received on 'INDEX' port.",
+-            "name": "index"
+-          },
+-          {
+-            "data_type": "int",
+-            "default": 0,
+-            "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to generate and make available for selection by the 'INDEX' port. This option can be overriden by values received on the 'MAX_REGEXP_SEARCH' port. The value of zero (default one) will be interpreted as to generate all possible matches.",
+-            "name": "max_regexp_search"
+-          },
+-          {
+-            "data_type": "string",
+-            "description": "Regular expression pattern to search the string received on 'IN' port with. It can be overriden by values received on 'REGEXP' port.",
+-            "name": "regexp"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "out_ports": [
+-        {
+-          "data_type": "int",
+-          "description": "Number of regular expression match substrings. The first substring will always identify the portion of the subject string matched by the entire pattern. The next one will be the first capturing subpattern, and so on.",
+-          "name": "LENGTH"
+-        },
+-        {
+-          "data_type": "string",
+-          "description": "Outputs the regular expression match substring at the selected index. With regard to indices, the first substring (index 0) will always identify the portion of the subject string matched by the entire pattern. The next one will be the first capturing subpattern, and so on.",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "string_regexp_search_data",
+-      "url": "http://solettaproject.org/doc/latest/node_types/string/regexp_search.html"
+-    },
+-    {
+-      "category": "string",
+-      "description": "Replace a regular expression pattern in a string for another. This node expects the same syntax and semantics as Perl 5 on regular expressions. When dealing the UTF-8 characters, remember to use the 'p{}' family of escape sequences (Unicode character properties).",
+-      "in_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "String to be replaced.",
+-          "methods": {
+-            "process": "string_regexp_replace"
+-          },
+-          "name": "IN"
+-        },
+-        {
+-          "data_type": "string",
+-          "description": "Regular expression pattern to match the string received on 'IN' port with. If groups are used, they may be referred back on the string coming in the 'TO' port.",
+-          "methods": {
+-            "process": "set_string_regexp_replace_pattern"
+-          },
+-          "name": "REGEXP"
+-        },
+-        {
+-          "data_type": "string",
+-          "description": "String substitution for the pattern match (may be a regular expression as well). Groups present on the string provided to the port 'REGEXP' may be referred here on the substitution.",
+-          "methods": {
+-            "process": "set_string_regexp_replace_to"
+-          },
+-          "name": "TO"
+-        },
+-        {
+-          "data_type": "int",
+-          "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to exchange for the string given in the 'TO' port. It must be non-negative. The value of zero will be interpreted as to replace all possible matches.",
+-          "methods": {
+-            "process": "set_string_regexp_replace_max_match"
+-          },
+-          "name": "MAX_REGEXP_REPLACE"
+-        }
+-      ],
+-      "methods": {
+-        "close": "string_regexp_replace_close",
+-        "open": "string_regexp_replace_open"
+-      },
+-      "name": "string/regexp-replace",
+-      "options": {
+-        "members": [
+-          {
+-            "data_type": "int",
+-            "default": 0,
+-            "description": "The regular expression matching against the input string can result in various substring matches. This value defines the maximum number of them to replace for the string given in the 'to' option. This option can be overriden by values received on the 'MAX_REGEXP_REPLACE' port. The value of zero (default one) will be interpreted as to replace all possible matches.",
+-            "name": "max_regexp_replace"
+-          },
+-          {
+-            "data_type": "string",
+-            "description": "Regular expression pattern to match the string received on 'IN' port with. If groups are used, they may be referred back on the string coming in the 'TO' port. It must not be an empty string. It may be overriden by values received on 'REGEXP' port.",
+-            "name": "regexp"
+-          },
+-          {
+-            "data_type": "string",
+-            "description": "String substitution for the pattern match. Groups present on the string provided to the port 'REGEXP' may be referred here on the substitution (e.g. \\\\g1 or \\\\1 for the first matching group). It may be an empty string. It can be overriden by values received on 'TO' port.",
+-            "name": "to"
+-          },
+-          {
+-            "data_type": "boolean",
+-            "default": true,
+-            "description": "Whether to only forward the input string as is to the output port when no matches occur (true) or to generate error packets (false)",
+-            "name": "forward_on_no_match"
+-          }
+-        ],
+-        "version": 1
+-      },
+-      "out_ports": [
+-        {
+-          "data_type": "string",
+-          "description": "The original string coming in the 'IN' port with the due replacements made.",
+-          "name": "OUT"
+-        }
+-      ],
+-      "private_data_type": "string_regexp_replace_data",
+-      "url": "http://solettaproject.org/doc/latest/node_types/string/regexp_replace.html"
+-    },
+     {
+       "category": "string",
+       "description": "Generate a new universally unique identifier (UUID). The output UUID is 16 bytes (128 bits) long and conforms to v4 UUIDs (generated from randomor pseudo-randomnumbers). The output string packet is sent upon node creation, but new UUIDs can be generated by 'ticks' on the 'GENERATE' input port.",

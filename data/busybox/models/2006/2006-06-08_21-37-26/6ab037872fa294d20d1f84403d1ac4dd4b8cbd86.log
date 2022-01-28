@@ -1,0 +1,752 @@
+"2006-06-08 21:37:26 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 605649baf..07005b81a 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -603,8 +603,8 @@ config CONFIG_TEST
+ 	default n
+ 	help
+ 	  test is used to check file types and compare values,
+-	  returning an appropriate exit code. The shells (ash
+-	  and bash) have test builtin.
++	  returning an appropriate exit code.  The bash shell
++	  has test built in, ash can build it in optionally.
+ 
+ config CONFIG_FEATURE_TEST_64
+ 	bool "Extend test to 64 bit"
+diff --git a/coreutils/echo.c b/coreutils/echo.c
+index 0dbb32f28..a673bb07a 100644
+--- a/coreutils/echo.c
++++ b/coreutils/echo.c
+@@ -1,29 +1,158 @@
++/* vi: set sw=4 ts=4: */
+ /*
+- * echo applet implementation for busybox
++ * echo implementation for busybox
+  *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation; either version 2 of the License, or
+- * (at your option) any later version.
++ * Copyright (c) 1991, 1993
++ *	The Regents of the University of California.  All rights reserved.
+  *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+- * General Public License for more details.
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, write to the Free Software
+- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ * Original copyright notice is retained at the end of this file.
++ */
++
++/* BB_AUDIT SUSv3 compliant -- unless configured as fancy echo. */
++/* http://www.opengroup.org/onlinepubs/007904975/utilities/echo.html */
++
++/* Mar 16, 2003      Manuel Novoa III   (mjn3@codepoet.org)
+  *
++ * Because of behavioral differences, implemented configurable SUSv3
++ * or 'fancy' gnu-ish behaviors.  Also, reduced size and fixed bugs.
++ * 1) In handling '\c' escape, the previous version only suppressed the
++ *     trailing newline.  SUSv3 specifies _no_ output after '\c'.
++ * 2) SUSv3 specifies that octal escapes are of the form \0{#{#{#}}}.
++ *    The previous version version did not allow 4-digit octals.
+  */
+ 
++
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
+ #include "busybox.h"
+ 
++int bb_echo(int ATTRIBUTE_UNUSED argc, char **argv)
++{
++#ifndef CONFIG_FEATURE_FANCY_ECHO
++#define eflag '\\'
++	++argv;
++#else
++	const char *p;
++	int nflag = 1;
++	int eflag = 0;
++
++	while (*++argv && (**argv == '-')) {
++		/* If it appears that we are handling options, then make sure
++		 * that all of the options specified are actually valid.
++		 * Otherwise, the string should just be echoed.
++		 */
++
++		if (!*(p = *argv + 1)) {	/* A single '-', so echo it. */
++			goto just_echo;
++		}
++
++		do {
++			if (strrchr("neE", *p) == 0) {
++				goto just_echo;
++			}
++		} while (*++p);
++
++		/* All of the options in this arg are valid, so handle them. */
++		p = *argv + 1;
++		do {
++			if (*p == 'n') {
++				nflag = 0;
++			} else if (*p == 'e') {
++				eflag = '\\';
++			} else {
++				eflag = 0;
++			}
++		} while (*++p);
++	}
++
++just_echo:
++#endif
++	while (*argv) {
++		register int c;
++
++		while ((c = *(*argv)++)) {
++			if (c == eflag) {	/* Check for escape seq. */
++				if (**argv == 'c') {
++					/* '\c' means cancel newline and
++					 * ignore all subsequent chars. */
++					return 0;
++				}
++#ifndef CONFIG_FEATURE_FANCY_ECHO
++				/* SUSv3 specifies that octal escapes must begin with '0'. */
++				if (((unsigned int)(**argv - '1')) >= 7)
++#endif
++				{
++					/* Since SUSv3 mandates a first digit of 0, 4-digit octals
++					* of the form \0### are accepted. */
++					if ((**argv == '0') && (((unsigned int)(argv[0][1] - '0')) < 8)) {
++						(*argv)++;
++					}
++					/* bb_process_escape_sequence can handle nul correctly */
++					c = bb_process_escape_sequence((const char **) argv);
++				}
++			}
++			putchar(c);
++		}
++
++		if (*++argv) {
++			putchar(' ');
++		}
++	}
++
++#ifdef CONFIG_FEATURE_FANCY_ECHO
++	if (nflag) {
++		putchar('\n');
++	}
++#else
++	putchar('\n');
++#endif
++	return 0;
++}
++
+ int echo_main(int argc, char** argv)
+ {
+ 	(void)bb_echo(argc, argv);
+ 	bb_fflush_stdout_and_exit(EXIT_SUCCESS);
+ }
++
++/*-
++ * Copyright (c) 1991, 1993
++ *	The Regents of the University of California.  All rights reserved.
++ *
++ * This code is derived from software contributed to Berkeley by
++ * Kenneth Almquist.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * 3. <BSD Advertising Clause omitted per the July 22, 1999 licensing change
++ *		ftp://ftp.cs.berkeley.edu/pub/4bsd/README.Impt.License.Change>
++ *
++ *	California, Berkeley and its contributors.
++ * 4. Neither the name of the University nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ *
++ *	@(#)echo.c	8.1 (Berkeley) 5/31/93
++ */
+diff --git a/coreutils/test.c b/coreutils/test.c
+index 2b624e308..4d920380d 100644
+--- a/coreutils/test.c
++++ b/coreutils/test.c
+@@ -4,31 +4,19 @@
+  *
+  * Copyright (c) by a whole pile of folks:
+  *
+- *	test(1); version 7-like  --  author Erik Baalbergen
+- *	modified by Eric Gisin to be used as built-in.
+- *	modified by Arnold Robbins to add SVR3 compatibility
+- *	(-x -c -b -p -u -g -k) plus Korn's -L -nt -ot -ef and new -S (socket).
+- *	modified by J.T. Conklin for NetBSD.
+- *	modified by Herbert Xu to be used as built-in in ash.
+- *	modified by Erik Andersen <andersen@codepoet.org> to be used
+- *	in busybox.
++ *     test(1); version 7-like  --  author Erik Baalbergen
++ *     modified by Eric Gisin to be used as built-in.
++ *     modified by Arnold Robbins to add SVR3 compatibility
++ *     (-x -c -b -p -u -g -k) plus Korn's -L -nt -ot -ef and new -S (socket).
++ *     modified by J.T. Conklin for NetBSD.
++ *     modified by Herbert Xu to be used as built-in in ash.
++ *     modified by Erik Andersen <andersen@codepoet.org> to be used
++ *     in busybox.
+  *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation; either version 2 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+- * General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, write to the Free Software
+- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  *
+  * Original copyright notice states:
+- *	"This program is in the Public Domain."
++ *     "This program is in the Public Domain."
+  */
+ 
+ #include <sys/types.h>
+@@ -37,13 +25,14 @@
+ #include <errno.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <setjmp.h>
+ #include "busybox.h"
+ 
+ /* test(1) accepts the following grammar:
+ 	oexpr	::= aexpr | aexpr "-o" oexpr ;
+ 	aexpr	::= nexpr | nexpr "-a" aexpr ;
+ 	nexpr	::= primary | "!" primary
+-	primary	::= unary-operator operand
++	primary ::= unary-operator operand
+ 		| operand binary-operator operand
+ 		| operand
+ 		| "(" oexpr ")"
+@@ -128,7 +117,7 @@ static const struct t_op {
+ 	"-t", FILTT, UNOP}, {
+ 	"-z", STREZ, UNOP}, {
+ 	"-n", STRNZ, UNOP}, {
+-	"-h", FILSYM, UNOP},	/* for backwards compat */
++	"-h", FILSYM, UNOP},    /* for backwards compat */
+ 	{
+ 	"-O", FILUID, UNOP}, {
+ 	"-G", FILGID, UNOP}, {
+@@ -182,36 +171,56 @@ static int test_eaccess(char *path, int mode);
+ static int is_a_group_member(gid_t gid);
+ static void initialize_group_array(void);
+ 
+-int test_main(int argc, char **argv)
++static jmp_buf leaving;
++
++int bb_test(int argc, char **argv)
+ {
+ 	int res;
+ 
+-	if (strcmp(bb_applet_name, "[") == 0) {
+-		if (strcmp(argv[--argc], "]"))
+-			bb_error_msg_and_die("missing ]");
++	if (strcmp(argv[0], "[") == 0) {
++		if (strcmp(argv[--argc], "]")) {
++			bb_error_msg("missing ]");
++			return 2;
++		}
+ 		argv[argc] = NULL;
+-	}
+-	if (strcmp(bb_applet_name, "[[") == 0) {
+-		if (strcmp(argv[--argc], "]]"))
+-			bb_error_msg_and_die("missing ]]");
++	} else if (strcmp(argv[0], "[[") == 0) {
++		if (strcmp(argv[--argc], "]]")) {
++			bb_error_msg("missing ]]");
++			return 2;
++		}
+ 		argv[argc] = NULL;
+ 	}
++
++	res = setjmp(leaving);
++	if (res)
++		return res;
++
++	/* resetting ngroups is probably unnecessary.  it will
++	 * force a new call to getgroups(), which prevents using
++	 * group data fetched during a previous call.  but the
++	 * only way the group data could be stale is if there's
++	 * been an intervening call to setgroups(), and this
++	 * isn't likely in the case of a shell.  paranoia
++	 * prevails...
++	 */
++	 ngroups = 0;
++
+ 	/* Implement special cases from POSIX.2, section 4.62.4 */
+ 	switch (argc) {
+ 	case 1:
+-		exit(1);
++		return 1;
+ 	case 2:
+-		exit(*argv[1] == '\0');
++		return *argv[1] == '\0';
+ 	case 3:
+ 		if (argv[1][0] == '!' && argv[1][1] == '\0') {
+-			exit(!(*argv[2] == '\0'));
++			return *argv[2] != '\0';
+ 		}
+ 		break;
+ 	case 4:
+ 		if (argv[1][0] != '!' || argv[1][1] != '\0') {
+ 			if (t_lex(argv[2]), t_wp_op && t_wp_op->op_type == BINOP) {
+ 				t_wp = &argv[1];
+-				exit(binop() == 0);
++				return binop() == 0;
+ 			}
+ 		}
+ 		break;
+@@ -219,7 +228,7 @@ int test_main(int argc, char **argv)
+ 		if (argv[1][0] == '!' && argv[1][1] == '\0') {
+ 			if (t_lex(argv[3]), t_wp_op && t_wp_op->op_type == BINOP) {
+ 				t_wp = &argv[2];
+-				exit(!(binop() == 0));
++				return binop() != 0;
+ 			}
+ 		}
+ 		break;
+@@ -228,10 +237,21 @@ int test_main(int argc, char **argv)
+ 	t_wp = &argv[1];
+ 	res = !oexpr(t_lex(*t_wp));
+ 
+-	if (*t_wp != NULL && *++t_wp != NULL)
+-		bb_error_msg_and_die("%s: unknown operand", *t_wp);
++	if (*t_wp != NULL && *++t_wp != NULL) {
++		bb_error_msg("%s: unknown operand", *t_wp);
++		return 2;
++	}
++	return res;
++}
+ 
+-	return (res);
++static void syntax(const char *op, const char *msg)
++{
++	if (op && *op) {
++		bb_error_msg("%s: %s", op, msg);
++	} else {
++		bb_error_msg("%s", msg);
++	}
++	longjmp(leaving, 2);
+ }
+ 
+ static arith_t oexpr(enum token n)
+@@ -269,18 +289,18 @@ static arith_t primary(enum token n)
+ 	arith_t res;
+ 
+ 	if (n == EOI) {
+-		bb_error_msg_and_die("argument expected");
++		syntax(NULL, "argument expected");
+ 	}
+ 	if (n == LPAREN) {
+ 		res = oexpr(t_lex(*++t_wp));
+ 		if (t_lex(*++t_wp) != RPAREN)
+-			bb_error_msg_and_die("closing paren expected");
++			syntax(NULL, "closing paren expected");
+ 		return res;
+ 	}
+ 	if (t_wp_op && t_wp_op->op_type == UNOP) {
+ 		/* unary expression */
+ 		if (*++t_wp == NULL)
+-			bb_error_msg_and_die(bb_msg_requires_arg, t_wp_op->op_text);
++			syntax(t_wp_op->op_text, "argument expected");
+ 		switch (n) {
+ 		case STREZ:
+ 			return strlen(*t_wp) == 0;
+@@ -310,7 +330,7 @@ static int binop(void)
+ 	op = t_wp_op;
+ 
+ 	if ((opnd2 = *++t_wp) == (char *) 0)
+-		bb_error_msg_and_die(bb_msg_requires_arg, op->op_text);
++		syntax(op->op_text, "argument expected");
+ 
+ 	switch (op->op_num) {
+ 	case STREQ:
+@@ -460,11 +480,11 @@ static arith_t getn(const char *s)
+ #endif
+ 
+ 	if (errno != 0)
+-		bb_error_msg_and_die("%s: out of range", s);
++		syntax(s, "out of range");
+ 
+ 	/*   p = bb_skip_whitespace(p); avoid const warning */
+ 	if (*(bb_skip_whitespace(p)))
+-		bb_error_msg_and_die("%s: bad number", s);
++		syntax(s, "bad number");
+ 
+ 	return r;
+ }
+@@ -516,7 +536,7 @@ static int test_eaccess(char *path, int mode)
+ 			return (0);
+ 	}
+ 
+-	if (st.st_uid == euid)	/* owner */
++	if (st.st_uid == euid)  /* owner */
+ 		mode <<= 6;
+ 	else if (is_a_group_member(st.st_gid))
+ 		mode <<= 3;
+@@ -553,3 +573,12 @@ static int is_a_group_member(gid_t gid)
+ 
+ 	return (0);
+ }
++
++
++/* applet entry point */
++
++int test_main(int argc, char **argv)
++{
++	exit(bb_test(argc, argv));
++}
++
+diff --git a/include/libbb.h b/include/libbb.h
+index accc08ddf..b93b7a618 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -118,6 +118,7 @@ extern void bb_verror_msg(const char *s, va_list p) __attribute__ ((format (prin
+ extern void bb_vperror_msg(const char *s, va_list p)  __attribute__ ((format (printf, 1, 0)));
+ 
+ extern int bb_echo(int argc, char** argv);
++extern int bb_test(int argc, char** argv);
+ 
+ extern const char *bb_mode_string(int mode);
+ extern int is_directory(const char *name, int followLinks, struct stat *statBuf);
+diff --git a/libbb/Makefile.in b/libbb/Makefile.in
+index f05b8ec16..0324ec041 100644
+--- a/libbb/Makefile.in
++++ b/libbb/Makefile.in
+@@ -35,7 +35,7 @@ LIBBB-y:= \
+ 	getopt_ulflags.c default_error_retval.c wfopen_input.c speed_table.c \
+ 	perror_nomsg_and_die.c perror_nomsg.c skip_whitespace.c bb_askpass.c \
+ 	warn_ignoring_args.c concat_subpath_file.c vfork_daemon_rexec.c \
+-	bb_echo.c bb_do_delay.c
++	bb_do_delay.c
+ 
+ # conditionally compiled objects:
+ LIBBB-$(CONFIG_FEATURE_SHADOWPASSWDS)+=pwd2spwd.c
+diff --git a/libbb/bb_echo.c b/libbb/bb_echo.c
+deleted file mode 100644
+index 0c5a94766..000000000
+--- a/libbb/bb_echo.c
++++ /dev/null
+@@ -1,151 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * echo implementation for busybox
+- *
+- * Copyright (c) 1991, 1993
+- *	The Regents of the University of California.  All rights reserved.
+- *
+- * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+- *
+- * Original copyright notice is retained at the end of this file.
+- */
+-
+-/* BB_AUDIT SUSv3 compliant -- unless configured as fancy echo. */
+-/* http://www.opengroup.org/onlinepubs/007904975/utilities/echo.html */
+-
+-/* Mar 16, 2003      Manuel Novoa III   (mjn3@codepoet.org)
+- *
+- * Because of behavioral differences, implemented configurable SUSv3
+- * or 'fancy' gnu-ish behaviors.  Also, reduced size and fixed bugs.
+- * 1) In handling '\c' escape, the previous version only suppressed the
+- *     trailing newline.  SUSv3 specifies _no_ output after '\c'.
+- * 2) SUSv3 specifies that octal escapes are of the form \0{#{#{#}}}.
+- *    The previous version version did not allow 4-digit octals.
+- */
+-
+-
+-#include <stdio.h>
+-#include <string.h>
+-#include "libbb.h"
+-
+-int bb_echo(int ATTRIBUTE_UNUSED argc, char **argv)
+-{
+-#ifndef CONFIG_FEATURE_FANCY_ECHO
+-#define eflag '\\'
+-	++argv;
+-#else
+-	const char *p;
+-	int nflag = 1;
+-	int eflag = 0;
+-
+-	while (*++argv && (**argv == '-')) {
+-		/* If it appears that we are handling options, then make sure
+-		 * that all of the options specified are actually valid.
+-		 * Otherwise, the string should just be echoed.
+-		 */
+-
+-		if (!*(p = *argv + 1)) {	/* A single '-', so echo it. */
+-			goto just_echo;
+-		}
+-
+-		do {
+-			if (strrchr("neE", *p) == 0) {
+-				goto just_echo;
+-			}
+-		} while (*++p);
+-
+-		/* All of the options in this arg are valid, so handle them. */
+-		p = *argv + 1;
+-		do {
+-			if (*p == 'n') {
+-				nflag = 0;
+-			} else if (*p == 'e') {
+-				eflag = '\\';
+-			} else {
+-				eflag = 0;
+-			}
+-		} while (*++p);
+-	}
+-
+-just_echo:
+-#endif
+-	while (*argv) {
+-		register int c;
+-
+-		while ((c = *(*argv)++)) {
+-			if (c == eflag) {	/* Check for escape seq. */
+-				if (**argv == 'c') {
+-					/* '\c' means cancel newline and
+-					 * ignore all subsequent chars. */
+-					return 0;
+-				}
+-#ifndef CONFIG_FEATURE_FANCY_ECHO
+-				/* SUSv3 specifies that octal escapes must begin with '0'. */
+-				if (((unsigned int)(**argv - '1')) >= 7)
+-#endif
+-				{
+-					/* Since SUSv3 mandates a first digit of 0, 4-digit octals
+-					* of the form \0### are accepted. */
+-					if ((**argv == '0') && (((unsigned int)(argv[0][1] - '0')) < 8)) {
+-						(*argv)++;
+-					}
+-					/* bb_process_escape_sequence can handle nul correctly */
+-					c = bb_process_escape_sequence((const char **) argv);
+-				}
+-			}
+-			putchar(c);
+-		}
+-
+-		if (*++argv) {
+-			putchar(' ');
+-		}
+-	}
+-
+-#ifdef CONFIG_FEATURE_FANCY_ECHO
+-	if (nflag) {
+-		putchar('\n');
+-	}
+-#else
+-	putchar('\n');
+-#endif
+-	return 0;
+-}
+-
+-/*-
+- * Copyright (c) 1991, 1993
+- *	The Regents of the University of California.  All rights reserved.
+- *
+- * This code is derived from software contributed to Berkeley by
+- * Kenneth Almquist.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions
+- * are met:
+- * 1. Redistributions of source code must retain the above copyright
+- *    notice, this list of conditions and the following disclaimer.
+- * 2. Redistributions in binary form must reproduce the above copyright
+- *    notice, this list of conditions and the following disclaimer in the
+- *    documentation and/or other materials provided with the distribution.
+- *
+- * 3. <BSD Advertising Clause omitted per the July 22, 1999 licensing change
+- *		ftp://ftp.cs.berkeley.edu/pub/4bsd/README.Impt.License.Change>
+- *
+- *	California, Berkeley and its contributors.
+- * 4. Neither the name of the University nor the names of its contributors
+- *    may be used to endorse or promote products derived from this software
+- *    without specific prior written permission.
+- *
+- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+- * SUCH DAMAGE.
+- *
+- *	@(#)echo.c	8.1 (Berkeley) 5/31/93
+- */
+diff --git a/shell/Config.in b/shell/Config.in
+index dde8fd1dd..8f2f98e68 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -95,12 +95,28 @@ config CONFIG_ASH_MATH_SUPPORT_64
+ 	  large numbers.
+ 
+ config CONFIG_ASH_GETOPTS
+-	bool "Enable getopts builtin to parse positional parameters"
++	bool "Builtin getopt to parse positional parameters"
+ 	default n
+ 	depends on CONFIG_ASH
+ 	help
+ 	  Enable getopts builtin in the ash shell.
+ 
++config CONFIG_ASH_BUILTIN_ECHO
++	bool "Builtin version of 'echo'"
++	default y
++	select CONFIG_ECHO
++	depends on CONFIG_ASH
++	help
++	  Enable support for echo, built in to ash.
++
++config CONFIG_ASH_BUILTIN_TEST
++	bool "Builtin version of 'test'"
++	default y
++	select CONFIG_TEST
++	depends on CONFIG_ASH
++	help
++	  Enable support for test, built in to ash.
++
+ config CONFIG_ASH_CMDCMD
+ 	bool "Enable cmdcmd to override shell builtins"
+ 	default n
+@@ -110,21 +126,6 @@ config CONFIG_ASH_CMDCMD
+ 	  you to run the specified command with the specified arguments,
+ 	  even when there is an ash builtin command with the same name.
+ 
+-config CONFIG_ASH_BUILTIN_ECHO
+-	bool "Enable builtin version of 'echo'"
+-	default n
+-	depends on CONFIG_ASH
+-	help
+-	  Enable support for echo, built in to ash.
+-
+-# this entry also appears in coreutils/Config.in, next to the echo applet
+-config CONFIG_FEATURE_FANCY_ECHO
+-	bool "Enable echo options (-n and -e)"
+-	default y
+-	depends on CONFIG_ASH_BUILTIN_ECHO
+-	help
+-	  This adds options (-n and -e) to echo.
+-
+ config CONFIG_ASH_MAIL
+ 	bool "Check for new mail on interactive shells"
+ 	default y
+@@ -229,6 +230,11 @@ config CONFIG_FEATURE_SH_STANDALONE_SHELL
+ 	  is generally used when creating a statically linked version of busybox
+ 	  for use as a rescue shell, in the event that you screw up your system.
+ 
++	  Note that this will *also* cause applets to take precedence
++	  over shell builtins of the same name.  So turning this on will
++	  eliminate any performance gained by turning on the builtin "echo"
++	  and "test" commands in ash.
++
+ 	  Note that when using this option, the shell will attempt to directly
+ 	  run '/bin/busybox'.  If you do not have the busybox binary sitting in
+ 	  that exact location with that exact name, this option will not work at
+diff --git a/shell/ash.c b/shell/ash.c
+index 962813dbd..713898a9f 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -1225,6 +1225,9 @@ static int evalcmd(int, char **);
+ #ifdef CONFIG_ASH_BUILTIN_ECHO
+ static int echocmd(int, char **);
+ #endif
++#ifdef CONFIG_ASH_BUILTIN_TEST
++static int testcmd(int, char **);
++#endif
+ static int execcmd(int, char **);
+ static int exitcmd(int, char **);
+ static int exportcmd(int, char **);
+@@ -1286,10 +1289,15 @@ struct builtincmd {
+ 
+ 
+ #define COMMANDCMD (builtincmd + 5 + \
+-	ENABLE_ASH_ALIAS + ENABLE_ASH_JOB_CONTROL)
++	2 * ENABLE_ASH_BUILTIN_TEST + \
++	ENABLE_ASH_ALIAS + \
++	ENABLE_ASH_JOB_CONTROL)
+ #define EXECCMD (builtincmd + 7 + \
+-	ENABLE_ASH_CMDCMD + ENABLE_ASH_ALIAS + \
+-	ENABLE_ASH_BUILTIN_ECHO + ENABLE_ASH_JOB_CONTROL)
++	2 * ENABLE_ASH_BUILTIN_TEST + \
++	ENABLE_ASH_ALIAS + \
++	ENABLE_ASH_JOB_CONTROL + \
++	ENABLE_ASH_CMDCMD + \
++	ENABLE_ASH_BUILTIN_ECHO)
+ 
+ #define BUILTIN_NOSPEC  "0"
+ #define BUILTIN_SPECIAL "1"
+@@ -1307,6 +1315,10 @@ struct builtincmd {
+ static const struct builtincmd builtincmd[] = {
+ 	{ BUILTIN_SPEC_REG      ".", dotcmd },
+ 	{ BUILTIN_SPEC_REG      ":", truecmd },
++#ifdef CONFIG_ASH_BUILTIN_TEST
++	{ BUILTIN_REGULAR	"[", testcmd },
++	{ BUILTIN_REGULAR	"[[", testcmd },
++#endif
+ #ifdef CONFIG_ASH_ALIAS
+ 	{ BUILTIN_REG_ASSG      "alias", aliascmd },
+ #endif
+@@ -1353,6 +1365,9 @@ static const struct builtincmd builtincmd[] = {
+ 	{ BUILTIN_SPEC_REG      "set", setcmd },
+ 	{ BUILTIN_SPEC_REG      "source", dotcmd },
+ 	{ BUILTIN_SPEC_REG      "shift", shiftcmd },
++#ifdef CONFIG_ASH_BUILTIN_TEST
++	{ BUILTIN_REGULAR	"test", testcmd },
++#endif
+ 	{ BUILTIN_SPEC_REG      "times", timescmd },
+ 	{ BUILTIN_SPEC_REG      "trap", trapcmd },
+ 	{ BUILTIN_REGULAR       "true", truecmd },
+@@ -8143,6 +8158,15 @@ echocmd(int argc, char **argv)
+ 	return bb_echo(argc, argv);
+ }
+ #endif
++
++#ifdef CONFIG_ASH_BUILTIN_TEST
++static int
++testcmd(int argc, char **argv)
++{
++	return bb_test(argc, argv);
++}
++#endif
++
+ /*      memalloc.c        */
+ 
+ /*

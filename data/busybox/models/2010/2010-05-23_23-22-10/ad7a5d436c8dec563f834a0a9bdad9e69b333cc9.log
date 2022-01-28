@@ -1,0 +1,121 @@
+"2010-05-23 23:22:10 +0200"
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index 195685b97..a7e995936 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -12,6 +12,12 @@ config CHVT
+ 	  This program is used to change to another terminal.
+ 	  Example: chvt 4 (change to terminal /dev/tty4)
+ 
++config FGCONSOLE
++	bool "fgconsole"
++	default n
++	help
++	  This program prints active (foreground) console number.
++
+ config CLEAR
+ 	bool "clear"
+ 	default n
+diff --git a/console-tools/Kbuild b/console-tools/Kbuild
+index df5ffdb96..ad8b8ce77 100644
+--- a/console-tools/Kbuild
++++ b/console-tools/Kbuild
+@@ -6,6 +6,7 @@
+ 
+ lib-y:=
+ lib-$(CONFIG_CHVT)		+= chvt.o
++lib-$(CONFIG_FGCONSOLE)		+= fgconsole.o
+ lib-$(CONFIG_CLEAR)		+= clear.o
+ lib-$(CONFIG_DEALLOCVT)		+= deallocvt.o
+ lib-$(CONFIG_DUMPKMAP)		+= dumpkmap.o
+diff --git a/console-tools/fgconsole.c b/console-tools/fgconsole.c
+new file mode 100644
+index 000000000..75fd98fd5
+--- /dev/null
++++ b/console-tools/fgconsole.c
+@@ -0,0 +1,30 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * Mini fgconsole implementation for busybox
++ *
++ * Copyright (C) 2010 by Grigory Batalov <bga@altlinux.org>
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++
++#include "libbb.h"
++
++/* From <linux/vt.h> */
++struct vt_stat {
++	unsigned short v_active;        /* active vt */
++	unsigned short v_signal;        /* signal to send */
++	unsigned short v_state;         /* vt bitmask */
++};
++enum { VT_GETSTATE = 0x5603 }; /* get global vt state info */
++
++int fgconsole_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
++int fgconsole_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
++{
++	struct vt_stat vtstat;
++
++	vtstat.v_active = 0;
++	xioctl(get_console_fd_or_die(), VT_GETSTATE, &vtstat);
++	printf("%d\n", vtstat.v_active);
++
++	return EXIT_SUCCESS;
++}
+diff --git a/include/applets.h b/include/applets.h
+index ff8799c63..33c3c2555 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -157,6 +157,7 @@ IF_FBSPLASH(APPLET(fbsplash, _BB_DIR_SBIN, _BB_SUID_DROP))
+ IF_FDFLUSH(APPLET_ODDNAME(fdflush, freeramdisk, _BB_DIR_BIN, _BB_SUID_DROP, fdflush))
+ IF_FDFORMAT(APPLET(fdformat, _BB_DIR_USR_BIN, _BB_SUID_DROP))
+ IF_FDISK(APPLET(fdisk, _BB_DIR_SBIN, _BB_SUID_DROP))
++IF_FGCONSOLE(APPLET(fgconsole, _BB_DIR_USR_BIN, _BB_SUID_DROP))
+ IF_FEATURE_GREP_FGREP_ALIAS(APPLET_ODDNAME(fgrep, grep, _BB_DIR_BIN, _BB_SUID_DROP, fgrep))
+ IF_FIND(APPLET_NOEXEC(find, find, _BB_DIR_USR_BIN, _BB_SUID_DROP, find))
+ IF_FINDFS(APPLET(findfs, _BB_DIR_SBIN, _BB_SUID_MAYBE))
+diff --git a/include/usage.h b/include/usage.h
+index d53b86731..8b8bd2c78 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -156,6 +156,11 @@
+      "\n	-r	Repetitions" \
+      "\n	-n	Start new tone" \
+ 
++#define blkid_trivial_usage \
++       ""
++#define blkid_full_usage "\n\n" \
++       "Print UUIDs of all filesystems"
++
+ #define bootchartd_trivial_usage \
+        "start [PROG ARGS]|stop|init"
+ #define bootchartd_full_usage "\n\n" \
+@@ -1243,10 +1248,10 @@
+      "\n	-H HEADS" \
+      "\n	-S SECTORS" \
+ 
+-#define blkid_trivial_usage \
+-       ""
+-#define blkid_full_usage "\n\n" \
+-       "Print UUIDs of all filesystems"
++#define fgconsole_trivial_usage \
++	""
++#define fgconsole_full_usage "\n\n" \
++	"Get active console"
+ 
+ #define findfs_trivial_usage \
+        "LABEL=label or UUID=uuid"
+diff --git a/scripts/defconfig b/scripts/defconfig
+index 0a748febc..8b88f79b3 100644
+--- a/scripts/defconfig
++++ b/scripts/defconfig
+@@ -287,6 +287,7 @@ CONFIG_FEATURE_MD5_SHA1_SUM_CHECK=y
+ # Console Utilities
+ #
+ CONFIG_CHVT=y
++CONFIG_FGCONSOLE=n
+ CONFIG_CLEAR=y
+ CONFIG_DEALLOCVT=y
+ CONFIG_DUMPKMAP=y

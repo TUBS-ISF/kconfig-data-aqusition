@@ -1,0 +1,143 @@
+"2004-04-07 09:34:27 +0000"
+diff --git a/debian/config-static b/debian/config-static
+index 5114da6b1..035354683 100644
+--- a/debian/config-static
++++ b/debian/config-static
+@@ -437,7 +437,6 @@ CONFIG_FEATURE_COMMAND_TAB_COMPLETION=y
+ CONFIG_FEATURE_COMMAND_USERNAME_COMPLETION=y
+ CONFIG_FEATURE_COMMAND_HISTORY=15
+ CONFIG_FEATURE_SH_STANDALONE_SHELL=y
+-CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN=y
+ CONFIG_FEATURE_SH_FANCY_PROMPT=y
+ # CONFIG_FEATURE_SH_EXTRA_QUIET is not set
+ 
+diff --git a/debian/config-udeb b/debian/config-udeb
+index 3cb612f7e..7359abcfe 100644
+--- a/debian/config-udeb
++++ b/debian/config-udeb
+@@ -359,7 +359,6 @@ CONFIG_FEATURE_COMMAND_TAB_COMPLETION=y
+ # CONFIG_FEATURE_COMMAND_USERNAME_COMPLETION is not set
+ CONFIG_FEATURE_COMMAND_HISTORY=15
+ CONFIG_FEATURE_SH_STANDALONE_SHELL=y
+-# CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN is not set
+ CONFIG_FEATURE_SH_FANCY_PROMPT=y
+ # CONFIG_FEATURE_SH_EXTRA_QUIET is not set
+ 
+diff --git a/debian/config-udeb-linux b/debian/config-udeb-linux
+index be4e9fb48..b33fb22b0 100644
+--- a/debian/config-udeb-linux
++++ b/debian/config-udeb-linux
+@@ -368,7 +368,6 @@ CONFIG_FEATURE_COMMAND_TAB_COMPLETION=y
+ # CONFIG_FEATURE_COMMAND_USERNAME_COMPLETION is not set
+ CONFIG_FEATURE_COMMAND_HISTORY=15
+ CONFIG_FEATURE_SH_STANDALONE_SHELL=y
+-# CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN is not set
+ CONFIG_FEATURE_SH_FANCY_PROMPT=y
+ # CONFIG_FEATURE_SH_EXTRA_QUIET is not set
+ 
+diff --git a/shell/Config.in b/shell/Config.in
+index 34baaa45c..b064ed41b 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -160,16 +160,14 @@ config CONFIG_FEATURE_SH_STANDALONE_SHELL
+ 	default n
+ 	depends on CONFIG_MSH || CONFIG_LASH || CONFIG_HUSH || CONFIG_ASH
+ 	help
+-	  Have all the busybox commands built into the shell, creating
+-	  a standalone shell.
+-
+-config CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN
+-	bool "Standalone shell -- applets always win"
+-	default n
+-	depends on CONFIG_FEATURE_SH_STANDALONE_SHELL
+-	help
+-	  Use a command builtin to the shell over one with the same name,
+-	  that may be on the system.
++	  This option causes the selected busybox shell to use busybox applets
++	  in preference to executables in the PATH whenever possible.  For
++	  example, entering the command 'ifconfig' into the shell would cause
++	  busybox to use the ifconfig busybox applet.  Specifying the fully
++	  qualified executable name, such as '/sbin/ifconfig' will still
++	  execute the /sbin/ifconfig executable on the filesystem.  This option
++	  is generally used when creating a staticly linked version of busybox
++	  for use as a rescue shell, in the event that you screw up your system.
+ 
+ config CONFIG_FEATURE_COMMAND_EDITING
+ 	bool "command line editing"
+diff --git a/shell/ash.c b/shell/ash.c
+index 5ebc8aced..1a0e0aa6e 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -3717,15 +3717,9 @@ tryexec(char *cmd, char **argv, char **envp)
+ 	int flg_bb = 0;
+ 	char *name = cmd;
+ 
+-#ifdef CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN
+-	name = bb_get_last_path_component(name);
+-	if(find_applet_by_name(name) != NULL)
+-		flg_bb = 1;
+-#else
+ 	if(strchr(name, '/') == NULL && find_applet_by_name(name) != NULL) {
+ 		flg_bb = 1;
+ 	}
+-#endif
+ 	if(flg_bb) {
+ 		char **ap;
+ 		char **new;
+diff --git a/shell/hush.c b/shell/hush.c
+index 0a32099c7..ad5ddf0d5 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -1124,18 +1124,6 @@ static void pseudo_exec(struct child_prog *child)
+ 			char** argv_l=child->argv;
+ 			char *name = child->argv[0];
+ 
+-#ifdef CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN
+-			/* Following discussions from November 2000 on the busybox mailing
+-			 * list, the default configuration, (without
+-			 * bb_get_last_path_component()) lets the user force use of an
+-			 * external command by specifying the full (with slashes) filename.
+-			 * If you enable CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN, then applets
+-			 * _aways_ override external commands, so if you want to run
+-			 * /bin/cat, it will use BusyBox cat even if /bin/cat exists on the
+-			 * filesystem and is _not_ busybox.  Some systems may want this,
+-			 * most do not.  */
+-			name = bb_get_last_path_component(name);
+-#endif
+ 			/* Count argc for use in a second... */
+ 			for(argc_l=0;*argv_l!=NULL; argv_l++, argc_l++);
+ 			optind = 1;
+diff --git a/shell/lash.c b/shell/lash.c
+index e20c2a20e..b46cee807 100644
+--- a/shell/lash.c
++++ b/shell/lash.c
+@@ -1275,15 +1275,6 @@ static int pseudo_exec(struct child_prog *child)
+ 	 */
+ 	name = child->argv[0];
+ 
+-#ifdef CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN
+-	/* If you enable CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN, then
+-	 * if you run /bin/cat, it will use BusyBox cat even if
+-	 * /bin/cat exists on the filesystem and is _not_ busybox.
+-	 * Some systems want this, others do not.  Choose wisely.  :-)
+-	 */
+-	name = bb_get_last_path_component(name);
+-#endif
+-
+ 	{
+ 	    char** argv_l=child->argv;
+ 	    int argc_l;
+diff --git a/shell/msh.c b/shell/msh.c
+index e7059507a..5dc0b2b51 100644
+--- a/shell/msh.c
++++ b/shell/msh.c
+@@ -2836,9 +2836,6 @@ char *c, **v, **envp;
+ 
+ #ifdef CONFIG_FEATURE_SH_STANDALONE_SHELL
+ 	char *name = c;
+-#ifdef CONFIG_FEATURE_SH_APPLETS_ALWAYS_WIN
+-	name = bb_get_last_path_component(name);
+-#endif
+ 	optind = 1;
+ 	if (find_applet_by_name(name)) {
+ 		/* We have to exec here since we vforked.  Running

@@ -1,0 +1,1172 @@
+"2016-11-04 20:52:57 +0800"
+diff --git a/data/scripts/libsoletta.sym b/data/scripts/libsoletta.sym
+index 065cff26..10fed74d 100644
+--- a/data/scripts/libsoletta.sym
++++ b/data/scripts/libsoletta.sym
+@@ -415,10 +415,14 @@ global:
+         sol_iio_close;
+         sol_iio_device_start_buffer;
+         sol_iio_device_trigger;
++        sol_iio_device_get_scale;
++        sol_iio_device_get_offset;
++        sol_iio_device_get_sampling_frequency;
+         sol_iio_open;
+         sol_iio_read_channel_raw_buffer;
+         sol_iio_read_channel_value;
+         sol_iio_mount_calibration;
++        sol_iio_channel_get_name;
+ 
+         sol_init;
+ 
+diff --git a/src/lib/io/include/sol-iio.h b/src/lib/io/include/sol-iio.h
+old mode 100644
+new mode 100755
+index 4b8155b2..572d04dd
+--- a/src/lib/io/include/sol-iio.h
++++ b/src/lib/io/include/sol-iio.h
+@@ -248,6 +248,49 @@ sol_iio_read_channel_raw_buffer(struct sol_iio_channel *channel);
+ int
+ sol_iio_mount_calibration(struct sol_iio_device *device, sol_direction_vector *value);
+ 
++/**
++ * @brief Gets the configuration attribute name of a channel.
++ *
++ * @param channel sol_iio_channel structure which the name is desired.
++ * @return The configuration attribute name of the channel on success, @c NULL on error.
++ *
++ */
++const char *sol_iio_channel_get_name(const struct sol_iio_channel *channel);
++
++
++/**
++ * @brief Gets the configuration scale attribute from one device
++ *
++ * @param device The sol_iio_device structure which the scale is desired
++ * @param prefix_name pointer to the attribute name Eg: "in_anglvel_x"
++ * @param scale data to be get from attribute name
++ *
++ * @return 0 on success, -errno on failure.
++ */
++int sol_iio_device_get_scale(const struct sol_iio_device *device, const char *prefix_name, double *scale);
++
++/**
++ * @brief Gets the configuration offset attribute from one device
++ *
++ * @param device The sol_iio_device structure which the offset is desired
++ * @param prefix_name pointer to the attribute name Eg: "in_anglvel_x"
++ * @param offset data to be get from attribute name
++ *
++ * @return 0 on success, -errno on failure.
++ */
++int sol_iio_device_get_offset(const struct sol_iio_device *device, const char *prefix_name, double *offset);
++
++/**
++ * @brief Gets the configuration sampling_frequency attribute from one device
++ *
++ * @param device The sol_iio_device structure which the sampling_frequency is desired
++ * @param prefix_name pointer to the attribute name Eg: "in_anglvel"
++ * @param sampling_frequency data to be get from attribute name
++ *
++ * @return 0 on success, -errno on failure.
++ */
++int sol_iio_device_get_sampling_frequency(const struct sol_iio_device *device, const char *prefix_name, int *sampling_frequency);
++
+ /**
+  * @}
+  */
+diff --git a/src/lib/io/sol-iio.c b/src/lib/io/sol-iio.c
+old mode 100644
+new mode 100755
+index 597ce89e..f365f61c
+--- a/src/lib/io/sol-iio.c
++++ b/src/lib/io/sol-iio.c
+@@ -571,15 +571,16 @@ setup_device_reader(struct sol_iio_device *device)
+  * TODO there are other esoteric combinations - for them, if we care about,
+  * we will probably need API calls to get the 'scale' and 'offset' file names */
+ static char *
+-channel_get_pure_name(struct sol_iio_channel *channel)
++channel_get_pure_name(const char *name)
+ {
+     char channel_name[NAME_MAX];
+     size_t channel_name_len;
+     char *channel_pure_name;
+     bool modified = false;
+ 
+-    SOL_NULL_CHECK(channel->name, NULL);
+-    strncpy(channel_name, channel->name, sizeof(channel_name) - 1);
++    SOL_NULL_CHECK(name, NULL);
++
++    strncpy(channel_name, name, sizeof(channel_name) - 1);
+     channel_name[sizeof(channel_name) - 1] = '\0';
+ 
+     channel_name_len = strlen(channel_name);
+@@ -698,7 +699,7 @@ iio_set_channel_scale(struct sol_iio_channel *channel, double scale)
+     }
+ 
+     /* If failed, try channel pure name */
+-    pure_name = channel_get_pure_name(channel);
++    pure_name = channel_get_pure_name(channel->name);
+     if (pure_name && craft_filename_path(path, sizeof(path), CHANNEL_SCALE_PATH,
+         channel->device->device_id, pure_name)) {
+ 
+@@ -734,7 +735,7 @@ iio_set_channel_offset(struct sol_iio_channel *channel, int offset)
+     }
+ 
+     /* If failed, try channel pure name */
+-    pure_name = channel_get_pure_name(channel);
++    pure_name = channel_get_pure_name(channel->name);
+     if (pure_name && craft_filename_path(path, sizeof(path), CHANNEL_OFFSET_PATH,
+         channel->device->device_id, pure_name)) {
+ 
+@@ -1069,72 +1070,96 @@ read_channel_scan_info(struct sol_iio_channel *channel)
+     return false;
+ }
+ 
+-static void
+-channel_get_scale(struct sol_iio_channel *channel)
++static int
++get_scale(const struct sol_iio_device *device, const char *prefix_name, double *scale)
+ {
+     char path[PATH_MAX];
+-    char *channel_pure_name = NULL;
+-    struct sol_iio_device *device = channel->device;
+-    bool r;
++    char *pure_name = NULL;
++    int r = 0;
+ 
+ #define GET_SCALE(_name) \
+     do { \
+-        if (_name) { \
+-            r = craft_filename_path(path, sizeof(path), CHANNEL_SCALE_PATH, \
+-                device->device_id, _name); \
+-            if (r && sol_util_read_file(path, "%lf", &channel->scale) > 0) { \
++        if (craft_filename_path(path, sizeof(path), CHANNEL_SCALE_PATH, \
++            device->device_id, _name)) { \
++            r = sol_util_read_file(path, "%lf", scale); \
++            if (r > 0) \
+                 goto end; \
+-            } \
+         } \
+     } while (0)
+ 
+-    GET_SCALE(channel->name);
+-    /* No scale. If channel has x, y, z or Y component, look for scale file without it */
+-    channel_pure_name = channel_get_pure_name(channel);
+-    GET_SCALE(channel_pure_name);
++    GET_SCALE(prefix_name);
++    pure_name = channel_get_pure_name(prefix_name);
++    GET_SCALE(pure_name);
+ 
+     SOL_INF("Could not get scale for channel [%s] in device%d. Assuming 1.0",
+-        channel->name, device->device_id);
+-    channel->scale = 1.0;
++        prefix_name, device->device_id);
++    *scale = 1.0;
+ 
+ #undef GET_SCALE
+ 
+ end:
+-    free(channel_pure_name);
++    if (pure_name)
++        free(pure_name);
++
++    if (r > 0)
++        return 0;
++
++    return r;
+ }
+ 
+-static void
+-channel_get_offset(struct sol_iio_channel *channel)
++static int
++channel_get_scale(struct sol_iio_channel *channel)
++{
++    SOL_NULL_CHECK(channel->device, -EINVAL);
++    SOL_NULL_CHECK(channel->name, -EINVAL);
++
++    return get_scale(channel->device, channel->name, &channel->scale);
++}
++
++static int
++get_offset(const struct sol_iio_device *device, const char *prefix_name, double *offset)
+ {
+     char path[PATH_MAX];
+-    char *channel_pure_name = NULL;
+-    struct sol_iio_device *device = channel->device;
+-    bool r;
++    char *pure_name = NULL;
++    int r = 0;
+ 
+ #define GET_OFFSET(_name) \
+     do { \
+-        if (_name) { \
+-            r = craft_filename_path(path, sizeof(path), CHANNEL_OFFSET_PATH, \
+-                device->device_id, _name); \
+-            if (r && sol_util_read_file(path, "%d", &channel->offset) > 0) { \
++        if (craft_filename_path(path, sizeof(path), CHANNEL_OFFSET_PATH, \
++            device->device_id, _name)) { \
++            r = sol_util_read_file(path, "%lf", offset); \
++            if (r > 0) \
+                 goto end; \
+-            } \
+         } \
+     } while (0)
+ 
+-    GET_OFFSET(channel->name);
+-    /* No scale. If channel has x, y or z component, look for scale file without it */
+-    channel_pure_name = channel_get_pure_name(channel);
+-    GET_OFFSET(channel_pure_name);
++    GET_OFFSET(prefix_name);
++    pure_name = channel_get_pure_name(prefix_name);
++    GET_OFFSET(pure_name);
+ 
+     SOL_INF("Could not get offset for channel [%s] in device%d. Assuming 0",
+-        channel->name, device->device_id);
+-    channel->offset = 0;
++        prefix_name, device->device_id);
++    *offset = 0.0;
+ 
+ #undef GET_OFFSET
+ 
+ end:
+-    free(channel_pure_name);
++    if (pure_name)
++        free(pure_name);
++
++    if (r > 0)
++        return 0;
++
++    return r;
++}
++
++static int
++channel_get_offset(struct sol_iio_channel *channel)
++{
++    SOL_NULL_CHECK(channel->device, -EINVAL);
++    SOL_NULL_CHECK(channel->name, -EINVAL);
++
++    return get_offset(channel->device, channel->name, (double *)&channel->offset);
+ }
+ 
+ static void
+@@ -1770,3 +1795,57 @@ sol_iio_mount_calibration(struct sol_iio_device *device, sol_direction_vector *v
+     SOL_DBG("%f-%f-%f", value->x, value->y, value->z);
+     return 0;
+ }
++
++SOL_API const char *
++sol_iio_channel_get_name(const struct sol_iio_channel *channel)
++{
++    SOL_NULL_CHECK(channel, NULL);
++
++    return channel->name;
++}
++
++SOL_API int
++sol_iio_device_get_scale(const struct sol_iio_device *device, const char *prefix_name, double *scale)
++{
++    SOL_NULL_CHECK(device, -EINVAL);
++    SOL_NULL_CHECK(prefix_name, -EINVAL);
++    SOL_NULL_CHECK(scale, -EINVAL);
++
++    return get_scale(device, prefix_name, scale);
++}
++
++SOL_API int
++sol_iio_device_get_offset(const struct sol_iio_device *device, const char *prefix_name, double *offset)
++{
++    SOL_NULL_CHECK(device, -EINVAL);
++    SOL_NULL_CHECK(prefix_name, -EINVAL);
++    SOL_NULL_CHECK(offset, -EINVAL);
++
++    return get_offset(device, prefix_name, offset);
++}
++
++SOL_API int
++sol_iio_device_get_sampling_frequency(const struct sol_iio_device *device, const char *prefix_name, int *sampling_frequency)
++{
++    char path[PATH_MAX];
++    int r;
++
++    SOL_NULL_CHECK(device, -EINVAL);
++    SOL_NULL_CHECK(prefix_name, -EINVAL);
++    SOL_NULL_CHECK(sampling_frequency, -EINVAL);
++
++
++    if (craft_filename_path(path, sizeof(path), CHANNEL_SAMPLING_FREQUENCY_DEVICE_PATH,
++        device->device_id, prefix_name)) {
++        r = sol_util_read_file(path, "%d", sampling_frequency);
++        SOL_INT_CHECK(r, < 0, r);
++    }
++
++    if (craft_filename_path(path, sizeof(path), SAMPLING_FREQUENCY_DEVICE_PATH,
++        device->device_id)) {
++        r = sol_util_read_file(path, "%d", sampling_frequency);
++        SOL_INT_CHECK(r, < 0, r);
++    }
++
++    return 0;
++}
+diff --git a/src/modules/flow/iio/iio.json b/src/modules/flow/iio/iio.json
+old mode 100644
+new mode 100755
+index 24122bf2..27e117b3
+--- a/src/modules/flow/iio/iio.json
++++ b/src/modules/flow/iio/iio.json
+@@ -18,6 +18,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a gyroscope configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -31,6 +39,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_GYROSCOPE__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_GYROSCOPE__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_GYROSCOPE__OUT__OFFSET",
+             "reader_cb": "iio_direction_vector_reader_cb"
+        }
+       },
+@@ -104,6 +114,21 @@
+          "data_type": "direction-vector",
+          "description": "Angular speed in all X/Y/Z axes, in radians per second.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "direction-vector",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "direction-vector",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_direction_vector_data"
+@@ -119,6 +144,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a magnet configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -132,6 +165,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_MAGNETOMETER__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_MAGNETOMETER__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_MAGNETOMETER__OUT__OFFSET",
+             "reader_cb": "iio_direction_vector_reader_cb"
+        }
+       },
+@@ -206,6 +241,21 @@
+          "data_type": "direction-vector",
+          "description": "Magnet location in all X/Y/Z axes, in Gauss.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "direction-vector",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "direction-vector",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_direction_vector_data"
+@@ -221,6 +271,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a temperature configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -234,6 +292,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_THERMOMETER__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_THERMOMETER__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_THERMOMETER__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -308,6 +368,21 @@
+          "data_type": "float",
+          "description": "Temperature read, in milli degrees Celsius",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -323,6 +398,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a pressure configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -336,6 +419,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_PRESSURE_SENSOR__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_PRESSURE_SENSOR__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_PRESSURE_SENSOR__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -410,6 +495,21 @@
+          "data_type": "float",
+          "description": "Pressure data read in Kpa.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -425,6 +525,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a color configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -438,6 +546,12 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__OUT",
++            "scale_red_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__SCALE_RED",
++            "scale_green_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__SCALE_GREEN",
++            "scale_blue_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__SCALE_BLUE",
++            "offset_red_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__OFFSET_RED",
++            "offset_green_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__OFFSET_GREEN",
++            "offset_blue_port": "SOL_FLOW_NODE_TYPE_IIO_COLOR_SENSOR__OUT__OFFSET_BLUE",
+             "reader_cb": "iio_color_reader_cb"
+        }
+       },
+@@ -534,6 +648,41 @@
+          "data_type": "rgb",
+          "description": "Color Sensor data read.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE_RED"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE_GREEN"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE_BLUE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET_RED"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET_GREEN"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET_BLUE"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_color_data"
+@@ -549,6 +698,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a accelerate configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -562,6 +719,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_ACCELEROMETER__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_ACCELEROMETER__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_ACCELEROMETER__OUT__OFFSET",
+             "reader_cb": "iio_direction_vector_reader_cb"
+        }
+       },
+@@ -635,6 +794,21 @@
+          "data_type": "direction-vector",
+          "description": "Accelerate data read, in m/s^2.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "direction-vector",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "direction-vector",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_direction_vector_data"
+@@ -650,6 +824,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a humidity configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -663,6 +845,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_HUMIDITY_SENSOR__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_HUMIDITY_SENSOR__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_HUMIDITY_SENSOR__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -737,6 +921,21 @@
+          "data_type": "float",
+          "description": "Relative humidity data read, in percentage(%rh).",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -752,6 +951,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a adc configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -765,6 +972,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_ADC__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_ADC__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_ADC__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -845,6 +1054,21 @@
+          "data_type": "float",
+          "description": "ADC data read from analog signal, in milivolts(mV)",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -860,6 +1084,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a light configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -873,6 +1105,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_LIGHT_SENSOR__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_LIGHT_SENSOR__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_LIGHT_SENSOR__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -953,6 +1187,21 @@
+          "data_type": "float",
+          "description": "Light data read in lux.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -968,6 +1217,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a light configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -981,6 +1238,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_INTENSITY_BOTH_SENSOR__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_INTENSITY_BOTH_SENSOR__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_INTENSITY_BOTH_SENSOR__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -1061,6 +1320,21 @@
+          "data_type": "float",
+          "description": "Unit-less light intensity.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -1076,6 +1350,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a light configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -1089,6 +1371,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_INTENSITY_IR_SENSOR__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_INTENSITY_IR_SENSOR__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_INTENSITY_IR_SENSOR__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -1169,6 +1453,21 @@
+          "data_type": "float",
+          "description": "Unit-less light intensity.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+@@ -1184,6 +1483,14 @@
+           "methods": {
+             "process": "iio_common_tick"
+           }
++        },
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a proximity configuration attribute reading.",
++          "name": "TRIGGER",
++          "methods": {
++            "process": "iio_get_info"
++          }
+         }
+       ],
+       "methods": {
+@@ -1197,6 +1504,8 @@
+         "data_type": "struct iio_node_type",
+         "extra_methods": {
+             "out_port": "SOL_FLOW_NODE_TYPE_IIO_PROXIMITY_SENSOR__OUT__OUT",
++            "scale_port": "SOL_FLOW_NODE_TYPE_IIO_PROXIMITY_SENSOR__OUT__SCALE",
++            "offset_port": "SOL_FLOW_NODE_TYPE_IIO_PROXIMITY_SENSOR__OUT__OFFSET",
+             "reader_cb": "iio_double_reader_cb"
+        }
+       },
+@@ -1274,6 +1583,21 @@
+          "data_type": "float",
+          "description": "proximity data read.",
+          "name": "OUT"
++        },
++        {
++         "data_type": "float",
++         "description": "Scale to applied to device raw readings",
++         "name": "SCALE"
++        },
++        {
++         "data_type": "float",
++         "description": "Offset to be added to device raw readings",
++         "name": "OFFSET"
++        },
++        {
++         "data_type": "int",
++         "description": "Sampling frequency of the sensor. If -1, use device default",
++         "name": "SAMPLING_FREQUENCY"
+         }
+       ],
+       "private_data_type": "iio_double_data"
+diff --git a/src/modules/flow/iio/nodes.c b/src/modules/flow/iio/nodes.c
+old mode 100644
+new mode 100755
+index 99f7a45b..8c79b9da
+--- a/src/modules/flow/iio/nodes.c
++++ b/src/modules/flow/iio/nodes.c
+@@ -43,6 +43,9 @@ struct iio_device_config {
+     bool buffer_enabled : 1;
+     bool use_device_default_scale : 1;
+     bool use_device_default_offset : 1;
++    enum iio_data_type {
++        DOUBLE, DIRECTION_VECTOR, COLOR,
++    } data_type;
+ };
+ 
+ /* Make sure the iio_device_config is the first element */
+@@ -78,6 +81,15 @@ struct iio_color_data {
+ struct iio_node_type {
+     struct sol_flow_node_type base;
+     uint16_t out_port;
++    uint16_t scale_port;
++    uint16_t scale_red_port;
++    uint16_t scale_green_port;
++    uint16_t scale_blue_port;
++    uint16_t offset_port;
++    uint16_t offset_red_port;
++    uint16_t offset_green_port;
++    uint16_t offset_blue_port;
++    uint16_t sampling_frequency_port;
+     void (*reader_cb)(void *data, struct sol_iio_device *device);
+ };
+ 
+@@ -101,6 +113,7 @@ iio_common_close(struct sol_flow_node *node, void *data)
+     struct iio_device_config *mdata = data;
+ 
+     free((char *)mdata->config.trigger_name);
++
+     if (mdata->device)
+         sol_iio_close(mdata->device);
+ }
+@@ -130,6 +143,122 @@ error:
+     return -EIO;
+ }
+ 
++static int
++iio_get_info(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    static const char *errmsg = "Could not read configuration attribute";
++    struct iio_device_config *device_config = data;
++    struct sol_iio_device *device = device_config->device;
++    struct iio_node_type *type = (struct iio_node_type *)sol_flow_node_get_type(node);
++    char *sampling_frequency_name = device_config->config.sampling_frequency_name;
++    int frequency, r;
++
++    if (device_config->data_type == DOUBLE) {
++        struct iio_double_data *mdata = data;
++        const char *name;
++        double value;
++
++        name = sol_iio_channel_get_name(mdata->channel_val);
++        SOL_NULL_CHECK_GOTO(name, error);
++
++        r = sol_iio_device_get_scale(device, name, &value);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_flow_send_drange_value_packet(node, type->scale_port, value);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_offset(device, name, &value);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_flow_send_drange_value_packet(node, type->offset_port, value);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++    } else if (device_config->data_type == DIRECTION_VECTOR) {
++        struct iio_direction_vector_data *mdata = data;
++        const char *name_x, *name_y, *name_z;
++        double value_x, value_y, value_z;
++
++        name_x = sol_iio_channel_get_name(mdata->channel_x);
++        SOL_NULL_CHECK_GOTO(name_x, error);
++        name_y = sol_iio_channel_get_name(mdata->channel_y);
++        SOL_NULL_CHECK_GOTO(name_y, error);
++        name_z = sol_iio_channel_get_name(mdata->channel_z);
++        SOL_NULL_CHECK_GOTO(name_z, error);
++
++        r = sol_iio_device_get_scale(device, name_x, &value_x);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_iio_device_get_scale(device, name_y, &value_y);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_iio_device_get_scale(device, name_z, &value_z);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_flow_send_direction_vector_components_packet(node,
++            type->scale_port, value_x, value_y, value_z);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_offset(device, name_x, &value_x);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_iio_device_get_offset(device, name_y, &value_y);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_iio_device_get_offset(device, name_z, &value_z);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_flow_send_direction_vector_components_packet(node,
++            type->offset_port, value_x, value_y, value_z);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++    } else if (device_config->data_type == COLOR) {
++        struct iio_color_data *mdata = data;
++        const char *name_red, *name_green, *name_blue;
++        double value_red, value_green, value_blue;
++
++        name_red = sol_iio_channel_get_name(mdata->channel_red);
++        SOL_NULL_CHECK_GOTO(name_red, error);
++        name_green = sol_iio_channel_get_name(mdata->channel_green);
++        SOL_NULL_CHECK_GOTO(name_green, error);
++        name_blue = sol_iio_channel_get_name(mdata->channel_blue);
++        SOL_NULL_CHECK_GOTO(name_blue, error);
++
++        r = sol_iio_device_get_scale(device, name_red, &value_red);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_flow_send_drange_value_packet(node, type->scale_red_port, value_red);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_scale(device, name_green, &value_green);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_flow_send_drange_value_packet(node, type->scale_green_port, value_green);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_scale(device, name_blue, &value_blue);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_flow_send_drange_value_packet(node, type->scale_blue_port, value_blue);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_offset(device, name_red, &value_red);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_flow_send_drange_value_packet(node, type->offset_red_port, value_red);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_offset(device, name_green, &value_green);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_flow_send_drange_value_packet(node, type->offset_green_port, value_green);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++
++        r = sol_iio_device_get_offset(device, name_blue, &value_blue);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++        r = sol_flow_send_drange_value_packet(node, type->offset_blue_port, value_blue);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++    }
++
++    r = sol_iio_device_get_sampling_frequency(device, sampling_frequency_name, &frequency);
++    SOL_INT_CHECK_GOTO(r, < 0, error);
++
++    r = sol_flow_send_irange_value_packet(node, type->sampling_frequency_port, frequency);
++    SOL_INT_CHECK_GOTO(r, < 0, error);
++
++error:
++    sol_flow_send_error_packet(node, EIO, "%s", errmsg);
++    return -EIO;
++}
++
+ static void
+ iio_direction_vector_reader_cb(void *data, struct sol_iio_device *device)
+ {
+@@ -284,6 +413,7 @@ gyroscope_open(struct sol_flow_node *node, void *data, const struct sol_flow_nod
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DIRECTION_VECTOR;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     ret = snprintf(mdata->iio_base.config.sampling_frequency_name,
+@@ -367,6 +497,7 @@ magnet_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_o
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DIRECTION_VECTOR;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     ret = snprintf(mdata->iio_base.config.sampling_frequency_name,
+@@ -445,6 +576,7 @@ temperature_open(struct sol_flow_node *node, void *data, const struct sol_flow_n
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+@@ -519,6 +651,7 @@ pressure_open(struct sol_flow_node *node, void *data, const struct sol_flow_node
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     ret = snprintf(mdata->iio_base.config.sampling_frequency_name,
+@@ -603,6 +736,7 @@ color_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_op
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = COLOR;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+@@ -689,6 +823,7 @@ accelerate_open(struct sol_flow_node *node, void *data, const struct sol_flow_no
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DIRECTION_VECTOR;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     ret = snprintf(mdata->iio_base.config.sampling_frequency_name,
+@@ -767,6 +902,7 @@ humidity_open(struct sol_flow_node *node, void *data, const struct sol_flow_node
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+@@ -845,6 +981,7 @@ adc_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_opti
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+@@ -923,6 +1060,7 @@ light_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_op
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     ret = snprintf(mdata->iio_base.config.sampling_frequency_name,
+@@ -1014,6 +1152,7 @@ intensity_both_open(struct sol_flow_node *node, void *data, const struct sol_flo
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+@@ -1100,6 +1239,7 @@ intensity_ir_open(struct sol_flow_node *node, void *data, const struct sol_flow_
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+@@ -1178,6 +1318,7 @@ proximity_open(struct sol_flow_node *node, void *data, const struct sol_flow_nod
+         SOL_NULL_CHECK(mdata->iio_base.config.trigger_name, -ENOMEM);
+     }
+ 
++    mdata->iio_base.data_type = DOUBLE;
+     mdata->iio_base.config.buffer_size = opts->buffer_size;
+     mdata->iio_base.config.sampling_frequency = opts->sampling_frequency;
+     if (mdata->iio_base.buffer_enabled) {
+diff --git a/src/samples/flow/iio/Kconfig b/src/samples/flow/iio/Kconfig
+index 51beb120..02622c7c 100644
+--- a/src/samples/flow/iio/Kconfig
++++ b/src/samples/flow/iio/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_IIO_SAMPLE
+ 	bool
+-	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_IIO && FLOW_NODE_TYPE_TIMER && FLOW_NODE_TYPE_CONSOLE && FLOW_NODE_TYPE_IIO
++	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_IIO && FLOW_NODE_TYPE_TIMER && FLOW_NODE_TYPE_CONSOLE && FLOW_NODE_TYPE_IIO && FLOW_NODE_TYPE_CONSTANT
+ 	default y
+diff --git a/src/samples/flow/iio/magnet.fbp b/src/samples/flow/iio/magnet.fbp
+index ba4e4b0c..b3d15708 100755
+--- a/src/samples/flow/iio/magnet.fbp
++++ b/src/samples/flow/iio/magnet.fbp
+@@ -23,5 +23,7 @@
+ 
+ magnet(MyMagnet)
+ timer(timer)
++tick(constant/empty)
+ 
++tick OUT -> TRIGGER magnet SCALE -> IN _(console:prefix="scale:")
+ timer OUT -> TICK magnet OUT -> IN _(console)

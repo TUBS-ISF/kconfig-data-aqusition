@@ -1,0 +1,370 @@
+"2012-06-15 14:00:44 +0200"
+diff --git a/docs/man/arc4random.3 b/docs/man/arc4random.3
+new file mode 100644
+index 000000000..933d2eb0c
+--- /dev/null
++++ b/docs/man/arc4random.3
+@@ -0,0 +1,110 @@
++.\" $OpenBSD: arc4random.3,v 1.19 2005/07/17 08:50:55 jaredy Exp $
++.\"
++.\" Copyright 1997 Niels Provos <provos@physnet.uni-hamburg.de>
++.\" All rights reserved.
++.\"
++.\" Redistribution and use in source and binary forms, with or without
++.\" modification, are permitted provided that the following conditions
++.\" are met:
++.\" 1. Redistributions of source code must retain the above copyright
++.\"    notice, this list of conditions and the following disclaimer.
++.\" 2. Redistributions in binary form must reproduce the above copyright
++.\"    notice, this list of conditions and the following disclaimer in the
++.\"    documentation and/or other materials provided with the distribution.
++.\" 3. All advertising materials mentioning features or use of this software
++.\"    must display the following acknowledgement:
++.\"      This product includes software developed by Niels Provos.
++.\" 4. The name of the author may not be used to endorse or promote products
++.\"    derived from this software without specific prior written permission.
++.\"
++.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++.\" IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++.\" OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++.\" IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++.\" INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++.\" NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++.\" DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++.\" THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++.\" (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++.\" THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++.\"
++.\" Manual page, using -mandoc macros
++.\"
++.Dd April 15, 1997
++.Dt ARC4RANDOM 3
++.Os
++.Sh NAME
++.Nm arc4random ,
++.Nm arc4random_stir ,
++.Nm arc4random_addrandom
++.Nd arc4 random number generator
++.Sh SYNOPSIS
++.Fd #include <stdlib.h>
++.Ft uint32_t
++.Fn arc4random "void"
++.Ft void
++.Fn arc4random_stir "void"
++.Ft void
++.Fn arc4random_addrandom "u_char *dat" "int datlen"
++.Sh DESCRIPTION
++The
++.Fn arc4random
++function provides a high quality 32-bit pseudo-random
++number very quickly.
++.Fn arc4random
++seeds itself on a regular basis from the kernel strong random number
++subsystem described in
++.Xr random 4 .
++On each call, an ARC4 generator is used to generate a new result.
++The
++.Fn arc4random
++function uses the ARC4 cipher key stream generator,
++which uses 8*8 8-bit S-Boxes.
++The S-Boxes can be in about (2**1700) states.
++.Pp
++.Fn arc4random
++fits into a middle ground not covered by other subsystems such as
++the strong, slow, and resource expensive random
++devices described in
++.Xr random 4
++versus the fast but poor quality interfaces described in
++.Xr rand 3 ,
++.Xr random 3 ,
++and
++.Xr drand48 3 .
++.Pp
++The
++.Fn arc4random_stir
++function reads data from a pseudo-random device, usually
++.Pa /dev/urandom,
++and uses it to permute the S-Boxes via
++.Fn arc4random_addrandom .
++.Pp
++There is no need to call
++.Fn arc4random_stir
++before using
++.Fn arc4random ,
++since
++.Fn arc4random
++automatically initializes itself.
++.Sh SEE ALSO
++.Xr rand 3 ,
++.Xr rand48 3 ,
++.Xr random 3
++.Sh HISTORY
++An algorithm called
++.Pa RC4
++was designed by RSA Data Security, Inc.
++It was considered a trade secret.
++Because it was a trade secret, it obviously could not be patented.
++A clone of this was posted anonymously to USENET and confirmed to
++be equivalent by several sources who had access to the original cipher.
++Because of the trade secret situation, RSA Data Security, Inc. can do
++nothing about the release of the ARC4 algorithm.
++Since
++.Pa RC4
++used to be a trade secret, the cipher is now referred to as
++.Pa ARC4 .
++.Pp
++These functions first appeared in
++.Ox 2.1 .
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 6a590ac54..4bb681207 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -2087,6 +2087,17 @@ config UCLIBC_HAS_ARC4RANDOM
+ 
+ 	  Most people will answer N.
+ 
++config ARC4RANDOM_USES_NODEV
++	bool "Do not use /dev/urandom with arc4random()"
++	depends on UCLIBC_HAS_ARC4RANDOM
++	default n
++	help
++	  Answer Y to use gettimeofday(2) and getpid(2) exclusively for
++          arc4random(). This is not a bad idea for a diskless system, but
++          it uses a lot of syscalls to stir each array element.
++
++	  Most people will answer N.
++
+ config HAVE_NO_SSP
+ 	bool
+ 
+diff --git a/libc/stdlib/arc4random.c b/libc/stdlib/arc4random.c
+index b83fe32a6..0013612e9 100644
+--- a/libc/stdlib/arc4random.c
++++ b/libc/stdlib/arc4random.c
+@@ -1,24 +1,29 @@
+-/*	$$$: arc4random.c 2005/02/08 robert */
+-/*	$NetBSD: arc4random.c,v 1.5.2.1 2004/03/26 22:52:50 jmc Exp $	*/
+-/*	$OpenBSD: arc4random.c,v 1.6 2001/06/05 05:05:38 pvalchev Exp $	*/
+-
+ /*
+- * Arc4 random number generator for OpenBSD.
+- * Copyright 1996 David Mazieres <dm@lcs.mit.edu>.
++ * Copyright (c) 1996, David Mazieres <dm@uun.org>
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
+  *
+- * Modification and redistribution in source and binary forms is
+- * permitted provided that due credit is given to the author and the
+- * OpenBSD project by leaving this copyright notice intact.
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+  */
+ 
+ /*
++ * Arc4 random number generator for OpenBSD.
++ *
+  * This code is derived from section 17.1 of Applied Cryptography,
+  * second edition, which describes a stream cipher allegedly
+  * compatible with RSA Labs "RC4" cipher (the actual description of
+  * which is a trade secret).  The same algorithm is used as a stream
+  * cipher called "arcfour" in Tatu Ylonen's ssh package.
+  *
+- * Here the stream cipher has been modified always to include the time
++ * Here the stream cipher has been modified always to include entropy
+  * when initializing the state.  That makes it impossible to
+  * regenerate the same random sequence twice, so this can't be used
+  * for encryption, but will generate good random numbers.
+@@ -26,17 +31,15 @@
+  * RC4 is a registered trademark of RSA Laboratories.
+  */
+ 
++/*	$OpenBSD: arc4random.c,v 1.16 2007/02/12 19:58:47 otto Exp $	*/
++
+ #include <features.h>
++
+ #include <fcntl.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <sys/types.h>
+-#include <sys/param.h>
+ #include <sys/time.h>
+-#ifdef __ARC4RANDOM_USE_ERANDOM__
+-#include <sys/sysctl.h>
+-#endif
+-
+ 
+ struct arc4_stream {
+ 	u_int8_t i;
+@@ -46,6 +49,8 @@ struct arc4_stream {
+ 
+ static smallint rs_initialized;
+ static struct arc4_stream rs;
++static pid_t arc4_stir_pid;
++static int arc4_count;
+ 
+ static __inline__ void
+ arc4_init(struct arc4_stream *as)
+@@ -92,52 +97,83 @@ arc4_addrandom(struct arc4_stream *as, u_char *dat, int datlen)
+ static void
+ arc4_stir(struct arc4_stream *as)
+ {
+-	int     fd;
+-	struct {
+-		struct timeval tv;
+-		uint rnd[(128 - sizeof(struct timeval)) / sizeof(uint)];
+-	}       rdat;
+ 	int	n;
++	u_char	rnd[128];
++	struct timeval tv;
++
++#ifndef __ARC4RANDOM_USES_NODEV__
++	int	fd;
+ 
+-	gettimeofday(&rdat.tv, NULL);
+ 	fd = open("/dev/urandom", O_RDONLY);
+ 	if (fd != -1) {
+-		read(fd, rdat.rnd, sizeof(rdat.rnd));
++		read(fd, rnd, sizeof(rnd));
+ 		close(fd);
+ 	}
+-#ifdef __ARC4RANDOM_USE_ERANDOM__
++	/* Did the pseudo-random device fail? Use gettimeofday(). */
++	else
++#endif
++	if (gettimeofday(&tv, NULL) != (-1)) {
++
++		/* Initialize the first element so it's hopefully not '0',
++		 * to help out the next loop. Tossing in some prime numbers
++		 * probably can't hurt. */
++		rnd[0] = (tv.tv_sec % 10000) * 3 + tv.tv_usec * 7 + \
++			(getpid() % 1000) * 13;
++
++		for (n = 1; n < 127 ; n++) {
++
++		/* Take advantage of the stack space. Only initialize
++		 * elements equal to '0'. This will make the rnd[]
++		 * array much less vulnerable to timing attacks. Here
++		 * we'll stir getpid() into the value of the previous
++		 * element. Approximately 1 in 128 elements will still
++		 * become '0'. */
++
++			if (rnd[n] == 0) {
++				rnd[n] = ((rnd[n - 1] + n) ^ \
++					((getpid() % 1000) * 17));
++			}
++		}
++	}
+ 	else {
+-		int mib[3];
+-		uint i;
+-		size_t len;
+-
+-		/* Device could not be opened, we might be chrooted, take
+-		 * randomness from sysctl. */
+-
+-		mib[0] = CTL_KERN;
+-		mib[1] = KERN_RANDOM;
+-		mib[2] = RANDOM_ERANDOM;
+-
+-		for (i = 0; i < sizeof(rdat.rnd) / sizeof(uint); i++) {
+-			len = sizeof(uint);
+-			if (sysctl(mib, 3, &rdat.rnd[i], &len, NULL, 0) == -1)
+-				break;
++	/* gettimeofday() failed? Do the same thing as above, but only
++	 * with getpid(). */
++
++		rnd[0] = (getpid() % 1000) * 19;
++		for (n = 1; n < 127 ; n++) {
++			if (rnd[n] == 0) {
++				rnd[n] = ((rnd[n - 1] + n) ^ \
++					((getpid() % 1000) * 23));
++			}
+ 		}
+ 	}
+-#endif
+ 
+-	arc4_addrandom(as, (void *) &rdat, sizeof(rdat));
++	arc4_stir_pid = getpid();
++	arc4_addrandom(as, rnd, sizeof(rnd));
+ 
+ 	/*
+-	 * Throw away the first N words of output, as suggested in the
+-	 * paper "Weaknesses in the Key Scheduling Algorithm of RC4"
+-	 * by Fluher, Mantin, and Shamir.  N = 1024 is based on
+-	 * suggestions in the paper "(Not So) Random Shuffles of RC4"
+-	 * by Ilya Mironov.
++	 * Discard early keystream, as per recommendations in:
++	 * http://www.wisdom.weizmann.ac.il/~itsik/RC4/Papers/Rc4_ksa.ps
+ 	 */
+-	for (n = 0; n < 1024; n++)
+-		arc4_getbyte(as);
++	for (n = 0; n < 256; n++)
++		(void)arc4_getbyte(as);
++	arc4_count = 1600000;
++}
++
++#if 0
++static void __arc4random_stir(void);
++/*
++ * __arc4_getbyte() is a libc private function intended for use
++ * with malloc.
++ */
++u_int8_t
++__arc4_getbyte(void)
++{
++	if (--arc4_count == 0 || !rs_initialized)
++		__arc4random_stir();
++	return arc4_getbyte(&rs);
+ }
++#endif
+ 
+ static __inline__ u_int32_t
+ arc4_getword(struct arc4_stream *as)
+@@ -172,20 +208,8 @@ arc4random_addrandom(u_char *dat, int datlen)
+ u_int32_t
+ arc4random(void)
+ {
+-	if (!rs_initialized)
++	arc4_count -= 4;
++	if (arc4_count <= 0 || !rs_initialized || arc4_stir_pid != getpid())
+ 		__arc4random_stir();
+ 	return arc4_getword(&rs);
+ }
+-
+-#if 0
+-/*-------- Test code --------*/
+-#include <stdlib.h>
+-#include <stdio.h>
+-
+-int main(void) {
+-    int random_number;
+-    random_number = arc4random() % 65536;
+-    printf("%d\n", random_number);
+-    return 0;
+-}
+-#endif
+diff --git a/test/stdlib/testarc4random.c b/test/stdlib/testarc4random.c
+new file mode 100644
+index 000000000..4d773aa4b
+--- /dev/null
++++ b/test/stdlib/testarc4random.c
+@@ -0,0 +1,12 @@
++#include <stdlib.h>
++#include <stdio.h>
++
++int main(void)
++{
++#ifdef __UCLIBC_HAS_ARC4RANDOM__
++	int random_number;
++	random_number = arc4random() % 65536;
++	printf("%d\n", random_number);
++#endif
++	return 0;
++}

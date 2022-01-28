@@ -1,0 +1,102 @@
+"2007-11-20 01:06:29 -0600"
+diff --git a/toys/Config.in b/toys/Config.in
+index 84b3f28f..04640c58 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -68,6 +68,18 @@ config DF_PEDANTIC
+ 
+ 	  -k	Sets units back to 1024 bytes (the default without -P)
+ 
++config DMESG
++	bool "dmesg"
++	default y
++	help
++	  usage: dmesg [-n level] [-s bufsize] | -c
++
++	  Print or control the kernel ring buffer.
++
++	  -n	Set kernel logging level (1-9).
++	  -s	Size of buffer to read (in bytes), default 16384.
++	  -c	Clear the ring buffer after printing.
++
+ config ECHO
+ 	bool "echo"
+ 	default y
+diff --git a/toys/dmesg.c b/toys/dmesg.c
+new file mode 100644
+index 00000000..7a150121
+--- /dev/null
++++ b/toys/dmesg.c
+@@ -0,0 +1,40 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * dmesg.c - display/control kernel ring buffer.
++ *
++ * Copyright 2006 Rob Landley <rob@landley.net>
++ */
++
++#include "toys.h"
++#include <sys/klog.h>
++
++#define TT toy.dmesg
++
++int dmesg_main(void)
++{
++	// For -n just tell kernel to which messages to keep.
++	if (toys.optflags & 2) {
++		if (klogctl(8, NULL, TT.level))
++			error_exit("klogctl");
++	} else {
++		int size, i, last = '\n';
++		char *data;
++
++		// Figure out how much data we need, and fetch it.
++		size = TT.size;
++		if (size<2) size = 16384;
++		data = xmalloc(size);
++		size = klogctl(3 + (toys.optflags&1), data, size);
++		if (size < 0) error_exit("klogctl");
++
++		// Display data, filtering out level markers.
++		for (i=0; i<size; ) {
++			if (last=='\n' && data[i]=='<') i += 3;
++			else putchar(last = data[i++]);
++		}
++		if (last!='\n') putchar('\n');
++		if (CFG_TOYBOX_FREE) free(data);
++	}
++
++	return 0;
++}
+diff --git a/toys/toylist.h b/toys/toylist.h
+index 97838ce9..a55a56a6 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -21,6 +21,11 @@ struct df_data {
+ // Still to go: "E:jJ:L:m:O:"
+ #define MKE2FS_OPTSTRING "<1>2g:Fnqm#N#i#b#"
+ 
++struct dmesg_data {
++	long level;
++	long size;
++};
++
+ struct mke2fs_data {
+ 	// Command line arguments.
+ 	long blocksize;
+@@ -67,6 +72,7 @@ struct mkfifo_data {
+ };
+ 
+ extern union toy_union {
++	struct dmesg_data dmesg;
+ 	struct df_data df;
+ 	struct mke2fs_data mke2fs;
+ 	struct mkfifo_data mkfifo;
+@@ -104,6 +110,7 @@ USE_CATV(NEWTOY(catv, "vte", TOYFLAG_USR|TOYFLAG_BIN))
+ USE_COUNT(NEWTOY(count, "", TOYFLAG_USR|TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(cd, NULL, TOYFLAG_NOFORK))
+ USE_DF(NEWTOY(df, "Pkt*a", TOYFLAG_USR|TOYFLAG_SBIN))
++USE_DMESG(NEWTOY(dmesg, "s#n#c", TOYFLAG_BIN))
+ USE_ECHO(NEWTOY(echo, "+en", TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(exit, NULL, TOYFLAG_NOFORK))
+ USE_FALSE(NEWTOY(false, NULL, TOYFLAG_BIN))

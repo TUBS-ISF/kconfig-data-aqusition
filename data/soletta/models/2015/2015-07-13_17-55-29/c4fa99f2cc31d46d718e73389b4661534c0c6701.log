@@ -1,0 +1,209 @@
+"2015-07-13 17:55:29 -0300"
+diff --git a/Kconfig b/Kconfig
+index 83e9fd25..511acb0d 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -60,6 +60,11 @@ menu "Networking"
+ source "src/lib/comms/Kconfig"
+ endmenu
+ 
++menu "Samples"
++source "src/samples/coap/Kconfig"
++source "src/samples/common/Kconfig"
++endmenu
++
+ menu "Tools"
+ source "src/bin/sol-fbp-generator/Kconfig"
+ source "src/bin/sol-fbp-runner/Kconfig"
+diff --git a/src/samples/coap/.gitignore b/src/samples/coap/.gitignore
+index 68ca2943..0680e9bf 100644
+--- a/src/samples/coap/.gitignore
++++ b/src/samples/coap/.gitignore
+@@ -1,4 +1,4 @@
+-/oic-client
+-/oic-server
+-/simple-client
+-/simple-server
++/oic-sample-client
++/oic-sample-server
++/coap-sample-client
++/coap-sample-server
+diff --git a/src/samples/coap/Kconfig b/src/samples/coap/Kconfig
+new file mode 100644
+index 00000000..fd83c7c0
+--- /dev/null
++++ b/src/samples/coap/Kconfig
+@@ -0,0 +1,13 @@
++config COAP_SAMPLES
++	bool "CoAP samples"
++	default y
++
++config COAP_CLIENT_SERVER_SAMPLES
++	bool "CoAP client/server samples"
++	depends on COAP && COAP_SAMPLES
++	default y
++
++config OIC_SAMPLES
++	bool "OIC samples"
++	depends on OIC && COAP_SAMPLES
++	default y
+diff --git a/src/samples/coap/Makefile b/src/samples/coap/Makefile
+new file mode 100644
+index 00000000..3b151f50
+--- /dev/null
++++ b/src/samples/coap/Makefile
+@@ -0,0 +1,7 @@
++sample-$(COAP_CLIENT_SERVER_SAMPLES) += coap-sample-client coap-sample-server
++sample-coap-sample-client-$(COAP_CLIENT_SERVER_SAMPLES) := simple-client.c
++sample-coap-sample-server-$(COAP_CLIENT_SERVER_SAMPLES) := simple-server.c
++
++sample-$(OIC_SAMPLES) += oic-sample-client oic-sample-server
++sample-oic-sample-client-$(OIC_SAMPLES) := oic-client.c
++sample-oic-sample-server-$(OIC_SAMPLES) := oic-server.c
+diff --git a/src/samples/common/.gitignore b/src/samples/common/.gitignore
+index bfc1cb4f..091d1323 100644
+--- a/src/samples/common/.gitignore
++++ b/src/samples/common/.gitignore
+@@ -1,3 +1,3 @@
+ linux-micro-init
+ platform-simple
+-uart
++uart-sample
+diff --git a/src/samples/common/Kconfig b/src/samples/common/Kconfig
+new file mode 100644
+index 00000000..824304b0
+--- /dev/null
++++ b/src/samples/common/Kconfig
+@@ -0,0 +1,19 @@
++config COMMON_SAMPLES
++	bool "Common samples"
++	default y
++
++config LINUX_MICRO_INIT_SAMPLE
++	bool "Linux Micro Init"
++	depends on PLATFORM_LINUX_MICRO && COMMON_SAMPLES
++	default y
++
++config PLATFORM_SIMPLE_SAMPLE
++	bool "Platform Simple"
++	depends on COMMON_SAMPLES
++	default y
++
++config UART_SAMPLE
++	bool "UART"
++	depends on COMMON_SAMPLES
++	default y
++
+diff --git a/src/samples/common/Makefile b/src/samples/common/Makefile
+new file mode 100644
+index 00000000..2c8f2eaf
+--- /dev/null
++++ b/src/samples/common/Makefile
+@@ -0,0 +1,8 @@
++sample-$(LINUX_MICRO_INIT_SAMPLE) += linux-micro-init
++sample-linux-micro-init-$(LINUX_MICRO_INIT_SAMPLE) := linux-micro-init.c
++
++sample-$(PLATFORM_SIMPLE_SAMPLE) += platform-simple
++sample-platform-simple-$(PLATFORM_SIMPLE_SAMPLE) := platform-simple.c
++
++sample-$(UART_SAMPLE) += uart-sample
++sample-uart-sample-$(UART_SAMPLE) := uart.c
+diff --git a/tools/build/Makefile.rules b/tools/build/Makefile.rules
+index 4f9b0b56..6b549fe9 100644
+--- a/tools/build/Makefile.rules
++++ b/tools/build/Makefile.rules
+@@ -108,7 +108,13 @@ parse-test = \
+ 	$(eval $(1)-deps      := $(subst .mod,,$(test-$(1)-y-deps))) \
+ 	$(eval tests-out      += $(test-$(1)-out)) \
+ 
+-clean-control = $(eval headers-y:=) $(eval obj-y:=) $(eval obj-m:=) $(eval bin-y:=) $(eval test-y:=)
++parse-sample = \
++	$(eval sample-$(1)-srcs := $(addprefix $(2),$(sample-$(1)-y))) \
++	$(eval sample-$(1)-out  := $(addprefix $(2),$(1))) \
++	$(eval $(1)-deps        := $(subst .mod,,$(sample-$(1)-y-deps))) \
++	$(eval samples-out      += $(sample-$(1)-out)) \
++
++clean-control = $(eval headers-y:=) $(eval obj-y:=) $(eval obj-m:=) $(eval bin-y:=) $(eval test-y:=) $(eval sample-y:=)
+ 
+ inc-subdirs = \
+ 	$(foreach subdir,$(SUBDIRS), $(clean-control) \
+@@ -133,6 +139,10 @@ inc-subdirs = \
+ 		$(foreach test,$(test-y), \
+ 			$(call parse-test,$(test),$(subdir)) \
+ 		) \
++		$(eval samples += $(sample-y)) \
++		$(foreach sample,$(sample-y), \
++			$(call parse-sample,$(sample),$(subdir)) \
++		) \
+ 		$(clean-control) \
+ 	)
+ 
+@@ -176,6 +186,13 @@ $(bin-$(1)-out): $(PRE_GEN) $(SOL_LIB_SO) $(bin-$(1)-srcs) $(call find-deps,$(1)
+ endef
+ $(foreach curr,$(bins),$(eval $(call make-bin,$(curr))))
+ 
++define make-sample
++$(sample-$(1)-out): $(PRE_GEN) $(SOL_LIB_SO) $(sample-$(1)-srcs) $(call find-deps,$(1))
++	$(Q)echo "     "SMP"   "$$@
++	$(Q)$(TARGETCC) $(SAMPLE_CFLAGS) $(sample-$(1)-cflags) $(filter-out %.h,$(sample-$(1)-srcs)) -o $(sample-$(1)-out) $(SAMPLE_LDFLAGS) $(sample-$(1)-ldflags) $(sort $(builtin-ldflags))
++endef
++$(foreach sample,$(samples),$(eval $(call make-sample,$(sample))))
++
+ define make-test
+ $(test-$(1)-out): $(PRE_GEN) $(SOL_LIB_SO) $(test-$(1)-srcs) $(call find-deps,$(1))
+ 	$(Q)echo "     "TST"   "$$@
+diff --git a/tools/build/Makefile.targets b/tools/build/Makefile.targets
+index b0991bd0..e05c70b1 100644
+--- a/tools/build/Makefile.targets
++++ b/tools/build/Makefile.targets
+@@ -44,6 +44,10 @@ endif
+ 
+ PHONY += run-coverage coverage
+ 
++samples: $(SOL_LIB_SO) $(SOL_LIB_AR) $(samples-out)
++
++PHONY += samples
++
+ PRE_INSTALL := $(PC_GEN) $(SOL_LIB_SO) $(SOL_LIB_AR) $(bins-out) $(modules-out) $(all-mod-descs)
+ PRE_INSTALL += $(NODE_TYPE_SCHEMA_DEST) $(PLATFORM_DETECT_DEST) $(GDB_AUTOLOAD_PY_DEST)
+ 
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 1c96a800..52f34f59 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -2,6 +2,7 @@ obj-y :=
+ obj-m :=
+ bin-y :=
+ test-y :=
++sample-y :=
+ 
+ # builtin objects, deps and configs lookup variables
+ builtins :=
+@@ -28,6 +29,9 @@ bins-out :=
+ tests :=
+ tests-out :=
+ 
++samples :=
++samples-out :=
++
+ all-gens :=
+ all-objs :=
+ all-dest-hdr :=
+@@ -214,6 +218,9 @@ BIN_LDFLAGS += $(addprefix -L,$(LIB_OUTPUTDIR))
+ BIN_LDFLAGS += -lsoletta
+ BIN_LDFLAGS += -Wl,-R$(abspath $(build_libdir))
+ 
++SAMPLE_CFLAGS := $(BIN_CFLAGS)
++SAMPLE_LDFLAGS := $(BIN_LDFLAGS)
++
+ # generators
+ ## headers
+ LINUX_MICRO_BUILTINS_H := $(top_srcdir)src/lib/common/sol-platform-linux-micro-builtins-gen.h
+@@ -306,6 +313,6 @@ EXTRA_HEADERS := $(COMMON_BUILDOPTS_H) $(FLOW_BUILDOPTS_H)
+ EXTRA_BINS := $(FLOW_NODE_TYPE_FIND)
+ EXTRA_BINS += $(addprefix $(SCRIPTDIR),sol-flow-node-type-gen.py sol-flow-node-type-validate.py)
+ 
+-warning-targets = all check check-fbp check-valgrind check-fbp-valgrind coverage run-coverage pre-install post-install install doc cheat-sheet: warning
++warning-targets = all check check-fbp check-valgrind check-fbp-valgrind coverage run-coverage pre-install post-install install doc cheat-sheet samples: warning
+ 
+ PACKAGE_DOCNAME := "soletta"-$(VERSION)-doc

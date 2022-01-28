@@ -1,0 +1,116 @@
+"2015-08-03 13:48:28 -0300"
+diff --git a/Kconfig b/Kconfig
+index 511acb0d..a64fa1bf 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -63,6 +63,7 @@ endmenu
+ menu "Samples"
+ source "src/samples/coap/Kconfig"
+ source "src/samples/common/Kconfig"
++source "src/samples/flow/Kconfig"
+ endmenu
+ 
+ menu "Tools"
+diff --git a/src/samples/flow/Kconfig b/src/samples/flow/Kconfig
+new file mode 100644
+index 00000000..c6cec725
+--- /dev/null
++++ b/src/samples/flow/Kconfig
+@@ -0,0 +1,14 @@
++config FLOW_SAMPLES
++	bool "Flow samples"
++	depends on FLOW
++	default y
++
++config FLOW_BASIC_SAMPLE
++	bool "Simple fbp sample"
++	depends on FLOW_SAMPLES && FBP_GENERATOR
++	default y
++
++config FLOW_CMDLINE_ARGS_SAMPLE
++	bool "Command line arguments sample"
++	depends on FLOW_SAMPLES && FBP_GENERATOR
++	default y
+diff --git a/src/samples/flow/Makefile b/src/samples/flow/Makefile
+new file mode 100644
+index 00000000..9ce52e70
+--- /dev/null
++++ b/src/samples/flow/Makefile
+@@ -0,0 +1,8 @@
++sample-$(FLOW_BASIC_SAMPLE) += simple-fbp
++sample-simple-fbp-$(FLOW_BASIC_SAMPLE) := basics/simple.fbp
++sample-simple-fbp-$(FLOW_BASIC_SAMPLE)-deps := timer.mod boolean.mod console.mod
++
++sample-$(FLOW_CMDLINE_ARGS_SAMPLE) += cmdline-args
++sample-cmdline-args-$(FLOW_CMDLINE_ARGS_SAMPLE) := basics/cmdline-args.fbp
++sample-cmdline-args-$(FLOW_CMDLINE_ARGS_SAMPLE)-deps := boolean.mod app.mod console.mod int.mod constant.mod
++sample-cmdline-args-$(FLOW_CMDLINE_ARGS_SAMPLE)-deps += converter.mod
+diff --git a/tools/build/Makefile.rules b/tools/build/Makefile.rules
+index 09e69bf1..a83a2cb6 100644
+--- a/tools/build/Makefile.rules
++++ b/tools/build/Makefile.rules
+@@ -110,8 +110,18 @@ parse-test = \
+ 	$(eval $(1)-deps      := $(subst .mod,,$($(3)-$(1)-y-deps))) \
+ 	$(eval tests-out      += $(test-$(1)-out)) \
+ 
++gen-fbp-artifact = \
++	$(foreach fbp,$(filter %.fbp,$(2)), \
++		$(eval $(fbp)-src       := $(subst $(top_srcdir)src,$(build_stagedir),$(subst .fbp,-gen.c,$(fbp)))) \
++		$(eval $(3)             += $($(fbp)-src)) \
++		$(eval sample-$(1)-gens += $(fbp)) \
++		$(eval all-fbp-gens     += $(fbp)) \
++	) \
++
+ parse-sample = \
+-	$(eval sample-$(1)-srcs := $(addprefix $(2),$(sample-$(1)-y))) \
++	$(eval sample-$(1)-srcs := $(addprefix $(2),$(filter-out %.fbp,$(sample-$(1)-y)))) \
++	$(eval artifacts        := $(addprefix $(2),$(filter %.fbp,$(sample-$(1)-y)))) \
++	$(call gen-fbp-artifact,$(1),$(artifacts),sample-$(1)-srcs) \
+ 	$(eval sample-$(1)-out  := $(addprefix $(2),$(1))) \
+ 	$(eval $(1)-deps        := $(subst .mod,,$(sample-$(1)-y-deps))) \
+ 	$(eval samples-out      += $(sample-$(1)-out)) \
+@@ -195,7 +205,8 @@ $(foreach curr,$(bins),$(eval $(call make-bin,$(curr))))
+ define make-sample
+ $(sample-$(1)-out): $(PRE_GEN) $(SOL_LIB_SO) $(sample-$(1)-srcs) $(call find-deps,$(1))
+ 	$(Q)echo "     "SMP"   "$$@
+-	$(Q)$(TARGETCC) $(SAMPLE_CFLAGS) $(sample-$(1)-cflags) $(filter-out %.h,$(sample-$(1)-srcs)) -o $(sample-$(1)-out) $(SAMPLE_LDFLAGS) $(sample-$(1)-ldflags) $(sort $(builtin-ldflags))
++	$(Q)$(TARGETCC) $(SAMPLE_CFLAGS) $(sample-$(1)-cflags) $(filter-out %.h,$(sample-$(1)-srcs)) \
++	$(call find-deps,$(1)) -o $(sample-$(1)-out) $(SAMPLE_LDFLAGS) $(sample-$(1)-ldflags) $(sort $(builtin-ldflags))
+ endef
+ $(foreach sample,$(samples),$(eval $(call make-sample,$(sample))))
+ 
+@@ -304,6 +315,14 @@ $($(1)-dest): $(1) $(KCONFIG_CONFIG)
+ endef
+ $(foreach tpl,$(all-templates),$(eval $(call make-template-gen,$(tpl))))
+ 
++define make-fbp-gen
++$($(1)-src): $(1) $(SOL_FBP_GENERATOR_BIN)
++	$(Q)echo "     "GEN"   "$$@
++	$(Q)$(MKDIR) -p $(dir $($(1)-src))
++	$(Q)$(SOL_FBP_GENERATOR_BIN) -j $(build_descdir) $(1) $($(1)-src)
++endef
++$(foreach gen,$(all-fbp-gens),$(eval $(call make-fbp-gen,$(gen))))
++
+ $(FLOW_BUILTINS_DESC): $(PRE_GEN) $(SOL_LIB_SO) $(SOL_LIB_AR) $(all-mod-descs) $(JSON_FORMAT_SCRIPT)
+ 	$(Q)echo "     "GEN"   "$@
+ 	$(Q)$(MKDIR) -p $(dir $(@))
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 2d3618a8..b980ec3d 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -30,6 +30,7 @@ tests-out :=
+ samples :=
+ samples-out :=
+ 
++all-fbp-gens :=
+ all-gens :=
+ all-templates :=
+ all-objs :=
+@@ -269,6 +270,7 @@ TEST_VALGRIND_SUPP := $(top_srcdir)src/test/test.supp
+ 
+ TEST_FBP_SCRIPT := $(top_srcdir)tools/run-fbp-tests
+ SOL_FBP_RUNNER_BIN := $(build_bindir)sol-fbp-runner
++SOL_FBP_GENERATOR_BIN := $(build_bindir)sol-fbp-generator
+ 
+ DOXYGEN_RESOURCES = \
+ 	doc/doxygen/Doxyfile \

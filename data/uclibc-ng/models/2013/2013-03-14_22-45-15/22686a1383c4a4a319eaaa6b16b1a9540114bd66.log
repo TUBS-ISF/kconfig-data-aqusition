@@ -1,0 +1,3293 @@
+"2013-03-14 22:45:15 +0100"
+diff --git a/Rules.mak b/Rules.mak
+index 7270bf13d..04a69af3d 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -405,6 +405,12 @@ ifeq ($(TARGET_ARCH),arm)
+ 	CPU_CFLAGS-$(COMPILE_IN_THUMB_MODE)+=-mthumb
+ endif
+ 
++ifeq ($(TARGET_ARCH),metag)
++        SYMBOL_PREFIX=_
++        CPU_CFLAGS-$(CONFIG_META_1_2)+=
++        CPU_CFLAGS-$(CONFIG_META_2_1)+=-Wa,-mcpu=metac21
++endif
++
+ ifeq ($(TARGET_ARCH),mips)
+ 	OPTIMIZATION+=-mno-split-addresses
+ 	CPU_CFLAGS-$(CONFIG_MIPS_ISA_1)+=-mips1
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 89b3dd433..ed2cf2458 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -24,6 +24,7 @@ choice
+ 	default TARGET_i960 if DESIRED_TARGET_ARCH = "i960"
+ 	default TARGET_ia64 if DESIRED_TARGET_ARCH = "ia64"
+ 	default TARGET_m68k if DESIRED_TARGET_ARCH = "m68k"
++	default TARGET_metag if DESIRED_TARGET_ARCH = "metag"
+ 	default TARGET_microblaze if DESIRED_TARGET_ARCH = "microblaze"
+ 	default TARGET_mips if DESIRED_TARGET_ARCH = "mips"
+ 	default TARGET_nios if DESIRED_TARGET_ARCH = "nios"
+@@ -81,6 +82,9 @@ config TARGET_ia64
+ config TARGET_m68k
+ 	bool "m68k"
+ 
++config TARGET_metag
++	bool "metag"
++
+ config TARGET_microblaze
+ 	bool "microblaze"
+ 
+@@ -174,6 +178,10 @@ if TARGET_m68k
+ source "extra/Configs/Config.m68k"
+ endif
+ 
++if TARGET_metag
++source "extra/Configs/Config.metag"
++endif
++
+ if TARGET_nios
+ source "extra/Configs/Config.nios"
+ endif
+@@ -1491,7 +1499,7 @@ config UCLIBC_BUILD_MINIMAL_LOCALE
+ 
+ config UCLIBC_PREGENERATED_LOCALE_DATA
+ 	bool "Use Pre-generated Locale Data"
+-	depends on UCLIBC_HAS_LOCALE
++	depends on UCLIBC_HAS_LOCALE && !TARGET_metag
+ 	help
+ 	  Use pre-built locale data.
+ 
+diff --git a/extra/Configs/Config.metag b/extra/Configs/Config.metag
+new file mode 100644
+index 000000000..e55822281
+--- /dev/null
++++ b/extra/Configs/Config.metag
+@@ -0,0 +1,32 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++# Copyright (C) 2013, Imagination Technologies Ltd.
++#
++# Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++config TARGET_ARCH
++	default "metag"
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_LITTLE_ENDIAN
++	select ARCH_HAS_MMU
++
++choice
++	prompt "Target Processor Type"
++	default CONFIG_META_2_1
++	help
++	  This is the processor type of your CPU. This information is used for
++	  optimizing purposes.
++
++config CONFIG_META_1_2
++	bool "Meta 1.2"
++
++config CONFIG_META_2_1
++	bool "Meta 2.1"
++
++endchoice
+diff --git a/extra/Configs/defconfigs/metag/defconfig b/extra/Configs/defconfigs/metag/defconfig
+new file mode 100644
+index 000000000..a6f57df72
+--- /dev/null
++++ b/extra/Configs/defconfigs/metag/defconfig
+@@ -0,0 +1 @@
++TARGET_metag=y
+diff --git a/ldso/ldso/metag/dl-debug.h b/ldso/ldso/metag/dl-debug.h
+new file mode 100644
+index 000000000..5981d7c73
+--- /dev/null
++++ b/ldso/ldso/metag/dl-debug.h
+@@ -0,0 +1,27 @@
++/*
++ * Meta ELF shared library loader support.
++ *
++ * Program to load an elf binary on a linux system, and run it.
++ * References to symbols in sharable libraries can be resolved
++ * by either an ELF sharable library or a linux style of shared
++ * library.
++ *
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++static const char *_dl_reltypes_tab[] = {
++	[0]  "R_METAG_HIADDR16", "R_METAG_LOADDR16", "R_METAG_ADDR32",
++	[3]  "R_METAG_NONE", "R_METAG_RELBRANCH", "R_METAG_GETSETOFF",
++	[6]  "R_METAG_REG32OP1", "R_METAG_REG32OP2", "R_METAG_REG32OP3",
++	[9]  "R_METAG_REG16OP1", "R_METAG_REG16OP2", "R_METAG_REG16OP3",
++	[12] "R_METAG_REG32OP4", "R_METAG_HIOG", "R_METAG_LOOG",
++	[30] "R_METAG_VTINHERIT", "R_METAG_VTENTRY",
++	[32] "R_METAG_HI16_GOTOFF", "R_METAG_LO16_GOTOFF",
++	[34] "R_METAG_GETSET_GOTOFF", "R_METAG_GETSET_GOT",
++	[36] "R_METAG_HI16_GOTPC", "R_METAG_LO16_GOTPC",
++	[38] "R_METAG_HI16_PLT", "R_METAG_LO16_PLT",
++	[40] "R_METAG_RELBRANCH_PLT", "R_METAG_GOTOFF",
++	[42] "R_METAG_PLT", "R_METAG_COPY", "R_METAG_JMP_SLOT",
++};
+diff --git a/ldso/ldso/metag/dl-startup.h b/ldso/ldso/metag/dl-startup.h
+new file mode 100644
+index 000000000..8dbf747e1
+--- /dev/null
++++ b/ldso/ldso/metag/dl-startup.h
+@@ -0,0 +1,63 @@
++/*
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++/*
++ * This code fixes the stack pointer so that the dynamic linker
++ * can find argc, argv and auxvt (Auxillary Vector Table).
++ */
++
++__asm__ (
++"       .text\n"
++"       .global __start\n"
++"       .type   __start,@function\n"
++"	.hidden __start\n"
++"_start:\n"
++"__start:\n"
++"       MSETL   [A0StP++],D0Ar4,D0Ar2\n"
++"       MOV     D1Ar1,D0Ar2\n"
++"       CALLR   D1RtP,__dl_start\n"
++"       GETL    D0Ar2,D1Ar1,[A0StP+#-(1*8)]\n"
++"       GETL    D0Ar4,D1Ar3,[A0StP+#-(2*8)]\n"
++"       SUB     A0StP,A0StP,#(2*8)\n"
++"       MOV     PC,D0Re0\n"
++"       .size __start,.-__start\n"
++"       .previous\n"
++);
++
++
++/*
++ * Get a pointer to the argv array.  On many platforms this can be just
++ * the address if the first argument, on other platforms we need to
++ * do something a little more subtle here.
++ */
++
++#define GET_ARGV(ARGVP, ARGS) ARGVP = (((unsigned long *) ARGS))
++
++
++/* Handle relocation of the symbols in the dynamic loader. */
++static inline
++void PERFORM_BOOTSTRAP_RELOC(ELF_RELOC *rpnt, unsigned long *reloc_addr,
++	unsigned long symbol_addr, unsigned long load_addr, Elf32_Sym *symtab)
++{
++	switch (ELF32_R_TYPE(rpnt->r_info)) {
++		case R_METAG_GLOB_DAT:
++		case R_METAG_JMP_SLOT:
++		case R_METAG_ADDR32:
++			*reloc_addr = symbol_addr;
++			break;
++		case R_METAG_RELATIVE:
++			*reloc_addr = load_addr + rpnt->r_addend;
++			break;
++		case R_METAG_RELBRANCH:
++			*reloc_addr = symbol_addr + rpnt->r_addend - *reloc_addr - 4;
++			break;
++		case R_METAG_NONE:
++			break;
++		default:
++			_dl_exit(1);
++			break;
++	}
++}
+diff --git a/ldso/ldso/metag/dl-syscalls.h b/ldso/ldso/metag/dl-syscalls.h
+new file mode 100644
+index 000000000..70ceab10e
+--- /dev/null
++++ b/ldso/ldso/metag/dl-syscalls.h
+@@ -0,0 +1,6 @@
++/* stub for arch-specific syscall issues
++ *
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
+diff --git a/ldso/ldso/metag/dl-sysdep.h b/ldso/ldso/metag/dl-sysdep.h
+new file mode 100644
+index 000000000..55e8d1f66
+--- /dev/null
++++ b/ldso/ldso/metag/dl-sysdep.h
+@@ -0,0 +1,98 @@
++/*
++ * Meta can never use Elf32_Rel relocations.
++ *
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#define ELF_USES_RELOCA
++
++#include <elf.h>
++
++/* Initialization sequence for the GOT.  */
++#define INIT_GOT(GOT_BASE,MODULE)				\
++{								\
++	GOT_BASE[1] = (unsigned long) MODULE; 			\
++	GOT_BASE[2] = (unsigned long) _dl_linux_resolve; 	\
++}
++
++/* Maximum unsigned GOT [GS]ETD offset size, ie. 2^(11+2). */
++#define GOT_REG_OFFSET 0x2000
++
++/* Defined some magic numbers that this ld.so should accept. */
++#define MAGIC1 EM_METAG
++#undef  MAGIC2
++#define ELF_TARGET "META"
++
++/* Need bootstrap relocations */
++#define ARCH_NEEDS_BOOTSTRAP_RELOCS
++
++struct elf_resolve;
++extern unsigned long _dl_linux_resolver(struct elf_resolve *tpnt, int reloc_entry);
++
++/* Variable page size. */
++#define ADDR_ALIGN (_dl_pagesize - 1)
++#define PAGE_ALIGN (~ADDR_ALIGN)
++#define OFFS_ALIGN (PAGE_ALIGN & ~(1ul << (sizeof(_dl_pagesize) * 8 - 1)))
++
++/* The union of reloc-type-classes where the reloc TYPE is a member.
++
++   TYPE is in the class ELF_RTYPE_CLASS_NOCOPY if it should not be allowed
++   to resolve to one of the main executable's symbols, as for a COPY
++   reloc.  */
++#define elf_machine_type_class(type)				\
++  (((((type) == R_METAG_JMP_SLOT)) * ELF_RTYPE_CLASS_PLT)	\
++   | (((type) == R_METAG_COPY) * ELF_RTYPE_CLASS_COPY))
++
++static inline Elf32_Addr
++elf_machine_dynamic(Elf32_Ehdr *header)
++{
++	Elf32_Addr *got;
++
++	__asm__ ("MOV %0,A1LbP" : "=r" (got));
++
++	if (header->e_ident[EI_ABIVERSION] >= 1) {
++		/* GOT register offset was introduced with ABI v1 */
++		got = (Elf32_Addr*)((void*)got - GOT_REG_OFFSET);
++	}
++	return *got;
++}
++
++#define DL_BOOT_COMPUTE_GOT(GOT) \
++    ((GOT) = elf_machine_dynamic(header))
++
++static inline Elf32_Addr
++elf_machine_load_address(void)
++{
++	Elf32_Addr addr;
++	__asm__ ("MOV  D1Ar1,A1LbP\n"
++		 "ADDT D1Ar1,D1Ar1,#HI(__dl_start@GOTOFF)\n"
++		 "ADD  D1Ar1,D1Ar1,#LO(__dl_start@GOTOFF)\n"
++		 "ADDT D0Ar2,D0Ar2,#HI(__dl_start_addr@GOTOFF)\n"
++		 "ADD  D0Ar2,D0Ar2,#LO(__dl_start_addr@GOTOFF)\n"
++		 "GETD D0Ar2,[D0Ar2]\n"
++		 "SUB  %0,D1Ar1,D0Ar2\n"
++		 ".section .data\n"
++		 "__dl_start_addr: .long __dl_start\n"
++		 ".previous\n"
++		 : "=d" (addr) : : "D1Ar1", "D0Ar2");
++	return addr;
++}
++
++static inline void
++elf_machine_relative(Elf32_Addr load_off, const Elf32_Addr rel_addr,
++                     Elf32_Word relative_count)
++{
++	Elf32_Rela *rpnt = (void *)rel_addr;
++
++	--rpnt;
++	do {
++		Elf32_Addr *const reloc_addr =
++			(void *)(load_off + (++rpnt)->r_offset);
++
++		*reloc_addr =  load_off + rpnt->r_addend;
++	} while (--relative_count);
++}
++
++#define DL_MALLOC_ALIGN 8
+diff --git a/ldso/ldso/metag/elfinterp.c b/ldso/ldso/metag/elfinterp.c
+new file mode 100644
+index 000000000..78434167b
+--- /dev/null
++++ b/ldso/ldso/metag/elfinterp.c
+@@ -0,0 +1,299 @@
++/*
++ * Meta ELF shared library loader support.
++ *
++ * Program to load an elf binary on a linux system, and run it.
++ * References to symbols in sharable libraries can be resolved
++ * by either an ELF sharable library or a linux style of shared
++ * library.
++ *
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include "ldso.h"
++
++/* Defined in resolve.S. */
++extern int _dl_linux_resolve(void);
++
++static inline unsigned long __get_unaligned_reloc(unsigned long *addr)
++{
++	char *rel_addr = (char *)addr;
++	unsigned long val;
++
++	val = *rel_addr++ & 0xff;
++	val |= (*rel_addr++ << 8) & 0x0000ff00;
++	val |= (*rel_addr++ << 16) & 0x00ff0000;
++	val |= (*rel_addr++ << 24) & 0xff000000;
++
++	return val;
++}
++
++static inline void __put_unaligned_reloc(unsigned long *addr,
++					 unsigned long val)
++{
++	char *rel_addr = (char *)addr;
++
++	*rel_addr++ = (val & 0x000000ff);
++	*rel_addr++ = ((val & 0x0000ff00) >> 8);
++	*rel_addr++ = ((val & 0x00ff0000) >> 16);
++	*rel_addr++ = ((val & 0xff000000) >> 24);
++}
++
++unsigned long
++_dl_linux_resolver(struct elf_resolve *tpnt, int reloc_entry)
++{
++	int reloc_type;
++	int symtab_index;
++	char *strtab;
++	char *symname;
++	char *new_addr;
++	char *rel_addr;
++	char **got_addr;
++	Elf32_Sym *symtab;
++	ELF_RELOC *this_reloc;
++	unsigned long instr_addr;
++
++	rel_addr = (char *)tpnt->dynamic_info[DT_JMPREL];
++
++	this_reloc = (ELF_RELOC *)(intptr_t)(rel_addr + reloc_entry);
++	reloc_type = ELF32_R_TYPE(this_reloc->r_info);
++	symtab_index = ELF32_R_SYM(this_reloc->r_info);
++
++	symtab = (Elf32_Sym *)(intptr_t)tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++	symname = strtab + symtab[symtab_index].st_name;
++
++	if (unlikely(reloc_type != R_METAG_JMP_SLOT)) {
++		_dl_dprintf(2, "%s: Incorrect relocation type in jump relocations\n",
++			    _dl_progname);
++		_dl_exit(1);
++	}
++
++	/* Address of the jump instruction to fix up. */
++	instr_addr = ((unsigned long)this_reloc->r_offset +
++		      (unsigned long)tpnt->loadaddr);
++	got_addr = (char **)instr_addr;
++
++	/* Get the address of the GOT entry. */
++	new_addr = _dl_find_hash(symname, tpnt->symbol_scope, tpnt,
++			ELF_RTYPE_CLASS_PLT, NULL);
++	if (unlikely(!new_addr)) {
++		_dl_dprintf(2, "%s: Can't resolve symbol '%s'\n", _dl_progname, symname);
++		_dl_exit(1);
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_bindings) {
++		_dl_dprintf(_dl_debug_file, "\nresolve function: %s", symname);
++		if (_dl_debug_detail)
++			_dl_dprintf(_dl_debug_file,
++				    "\n\tpatched: %x ==> %x @ %x\n",
++				    *got_addr, new_addr, got_addr);
++	}
++	if (!_dl_debug_nofixups) {
++		*got_addr = new_addr;
++	}
++#else
++	*got_addr = new_addr;
++#endif
++
++	return (unsigned long)new_addr;
++}
++
++static int
++_dl_parse(struct elf_resolve *tpnt, struct dyn_elf *scope,
++	  unsigned long rel_addr, unsigned long rel_size,
++	  int (*reloc_fnc)(struct elf_resolve *tpnt, struct dyn_elf *scope,
++			   ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab))
++{
++	int symtab_index;
++	unsigned int i;
++	char *strtab;
++	Elf32_Sym *symtab;
++	ELF_RELOC *rpnt;
++
++	/* Parse the relocation information. */
++	rpnt = (ELF_RELOC *)(intptr_t)rel_addr;
++	rel_size /= sizeof(ELF_RELOC);
++
++	symtab = (Elf32_Sym *)(intptr_t)tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++
++	for (i = 0; i < rel_size; i++, rpnt++) {
++		int res;
++
++		symtab_index = ELF32_R_SYM(rpnt->r_info);
++
++		debug_sym(symtab, strtab, symtab_index);
++		debug_reloc(symtab, strtab, rpnt);
++
++		/* Pass over to actual relocation function. */
++		res = reloc_fnc(tpnt, scope, rpnt, symtab, strtab);
++
++		if (res == 0)
++			continue;
++
++		_dl_dprintf(2, "\n%s: ", _dl_progname);
++
++		if (symtab_index)
++			_dl_dprintf(2, "symbol '%s': ",
++				    strtab + symtab[symtab_index].st_name);
++
++		if (unlikely(res < 0)) {
++			int reloc_type = ELF32_R_TYPE(rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++			_dl_dprintf(2, "can't handle reloc type %s\n",
++				    _dl_reltypes(reloc_type));
++#else
++			_dl_dprintf(2, "can't handle reloc type %x\n",
++				    reloc_type);
++#endif
++			_dl_exit(-res);
++		} else if (unlikely(res > 0)) {
++			_dl_dprintf(2, "can't resolve symbol\n");
++			return res;
++		}
++	}
++
++	return 0;
++}
++
++static int
++_dl_do_reloc(struct elf_resolve *tpnt, struct dyn_elf *scope,
++	     ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab)
++{
++	int reloc_type;
++	int symtab_index;
++	char *symname = NULL;
++	unsigned long *reloc_addr;
++	unsigned long symbol_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	unsigned long old_val;
++#endif
++
++	reloc_addr = (unsigned long *)(intptr_t)(tpnt->loadaddr + (unsigned long)rpnt->r_offset);
++	reloc_type = ELF32_R_TYPE(rpnt->r_info);
++	symtab_index = ELF32_R_SYM(rpnt->r_info);
++	symbol_addr = 0;
++	symname = strtab + symtab[symtab_index].st_name;
++
++	if (symtab_index) {
++		if (symtab[symtab_index].st_shndx != SHN_UNDEF &&
++		    ELF32_ST_BIND(symtab[symtab_index].st_info) == STB_LOCAL) {
++			symbol_addr = (unsigned long)tpnt->loadaddr;
++		} else {
++		  symbol_addr = (unsigned long)_dl_find_hash(symname, scope, tpnt,
++							     elf_machine_type_class(reloc_type), NULL);
++		}
++
++		if (unlikely(!symbol_addr && ELF32_ST_BIND(symtab[symtab_index].st_info) != STB_WEAK)) {
++			_dl_dprintf(2, "%s: can't resolve symbol '%s'\n", _dl_progname, symname);
++			_dl_exit(1);
++		};
++
++		symbol_addr += rpnt->r_addend;
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (reloc_type != R_METAG_NONE)
++		old_val = __get_unaligned_reloc(reloc_addr);
++#endif
++
++	switch (reloc_type) {
++		case R_METAG_NONE:
++			break;
++		case R_METAG_GLOB_DAT:
++		case R_METAG_JMP_SLOT:
++		case R_METAG_ADDR32:
++			__put_unaligned_reloc(reloc_addr, symbol_addr);
++			break;
++		case R_METAG_COPY:
++#if defined (__SUPPORT_LD_DEBUG__)
++			if (_dl_debug_move)
++				_dl_dprintf(_dl_debug_file,
++					    "\t%s move %d bytes from %x to %x\n",
++					    symname, symtab[symtab_index].st_size,
++					    symbol_addr, reloc_addr);
++#endif
++
++			_dl_memcpy((char *)reloc_addr,
++				   (char *)symbol_addr,
++				   symtab[symtab_index].st_size);
++			break;
++		case R_METAG_RELATIVE:
++			__put_unaligned_reloc(reloc_addr,
++					      (unsigned long)tpnt->loadaddr +
++					      rpnt->r_addend);
++			break;
++		default:
++			return -1;	/* Calls _dl_exit(1). */
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail &&
++	    (reloc_type != R_METAG_NONE)) {
++		unsigned long new_val = __get_unaligned_reloc(reloc_addr);
++		_dl_dprintf(_dl_debug_file, "\tpatched: %x ==> %x @ %x\n",
++			    old_val, new_val, reloc_addr);
++	}
++#endif
++
++	return 0;
++}
++
++static int
++_dl_do_lazy_reloc(struct elf_resolve *tpnt, struct dyn_elf *scope,
++		  ELF_RELOC *rpnt, Elf32_Sym *symtab, char *strtab)
++{
++	int reloc_type;
++	unsigned long *reloc_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	unsigned long old_val;
++#endif
++
++	reloc_addr = (unsigned long *)(intptr_t)(tpnt->loadaddr + (unsigned long)rpnt->r_offset);
++	reloc_type = ELF32_R_TYPE(rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++		case R_METAG_NONE:
++			break;
++		case R_METAG_JMP_SLOT:
++			*reloc_addr += (unsigned long)tpnt->loadaddr;
++			break;
++		default:
++			return -1;	/* Calls _dl_exit(1). */
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail)
++		_dl_dprintf(_dl_debug_file, "\tpatched: %x ==> %x @ %x\n",
++			    old_val, *reloc_addr, reloc_addr);
++#endif
++
++	return 0;
++}
++
++/* External interface to the generic part of the dynamic linker. */
++
++void
++_dl_parse_lazy_relocation_information(struct dyn_elf *rpnt,
++				      unsigned long rel_addr,
++				      unsigned long rel_size)
++{
++	_dl_parse(rpnt->dyn, NULL, rel_addr, rel_size, _dl_do_lazy_reloc);
++}
++
++int
++_dl_parse_relocation_information(struct dyn_elf *rpnt,
++				 unsigned long rel_addr,
++				 unsigned long rel_size)
++{
++	return _dl_parse(rpnt->dyn, rpnt->dyn->symbol_scope, rel_addr,
++			 rel_size, _dl_do_reloc);
++}
+diff --git a/ldso/ldso/metag/resolve.S b/ldso/ldso/metag/resolve.S
+new file mode 100644
+index 000000000..8f23a340a
+--- /dev/null
++++ b/ldso/ldso/metag/resolve.S
+@@ -0,0 +1,51 @@
++/*
++ * Meta dynamic resolver
++ *
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ *
++ * This function is _not_ called directly.  It is jumped to (so no return
++ * address is on the stack) when attempting to use a symbol that has not yet
++ * been resolved.  The first time a jump symbol (such as a function call inside
++ * a shared library) is used (before it gets resolved) it will jump here to
++ * _dl_linux_resolve.  When we get called the stack looks like this:
++ *	reloc_entry
++ *	tpnt
++ *
++ * This function saves all the registers then makes the function call
++ * _dl_linux_resolver(tpnt, reloc_entry).  _dl_linux_resolver() figures out
++ * where the jump symbol is _really_ supposed to have jumped to and returns
++ * that to us.  Once we have that, we overwrite tpnt with this fixed up
++ * address. We then clean up after ourselves, put all the registers back how we
++ * found them, then we jump to the fixed up address, which is where the jump
++ * symbol that got us here really wanted to jump to in the first place.
++ *  -Erik Andersen
++ */
++
++	.text
++	.global __dl_linux_resolve
++	.type   __dl_linux_resolve,@function
++
++__dl_linux_resolve:
++	!! Save registers on the stack. Do we need to save any more here?
++	MSETL [A0StP++],D0Ar6,D0Ar4,D0Ar2,D0FrT
++	SETL  [A0StP++],A0FrP,A1LbP
++	!! Get the args for _dl_linux_resolver off the stack
++	GETL  D0Re0,D1Re0,[A0StP+#-(6*8)]
++	GETD  D1Ar1,[D0Re0]
++	MOV   D0Ar2,D1Re0
++	!! Multiply plt_index by sizeof(Elf32_Rela)
++	MULW  D0Ar2,D0Ar2,#12
++	!! Call the resolver
++	CALLR D1RtP,__dl_linux_resolver
++	!! Restore the registers from the stack
++	SUB   A0.2,A0StP,#(1*8)
++	GETL  A0FrP,A1LbP,[A0.2]
++	SUB   A0.2,A0.2,#(4*8)
++	MGETL D0Ar6,D0Ar4,D0Ar2,D0FrT,[A0.2]
++	!! Also take into account args pushed by PLT
++	SUB   A0StP,A0StP,#(6*8)
++	!! Jump to the resolved address
++	MOV   PC,D0Re0
++	.size __dl_linux_resolve, .-__dl_linux_resolve
+diff --git a/libc/string/metag/Makefile b/libc/string/metag/Makefile
+new file mode 100644
+index 000000000..523cf6842
+--- /dev/null
++++ b/libc/string/metag/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir:=../../../
++top_builddir:=../../../
++all: objs
++include $(top_builddir)Rules.mak
++include ../Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libc/string/metag/memchr.S b/libc/string/metag/memchr.S
+new file mode 100644
+index 000000000..8b48d863c
+--- /dev/null
++++ b/libc/string/metag/memchr.S
+@@ -0,0 +1,156 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++!
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++	.text
++	.global	_memchr
++	.type	_memchr,function
++! D0Ar6 src
++! D0Ar2 c
++! D1Ar3 n
++_memchr:
++	CMP     D1Ar3, #0
++	BEQ	$Lexit_fail
++	!! convert c to unsigned char
++	AND     D0Ar2,D0Ar2,#0xff
++	MOV	D0Ar6, D1Ar1
++	MOV	D1Ar5, D0Ar6
++	!! test alignment
++	AND	D1Ar5, D1Ar5, #7
++	CMP	D1Ar5, #0
++	BNZ	$Lunaligned_loop
++	!! length must be greater than or equal to 8 for aligned loop
++	CMP     D1Ar3, #8
++	BGE     $Laligned_setup
++$Lunaligned_loop:
++	!! get 1 char from s
++	GETB	D0Re0, [D0Ar6++]
++	!! increase alignment counter
++	ADD	D1Ar5, D1Ar5, #1
++	!! decrement n
++	SUB     D1Ar3, D1Ar3, #1
++	!! exit if we have a match
++	CMP	D0Re0, D0Ar2
++	BZ	$Lexit_success1
++	!! exit if we have hit the end of the string
++	CMP	D1Ar3, #0
++	BZ	$Lexit_fail
++	!! fall through if the buffer is aligned now
++	CMP	D1Ar5, #8
++	BNE	$Lunaligned_loop
++	!! fall through if there is more than 8 bytes left
++	CMP	D1Ar3, #8
++	BLT	$Lunaligned_loop
++$Laligned_setup:
++	!! fill the c into 4 bytes
++	MOV	D0Ar4, D0Ar2
++	LSL	D0Ar4, D0Ar4, #8
++	ADD	D0Ar4, D0Ar4, D0Ar2
++	LSL	D0Ar4, D0Ar4, #8
++	ADD	D0Ar4, D0Ar4, D0Ar2
++	LSL	D0Ar4, D0Ar4, #8
++	ADD	D0Ar4, D0Ar4, D0Ar2
++	!! divide n by 8
++	MOV	D1Ar5, D1Ar3
++	LSR	D1Ar5, D1Ar5, #3
++$Laligned_loop:
++	!! get 8 chars from s
++	GETL	D0Re0, D1Re0, [D0Ar6++]
++	!! decrement loop counter
++	SUB	D1Ar5, D1Ar5, #1
++	!! test first 4 chars
++	XOR	D0Re0, D0Re0, D0Ar4
++	!! test second 4 chars
++	MOV	D0Ar2, D1Re0
++	XOR	D1Re0, D0Ar2, D0Ar4
++	!! check for matches in the first 4 chars
++	MOV	D0Ar2, D0Re0
++	ADDT	D0Re0, D0Re0, #HI(0xfefefeff)
++	ADD	D0Re0, D0Re0, #LO(0xfefefeff)
++	XOR	D0Ar2, D0Ar2, #-1
++	AND	D0Re0, D0Re0, D0Ar2
++	ANDMT	D0Re0, D0Re0, #HI(0x80808080)
++	ANDMB	D0Re0, D0Re0, #LO(0x80808080)
++	CMP	D0Re0, #0
++	BNZ	$Lmatch_word1
++	!! check for matches in the second 4 chars
++	MOV	D1Ar1, D1Re0
++	ADDT	D1Re0, D1Re0, #HI(0xfefefeff)
++	ADD	D1Re0, D1Re0, #LO(0xfefefeff)
++	XOR	D1Ar1, D1Ar1, #-1
++	AND	D1Re0, D1Re0, D1Ar1
++	ANDMT	D1Re0, D1Re0, #HI(0x80808080)
++	ANDMB	D1Re0, D1Re0, #LO(0x80808080)
++	CMP	D1Re0, #0
++	BNZ	$Lmatch_word2
++	!! check if we have reached the end of the buffer
++	CMP	D1Ar5, #0
++	BNE	$Laligned_loop
++	!! exit if there are no chars left to check
++	AND	D1Ar3, D1Ar3, #7
++	CMP	D1Ar3, #0
++	BZ	$Lexit_fail
++	!! recover c
++	AND	D0Ar2, D0Ar4, #0xff
++$Lbyte_loop:
++	!! get 1 char from s
++	GETB	D0Re0, [D0Ar6++]
++	!! decrement n
++	SUB	D1Ar3, D1Ar3, #1
++	!! exit if we have a match
++	CMP	D0Re0, D0Ar2
++	BZ	$Lexit_success1
++	!! fall through if we have run out of chars
++	CMP	D1Ar3, #0
++	BNE	$Lbyte_loop
++
++$Lexit_fail:
++	MOV	D0Re0, #0
++	B	$Lend
++
++$Lmatch_word1:
++	!! move the match word into D1Re0
++	MOV	D1Re0, D0Re0
++	!! roll back the buffer pointer by 4 chars
++	SUB	D0Ar6, D0Ar6, #4
++$Lmatch_word2:
++	!! roll back the buffer pointer by 4 chars
++	SUB	D0Ar6, D0Ar6, #4
++	!! exit if lowest byte is 0
++	MOV	D1Ar1, D1Re0
++	AND	D1Ar1, D1Ar1, #0xff
++	CMP	D1Ar1, #0
++	BNE	$Lexit_success2
++	!! advance buffer pointer to the next char
++	ADD	D0Ar6, D0Ar6, #1
++	!! shift in the next lowest byte
++	LSR	D1Re0, D1Re0, #8
++	!! exit if lowest byte is 0
++	MOV	D1Ar1, D1Re0
++	AND	D1Ar1, D1Ar1, #0xff
++	CMP	D1Ar1, #0
++	BNE	$Lexit_success2
++	!! advance buffer pointer to the next char
++	ADD	D0Ar6, D0Ar6, #1
++	!! shift in the next lowest byte
++	LSR	D1Re0, D1Re0, #8
++	!! exit if lowest byte is 0
++	MOV	D1Ar1, D1Re0
++	AND	D1Ar1, D1Ar1, #0xff
++	CMP	D1Ar1, #0
++	BNE	$Lexit_success2
++	!! the match must be in the last byte, exit
++	ADD	D0Ar6, D0Ar6, #1
++	B	$Lexit_success2
++
++$Lexit_success1:
++	SUB	D0Ar6, D0Ar6, #1
++$Lexit_success2:
++	!! return the buffer pointer
++	MOV	D0Re0, D0Ar6
++$Lend:
++	MOV	PC, D1RtP
++
++	.size _memchr,.-_memchr
++
++libc_hidden_def(memchr)
+diff --git a/libc/string/metag/memcpy.S b/libc/string/metag/memcpy.S
+new file mode 100644
+index 000000000..f96c9d131
+--- /dev/null
++++ b/libc/string/metag/memcpy.S
+@@ -0,0 +1,189 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++	.text
++	.global	_memcpy
++	.type	_memcpy,function
++! D1Ar1 dst
++! D0Ar2 src
++! D1Ar3 cnt
++! D0Re0 dst
++_memcpy:
++	CMP 	D1Ar3, #16
++	MOV 	A1.2, D0Ar2		! source pointer
++	MOV 	A0.2, D1Ar1		! destination pointer
++	MOV 	A0.3, D1Ar1		! for return value
++! If there are less than 16 bytes to copy use the byte copy loop
++	BGE 	$Llong_copy
++
++$Lbyte_copy:
++! Simply copy a byte at a time
++	SUBS	TXRPT, D1Ar3, #1
++	BLT	$Lend
++$Lloop_byte:
++	GETB 	D1Re0, [A1.2++]
++	SETB 	[A0.2++], D1Re0
++	BR	$Lloop_byte
++
++$Lend:
++! Finally set return value and return
++	MOV 	D0Re0, A0.3
++	MOV 	PC, D1RtP
++
++$Llong_copy:
++	ANDS 	D1Ar5, D1Ar1, #7	! test destination alignment
++	BZ	$Laligned_dst
++
++! The destination address is not 8 byte aligned. We will copy bytes from
++! the source to the destination until the remaining data has an 8 byte
++! destination address alignment (i.e we should never copy more than 7
++! bytes here).
++$Lalign_dst:
++	GETB 	D0Re0, [A1.2++]
++	ADD 	D1Ar5, D1Ar5, #1	! dest is aligned when D1Ar5 reaches #8
++	SUB 	D1Ar3, D1Ar3, #1	! decrement count of remaining bytes
++	SETB 	[A0.2++], D0Re0
++	CMP 	D1Ar5, #8
++	BNE 	$Lalign_dst
++
++! We have at least (16 - 7) = 9 bytes to copy - calculate the number of 8 byte
++! blocks, then jump to the unaligned copy loop or fall through to the aligned
++! copy loop as appropriate.
++$Laligned_dst:
++	MOV	D0Ar4, A1.2
++	LSR 	D1Ar5, D1Ar3, #3	! D1Ar5 = number of 8 byte blocks
++	ANDS 	D0Ar4, D0Ar4, #7	! test source alignment
++	BNZ 	$Lunaligned_copy	! if unaligned, use unaligned copy loop
++
++! Both source and destination are 8 byte aligned - the easy case.
++$Laligned_copy:
++	LSRS	D1Ar5, D1Ar3, #5	! D1Ar5 = number of 32 byte blocks
++	BZ	$Lbyte_copy
++	SUB	TXRPT, D1Ar5, #1
++
++$Laligned_32:
++	GETL 	D0Re0, D1Re0, [A1.2++]
++	GETL 	D0Ar6, D1Ar5, [A1.2++]
++	SETL 	[A0.2++], D0Re0, D1Re0
++	SETL 	[A0.2++], D0Ar6, D1Ar5
++	GETL 	D0Re0, D1Re0, [A1.2++]
++	GETL 	D0Ar6, D1Ar5, [A1.2++]
++	SETL 	[A0.2++], D0Re0, D1Re0
++	SETL 	[A0.2++], D0Ar6, D1Ar5
++	BR	$Laligned_32
++
++! If there are any remaining bytes use the byte copy loop, otherwise we are done
++	ANDS 	D1Ar3, D1Ar3, #0x1f
++	BNZ	$Lbyte_copy
++	B	$Lend
++
++! The destination is 8 byte aligned but the source is not, and there are 8
++! or more bytes to be copied.
++$Lunaligned_copy:
++! Adjust the source pointer (A1.2) to the 8 byte boundary before its
++! current value
++	MOV 	D0Ar4, A1.2
++	MOV 	D0Ar6, A1.2
++	ANDMB 	D0Ar4, D0Ar4, #0xfff8
++	MOV 	A1.2, D0Ar4
++! Save the number of bytes of mis-alignment in D0Ar4 for use later
++	SUBS 	D0Ar6, D0Ar6, D0Ar4
++	MOV	D0Ar4, D0Ar6
++! if there is no mis-alignment after all, use the aligned copy loop
++	BZ 	$Laligned_copy
++
++! prefetch 8 bytes
++	GETL 	D0Re0, D1Re0, [A1.2]
++
++	SUB	TXRPT, D1Ar5, #1
++
++! There are 3 mis-alignment cases to be considered. Less than 4 bytes, exactly
++! 4 bytes, and more than 4 bytes.
++	CMP 	D0Ar6, #4
++	BLT 	$Lunaligned_1_2_3	! use 1-3 byte mis-alignment loop
++	BZ 	$Lunaligned_4		! use 4 byte mis-alignment loop
++
++! The mis-alignment is more than 4 bytes
++$Lunaligned_5_6_7:
++	SUB 	D0Ar6, D0Ar6, #4
++! Calculate the bit offsets required for the shift operations necesssary
++! to align the data.
++! D0Ar6 = bit offset, D1Ar5 = (32 - bit offset)
++	MULW 	D0Ar6, D0Ar6, #8
++	MOV	D1Ar5, #32
++	SUB	D1Ar5, D1Ar5, D0Ar6
++! Move data 4 bytes before we enter the main loop
++	MOV 	D0Re0, D1Re0
++
++$Lloop_5_6_7:
++	GETL 	D0Ar2, D1Ar1, [++A1.2]
++! form 64-bit data in D0Re0, D1Re0
++	LSR 	D0Re0, D0Re0, D0Ar6
++	MOV 	D1Re0, D0Ar2
++	LSL 	D1Re0, D1Re0, D1Ar5
++	ADD 	D0Re0, D0Re0, D1Re0
++
++	LSR 	D0Ar2, D0Ar2, D0Ar6
++	LSL 	D1Re0, D1Ar1, D1Ar5
++	ADD 	D1Re0, D1Re0, D0Ar2
++
++	SETL 	[A0.2++], D0Re0, D1Re0
++	MOV 	D0Re0, D1Ar1
++	BR	$Lloop_5_6_7
++
++	B 	$Lunaligned_end
++
++$Lunaligned_1_2_3:
++! Calculate the bit offsets required for the shift operations necesssary
++! to align the data.
++! D0Ar6 = bit offset, D1Ar5 = (32 - bit offset)
++	MULW 	D0Ar6, D0Ar6, #8
++	MOV	D1Ar5, #32
++	SUB	D1Ar5, D1Ar5, D0Ar6
++
++$Lloop_1_2_3:
++! form 64-bit data in D0Re0,D1Re0
++	LSR 	D0Re0, D0Re0, D0Ar6
++	LSL 	D1Ar1, D1Re0, D1Ar5
++	ADD 	D0Re0, D0Re0, D1Ar1
++	MOV	D0Ar2, D1Re0
++	LSR 	D0FrT, D0Ar2, D0Ar6
++	GETL 	D0Ar2, D1Ar1, [++A1.2]
++
++	MOV 	D1Re0, D0Ar2
++	LSL 	D1Re0, D1Re0, D1Ar5
++	ADD 	D1Re0, D1Re0, D0FrT
++
++	SETL 	[A0.2++], D0Re0, D1Re0
++	MOV 	D0Re0, D0Ar2
++	MOV 	D1Re0, D1Ar1
++	BR	$Lloop_1_2_3
++
++	B 	$Lunaligned_end
++
++! The 4 byte mis-alignment case - this does not require any shifting, just a
++! shuffling of registers.
++$Lunaligned_4:
++	MOV 	D0Re0, D1Re0
++$Lloop_4:
++	GETL 	D0Ar2, D1Ar1, [++A1.2]
++	MOV 	D1Re0, D0Ar2
++	SETL 	[A0.2++], D0Re0, D1Re0
++	MOV 	D0Re0, D1Ar1
++	BR	$Lloop_4
++
++$Lunaligned_end:
++! If there are no remaining bytes to copy, we are done.
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ	$Lend
++! Re-adjust the source pointer (A1.2) back to the actual (unaligned) byte
++! address of the remaining bytes, and fall through to the byte copy loop.
++	MOV 	D0Ar6, A1.2
++	ADD 	D1Ar5, D0Ar4, D0Ar6
++	MOV 	A1.2, D1Ar5
++	B	$Lbyte_copy
++
++        .size _memcpy,.-_memcpy
++
++libc_hidden_def(memcpy)
+diff --git a/libc/string/metag/memmove.S b/libc/string/metag/memmove.S
+new file mode 100644
+index 000000000..3416fd558
+--- /dev/null
++++ b/libc/string/metag/memmove.S
+@@ -0,0 +1,350 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++	.text
++	.global	_memmove
++	.type	_memmove,function
++! D1Ar1 dst
++! D0Ar2 src
++! D1Ar3 cnt
++! D0Re0 dst
++_memmove:
++	CMP 	D1Ar3, #0
++	MOV 	D0Re0, D1Ar1
++	BZ 	$LEND2
++	MSETL 	[A0StP], D0.5, D0.6, D0.7
++	MOV 	D1Ar5, D0Ar2
++	CMP 	D1Ar1, D1Ar5
++	BLT 	$Lforwards_copy
++	SUB 	D0Ar4, D1Ar1, D1Ar3
++	ADD 	D0Ar4, D0Ar4, #1
++	CMP 	D0Ar2, D0Ar4
++	BLT 	$Lforwards_copy
++	! should copy backwards
++	MOV 	D1Re0, D0Ar2
++	! adjust pointer to the end of mem
++	ADD 	D0Ar2, D1Re0, D1Ar3
++	ADD 	D1Ar1, D1Ar1, D1Ar3
++
++	MOV 	A1.2, D0Ar2
++	MOV 	A0.2, D1Ar1
++	CMP 	D1Ar3, #8
++	BLT 	$Lbbyte_loop
++
++	MOV 	D0Ar4, D0Ar2
++	MOV 	D1Ar5, D1Ar1
++
++	! test 8 byte alignment
++	ANDS 	D1Ar5, D1Ar5, #7
++	BNE 	$Lbdest_unaligned
++
++	ANDS 	D0Ar4, D0Ar4, #7
++	BNE 	$Lbsrc_unaligned
++
++	LSR 	D1Ar5, D1Ar3, #3
++
++$Lbaligned_loop:
++	GETL 	D0Re0, D1Re0, [--A1.2]
++	SETL 	[--A0.2], D0Re0, D1Re0
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lbaligned_loop
++
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lbbyte_loop_exit
++$Lbbyte_loop:
++	GETB 	D1Re0, [--A1.2]
++	SETB 	[--A0.2], D1Re0
++	SUBS 	D1Ar3, D1Ar3, #1
++	BNE 	$Lbbyte_loop
++$Lbbyte_loop_exit:
++	MOV 	D0Re0, A0.2
++$LEND:
++	SUB 	A0.2, A0StP, #24
++	MGETL 	D0.5, D0.6, D0.7, [A0.2]
++	SUB 	A0StP, A0StP, #24
++$LEND2:
++	MOV 	PC, D1RtP
++
++$Lbdest_unaligned:
++	GETB 	D0Re0, [--A1.2]
++	SETB 	[--A0.2], D0Re0
++	SUBS 	D1Ar5, D1Ar5, #1
++	SUB 	D1Ar3, D1Ar3, #1
++	BNE 	$Lbdest_unaligned
++	CMP 	D1Ar3, #8
++	BLT 	$Lbbyte_loop
++$Lbsrc_unaligned:
++	LSR 	D1Ar5, D1Ar3, #3
++	! adjust A1.2
++	MOV 	D0Ar4, A1.2
++	! save original address
++	MOV 	D0Ar6, A1.2
++
++	ADD 	D0Ar4, D0Ar4, #7
++	ANDMB 	D0Ar4, D0Ar4, #0xfff8
++	! new address is the 8-byte aligned one above the original
++	MOV 	A1.2, D0Ar4
++
++	! A0.2 dst 64-bit is aligned
++	! measure the gap size
++	SUB 	D0Ar6, D0Ar4, D0Ar6
++	MOVS 	D0Ar4, D0Ar6
++	! keep this information for the later adjustment
++	! both aligned
++	BZ 	$Lbaligned_loop
++
++	! prefetch
++	GETL 	D0Re0, D1Re0, [--A1.2]
++
++	CMP 	D0Ar6, #4
++	BLT 	$Lbunaligned_1_2_3
++	! 32-bit aligned
++	BZ 	$Lbaligned_4
++
++	SUB 	D0Ar6, D0Ar6, #4
++	! D1.6 stores the gap size in bits
++	MULW 	D1.6, D0Ar6, #8
++	MOV 	D0.6, #32
++	! D0.6 stores the complement of the gap size
++	SUB 	D0.6, D0.6, D1.6
++
++$Lbunaligned_5_6_7:
++	GETL 	D0.7, D1.7, [--A1.2]
++	! form 64-bit data in D0Re0, D1Re0
++	MOV 	D1Re0, D0Re0
++	! D1Re0 << gap-size
++	LSL 	D1Re0, D1Re0, D1.6
++	MOV 	D0Re0, D1.7
++	! D0Re0 >> complement
++	LSR 	D0Re0, D0Re0, D0.6
++	MOV 	D1.5, D0Re0
++	! combine the both
++	ADD 	D1Re0, D1Re0, D1.5
++
++	MOV 	D1.5, D1.7
++	LSL 	D1.5, D1.5, D1.6
++	MOV 	D0Re0, D0.7
++	LSR 	D0Re0, D0Re0, D0.6
++	MOV 	D0.5, D1.5
++	ADD 	D0Re0, D0Re0, D0.5
++
++	SETL 	[--A0.2], D0Re0, D1Re0
++	MOV 	D0Re0, D0.7
++	MOV 	D1Re0, D1.7
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lbunaligned_5_6_7
++
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lbbyte_loop_exit
++	! Adjust A1.2
++	! A1.2 <- A1.2 +8 - gapsize
++	ADD 	A1.2, A1.2, #8
++	SUB 	A1.2, A1.2, D0Ar4
++	B 	$Lbbyte_loop
++
++$Lbunaligned_1_2_3:
++	MULW 	D1.6, D0Ar6, #8
++	MOV 	D0.6, #32
++	SUB 	D0.6, D0.6, D1.6
++
++$Lbunaligned_1_2_3_loop:
++	GETL 	D0.7, D1.7, [--A1.2]
++	! form 64-bit data in D0Re0, D1Re0
++	LSL 	D1Re0, D1Re0, D1.6
++	! save D0Re0 for later use
++	MOV 	D0.5, D0Re0
++	LSR 	D0Re0, D0Re0, D0.6
++	MOV 	D1.5, D0Re0
++	ADD 	D1Re0, D1Re0, D1.5
++
++	! orignal data in D0Re0
++	MOV 	D1.5, D0.5
++	LSL 	D1.5, D1.5, D1.6
++	MOV 	D0Re0, D1.7
++	LSR 	D0Re0, D0Re0, D0.6
++	MOV 	D0.5, D1.5
++	ADD 	D0Re0, D0Re0, D0.5
++
++	SETL 	[--A0.2], D0Re0, D1Re0
++	MOV 	D0Re0, D0.7
++	MOV 	D1Re0, D1.7
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lbunaligned_1_2_3_loop
++
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lbbyte_loop_exit
++	! Adjust A1.2
++	ADD 	A1.2, A1.2, #8
++	SUB 	A1.2, A1.2, D0Ar4
++	B 	$Lbbyte_loop
++
++$Lbaligned_4:
++	GETL 	D0.7, D1.7, [--A1.2]
++	MOV 	D1Re0, D0Re0
++	MOV 	D0Re0, D1.7
++	SETL 	[--A0.2], D0Re0, D1Re0
++	MOV 	D0Re0, D0.7
++	MOV 	D1Re0, D1.7
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lbaligned_4
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lbbyte_loop_exit
++	! Adjust A1.2
++	ADD 	A1.2, A1.2, #8
++	SUB 	A1.2, A1.2, D0Ar4
++	B 	$Lbbyte_loop
++
++$Lforwards_copy:
++	MOV 	A1.2, D0Ar2
++	MOV 	A0.2, D1Ar1
++	CMP 	D1Ar3, #8
++	BLT 	$Lfbyte_loop
++
++	MOV 	D0Ar4, D0Ar2
++	MOV 	D1Ar5, D1Ar1
++
++	ANDS 	D1Ar5, D1Ar5, #7
++	BNE 	$Lfdest_unaligned
++
++	ANDS 	D0Ar4, D0Ar4, #7
++	BNE 	$Lfsrc_unaligned
++
++	LSR 	D1Ar5, D1Ar3, #3
++
++$Lfaligned_loop:
++	GETL 	D0Re0, D1Re0, [A1.2++]
++	SUBS 	D1Ar5, D1Ar5, #1
++	SETL 	[A0.2++], D0Re0, D1Re0
++	BNE 	$Lfaligned_loop
++
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lfbyte_loop_exit
++$Lfbyte_loop:
++	GETB 	D1Re0, [A1.2++]
++	SETB 	[A0.2++], D1Re0
++	SUBS 	D1Ar3, D1Ar3, #1
++	BNE 	$Lfbyte_loop
++$Lfbyte_loop_exit:
++	MOV 	D0Re0, D1Ar1
++	B 	$LEND
++
++$Lfdest_unaligned:
++	GETB 	D0Re0, [A1.2++]
++	ADD 	D1Ar5, D1Ar5, #1
++	SUB 	D1Ar3, D1Ar3, #1
++	SETB 	[A0.2++], D0Re0
++	CMP 	D1Ar5, #8
++	BNE 	$Lfdest_unaligned
++	CMP 	D1Ar3, #8
++	BLT 	$Lfbyte_loop
++$Lfsrc_unaligned:
++	! adjust A1.2
++	LSR 	D1Ar5, D1Ar3, #3
++
++	MOV 	D0Ar4, A1.2
++	MOV 	D0Ar6, A1.2
++	ANDMB 	D0Ar4, D0Ar4, #0xfff8
++	MOV 	A1.2, D0Ar4
++
++	! A0.2 dst 64-bit is aligned
++	SUB 	D0Ar6, D0Ar6, D0Ar4
++	! keep the information for the later adjustment
++	MOVS 	D0Ar4, D0Ar6
++
++	! both aligned
++	BZ 	$Lfaligned_loop
++
++	! prefetch
++	GETL 	D0Re0, D1Re0, [A1.2]
++
++	CMP 	D0Ar6, #4
++	BLT 	$Lfunaligned_1_2_3
++	BZ 	$Lfaligned_4
++
++	SUB 	D0Ar6, D0Ar6, #4
++	MULW 	D0.6, D0Ar6, #8
++	MOV 	D1.6, #32
++	SUB 	D1.6, D1.6, D0.6
++
++$Lfunaligned_5_6_7:
++	GETL 	D0.7, D1.7, [++A1.2]
++	! form 64-bit data in D0Re0, D1Re0
++	MOV 	D0Re0, D1Re0
++	LSR 	D0Re0, D0Re0, D0.6
++	MOV 	D1Re0, D0.7
++	LSL 	D1Re0, D1Re0, D1.6
++	MOV 	D0.5, D1Re0
++	ADD 	D0Re0, D0Re0, D0.5
++
++	MOV 	D0.5, D0.7
++	LSR 	D0.5, D0.5, D0.6
++	MOV 	D1Re0, D1.7
++	LSL 	D1Re0, D1Re0, D1.6
++	MOV 	D1.5, D0.5
++	ADD 	D1Re0, D1Re0, D1.5
++
++	SETL 	[A0.2++], D0Re0, D1Re0
++	MOV 	D0Re0, D0.7
++	MOV 	D1Re0, D1.7
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lfunaligned_5_6_7
++
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lfbyte_loop_exit
++	! Adjust A1.2
++	ADD	A1.2, A1.2, D0Ar4
++	B 	$Lfbyte_loop
++
++$Lfunaligned_1_2_3:
++	MULW 	D0.6, D0Ar6, #8
++	MOV 	D1.6, #32
++	SUB 	D1.6, D1.6, D0.6
++
++$Lfunaligned_1_2_3_loop:
++	GETL 	D0.7, D1.7, [++A1.2]
++	! form 64-bit data in D0Re0, D1Re0
++	LSR 	D0Re0, D0Re0, D0.6
++	MOV 	D1.5, D1Re0
++	LSL 	D1Re0, D1Re0, D1.6
++	MOV 	D0.5, D1Re0
++	ADD 	D0Re0, D0Re0, D0.5
++
++	MOV 	D0.5, D1.5
++	LSR 	D0.5, D0.5, D0.6
++	MOV 	D1Re0, D0.7
++	LSL 	D1Re0, D1Re0, D1.6
++	MOV 	D1.5, D0.5
++	ADD 	D1Re0, D1Re0, D1.5
++
++	SETL 	[A0.2++], D0Re0, D1Re0
++	MOV 	D0Re0, D0.7
++	MOV 	D1Re0, D1.7
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lfunaligned_1_2_3_loop
++
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lfbyte_loop_exit
++	! Adjust A1.2
++	ADD	A1.2, A1.2, D0Ar4
++	B 	$Lfbyte_loop
++
++$Lfaligned_4:
++	GETL 	D0.7, D1.7, [++A1.2]
++	MOV 	D0Re0, D1Re0
++	MOV 	D1Re0, D0.7
++	SETL 	[A0.2++], D0Re0, D1Re0
++	MOV 	D0Re0, D0.7
++	MOV 	D1Re0, D1.7
++	SUBS 	D1Ar5, D1Ar5, #1
++	BNE 	$Lfaligned_4
++	ANDS 	D1Ar3, D1Ar3, #7
++	BZ 	$Lfbyte_loop_exit
++	! Adjust A1.2
++	ADD	A1.2, A1.2, D0Ar4
++	B 	$Lfbyte_loop
++
++	.size _memmove,.-_memmove
++
++libc_hidden_def(memmove)
+diff --git a/libc/string/metag/memset.S b/libc/string/metag/memset.S
+new file mode 100644
+index 000000000..8d4e9a158
+--- /dev/null
++++ b/libc/string/metag/memset.S
+@@ -0,0 +1,90 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++	.text
++	.global	_memset
++	.type	_memset,function
++! D1Ar1 dst
++! D0Ar2 c
++! D1Ar3 cnt
++! D0Re0 dst
++_memset:
++	AND	D0Ar2,D0Ar2,#0xFF	! Ensure a byte input value
++	MULW 	D0Ar2,D0Ar2,#0x0101	! Duplicate byte value into  0-15
++	ANDS	D0Ar4,D1Ar1,#7		! Extract bottom LSBs of dst
++	LSL 	D0Re0,D0Ar2,#16		! Duplicate byte value into 16-31
++	ADD	A0.2,D0Ar2,D0Re0	! Duplicate byte value into 4 (A0.2)
++	MOV	D0Re0,D1Ar1		! Return dst
++	BZ	$LLongStub		! if start address is aligned
++	! start address is not aligned on an 8 byte boundary, so we
++	! need the number of bytes up to the next 8 byte address
++	! boundary, or the length of the string if less than 8, in D1Ar5
++	MOV	D0Ar2,#8		! Need 8 - N in D1Ar5 ...
++	SUB	D1Ar5,D0Ar2,D0Ar4	!            ... subtract N
++	CMP	D1Ar3,D1Ar5
++	MOVMI	D1Ar5,D1Ar3
++	B	$LByteStub		! dst is mis-aligned, do $LByteStub
++
++!
++! Preamble to LongLoop which generates 4*8 bytes per interation (5 cycles)
++!
++$LLongStub:
++	LSRS	D0Ar2,D1Ar3,#5
++	AND	D1Ar3,D1Ar3,#0x1F
++	MOV	A1.2,A0.2
++	BEQ	$LLongishStub
++	SUB	TXRPT,D0Ar2,#1
++	CMP	D1Ar3,#0
++$LLongLoop:
++	SETL 	[D1Ar1++],A0.2,A1.2
++	SETL 	[D1Ar1++],A0.2,A1.2
++	SETL 	[D1Ar1++],A0.2,A1.2
++	SETL 	[D1Ar1++],A0.2,A1.2
++	BR	$LLongLoop
++	BZ	$Lexit
++!
++! Preamble to LongishLoop which generates 1*8 bytes per interation (2 cycles)
++!
++$LLongishStub:
++	LSRS	D0Ar2,D1Ar3,#3
++	AND	D1Ar3,D1Ar3,#0x7
++	MOV	D1Ar5,D1Ar3
++	BEQ	$LByteStub
++	SUB	TXRPT,D0Ar2,#1
++	CMP	D1Ar3,#0
++$LLongishLoop:
++	SETL 	[D1Ar1++],A0.2,A1.2
++	BR	$LLongishLoop
++	BZ	$Lexit
++!
++! This does a byte structured burst of up to 7 bytes
++!
++!	D1Ar1 should point to the location required
++!	D1Ar3 should be the remaining total byte count
++!	D1Ar5 should be burst size (<= D1Ar3)
++!
++$LByteStub:
++	SUBS	D1Ar3,D1Ar3,D1Ar5	! Reduce count
++	ADD	D1Ar1,D1Ar1,D1Ar5	! Advance pointer to end of area
++	MULW	D1Ar5,D1Ar5,#4		! Scale to (1*4), (2*4), (3*4)
++	SUB	D1Ar5,D1Ar5,#(8*4)	! Rebase to -(7*4), -(6*4), -(5*4), ...
++	MOV	A1.2,D1Ar5
++	SUB	PC,CPC1,A1.2		! Jump into table below
++	SETB 	[D1Ar1+#(-7)],A0.2
++	SETB 	[D1Ar1+#(-6)],A0.2
++	SETB 	[D1Ar1+#(-5)],A0.2
++	SETB 	[D1Ar1+#(-4)],A0.2
++	SETB 	[D1Ar1+#(-3)],A0.2
++	SETB 	[D1Ar1+#(-2)],A0.2
++	SETB 	[D1Ar1+#(-1)],A0.2
++!
++! Return if all data has been output, otherwise do $LLongStub
++!
++	BNZ	$LLongStub
++$Lexit:
++	MOV	PC,D1RtP
++        .size _memset,.-_memset
++
++libc_hidden_def(memset)
+diff --git a/libc/string/metag/strchr.S b/libc/string/metag/strchr.S
+new file mode 100644
+index 000000000..6b0f2ea43
+--- /dev/null
++++ b/libc/string/metag/strchr.S
+@@ -0,0 +1,167 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++#include <features.h>
++
++	.text
++	.global	_strchr
++	.type	_strchr, function
++! D1Ar1 src
++! D0Ar2 c
++_strchr:
++	AND     D0Ar2,D0Ar2,#0xff                           ! Drop all but 8 bits of c
++	MOV 	D1Ar5, D1Ar1                                ! Copy src to D1Ar5
++	AND 	D1Ar5, D1Ar5, #7                            ! Check 64 bit alignment
++	CMP 	D1Ar5, #0
++	BZ 	$Laligned64bit                              ! Jump to 64 bit aligned strchr
++$Lalign64bit:
++	GETB 	D0Re0, [D1Ar1++]                            ! Get the next character
++	ADD 	D1Ar5, D1Ar5, #1                            ! Increment alignment counter
++	CMP 	D0Re0, D0Ar2                                ! Is the char c
++	BZ 	$Lcharatprevious                            ! If so exit returning position
++	CMP 	D0Re0, #0                                   ! End of string?
++	BZ 	$Lnotfound                                  ! If so exit
++	CMP 	D1Ar5, #8                                   ! Are we aligned 64bit yet?
++	BNZ 	$Lalign64bit                                ! If not keep aligning
++$Laligned64bit:                                             ! src is 64bit aligned
++	MOV 	D0Ar4, D0Ar2                                ! put c into D0Ar4
++	LSL 	D0Ar4, D0Ar4, #8                            ! Shift it up
++	ADD 	D0Ar4, D0Ar4, D0Ar2                         ! another c
++	LSL 	D0Ar4, D0Ar4, #8                            ! shift
++	ADD 	D0Ar4, D0Ar4, D0Ar2                         ! another c
++	LSL 	D0Ar4, D0Ar4, #8                            ! shift
++	ADD 	D0Ar4, D0Ar4, D0Ar2                         ! 4 copies of c
++$Lcheck8bytes:
++	GETL 	D0Re0, D1Re0, [D1Ar1++]                     ! grab 16 bytes
++	MOV 	A0.3, D0Re0                                 ! save for later use
++							    ! first word
++							    ! check for \0
++	MOV 	D0Ar2, D0Re0                                ! D0Ar2 is a scratch now
++	ADDT 	D0Re0, D0Re0, #HI(0xfefefeff)               ! Do 4 1-byte compares
++	ADD 	D0Re0, D0Re0, #LO(0xfefefeff)
++	XOR 	D0Ar2, D0Ar2, #-1
++	AND 	D0Re0, D0Re0, D0Ar2
++	ANDMT 	D0Re0, D0Re0, #HI(0x80808080)
++	ANDMB 	D0Re0, D0Re0, #LO(0x80808080)
++	CMP 	D0Re0, #0
++	BNZ 	$Lnullinword1                               ! found \0 (or c if c==\0)
++
++							    ! Check for c
++	MOV 	D0Re0, A0.3                                 ! restore the first word
++	XOR 	D0Re0, D0Re0, D0Ar4
++	MOV 	D0Ar2, D0Re0                                ! DO 4 1-byte compares
++	ADDT 	D0Re0, D0Re0, #HI(0xfefefeff)
++	ADD 	D0Re0, D0Re0, #LO(0xfefefeff)
++	XOR 	D0Ar2, D0Ar2, #-1
++	AND 	D0Re0, D0Re0, D0Ar2
++	ANDMT 	D0Re0, D0Re0, #HI(0x80808080)
++	ANDMB 	D0Re0, D0Re0, #LO(0x80808080)
++	CMP 	D0Re0, #0
++	BNZ 	$Lcharinword1                               ! found c
++
++							    ! second word
++							    ! check for \0
++	MOV 	A0.3, D1Re0                                 ! save for later use
++	MOV 	D1Ar3, D1Re0
++	ADDT 	D1Re0, D1Re0, #HI(0xfefefeff)               ! Do 4 1-byte compares
++	ADD 	D1Re0, D1Re0, #LO(0xfefefeff)
++	XOR 	D1Ar3, D1Ar3, #-1
++	AND 	D1Re0, D1Re0, D1Ar3
++	ANDMT 	D1Re0, D1Re0, #HI(0x80808080)
++	ANDMB 	D1Re0, D1Re0, #LO(0x80808080)
++	CMP 	D1Re0, #0
++	BNZ 	$Lnullinword2                               ! Found \0 (or c if c==\0)
++
++	MOV 	D0.4, A0.3                                  ! restore the second word
++	XOR 	D1Re0, D0.4, D0Ar4                          ! test c
++
++	MOV 	D1Ar3, D1Re0
++	ADDT 	D1Re0, D1Re0, #HI(0xfefefeff)               ! Do 4 1-byte compares
++	ADD 	D1Re0, D1Re0, #LO(0xfefefeff)
++	XOR 	D1Ar3, D1Ar3, #-1
++	AND 	D1Re0, D1Re0, D1Ar3
++	ANDMT 	D1Re0, D1Re0, #HI(0x80808080)
++	ANDMB 	D1Re0, D1Re0, #LO(0x80808080)
++	CMP 	D1Re0, #0
++	BNZ 	$Lcharinword2                               ! found c
++
++	B 	$Lcheck8bytes                               ! Keep checking
++
++$Lnullinword1:                                              ! found \0 somewhere, check for c too
++	SUB 	D1Ar1, D1Ar1, #4
++$Lnullinword2:
++	SUB 	D1Ar1, D1Ar1, #4
++	AND 	D0Ar2, D0Ar4, #0xff                         ! restore c
++	MOV 	D0Re0, A0.3                                 ! restore the word
++	MOV 	D0.4, D0Re0                                 ! for shifting later
++	AND 	D0Re0, D0Re0, #0xff                         ! take first byte of word
++	CMP 	D0Re0, D0Ar2
++	BZ 	$Lcharatcurrent                             ! found c
++	CMP 	D0Re0, #0!
++	BZ 	$Lnotfound                                  ! found \0
++
++	ADD 	D1Ar1, D1Ar1, #1
++	LSR 	D0.4, D0.4, #8
++	MOV 	D0Re0, D0.4
++	AND 	D0Re0, D0Re0, #0xff                         ! take second byte of word
++	CMP 	D0Re0, D0Ar2
++	BZ 	$Lcharatcurrent                             ! found c
++	CMP 	D0Re0, #0
++	BZ 	$Lnotfound                                  ! found \0
++
++	ADD 	D1Ar1, D1Ar1, #1
++	LSR 	D0.4, D0.4, #8
++	MOV 	D0Re0, D0.4
++	AND 	D0Re0, D0Re0, #0xff                         ! take third byte of word
++	CMP 	D0Re0, D0Ar2
++	BZ 	$Lcharatcurrent                             ! found c
++	CMP 	D0Re0, #0
++	BZ 	$Lnotfound                                  ! found \0
++
++	ADD 	D1Ar1, D1Ar1, #1                            ! move to 4th byte
++	CMP     D0Ar2, #0                                   ! If c was \0
++	BZ      $Lcharatcurrent                             ! c has been found!
++
++$Lnotfound:
++	MOV 	D0Re0,		#0                          ! End of string c not found
++	B 	$Lend
++
++$Lcharinword1: 						    ! found c in first word
++	MOV 	D1Re0, D0Re0
++	SUB 	D1Ar1, D1Ar1, #4
++$Lcharinword2:                                              ! found c in second word
++	SUB 	D1Ar1, D1Ar1, #4
++
++	AND 	D0Re0, D1Re0, #0xff                         ! First byte
++	CMP 	D0Re0, #0                                   ! Test c (zero indicates c due
++							    ! to the 4 1-byte compare code)
++	BNE 	$Lcharatcurrent
++	ADD 	D1Ar1, D1Ar1, #1
++
++	LSR 	D1Re0, D1Re0, #8
++	AND 	D0Re0, D1Re0, #0xff                         ! Second byte
++	CMP 	D0Re0, #0                                   ! Test c (indicated by zero)
++	BNE 	$Lcharatcurrent
++	ADD 	D1Ar1, D1Ar1, #1
++
++	LSR 	D1Re0, D1Re0, #8
++	AND 	D0Re0, D1Re0, #0xff                         ! Third byte
++	CMP 	D0Re0, #0                                   ! Test c (indicated by zero)
++	BNE 	$Lcharatcurrent
++	ADD 	D1Ar1, D1Ar1, #1                            ! Must be the fourth byte
++	B 	$Lcharatcurrent
++
++$Lcharatprevious:
++	SUB 	D1Ar1, D1Ar1, #1                            ! Fix-up pointer
++$Lcharatcurrent:
++	MOV 	D0Re0, D1Ar1                                ! Return the string pointer
++$Lend:
++	MOV 	PC, D1RtP
++	.size _strchr,.-_strchr
++
++libc_hidden_def(strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
++strong_alias(strchr,index)
++#endif
+diff --git a/libc/string/metag/strcmp.S b/libc/string/metag/strcmp.S
+new file mode 100644
+index 000000000..3278ffaa5
+--- /dev/null
++++ b/libc/string/metag/strcmp.S
+@@ -0,0 +1,65 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++#include <features.h>
++
++	.text
++	.global	_strcmp
++	.type	_strcmp,function
++!D1Ar1 s1
++!D0Ar2 s2
++_strcmp:
++	TST	D1Ar1,#3
++	TSTZ	D0Ar2,#3
++	MOVT	D1Re0,#0x0101
++	ADD	D1Re0,D1Re0,#0x0101
++	BNZ	$Lstrcmp_slow
++	GETD	D1Ar3,[D1Ar1+#4++]	! Load 32-bits from s1
++	GETD	D1Ar5,[D0Ar2+#4++]      ! Load 32-bits from s2
++	LSL	D0FrT,D1Re0,#7		! D0FrT = 0x80808080
++$Lstrcmp4_loop:
++	SUB	D0Re0,D1Ar3,D1Re0	! D1Re0 = 0x01010101
++	MOV	D0Ar6,D1Ar3
++	SUBS	D0Ar4,D1Ar3,D1Ar5	! Calculate difference
++	XOR	D0Ar6,D0Ar6,#-1
++	GETD	D1Ar3,[D1Ar1+#4++]	! Load 32-bits from s1
++	AND	D0Re0,D0Re0,D0Ar6
++	ANDSZ	D0Ar6,D0Re0,D0FrT	! D0FrT = 0x80808080
++	GETD	D1Ar5,[D0Ar2+#4++]      ! Load 32-bits from s2
++	BZ	$Lstrcmp4_loop
++	AND	D0Ar6, D0Re0, D0FrT	! D0FrT = 0x80808080
++!
++! Either they are different or they both contain a NULL + junk
++!
++$Lstrcmp4_end:
++	LSLS	D0Re0,D0Ar4,#24		! Was Byte[0] the same?
++	LSLSZ	D0Ar2,D0Ar6,#24		! Yes: AND they where not zero?
++	LSLSZ	D0Re0,D0Ar4,#16		! Yes: Was Byte[1] the same?
++	LSLSZ	D0Ar2,D0Ar6,#16		! Yes: AND they where not zero?
++	LSLSZ	D0Re0,D0Ar4,#8		! Tes: Was Byte[2] the same?
++	LSLSZ	D0Ar2,D0Ar6,#8		! Yes: AND they where not zero?
++	MOVZ	D0Re0,D0Ar4		! Yes: Must by Byte[3] thats the result
++	ASR	D0Re0,D0Re0,#24		! Sign extend result to integer
++	MOV	PC,D1RtP
++!
++! Misaligned case, byte at a time
++!
++$Lstrcmp_slow:
++	GETB	D1Ar3,[D1Ar1++]		! Load char from s1
++	GETB	D1Ar5,[D0Ar2++]         ! Load char from s2
++	CMP	D1Ar3,#1		! Null -> C and NZ, rest -> NC (\1->Z)
++	CMPNC	D1Ar3,D1Ar5		! NOT Null: Same -> Z, else -> NZ
++	BZ	$Lstrcmp_slow		! NOT Null and Same: Loop
++	SUB	D0Re0,D1Ar3,D1Ar5	! Generate result
++	MOV	PC,D1RtP
++
++        .size _strcmp,.-_strcmp
++
++
++libc_hidden_def(strcmp)
++#ifndef __UCLIBC_HAS_LOCALE__
++strong_alias(strcmp,strcoll)
++libc_hidden_def(strcoll)
++#endif
+diff --git a/libc/string/metag/strcpy.S b/libc/string/metag/strcpy.S
+new file mode 100644
+index 000000000..529ac9279
+--- /dev/null
++++ b/libc/string/metag/strcpy.S
+@@ -0,0 +1,94 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++	.text
++	.global	_strcpy
++	.type	_strcpy,function
++! D1Ar1 dst
++! D0Ar2 src
++
++_strcpy:
++	MOV	A1.2, D1Ar1
++
++	! test 4 byte alignment of src
++	ANDS	D0Ar4, D0Ar2, #3
++	BNZ	$Lbyteloop
++
++	! test 4 byte alignment of dest
++	ANDS	D1Ar5, D1Ar1, #3
++	BNZ	$Lbyteloop
++
++	! load mask values for aligned loops
++	MOVT	D1Ar3, #HI(0xfefefeff)
++	ADD	D1Ar3, D1Ar3, #LO(0xfefefeff)
++	MOVT	D0FrT, #HI(0x80808080)
++	ADD	D0FrT, D0FrT, #LO(0x80808080)
++
++	! test 8 byte alignment of src
++	ANDS	D0Ar4, D0Ar2, #7
++	BNZ	$Lwordloop
++
++	! test 8 byte alignment of dest
++	ANDS	D1Ar5, D1Ar1, #7
++	BNZ	$Lwordloop
++
++$L8byteloop:
++	GETL	D1Ar5, D0Ar6, [D0Ar2++]
++	MOV	D1Re0, D1Ar5
++	MOV	D0Re0, D1Ar5
++	ADD	D1Re0, D1Re0, D1Ar3
++	XOR	D0Re0, D0Re0, #-1
++	AND	D1Re0, D1Re0, D0Re0
++	ANDS	D1Re0, D1Re0, D0FrT
++	BNZ	$Lnullfound		! NULL in first word
++
++	MOV	D1Re0, D0Ar6
++	MOV	D0Re0, D0Ar6
++	ADD	D1Re0, D1Re0, D1Ar3
++	XOR	D0Re0, D0Re0, #-1
++	AND	D1Re0, D1Re0, D0Re0
++	ANDS	D1Re0, D1Re0, D0FrT
++	BNZ	$Lnullfound2		! NULL in the second word
++
++	SETL	[A1.2++], D1Ar5, D0Ar6
++	B	$L8byteloop
++
++$Lwordloop:
++	GETD	D0Ar6, [D0Ar2++]
++	MOV	D1Re0, D0Ar6
++	MOV	D0Re0, D0Ar6
++	ADD	D1Re0, D1Re0, D1Ar3
++	XOR	D0Re0, D0Re0, #-1
++	AND	D1Re0, D1Re0, D0Re0
++	ANDS	D1Re0, D1Re0, D0FrT
++	MOV	D1Ar5, D0Ar6
++	BNZ	$Lnullfound
++	SETD	[A1.2++], D0Ar6
++	B	$Lwordloop
++
++$Lnullfound2:
++	SETD	[A1.2++], D1Ar5
++	MOV	D1Ar5, D0Ar6
++
++$Lnullfound:
++	SETB	[A1.2++], D1Ar5
++	ANDS	D0Ar6, D1Ar5, #0xff
++	LSR	D1Ar5, D1Ar5, #8
++	BNZ	$Lnullfound
++	B	$Lend
++
++$Lbyteloop:
++	GETB	D0Ar6, [D0Ar2++]
++	SETB	[A1.2++], D0Ar6
++	CMP	D0Ar6, #0
++	BNZ	$Lbyteloop
++
++$Lend:
++	MOV	D0Re0, D1Ar1
++	MOV	PC, D1RtP
++
++	.size _strcpy,.-_strcpy
++
++libc_hidden_def(strcpy)
+diff --git a/libc/sysdeps/linux/metag/Makefile b/libc/sysdeps/linux/metag/Makefile
+new file mode 100644
+index 000000000..94b43e117
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/metag/Makefile.arch b/libc/sysdeps/linux/metag/Makefile.arch
+new file mode 100644
+index 000000000..0e6fbfe12
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/Makefile.arch
+@@ -0,0 +1,10 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2013 Imagination Technologies Ltd.
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++CSRC-y := brk.c syscall.c metag.c __syscall_error.c
++
++SSRC-y := _longjmp.S clone.S setjmp.S
+diff --git a/libc/sysdeps/linux/metag/__syscall_error.c b/libc/sysdeps/linux/metag/__syscall_error.c
+new file mode 100644
+index 000000000..f97cd0126
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/__syscall_error.c
+@@ -0,0 +1,18 @@
++/* Wrapper for setting errno.
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++int __syscall_error(int err_no) attribute_hidden;
++int __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/metag/_longjmp.S b/libc/sysdeps/linux/metag/_longjmp.S
+new file mode 100644
+index 000000000..54bc71c36
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/_longjmp.S
+@@ -0,0 +1,25 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++	.text
++	.global	___longjmp
++	.type	___longjmp,function
++
++___longjmp:
++        !! If val is 0, set it to 1
++	CMP 	D0Ar2,#0
++	ADDZ	D0Ar2,D0Ar2,#1
++
++        !! Restore A0/A1 regs
++        MGETL   A0.0,A0.1,[D1Ar1++]
++        !! Restore D0/D1 regs
++	MOV 	A0.3,D1Ar1
++        MGETL   D0FrT,D0.5,D0.6,D0.7,[A0.3++]
++        !! Move 2nd argument to return value
++        MOV     D0Re0,D0Ar2
++        MOV     PC,D1RtP
++        .size   ___longjmp,.-___longjmp
++
++libc_hidden_def(__longjmp)
+diff --git a/libc/sysdeps/linux/metag/bits/endian.h b/libc/sysdeps/linux/metag/bits/endian.h
+new file mode 100644
+index 000000000..af99901a7
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/endian.h
+@@ -0,0 +1,12 @@
++/* Meta is little endian
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++#define __BYTE_ORDER __LITTLE_ENDIAN
+diff --git a/libc/sysdeps/linux/metag/bits/fcntl.h b/libc/sysdeps/linux/metag/bits/fcntl.h
+new file mode 100644
+index 000000000..c4f641b7e
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/fcntl.h
+@@ -0,0 +1,238 @@
++/* O_*, F_*, FD_* bit values for Linux.
++   Copyright (C) 1995-1998, 2000, 2004, 2006, 2007, 2008
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	   0003
++#define O_RDONLY	     00
++#define O_WRONLY	     01
++#define O_RDWR		     02
++#define O_CREAT		   0100	/* not fcntl */
++#define O_EXCL		   0200	/* not fcntl */
++#define O_NOCTTY	   0400	/* not fcntl */
++#define O_TRUNC		  01000	/* not fcntl */
++#define O_APPEND	  02000
++#define O_NONBLOCK	  04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		 010000
++#define O_FSYNC		 O_SYNC
++#define O_ASYNC		 020000
++
++#ifdef __USE_GNU
++# define O_DIRECT	 040000	/* Direct disk access.	*/
++# define O_DIRECTORY	0200000	/* Must be a directory.	 */
++# define O_NOFOLLOW	0400000	/* Do not follow links.	 */
++# define O_NOATIME     01000000 /* Do not set atime.  */
++# define O_CLOEXEC     02000000 /* Set close_on_exec.  */
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	0100000
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	12	/* Get record locking info.  */
++#define F_SETLK64	13	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	14	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_UNIX98
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++# define F_DUPFD_CLOEXEC 1030	/* Duplicate file descriptor with
++				   close-on-exit set on new fd.  */
++#endif
++
++/* For F_[GET|SET]FD.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of bsd flock().  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation.	*/
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++#ifndef __USE_FILE_OFFSET64
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#else
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++#endif
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++/* Flags for SYNC_FILE_RANGE.  */
++# define SYNC_FILE_RANGE_WAIT_BEFORE	1 /* Wait upon writeout of all pages
++					     in the range before performing the
++					     write.  */
++# define SYNC_FILE_RANGE_WRITE		2 /* Initiate writeout of all those
++					     dirty pages in the range which are
++					     not presently under writeback.  */
++# define SYNC_FILE_RANGE_WAIT_AFTER	4 /* Wait upon writeout of all pages in
++					     the range after performing the
++					     write.  */
++
++/* Flags for SPLICE and VMSPLICE.  */
++# define SPLICE_F_MOVE		1	/* Move pages instead of copying.  */
++# define SPLICE_F_NONBLOCK	2	/* Don't block on the pipe splicing
++					   (but we may still block on the fd
++					   we splice from/to).  */
++# define SPLICE_F_MORE		4	/* Expect more data.  */
++# define SPLICE_F_GIFT		8	/* Pages passed in are a gift.  */
++#endif
++
++__BEGIN_DECLS
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++/* Selective file content synch'ing.  */
++extern int sync_file_range (int __fd, __off64_t __from, __off64_t __to,
++			    unsigned int __flags);
++
++/* Splice address range into a pipe.  */
++extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
++			 size_t __count, unsigned int __flags);
++
++/* Splice two files together.  */
++extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
++		       __off64_t *__offout, size_t __len,
++		       unsigned int __flags);
++
++/* In-kernel implementation of tee for pipe buffers.  */
++extern ssize_t tee (int __fdin, int __fdout, size_t __len,
++		    unsigned int __flags);
++
++#endif
++__END_DECLS
++
+diff --git a/libc/sysdeps/linux/metag/bits/ipc.h b/libc/sysdeps/linux/metag/bits/ipc.h
+new file mode 100644
+index 000000000..4852ade32
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/ipc.h
+@@ -0,0 +1,55 @@
++/* Copyright (C) 1995-1999, 2000, 2005, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_IPC_H
++# error "Never use <bits/ipc.h> directly; include <sys/ipc.h> instead."
++#endif
++
++#include <bits/types.h>
++
++/* Mode bits for `msgget', `semget', and `shmget'.  */
++#define IPC_CREAT	01000		/* Create key if key does not exist. */
++#define IPC_EXCL	02000		/* Fail if key exists.  */
++#define IPC_NOWAIT	04000		/* Return error on wait.  */
++
++/* Control commands for `msgctl', `semctl', and `shmctl'.  */
++#define IPC_RMID	0		/* Remove identifier.  */
++#define IPC_SET		1		/* Set `ipc_perm' options.  */
++#define IPC_STAT	2		/* Get `ipc_perm' options.  */
++#ifdef __USE_GNU
++# define IPC_INFO	3		/* See ipcs.  */
++#endif
++
++/* Special key values.  */
++#define IPC_PRIVATE	((__key_t) 0)	/* Private key.  */
++
++
++/* Data structure used to pass permission information to IPC operations.  */
++struct ipc_perm
++  {
++    __key_t __key;			/* Key.  */
++    __uid_t uid;			/* Owner's user ID.  */
++    __gid_t gid;			/* Owner's group ID.  */
++    __uid_t cuid;			/* Creator's user ID.  */
++    __gid_t cgid;			/* Creator's group ID.  */
++    unsigned int mode;			/* Read/write permission.  */
++    unsigned short __seq;		/* Sequence number.  */
++    unsigned short __pad1;
++    unsigned long __unused1;
++    unsigned long __unused2;
++  };
+diff --git a/libc/sysdeps/linux/metag/bits/kernel_types.h b/libc/sysdeps/linux/metag/bits/kernel_types.h
+new file mode 100644
+index 000000000..8e0a91f30
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/kernel_types.h
+@@ -0,0 +1,45 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts
++ * with the posix_types.h kernel header, and will ensure that
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef __ASM_GENERIC_POSIX_TYPES_H
++#define __ASM_GENERIC_POSIX_TYPES_H
++
++typedef unsigned int	__kernel_dev_t;
++typedef unsigned int	__kernel_ino_t;
++typedef unsigned int	__kernel_mode_t;
++typedef unsigned long	__kernel_nlink_t;
++typedef long		__kernel_off_t;
++typedef int		__kernel_pid_t;
++typedef unsigned int	__kernel_uid_t;
++typedef unsigned int	__kernel_gid_t;
++typedef unsigned int	__kernel_size_t;
++typedef int		__kernel_ssize_t;
++typedef long		__kernel_ptrdiff_t;
++typedef long		__kernel_time_t;
++typedef long		__kernel_suseconds_t;
++typedef long		__kernel_clock_t;
++typedef int		__kernel_daddr_t;
++typedef char *		__kernel_caddr_t;
++typedef int             __kernel_ipc_pid_t;
++typedef unsigned short	__kernel_uid16_t;
++typedef unsigned short	__kernel_gid16_t;
++typedef unsigned int	__kernel_uid32_t;
++typedef unsigned int	__kernel_gid32_t;
++typedef unsigned int	__kernel_old_uid_t;
++typedef unsigned int	__kernel_old_gid_t;
++typedef __kernel_dev_t	__kernel_old_dev_t;
++typedef long long	__kernel_loff_t;
++
++typedef struct {
++	int val[2];
++} __kernel_fsid_t;
++
++#endif /* __ASM_GENERIC_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/metag/bits/profil-counter.h b/libc/sysdeps/linux/metag/bits/profil-counter.h
+new file mode 100644
+index 000000000..66ba78141
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/profil-counter.h
+@@ -0,0 +1,17 @@
++/*
++ * Low-level statistical profiling support function.  Linux/Meta version.
++ *
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ *
++ * Based on the SH version from the GNU C Library.
++ */
++
++#include <signal.h>
++
++static void
++profil_counter (int signo, struct sigcontext sc)
++{
++  profil_count (sc.cbuf.ctx.CurrPC);
++}
+diff --git a/libc/sysdeps/linux/metag/bits/setjmp.h b/libc/sysdeps/linux/metag/bits/setjmp.h
+new file mode 100644
+index 000000000..8ad4b12d2
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/setjmp.h
+@@ -0,0 +1,44 @@
++/*
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++/* Define the machine-dependent type `jmp_buf' */
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H	1
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++/*
++   jmp_buf[0] - A0StP
++   jmp_buf[1] - A1GbP
++   jmp_buf[2] - A0FrP
++   jmp_buf[3] - A1LbP
++   jmp_buf[4] - D0FrT
++   jmp_buf[5] - D1RtP
++   jmp_buf[6] - D0.5
++   jmp_buf[7] - D1.5
++   jmp_buf[8] - D0.6
++   jmp_buf[9] - D1.6
++   jmp_buf[10] - D0.7
++   jmp_buf[11] - D1.7
++   */
++
++#define _JBLEN 24
++#if     defined (__USE_MISC) || defined (_ASM)
++#define JB_SP 0
++#endif
++
++#ifndef	_ASM
++typedef int __jmp_buf[_JBLEN] __attribute__((aligned (8)));
++#endif
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(jmpbuf, address) \
++  ((void *) (address) > (void *) (jmpbuf)[JB_SP])
++
++#endif	/* bits/setjmp.h */
+diff --git a/libc/sysdeps/linux/metag/bits/sigcontextinfo.h b/libc/sysdeps/linux/metag/bits/sigcontextinfo.h
+new file mode 100644
+index 000000000..06c566b42
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/sigcontextinfo.h
+@@ -0,0 +1,14 @@
++/*
++ * Copyright (C) 2013, Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ *
++ */
++
++#define SIGCONTEXT struct sigcontext
++#define SIGCONTEXT_EXTRA_ARGS
++#define GET_PC(ctx)	((void *) ctx.cbuf.ctx.CurrPC)
++#define GET_FRAME(ctx)	((void *) ctx.cbuf.ctx.AX[1].U0)
++#define GET_STACK(ctx)	((void *) ctx.cbuf.ctx.AX[0].U0)
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libc/sysdeps/linux/metag/bits/stackinfo.h b/libc/sysdeps/linux/metag/bits/stackinfo.h
+new file mode 100644
+index 000000000..55a61219d
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/stackinfo.h
+@@ -0,0 +1,28 @@
++/* Copyright (C) 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++/* On Meta the stack grows up.  */
++#define _STACK_GROWS_UP	1
++
++#endif	/* stackinfo.h */
+diff --git a/libc/sysdeps/linux/metag/bits/syscalls.h b/libc/sysdeps/linux/metag/bits/syscalls.h
+new file mode 100644
+index 000000000..b5c8fc58c
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/syscalls.h
+@@ -0,0 +1,99 @@
++/*
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ *
++ */
++
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++/*
++  Meta version adapted from the ARM version.
++*/
++
++#define SYS_ify(syscall_name)  (__NR_##syscall_name)
++
++#ifdef __ASSEMBLER__
++
++/* Call a given syscall, with arguments loaded. */
++#undef DO_CALL
++#define DO_CALL(syscall_name, args)		\
++  MOV D1Re0, #SYS_ify (syscall_name);		\
++  SWITCH #0x440001
++
++#else
++
++#include <errno.h>
++
++#undef INLINE_SYSCALL_NCS
++#define INLINE_SYSCALL_NCS(name, nr, args...)				\
++(__extension__                                                          \
++  ({ unsigned int _inline_sys_result = INTERNAL_SYSCALL_NCS (name, , nr, args); \
++    if (unlikely(INTERNAL_SYSCALL_ERROR_P (_inline_sys_result, )))	\
++      {									\
++	__set_errno (INTERNAL_SYSCALL_ERRNO (_inline_sys_result, ));	\
++	_inline_sys_result = (unsigned int) -1;				\
++      }									\
++    (int) _inline_sys_result; })                                        \
++)
++
++#undef INTERNAL_SYSCALL_DECL
++#define INTERNAL_SYSCALL_DECL(err) do { } while (0)
++
++#undef INTERNAL_SYSCALL_NCS
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)			\
++(__extension__                                                          \
++  ({unsigned int __sys_result;						\
++    {									\
++      register int _result __asm__ ("D0Re0"), _nr __asm__ ("D1Re0");	\
++      LOAD_ARGS_##nr (args);						\
++      _nr = (name);							\
++      __asm__ volatile ("SWITCH  #0x440001 ! syscall " #name		\
++			: "=r" (_result)				\
++			: "d" (_nr) ASM_ARGS_##nr			\
++			: "memory");					\
++      __sys_result = _result;						\
++    }									\
++    (int) __sys_result; })                                              \
++)
++
++#undef INTERNAL_SYSCALL_ERROR_P
++#define INTERNAL_SYSCALL_ERROR_P(val, err) \
++  ((unsigned int) (val) >= 0xfffff001u)
++
++#undef INTERNAL_SYSCALL_ERRNO
++#define INTERNAL_SYSCALL_ERRNO(val, err)	(-(val))
++
++#define LOAD_ARGS_0()
++#define ASM_ARGS_0
++#define LOAD_ARGS_1(a1)					\
++  register int _a1 __asm__ ("D1Ar1") = (int) (a1);	\
++  LOAD_ARGS_0 ()
++#define ASM_ARGS_1	ASM_ARGS_0, "d" (_a1)
++#define LOAD_ARGS_2(a1, a2)				\
++  register int _a2 __asm__ ("D0Ar2") = (int) (a2);	\
++  LOAD_ARGS_1 (a1)
++#define ASM_ARGS_2	ASM_ARGS_1, "d" (_a2)
++#define LOAD_ARGS_3(a1, a2, a3)				\
++  register int _a3 __asm__ ("D1Ar3") = (int) (a3);	\
++  LOAD_ARGS_2 (a1, a2)
++#define ASM_ARGS_3	ASM_ARGS_2, "d" (_a3)
++#define LOAD_ARGS_4(a1, a2, a3, a4)			\
++  register int _a4 __asm__ ("D0Ar4") = (int) (a4);	\
++  LOAD_ARGS_3 (a1, a2, a3)
++#define ASM_ARGS_4	ASM_ARGS_3, "d" (_a4)
++#define LOAD_ARGS_5(a1, a2, a3, a4, a5)			\
++  register int _a5 __asm__ ("D1Ar5") = (int) (a5);	\
++  LOAD_ARGS_4 (a1, a2, a3, a4)
++#define ASM_ARGS_5	ASM_ARGS_4, "d" (_a5)
++#define LOAD_ARGS_6(a1, a2, a3, a4, a5, a6)		\
++  register int _a6 __asm__ ("D0Ar6") = (int) (a6);	\
++  LOAD_ARGS_5 (a1, a2, a3, a4, a5)
++#define ASM_ARGS_6	ASM_ARGS_5, "d" (_a6)
++
++#endif /* __ASSEMBLER__ */
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/metag/bits/uClibc_arch_features.h b/libc/sysdeps/linux/metag/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..0a0d00d16
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/uClibc_arch_features.h
+@@ -0,0 +1,46 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++/* instruction used when calling abort() to kill yourself */
++/*#define __UCLIBC_ABORT_INSTRUCTION__ "asm instruction"*/
++#undef __UCLIBC_ABORT_INSTRUCTION__
++
++/* can your target use syscall6() for mmap ? */
++#define __UCLIBC_MMAP_HAS_6_ARGS__
++
++/* does your target use syscall4() for truncate64 ? (32bit arches only) */
++#undef __UCLIBC_TRUNCATE64_HAS_4_ARGS__
++
++/* does your target have a broken create_module() ? */
++#undef __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#undef __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target doesn't like .global */
++#undef __UCLIBC_ASM_GLOBAL_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* needed probably only for ppc64 */
++#undef __UCLIBC_HAVE_ASM_GLOBAL_DOT_NAME__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/metag/bits/wordsize.h b/libc/sysdeps/linux/metag/bits/wordsize.h
+new file mode 100644
+index 000000000..ba643b60a
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/bits/wordsize.h
+@@ -0,0 +1,19 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define __WORDSIZE	32
+diff --git a/libc/sysdeps/linux/metag/brk.c b/libc/sysdeps/linux/metag/brk.c
+new file mode 100644
+index 000000000..355e88fc7
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/brk.c
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <unistd.h>
++#include <sys/syscall.h>
++
++libc_hidden_proto(brk)
++
++/* This must be initialized data because commons can't have aliases.  */
++void * __curbrk attribute_hidden = 0;
++
++int brk (void *addr)
++{
++    void *newbrk;
++
++    __asm__ __volatile__ ("MOV D1Re0,%2\n\t"
++			  "MOV D1Ar1,%1\n\t"
++			  "SWITCH #0x440001\n\t"
++			  "MOV %0,D0Re0"
++			  : "=r" (newbrk)
++			  : "r" (addr), "K" (__NR_brk)
++			  : "D0Re0", "D1Re0", "D1Ar1");
++
++    __curbrk = newbrk;
++
++    if (newbrk < addr)
++    {
++	__set_errno (ENOMEM);
++	return -1;
++    }
++
++    return 0;
++}
++libc_hidden_def(brk)
+diff --git a/libc/sysdeps/linux/metag/clone.S b/libc/sysdeps/linux/metag/clone.S
+new file mode 100644
+index 000000000..8fff56710
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/clone.S
+@@ -0,0 +1,65 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++!    clone() is even more special than fork() as it mucks with stacks
++!    and invokes a function in the right context after its all over.
++
++#include <asm/errno.h>
++#include <asm/unistd.h>
++
++/* int clone(int (*fn)(void *arg), void *child_stack, int flags, void *arg); */
++
++	.text
++	.global	__clone
++	.type	__clone,function
++__clone:
++	! sanity check args
++	MOV	D0Re0, #-EINVAL
++	CMP	D1Ar1, #0
++	BEQ	___error
++	CMP	D0Ar2, #0
++	BEQ     ___error
++
++	! save function pointer
++	MOV D0FrT, D1Ar1
++
++	! do the system call
++	! get flags
++	MOV	D1Ar1, D1Ar3
++	! new sp is already in D0Ar2
++	MOV	D1Re0, #__NR_clone
++	SWITCH	#0x440001
++	CMP	D0Re0,#0
++	! Error on -1
++	BLT	___error
++	! If non-zero we are the parent
++	MOVNE	PC, D1RtP
++	! BRKPNT
++
++	! We are the child
++	! pick the function arg and call address off the stack and execute
++	MOV     D0Ar2, D0FrT
++	MOV     D1Ar1, D0Ar4
++	MOV     D1RtP, PC
++	ADD	D1RtP, D1RtP, #8
++	MOV	PC, D0Ar2
++
++	! and we are done, passing the return value through D0Re0
++#ifdef __PIC__
++	B	_exit@PLT
++#else
++	B	_exit
++#endif
++
++___error:
++	MOV	D1Ar1, D0Re0
++#ifdef __PIC__
++	B	___syscall_error@PLT
++#else
++	B	___syscall_error
++#endif
++	.size	__clone, .-__clone
++
++.weak    _clone
++_clone    =   __clone
+diff --git a/libc/sysdeps/linux/metag/crt1.S b/libc/sysdeps/linux/metag/crt1.S
+new file mode 100644
+index 000000000..74adc1fdb
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/crt1.S
+@@ -0,0 +1,76 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++
++#include <asm/unistd.h>
++
++	.text
++	.global	__start
++	.type	__start,function
++__start:
++	MOV	D0FrT,A0StP
++	MOV	A0FrP,A0StP
++
++	MOV	A0.2,#0
++	MOV	A0.3,#0
++
++	MOV	A1.1,#0
++	MOV	A1.2,#0
++	MOV	A1.3,#0
++
++	MOV	D0.5,#0
++	MOV	D0.6,#0
++	MOV	D0.7,#0
++
++	MOV	D1.5,#0
++	MOV	D1.6,#0
++	MOV	D1.7,#0
++
++	MOV	D1Ar3,D0Ar2			! argv
++	MOV	D0Ar2,D1Ar1			! argc
++
++#ifdef __PIC__
++	ADDT	A1LbP,CPC1,#HI(__GLOBAL_OFFSET_TABLE__)
++	ADD	A1LbP,A1LbP,#LO(__GLOBAL_OFFSET_TABLE__+4)
++
++	MOV	D1Ar1,A1LbP
++	ADDT	D1Ar1,D1Ar1,#HI(_main@GOTOFF)
++	ADD	D1Ar1,D1Ar1,#LO(_main@GOTOFF)
++
++	MOV	D0Ar4,A1LbP
++	ADDT	D0Ar4,D0Ar4,#HI(__init@GOTOFF)
++	ADD	D0Ar4,D0Ar4,#LO(__init@GOTOFF)
++
++	MOV	D1Ar5,A1LbP
++	ADDT	D1Ar5,D1Ar5,#HI(__fini@GOTOFF)
++	ADD	D1Ar5,D1Ar5,#LO(__fini@GOTOFF)
++#else
++	MOVT	D1Ar1,#HI(_main)
++	ADD	D1Ar1,D1Ar1,#LO(_main)
++	MOVT	D0Ar4,#HI(__init)
++	ADD	D0Ar4,D0Ar4,#LO(__init)
++	MOVT	D1Ar5,#HI(__fini)
++	ADD	D1Ar5,D1Ar5,#LO(__fini)
++#endif
++
++	MOV	D0Ar6,#0			! rtld_fini
++
++	MOVT	D1Re0,#0x80
++
++	SETL	[A0StP++],D0Re0,D1Re0		! stack_end (8Mb)
++
++	MOV	D1Re0,#0
++	MOV	D0Re0,#0
++
++#ifdef __PIC__
++	CALLR   D1RtP, ___uClibc_main@PLT
++#else
++	CALLR   D1RtP, ___uClibc_main
++#endif
++
++	MOV	D1Re0,#__NR_exit
++	MOV	D1Ar1,#0x1
++	SWITCH	#0x440001			! exit syscall
++
++	.size __start,.-__start
+diff --git a/libc/sysdeps/linux/metag/crti.S b/libc/sysdeps/linux/metag/crti.S
+new file mode 100644
+index 000000000..f7fca542d
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/crti.S
+@@ -0,0 +1,19 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++	.section .init
++	.global	__init
++	.type	__init,function
++__init:
++        MOV     D0FrT, A0FrP
++        ADD     A0FrP, A0StP, #0
++        SETL    [A0StP++], D0.4, D1RtP
++
++	.section .fini
++	.global	__fini
++	.type	__fini,function
++__fini:
++        MOV     D0FrT, A0FrP
++        ADD     A0FrP, A0StP, #0
++        SETL    [A0StP++], D0.4, D1RtP
+diff --git a/libc/sysdeps/linux/metag/crtn.S b/libc/sysdeps/linux/metag/crtn.S
+new file mode 100644
+index 000000000..c885e5373
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/crtn.S
+@@ -0,0 +1,19 @@
++!    Copyright (C) 2013 Imagination Technologies Ltd.
++
++!    Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++
++	.section .init
++	.global	__init
++	.type	__init,function
++	GETL    D0.4, D1RtP, [A0FrP+#8++]
++	SUB     A0StP, A0FrP, #8
++	MOV     A0FrP, D0.4
++	MOV     PC, D1RtP
++
++	.section .fini
++	.global	__fini
++	.type	__fini,function
++	GETL    D0.4, D1RtP, [A0FrP+#8++]
++	SUB     A0StP, A0FrP, #8
++	MOV     A0FrP, D0.4
++	MOV     PC, D1RtP
+diff --git a/libc/sysdeps/linux/metag/metag.c b/libc/sysdeps/linux/metag/metag.c
+new file mode 100644
+index 000000000..a92f2149c
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/metag.c
+@@ -0,0 +1,10 @@
++/*
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <sys/syscall.h>
++
++_syscall2(int,metag_setglobalbit,char *,addr,int,mask)
+diff --git a/libc/sysdeps/linux/metag/setjmp.S b/libc/sysdeps/linux/metag/setjmp.S
+new file mode 100644
+index 000000000..f00b4a841
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/setjmp.S
+@@ -0,0 +1,52 @@
++/*
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++!!! setjmp and variants
++        .text
++
++!! int _setjmp (jmp_buf __env)
++!! Store the calling environment in ENV, not saving the signal mask.
++!! Return 0.  */
++        .global __setjmp
++        .type   __setjmp,function
++__setjmp:
++        MOV     D0Ar2,#0
++        B       ___sigsetjmp1
++        .size   __setjmp,.-__setjmp
++
++!! int setjmp (jmp_buf __env)
++!! Store the calling environment in ENV, also saving the signal mask.
++!! Return 0.  */
++        .global _setjmp
++        .type   _setjmp,function
++_setjmp:
++        MOV     D0Ar2,#1
++        !! fall through to __sigsetjmp
++        .size   _setjmp,.-_setjmp
++
++!! int __sigsetjmp (jmp_buf __env, int __savemask)
++!! Store the calling environment in ENV, also saving the
++!! signal mask if SAVEMASK is nonzero.  Return 0.
++!! This is the internal name for `sigsetjmp'.
++        .global ___sigsetjmp
++        .type   ___sigsetjmp,function
++___sigsetjmp:
++___sigsetjmp1:
++        !! Save A0/A1 regs
++        MSETL   [D1Ar1++],A0.0,A0.1
++        !! Use A0.3 as temp
++        MOV     A0.3,D1Ar1
++        !! Rewind D1Ar1 that was modified above
++        SUB     D1Ar1,D1Ar1,#(2*8)
++        !! Save D0/D1 regs
++        MSETL   [A0.3++],D0FrT,D0.5,D0.6,D0.7
++        !! Tail call __sigjmp_save
++#ifdef __PIC__
++        B       ___sigjmp_save@PLT
++#else
++        B       ___sigjmp_save
++#endif
++        .size   ___sigsetjmp,.-___sigsetjmp
+diff --git a/libc/sysdeps/linux/metag/sys/io.h b/libc/sysdeps/linux/metag/sys/io.h
+new file mode 100644
+index 000000000..6fdc44ff8
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/sys/io.h
+@@ -0,0 +1,48 @@
++/* Copyright (C) 1996, 1998, 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_SYS_IO_H
++
++#define	_SYS_IO_H	1
++#include <features.h>
++
++__BEGIN_DECLS
++
++/* If TURN_ON is TRUE, request for permission to do direct i/o on the
++   port numbers in the range [FROM,FROM+NUM-1].  Otherwise, turn I/O
++   permission off for that range.  This call requires root privileges.  */
++extern int ioperm (unsigned long int __from, unsigned long int __num,
++		   int __turn_on) __THROW;
++
++/* Set the I/O privilege level to LEVEL.  If LEVEL is nonzero,
++   permission to access any I/O port is granted.  This call requires
++   root privileges. */
++extern int iopl (int __level) __THROW;
++
++/* The functions that actually perform reads and writes.  */
++extern unsigned char inb (unsigned long int port) __THROW;
++extern unsigned short int inw (unsigned long int port) __THROW;
++extern unsigned long int inl (unsigned long int port) __THROW;
++
++extern void outb (unsigned char value, unsigned long int port) __THROW;
++extern void outw (unsigned short value, unsigned long int port) __THROW;
++extern void outl (unsigned long value, unsigned long int port) __THROW;
++
++__END_DECLS
++
++#endif /* _SYS_IO_H */
+diff --git a/libc/sysdeps/linux/metag/sys/procfs.h b/libc/sysdeps/linux/metag/sys/procfs.h
+new file mode 100644
+index 000000000..4a4ca7672
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/sys/procfs.h
+@@ -0,0 +1,121 @@
++/* Copyright (C) 1996, 1997, 1999, 2007 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 51 Franklin Street - Fifth Floor,
++   Boston, MA 02110-1301, USA.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++
++#define ELF_NGREG 30
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Register set for the floating-point registers.  */
++#define ELF_NFPREG 18
++typedef unsigned long elf_fpreg_t;
++typedef elf_fpreg_t elf_fpregset_t[ELF_NFPREG];
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned short int pr_uid;
++    unsigned short int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/metag/sys/ucontext.h b/libc/sysdeps/linux/metag/sys/ucontext.h
+new file mode 100644
+index 000000000..899c20035
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/sys/ucontext.h
+@@ -0,0 +1,96 @@
++/* Copyright (C) 1998, 1999, 2001, 2006 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Meta ABI compliant context switching support.  */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++#include <sys/procfs.h>
++
++/* We need the signal context definitions even if they are not used
++   included in <signal.h>.  */
++#include <bits/sigcontext.h>
++
++typedef int greg_t;
++
++/* Number of general registers.  */
++#define NGREG	18
++
++/* Container for all general registers.  */
++typedef elf_gregset_t gregset_t;
++
++/* Number of each register is the `gregset_t' array.  */
++enum
++{
++  R0 = 0,
++#define R0	R0
++  R1 = 1,
++#define R1	R1
++  R2 = 2,
++#define R2	R2
++  R3 = 3,
++#define R3	R3
++  R4 = 4,
++#define R4	R4
++  R5 = 5,
++#define R5	R5
++  R6 = 6,
++#define R6	R6
++  R7 = 7,
++#define R7	R7
++  R8 = 8,
++#define R8	R8
++  R9 = 9,
++#define R9	R9
++  R10 = 10,
++#define R10	R10
++  R11 = 11,
++#define R11	R11
++  R12 = 12,
++#define R12	R12
++  R13 = 13,
++#define R13	R13
++  R14 = 14,
++#define R14	R14
++  R15 = 15
++#define R15	R15
++};
++
++/* Structure to describe FPU registers.  */
++typedef elf_fpregset_t	fpregset_t;
++
++/* Context to describe whole processor state.  This only describes
++   the core registers; coprocessor registers get saved elsewhere
++   (e.g. in uc_regspace, or somewhere unspecified on the stack
++   during non-RT signal handlers).  */
++typedef struct sigcontext mcontext_t;
++
++/* Userlevel context.  */
++typedef struct ucontext
++  {
++    unsigned long uc_flags;
++    struct ucontext *uc_link;
++    stack_t uc_stack;
++    mcontext_t uc_mcontext;
++    __sigset_t uc_sigmask;
++  } ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/metag/sys/user.h b/libc/sysdeps/linux/metag/sys/user.h
+new file mode 100644
+index 000000000..3d282d9be
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/sys/user.h
+@@ -0,0 +1,7 @@
++/*
++ * This file is not needed, but in practice gdb might try to include it.
++ *
++ * Copyright (C) 2013 Imagination Technologies Ltd.
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
+diff --git a/libc/sysdeps/linux/metag/syscall.c b/libc/sysdeps/linux/metag/syscall.c
+new file mode 100644
+index 000000000..93aabf3e0
+--- /dev/null
++++ b/libc/sysdeps/linux/metag/syscall.c
+@@ -0,0 +1,40 @@
++/* syscall for META/uClibc
++ *
++ * Copyright (C) 2013 Imagination Technologies
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <features.h>
++#include <errno.h>
++#include <sys/types.h>
++#include <sys/syscall.h>
++
++long syscall(long sysnum,
++	     long arg1, long arg2, long arg3,
++	     long arg4, long arg5, long arg6)
++{
++
++	register long __call __asm__ ("D1Re0") = sysnum;
++	register long __res __asm__ ("D0Re0");
++	register long __a __asm__ ("D1Ar1") = arg1;
++	register long __b __asm__ ("D0Ar2") = arg2;
++	register long __c __asm__ ("D1Ar3") = arg3;
++	register long __d __asm__ ("D0Ar4") = arg4;
++	register long __e __asm__ ("D1Ar5") = arg5;
++	register long __f __asm__ ("D0Ar6") = arg6;
++
++
++	__asm__ __volatile__ ("SWITCH  #0x440001"
++			      : "=d" (__res)
++			      : "d" (__call), "d" (__a), "d" (__b),
++				"d" (__c), "d" (__d), "d" (__e) , "d" (__f)
++			      : "memory");
++
++	if(__res >= (unsigned long) -4095) {
++		long err = __res;
++		(*__errno_location()) = (-err);
++		__res = (unsigned long) -1;
++	}
++	return (long) __res;
++}

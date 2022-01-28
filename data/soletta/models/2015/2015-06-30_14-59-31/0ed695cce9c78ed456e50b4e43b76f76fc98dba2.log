@@ -1,0 +1,134 @@
+"2015-06-30 14:59:31 -0300"
+diff --git a/data/scripts/dependency-resolver.py b/data/scripts/dependency-resolver.py
+index cd096be9..4e6629f1 100755
+--- a/data/scripts/dependency-resolver.py
++++ b/data/scripts/dependency-resolver.py
+@@ -47,7 +47,7 @@ pkg_config_deps = {
+ 
+ header_deps = {
+     "KDBUS": "<systemd/sd-bus.h>",
+-    "PTHREAD": "<pthread.h>",
++    "PTHREAD_H": "<pthread.h>",
+     "RIOTOS": "<riotos/cpu.h>",
+     "DLFCN_H": "<dlfcn.h>",
+ }
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 0e80bcbe..a5111895 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -53,7 +53,7 @@ endchoice
+ 
+ config PTHREAD
+         bool "Pthread"
+-        depends on HAVE_PTHREAD && SOL_PLATFORM_LINUX
++        depends on HAVE_PTHREAD_H && SOL_PLATFORM_LINUX
+         default y
+ 
+ config LOG
+diff --git a/src/lib/common/sol-log-impl-linux.c b/src/lib/common/sol-log-impl-linux.c
+index b2562fc6..48c4d02d 100644
+--- a/src/lib/common/sol-log-impl-linux.c
++++ b/src/lib/common/sol-log-impl-linux.c
+@@ -49,7 +49,7 @@ static pid_t _main_pid;
+ static struct sol_str_table *_env_levels = NULL;
+ static char *_env_levels_str = NULL;
+ 
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+ #include <pthread.h>
+ static pthread_t _main_thread;
+ static pthread_mutex_t _mutex = PTHREAD_MUTEX_INITIALIZER;
+@@ -396,7 +396,7 @@ sol_log_impl_init(void)
+     if (_main_pid == 0)
+         _main_pid = getpid();
+ 
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+     if (_main_thread == 0)
+         _main_thread = pthread_self();
+ #endif
+@@ -447,7 +447,7 @@ sol_log_impl_shutdown(void)
+ {
+     _env_levels_unload();
+     _main_pid = 0;
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+     _main_thread = 0;
+     pthread_mutex_destroy(&_mutex);
+ #endif
+@@ -456,7 +456,7 @@ sol_log_impl_shutdown(void)
+ bool
+ sol_log_impl_lock(void)
+ {
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+     int error = pthread_mutex_lock(&_mutex);
+     if (!error)
+         return true;
+@@ -471,7 +471,7 @@ sol_log_impl_lock(void)
+ void
+ sol_log_impl_unlock(void)
+ {
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+     pthread_mutex_unlock(&_mutex);
+ #endif
+ }
+@@ -501,7 +501,7 @@ sol_log_impl_print_function_stderr(void *data, const struct sol_log_domain *doma
+ 
+     if (_main_pid != getpid())
+         fprintf(stderr, "P%u ", getpid());
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+     if (_main_thread != pthread_self())
+         fprintf(stderr, "T%lu ", pthread_self());
+ #endif
+@@ -576,7 +576,7 @@ sol_log_print_function_file(void *data, const struct sol_log_domain *domain, uin
+ 
+     if (_main_pid != getpid())
+         fprintf(fp, "P:%u ", getpid());
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+     if (_main_thread != pthread_self())
+         fprintf(fp, "T:%lu ", pthread_self());
+ #endif
+@@ -658,7 +658,7 @@ sol_log_print_function_journal(void *data, const struct sol_log_domain *domain,
+     sd_journal_send_with_location(code_file, code_line, function,
+         "PRIORITY=%i", sd_level,
+         "MESSAGE=%s", msg ? msg : format,
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+         "THREAD=%" PRIu64, (uint64_t)pthread_self(),
+ #endif
+         NULL);
+diff --git a/src/lib/common/sol-mainloop-impl-posix.c b/src/lib/common/sol-mainloop-impl-posix.c
+index 7dd2813d..05f40416 100644
+--- a/src/lib/common/sol-mainloop-impl-posix.c
++++ b/src/lib/common/sol-mainloop-impl-posix.c
+@@ -114,7 +114,7 @@ timeout_compare(const void *data1, const void *data2)
+     return sol_util_timespec_compare(&a->expire, &b->expire);
+ }
+ 
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+ #include <pthread.h>
+ 
+ #define SIGPROCMASK pthread_sigmask
+@@ -248,7 +248,7 @@ threads_shutdown(void)
+     close(pipe_fds[0]);
+ }
+ 
+-#else  /* !HAVE_PTHREAD_H */
++#else  /* !PTHREAD */
+ 
+ #define SIGPROCMASK sigprocmask
+ #define MAIN_THREAD_CHECK_RETURN do { } while (0)
+@@ -368,7 +368,7 @@ static unsigned char siginfo_storage_used;
+ #define SIGINFO_HANDLER_FOREACH(ptr) \
+     for (ptr = siginfo_handler; ptr < siginfo_handler + SIGINFO_HANDLER_COUNT; ptr++) if (ptr->sig)
+ 
+-#ifdef HAVE_PTHREAD_H
++#ifdef PTHREAD
+ void sol_mainloop_posix_signals_block(void);
+ void sol_mainloop_posix_signals_unblock(void);
+ 

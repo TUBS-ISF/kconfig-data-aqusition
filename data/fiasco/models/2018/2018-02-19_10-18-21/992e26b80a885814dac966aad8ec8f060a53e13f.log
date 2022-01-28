@@ -1,0 +1,848 @@
+"2018-02-19 10:18:21 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index 4a4a513..423d3d5 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -319,6 +319,16 @@ config VIRT_OBJ_SPACE
+ 	depends on HAS_VIRT_OBJ_SPACE_OPTION
+ 	depends on !DISABLE_VIRT_OBJ_SPACE
+ 
++config CPU_LOCAL_MAP
++	bool "Enable CPU local page-tables for kernel mappings" if AMD64
++	depends on AMD64
++	help
++	  Enable to use per CPU page directories to allow CPU-local
++	  mapping of kernel memory. This is used for kernel isolation
++	  etc.
++	  
++	  If unsure say N.
++
+ config NO_IO_PAGEFAULT
+ 	bool "Disable IO-Port fault IPC" if IA32 || AMD64
+ 	depends on IA32 || AMD64
+diff --git a/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp b/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp
+index 5c8806d..5b67be7 100644
+--- a/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp
++++ b/src/jdb/ia32/64/jdb_kern_info-bench-ia32-64.cpp
+@@ -201,6 +201,11 @@ Jdb_kern_info_bench::show_arch()
+     {
+       BENCH("APIC timer read", inst_apic_timer_read, 200000);
+     }
++
++#ifndef CONFIG_AMD64
++    // disable this benchmark as it does not compile
++    // (probably because Mem_layout::Jdb_bench_page
++    // cannot be represented as 32bit signed immediate on AMD64)
+     {
+       time = Cpu::rdtsc();
+       for (i=200000; i; i--)
+@@ -211,6 +216,8 @@ Jdb_kern_info_bench::show_arch()
+       time = Cpu::rdtsc() - time - time_invlpg;
+       show_time (time, 200000, "load data TLB (4k)");
+     }
++#endif
++
+     {
+       // asm ("1: mov %%cr3,%%rdx; mov %%rdx, %%cr3; dec %%rax; jnz 1b; ret")
+       *(Unsigned32*)(Mem_layout::Jdb_bench_page + 0xff0) = 0x0fda200f;
+diff --git a/src/jdb/ia32/jdb-ia32-amd64.cpp b/src/jdb/ia32/jdb-ia32-amd64.cpp
+index 7c17979..4660bfb 100644
+--- a/src/jdb/ia32/jdb-ia32-amd64.cpp
++++ b/src/jdb/ia32/jdb-ia32-amd64.cpp
+@@ -387,8 +387,10 @@ Jdb::peek_task(Address addr, Space *task, void *value, int width)
+       // user address, use temporary mapping
+       phys = Address(task->virt_to_phys (addr));
+ 
++#ifndef CONFIG_CPU_LOCAL_MAP
+       if (phys == ~0UL)
+-	phys = task->virt_to_phys_s0((void*)addr);
++        phys = task->virt_to_phys_s0((void*)addr);
++#endif
+ 
+       if (phys == ~0UL)
+ 	return -1;
+@@ -424,8 +426,10 @@ Jdb::poke_task(Address addr, Space *task, void const *value, int width)
+       // user address, use temporary mapping
+       phys = Address(task->virt_to_phys(addr));
+ 
++#ifndef CONFIG_CPU_LOCAL_MAP
+       if (phys == ~0UL)
+-	phys = task->virt_to_phys_s0((void*)addr);
++        phys = task->virt_to_phys_s0((void*)addr);
++#endif
+ 
+       if (phys == ~0UL)
+ 	return -1;
+diff --git a/src/kern/ia32/64/main-ia32-64.cpp b/src/kern/ia32/64/main-ia32-64.cpp
+index 3857361..27c3f37 100644
+--- a/src/kern/ia32/64/main-ia32-64.cpp
++++ b/src/kern/ia32/64/main-ia32-64.cpp
+@@ -48,12 +48,10 @@ kernel_main(void)
+ 
+   // switch to stack of kernel thread and bootstrap the kernel
+   asm volatile
+-    ("  movq %%rax, %%cr3       \n\t"   // restore proper cr3 after running on the mp boot dir
+-     "	movq %3, %%rsp		\n\t"	// switch stack
++    ("	movq %3, %%rsp		\n\t"	// switch stack
+      "	call call_bootstrap	\n\t"	// bootstrap kernel thread
+      : "=a" (dummy), "=c" (dummy), "=d" (dummy)
+-     : "S" (kernel->init_stack()), "D" (kernel),
+-       "a" (Mem_layout::pmem_to_phys(Kmem::dir())));
++     : "S" (kernel->init_stack()), "D" (kernel));
+ }
+ 
+ 
+diff --git a/src/kern/ia32/64/mem_layout-ia32-64.cpp b/src/kern/ia32/64/mem_layout-ia32-64.cpp
+index a125f1a..feffaa1 100644
+--- a/src/kern/ia32/64/mem_layout-ia32-64.cpp
++++ b/src/kern/ia32/64/mem_layout-ia32-64.cpp
+@@ -16,10 +16,18 @@ public:
+ 
+   enum
+   {
+-    Utcb_addr         = 0xffff800000000000UL,    ///< % 4kB UTCB map address
+-    Kip_auto_map      = 0xffff800000002000UL,    ///< % 4kB
++    Kentry_start      = 0xffff810000000000UL, ///< 512GB slot 258
++    Kentry_cpu_page   = 0xffff817fffffc000UL, ///< last 4KB in solt 258
++    Io_bitmap         = 0xffff818000000000UL, ///< 512GB slot 259 first page
++    Caps_start        = 0xffff818000800000UL,    ///< % 4MB
++    Caps_end          = 0xffff81800c400000UL,    ///< % 4MB
++
++    Utcb_addr         = 0x0000007fff000000UL,    ///< % 4kB UTCB map address
+     User_max          = 0x00007fffffffffffUL,
+-    Service_page      = 0xffffffffeac00000UL,    ///< % 4MB global mappings
++
++    Kglobal_area      = 0xffffffff00000000UL,    ///< % 1GB to share 1GB tables (start)
++    Kglobal_area_end  = 0xffffffff80000000UL,    ///< % 1GB to share 1GB tables (end)
++    Service_page      = Kglobal_area,            ///< % 4MB global mappings
+     Local_apic_page   = Service_page + 0x0000,   ///< % 4KB
+     Kmem_tmp_page_1   = Service_page + 0x2000,   ///< % 4KB size 8KB
+     Kmem_tmp_page_2   = Service_page + 0x4000,   ///< % 4KB size 8KB
+@@ -32,15 +40,14 @@ public:
+     Tbuf_buffer_area  = Service_page + 0x200000, ///< % 2MB
+     Tbuf_ubuffer_area = Tbuf_buffer_area,
+     // 0xffffffffeb800000-0xfffffffffec000000 (8MB) free
+-    Io_map_area_start = 0xffffffffec000000UL,
+-    Io_map_area_end   = 0xffffffffec800000UL,
+-    ___free_3         = 0xffffffffec800000UL, ///< % 4MB
+-    ___free_4         = 0xffffffffec880000UL, ///< % 4MB
+-    Jdb_debug_start   = 0xffffffffecc00000UL,    ///< % 4MB   JDB symbols/lines
+-    Jdb_debug_end     = 0xffffffffee000000UL,    ///< % 4MB
++    Io_map_area_start = Kglobal_area + 0xc000000UL,
++    Io_map_area_end   = Kglobal_area + 0xc800000UL,
++    ___free_3         = Kglobal_area + 0xc800000UL, ///< % 4MB
++    ___free_4         = Kglobal_area + 0xc880000UL, ///< % 4MB
++    Jdb_debug_start   = Kglobal_area + 0xcc00000UL,    ///< % 4MB   JDB symbols/lines
++    Jdb_debug_end     = Kglobal_area + 0xe000000UL,    ///< % 4MB
+     // 0xffffffffee000000-0xffffffffef800000 (24MB) free
+     Kstatic           = 0xffffffffef800000UL,    ///< % 4MB Io_bitmap
+-    Io_bitmap         = 0xffffffffefc00000UL,    ///< % 4MB
+     Vmem_end          = 0xfffffffff0000000UL,
+ 
+     Kernel_image        = FIASCO_IMAGE_VIRT_START,
+@@ -55,8 +62,9 @@ public:
+     Adap_vram_cga_beg = Adap_image + 0xb8000, ///< % 8KB video RAM CGA memory
+     Adap_vram_cga_end = Adap_image + 0xc0000,
+ 
+-    Caps_start        = 0xfffffffff0800000UL,    ///< % 4MB
+-    Caps_end          = 0xfffffffffc400000UL,    ///< % 4MB
++    // used for CPU_LOCAL_MAP only
++    Kentry_cpu_pdir   = 0xfffffffff0800000UL,
++
+     Physmem           = 0xffffffff80000000UL,    ///< % 4MB   kernel memory
+     Physmem_end       = 0xffffffffe0000000UL,    ///< % 4MB   kernel memory
+   };
+@@ -132,3 +140,4 @@ Mem_layout::in_pmem(Address addr)
+ {
+   return addr >= Physmem && addr < Physmem_end;
+ }
++
+diff --git a/src/kern/ia32/64/thread-ia32-64.cpp b/src/kern/ia32/64/thread-ia32-64.cpp
+index abe7ef9..0d0fb2d 100644
+--- a/src/kern/ia32/64/thread-ia32-64.cpp
++++ b/src/kern/ia32/64/thread-ia32-64.cpp
+@@ -284,13 +284,19 @@ Thread::call_nested_trap_handler(Trap_state *ts)
+      "mov    %[stack],%%rsp	\n\t"	// setup clean stack pointer
+      "1:			\n\t"
+      "incq   %[recover]		\n\t"
++#ifndef CONFIG_CPU_LOCAL_MAP
+      "mov    %%cr3, %[d1]	\n\t"
++#endif
+      "push   %[d2]		\n\t"	// save old stack pointer on new stack
+      "push   %[d1]		\n\t"	// save old pdbr
++#ifndef CONFIG_CPU_LOCAL_MAP
+      "mov    %[pdbr], %%cr3	\n\t"
++#endif
+      "callq  *%[handler]	\n\t"
+      "pop    %[d1]		\n\t"
++#ifndef CONFIG_CPU_LOCAL_MAP
+      "mov    %[d1], %%cr3	\n\t"
++#endif
+      "pop    %%rsp		\n\t"	// restore old stack pointer
+      "cmpq   $0,%[recover]	\n\t"	// check trap within trap handler
+      "je     1f			\n\t"
+@@ -300,7 +306,9 @@ Thread::call_nested_trap_handler(Trap_state *ts)
+        "=S"(scratch2),
+        [recover] "+m" (ntr)
+      : [ts] "D" (ts),
++#ifndef CONFIG_CPU_LOCAL_MAP
+        [pdbr] "r" (Kernel_task::kernel_task()->virt_to_phys((Address)Kmem::dir())),
++#endif
+        [cpu] "S" (log_cpu),
+        [stack] "r" (stack),
+        [handler] "m" (nested_trap_handler)
+diff --git a/src/kern/ia32/kmem-ia32.cpp b/src/kern/ia32/kmem-ia32.cpp
+index c6c1cb7..0c5f863 100644
+--- a/src/kern/ia32/kmem-ia32.cpp
++++ b/src/kern/ia32/kmem-ia32.cpp
+@@ -11,7 +11,6 @@ INTERFACE [ia32,amd64,ux]:
+ #include "kip.h"
+ #include "mem_layout.h"
+ #include "paging.h"
+-#include "simple_alloc.h"
+ 
+ class Cpu;
+ class Tss;
+@@ -48,8 +47,6 @@ class Kmem : public Mem_layout
+ private:
+   Kmem();			// default constructors are undefined
+   Kmem (const Kmem&);
+-  static unsigned long tss_mem_pm;
+-  static cxx::Simple_alloc tss_mem_vm;
+ 
+ public:
+   static Device_map dev_map;
+@@ -97,6 +94,7 @@ IMPLEMENTATION [ia32, amd64]:
+ #include "paging.h"
+ #include "pic.h"
+ #include "std_macros.h"
++#include "simple_alloc.h"
+ 
+ #include <cstdio>
+ 
+@@ -392,8 +390,8 @@ Kmem::init_mmu()
+   // jdb adapter page.
+   assert((Mem_layout::Service_page & ~Config::SUPERPAGE_MASK) == 0);
+ 
+-  auto pt = kdir->walk(Virt_addr(Mem_layout::Service_page), Pdir::Depth,
+-                       false, pdir_alloc(alloc));
++  kdir->walk(Virt_addr(Mem_layout::Service_page), Pdir::Depth,
++             false, pdir_alloc(alloc));
+ 
+   // kernel mode should acknowledge write-protected page table entries
+   Cpu::set_cr0(Cpu::get_cr0() | CR0_WP);
+@@ -401,65 +399,8 @@ Kmem::init_mmu()
+   // now switch to our new page table
+   Cpu::set_pdbr(Mem_layout::pmem_to_phys(kdir));
+ 
+-  assert((Mem_layout::Io_bitmap & ~Config::SUPERPAGE_MASK) == 0);
+-
+-  enum { Tss_mem_size = 0x10 + Config::Max_num_cpus * (sizeof(Tss) + 256) };
+-
+-  /* Per-CPU TSS required to use IO-bitmap for more CPUs */
+-  static_assert(Tss_mem_size < 0x10000, "Too many CPUs configured.");
+-
+-  unsigned tss_mem_size = Tss_mem_size;
+-
+-  if (tss_mem_size < Config::PAGE_SIZE)
+-    tss_mem_size = Config::PAGE_SIZE;
+-
+-  tss_mem_pm = Mem_layout::pmem_to_phys(alloc->unaligned_alloc(tss_mem_size));
+-
+-  printf("Kmem:: TSS mem at %lx (%uBytes)\n", tss_mem_pm, tss_mem_size);
+-
+-  if (superpages
+-      && Config::SUPERPAGE_SIZE - (tss_mem_pm & ~Config::SUPERPAGE_MASK) < 0x10000)
+-    {
+-      // can map as 4MB page because the cpu_page will land within a
+-      // 16-bit range from io_bitmap
+-      auto e = kdir->walk(Virt_addr(Mem_layout::Io_bitmap - Config::SUPERPAGE_SIZE),
+-                          Pdir::Super_level, false, pdir_alloc(alloc));
+-
+-      e.set_page(tss_mem_pm & Config::SUPERPAGE_MASK,
+-                 Pt_entry::Writable | Pt_entry::Referenced
+-                 | Pt_entry::Dirty | Pt_entry::global());
+-
+-      tss_mem_vm = cxx::Simple_alloc(
+-          (tss_mem_pm & ~Config::SUPERPAGE_MASK)
+-          + (Mem_layout::Io_bitmap - Config::SUPERPAGE_SIZE),
+-          tss_mem_size);
+-    }
+-  else
+-    {
+-      unsigned i;
+-      for (i = 0; (i << Config::PAGE_SHIFT) < tss_mem_size; ++i)
+-        {
+-          pt = kdir->walk(Virt_addr(Mem_layout::Io_bitmap - Config::PAGE_SIZE * (i+1)),
+-                          Pdir::Depth, false, pdir_alloc(alloc));
++  setup_global_cpu_structures(superpages);
+ 
+-          pt.set_page(tss_mem_pm + i * Config::PAGE_SIZE,
+-                      Pt_entry::Writable | Pt_entry::Referenced | Pt_entry::Dirty
+-                      | Pt_entry::global());
+-        }
+-
+-      tss_mem_vm = cxx::Simple_alloc(
+-          Mem_layout::Io_bitmap - Config::PAGE_SIZE * i,
+-          tss_mem_size);
+-    }
+-
+-  // the IO bitmap must be followed by one byte containing 0xff
+-  // if this byte is not present, then one gets page faults
+-  // (or general protection) when accessing the last port
+-  // at least on a Pentium 133.
+-  //
+-  // Therefore we write 0xff in the first byte of the cpu_page
+-  // and map this page behind every IO bitmap
+-  io_bitmap_delimiter = tss_mem_vm.alloc<Unsigned8>();
+ 
+   // did we really get the first byte ??
+   assert((reinterpret_cast<Address>(io_bitmap_delimiter)
+@@ -467,20 +408,13 @@ Kmem::init_mmu()
+   *io_bitmap_delimiter = 0xff;
+ }
+ 
+-
+-PUBLIC static FIASCO_INIT_CPU
++PRIVATE static
+ void
+-Kmem::init_cpu(Cpu &cpu)
++Kmem::setup_cpu_structures(Cpu &cpu, cxx::Simple_alloc *cpu_alloc,
++                           cxx::Simple_alloc *tss_alloc)
+ {
+-  cxx::Simple_alloc cpu_mem_vm(Kmem_alloc::allocator()->unaligned_alloc(1024), 1024);
+-  if (Config::Warn_level >= 2)
+-    printf("Allocate cpu_mem @ %p\n", cpu_mem_vm.block());
+-
+-  cxx::Simple_alloc *cpu_mem_alloc = &cpu_mem_vm;
+-  cxx::Simple_alloc *tss_alloc =  &tss_mem_vm;
+-
+   // now initialize the global descriptor table
+-  cpu.init_gdt((Address)cpu_mem_alloc->alloc_bytes(Gdt::gdt_max, 0x10), user_max());
++  cpu.init_gdt((Address)cpu_alloc->alloc_bytes(Gdt::gdt_max, 0x10), user_max());
+ 
+   // Allocate the task segment as the last thing from cpu_page_vm
+   // because with IO protection enabled the task segment includes the
+@@ -519,7 +453,7 @@ Kmem::init_cpu(Cpu &cpu)
+   // and finally initialize the TSS
+   cpu.set_tss();
+ 
+-  init_cpu_arch(cpu, cpu_mem_alloc);
++  init_cpu_arch(cpu, cpu_alloc);
+ }
+ 
+ 
+@@ -546,8 +480,6 @@ IMPLEMENTATION [ia32,ux,amd64]:
+ #include "tss.h"
+ 
+ // static class variables
+-unsigned long Kmem::tss_mem_pm;
+-cxx::Simple_alloc Kmem::tss_mem_vm;
+ Kpdir *Mem_layout::kdir;
+ 
+ /**
+@@ -575,6 +507,23 @@ Kmem::phys_to_virt(Address addr)
+ PUBLIC static inline const Pdir* Kmem::dir() { return kdir; }
+ 
+ 
++//--------------------------------------------------------------------------
++INTERFACE [(ia32 || ux || amd64) && !cpu_local_map]:
++
++#include "simple_alloc.h"
++
++EXTENSION class Kmem
++{
++  static unsigned long tss_mem_pm;
++  static cxx::Simple_alloc tss_mem_vm;
++};
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(ia32 || ux || amd64) && !cpu_local_map]:
++
++unsigned long Kmem::tss_mem_pm;
++cxx::Simple_alloc Kmem::tss_mem_vm;
++
+ //--------------------------------------------------------------------------
+ IMPLEMENTATION [realmode && amd64]:
+ 
+@@ -585,7 +534,8 @@ Kmem::get_realmode_startup_pdbr()
+   // for amd64 we need to make sure that our boot-up page directory is below
+   // 4GB in physical memory
+   static char _boot_pdir_page[Config::PAGE_SIZE] __attribute__((aligned(4096)));
+-  memcpy(_boot_pdir_page, dir(), sizeof(_boot_pdir_page));
++  void *pd = current_cpu_kdir();
++  memcpy(_boot_pdir_page, pd, sizeof(_boot_pdir_page));
+ 
+   return Kmem::virt_to_phys(_boot_pdir_page);
+ }
+@@ -600,4 +550,270 @@ Kmem::get_realmode_startup_pdbr()
+   return Mem_layout::pmem_to_phys(Kmem::dir());
+ }
+ 
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32 || ux) && !cpu_local_map]:
++
++PUBLIC static inline
++Kpdir *
++Kmem::current_cpu_kdir()
++{
++  return kdir;
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && !cpu_local_map]:
++
++PRIVATE static inline
++void
++Kmem::setup_global_cpu_structures(bool superpages)
++{
++  auto *alloc = Kmem_alloc::allocator();
++  assert((Mem_layout::Io_bitmap & ~Config::SUPERPAGE_MASK) == 0);
++
++  enum { Tss_mem_size = 0x10 + Config::Max_num_cpus * (sizeof(Tss) + 256) };
++
++  /* Per-CPU TSS required to use IO-bitmap for more CPUs */
++  static_assert(Tss_mem_size < 0x10000, "Too many CPUs configured.");
++
++  unsigned tss_mem_size = Tss_mem_size;
++
++  if (tss_mem_size < Config::PAGE_SIZE)
++    tss_mem_size = Config::PAGE_SIZE;
++
++  tss_mem_pm = Mem_layout::pmem_to_phys(alloc->unaligned_alloc(tss_mem_size));
++
++  printf("Kmem:: TSS mem at %lx (%uBytes)\n", tss_mem_pm, tss_mem_size);
++
++  if (superpages
++      && Config::SUPERPAGE_SIZE - (tss_mem_pm & ~Config::SUPERPAGE_MASK) < 0x10000)
++    {
++      // can map as 4MB page because the cpu_page will land within a
++      // 16-bit range from io_bitmap
++      auto e = kdir->walk(Virt_addr(Mem_layout::Io_bitmap - Config::SUPERPAGE_SIZE),
++                          Pdir::Super_level, false, pdir_alloc(alloc));
++
++      e.set_page(tss_mem_pm & Config::SUPERPAGE_MASK,
++                 Pt_entry::Writable | Pt_entry::Referenced
++                 | Pt_entry::Dirty | Pt_entry::global());
++
++      tss_mem_vm = cxx::Simple_alloc(
++          (tss_mem_pm & ~Config::SUPERPAGE_MASK)
++          + (Mem_layout::Io_bitmap - Config::SUPERPAGE_SIZE),
++          tss_mem_size);
++    }
++  else
++    {
++      unsigned i;
++      for (i = 0; (i << Config::PAGE_SHIFT) < tss_mem_size; ++i)
++        {
++          auto e = kdir->walk(Virt_addr(Mem_layout::Io_bitmap - Config::PAGE_SIZE * (i+1)),
++                              Pdir::Depth, false, pdir_alloc(alloc));
++
++          e.set_page(tss_mem_pm + i * Config::PAGE_SIZE,
++                     Pt_entry::Writable | Pt_entry::Referenced | Pt_entry::Dirty
++                     | Pt_entry::global());
++        }
++
++      tss_mem_vm = cxx::Simple_alloc(
++          Mem_layout::Io_bitmap - Config::PAGE_SIZE * i,
++          tss_mem_size);
++    }
++
++  // the IO bitmap must be followed by one byte containing 0xff
++  // if this byte is not present, then one gets page faults
++  // (or general protection) when accessing the last port
++  // at least on a Pentium 133.
++  //
++  // Therefore we write 0xff in the first byte of the cpu_page
++  // and map this page behind every IO bitmap
++  io_bitmap_delimiter = tss_mem_vm.alloc<Unsigned8>();
++}
++
++PUBLIC static FIASCO_INIT_CPU
++void
++Kmem::init_cpu(Cpu &cpu)
++{
++  cxx::Simple_alloc cpu_mem_vm(Kmem_alloc::allocator()->unaligned_alloc(1024), 1024);
++  if (Config::Warn_level >= 2)
++    printf("Allocate cpu_mem @ %p\n", cpu_mem_vm.block());
++
++  // now switch to our new page table
++  Cpu::set_pdbr(Mem_layout::pmem_to_phys(kdir));
++
++  setup_cpu_structures(cpu, &cpu_mem_vm, &tss_mem_vm);
++}
++
++PUBLIC static inline
++void
++Kmem::resume_cpu(Cpu_number)
++{
++  Cpu::set_pdbr(pmem_to_phys(kdir));
++}
++
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && cpu_local_map]:
++
++DEFINE_PER_CPU static Per_cpu<Kpdir *> _per_cpu_dir;
++
++PUBLIC static inline
++Kpdir *
++Kmem::current_cpu_kdir()
++{
++  return reinterpret_cast<Kpdir *>(Kentry_cpu_pdir);
++}
++
++PUBLIC static inline
++Kpdir *
++Kmem::current_cpu_udir()
++{
++  return reinterpret_cast<Kpdir *>(Kentry_cpu_pdir);
++}
++
++PRIVATE static inline
++void
++Kmem::setup_global_cpu_structures(bool superpages)
++{
++  (void)superpages;
++  io_bitmap_delimiter = (Unsigned8 *)Kmem_alloc::allocator()->alloc(Config::PAGE_SHIFT);
++}
++
++PUBLIC static FIASCO_INIT_CPU
++void
++Kmem::init_cpu(Cpu &cpu)
++{
++  Kmem_alloc *const alloc = Kmem_alloc::allocator();
++
++  unsigned const cpu_dir_sz = sizeof(Kpdir);
++
++  Kpdir *cpu_dir = (Kpdir*)alloc->unaligned_alloc(cpu_dir_sz);
++  memset (cpu_dir, 0, cpu_dir_sz);
++
++  auto src = kdir->walk(Virt_addr(0), 0);
++  auto dst = cpu_dir->walk(Virt_addr(0), 0);
++  write_now(dst.pte, *src.pte);
++
++  static_assert ((Kglobal_area & ((1UL << 30) - 1)) == 0, "Kglobal area must be 1GB aligned");
++  static_assert ((Kglobal_area_end & ((1UL << 30) - 1)) == 0, "Kglobal area must be 1GB aligned");
++
++  for (unsigned i = 0; i < ((Kglobal_area_end - Kglobal_area) >> 30); ++i)
++    {
++      auto src = kdir->walk(Virt_addr(Kglobal_area + (((Address)i) << 30)), 1);
++      auto dst = cpu_dir->walk(Virt_addr(Kglobal_area + (((Address)i) << 30)), 1,
++                               false, pdir_alloc(alloc));
++
++      if (dst.level != 1)
++        panic("could not setup per-cpu page table: %d\n", __LINE__);
++
++      if (src.level != 1)
++        panic("could not setup per-cpu page table, invalid source mapping: %d\n", __LINE__);
++
++      write_now(dst.pte, *src.pte);
++    }
++
++  static_assert((Physmem & (Config::SUPERPAGE_SIZE - 1)) == 0, "Physmem area must be superpage aligned");
++  static_assert((Physmem_end& (Config::SUPERPAGE_SIZE - 1)) == 0, "Physmem_end area must be superpage aligned");
++
++  for (unsigned i = 0; i < ((Physmem_end - Physmem) >> Config::SUPERPAGE_SHIFT);)
++    {
++      Address a = Physmem + (i << Config::SUPERPAGE_SHIFT);
++      if ((a & ((1UL << 30) - 1)) || ((Physmem_end - (1UL << 30)) < a))
++        {
++          // copy a superpage slot
++          auto src = kdir->walk(Virt_addr(a), 2);
++
++          if (src.level != 2)
++            panic("could not setup per-cpu page table, invalid source mapping: %d\n", __LINE__);
++
++          if (src.is_valid())
++            {
++              auto dst = cpu_dir->walk(Virt_addr(a), 2,
++                                       false, pdir_alloc(alloc));
++
++              if (dst.level != 2)
++                panic("could not setup per-cpu page table: %d\n", __LINE__);
++
++
++              if (0)
++                printf("physmem sync(2M): va:%16lx pte:%16lx\n", a, *src.pte);
++
++              write_now(dst.pte, *src.pte);
++            }
++          ++i;
++        }
++      else
++        {
++          // copy a 1GB slot
++          auto src = kdir->walk(Virt_addr(a), 1);
++          if (src.level != 1)
++            panic("could not setup per-cpu page table, invalid source mapping: %d\n", __LINE__);
++
++          if (src.is_valid())
++            {
++              auto dst = cpu_dir->walk(Virt_addr(a), 1,
++                                       false, pdir_alloc(alloc));
++
++              if (dst.level != 1)
++                panic("could not setup per-cpu page table: %d\n", __LINE__);
++
++
++              if (0)
++                printf("physmem sync(1G): va:%16lx pte:%16lx\n", a, *src.pte);
++
++              write_now(dst.pte, *src.pte);
++            }
++
++          i += 512; // skip 512 2MB entries == 1G
++        }
++    }
++
++  cpu_dir->map(Kernel_image_phys,
++               Virt_addr(Kernel_image),
++               Virt_size(Config::SUPERPAGE_SIZE),
++               Pt_entry::Dirty | Pt_entry::Writable | Pt_entry::Referenced
++               | Pt_entry::global(), Pt_entry::super_level(), false,
++               pdir_alloc(alloc));
++
++   if (!Adap_in_kernel_image)
++     cpu_dir->map(Adap_image_phys,
++                  Virt_addr(Adap_image),
++                  Virt_size(Config::SUPERPAGE_SIZE),
++                  Pt_entry::Dirty | Pt_entry::Writable | Pt_entry::Referenced
++                  | Pt_entry::global(), Pt_entry::super_level(),
++                  false, pdir_alloc(alloc));
++
++  Address cpu_dir_pa = Mem_layout::pmem_to_phys(cpu_dir);
++  cpu_dir->map(cpu_dir_pa, Virt_addr(Kentry_cpu_pdir),
++               Virt_size(cpu_dir_sz),
++               Pt_entry::Writable | Pt_entry::Referenced
++               | Pt_entry::Dirty  | Pt_entry::global(),
++               Pdir::Depth,
++               false, pdir_alloc(alloc));
++
++  unsigned const cpu_mx_sz = Config::PAGE_SIZE;
++  void *cpu_mx = alloc->unaligned_alloc(cpu_mx_sz);
++  auto cpu_mx_pa = Mem_layout::pmem_to_phys(cpu_mx);
++
++  cpu_dir->map(cpu_mx_pa, Virt_addr(Kentry_cpu_page), Virt_size(cpu_mx_sz),
++               Pt_entry::Writable | Pt_entry::Referenced
++               | Pt_entry::Dirty  | Pt_entry::global(),
++               Pdir::Depth,
++               false, pdir_alloc(alloc));
++
++  _per_cpu_dir.cpu(cpu.id()) = cpu_dir;
++  Cpu::set_pdbr(cpu_dir_pa);
++
++  cxx::Simple_alloc cpu_m(Kentry_cpu_page, Config::PAGE_SIZE);
++
++  // CPU dir pa and 
++  write_now(cpu_m.alloc<Mword>(4), cpu_dir_pa);
++  setup_cpu_structures(cpu, &cpu_m, &cpu_m);
++}
++
++PUBLIC static
++void
++Kmem::resume_cpu(Cpu_number cpu)
++{
++  Cpu::set_pdbr(pmem_to_phys(_per_cpu_dir.cpu(cpu)));
++}
+ 
+diff --git a/src/kern/ia32/main-ia32.cpp b/src/kern/ia32/main-ia32.cpp
+index cdf15e6..89f2b16 100644
+--- a/src/kern/ia32/main-ia32.cpp
++++ b/src/kern/ia32/main-ia32.cpp
+@@ -142,6 +142,7 @@ int FIASCO_FASTCALL boot_ap_cpu()
+     }
+   else
+     {
++      Kmem::resume_cpu(_cpu);
+       cpu.pm_resume();
+       Pm_object::run_on_resume_hooks(_cpu);
+     }
+diff --git a/src/kern/ia32/mem_space-ia32.cpp b/src/kern/ia32/mem_space-ia32.cpp
+index 6fad97b..98d5861 100644
+--- a/src/kern/ia32/mem_space-ia32.cpp
++++ b/src/kern/ia32/mem_space-ia32.cpp
+@@ -150,27 +150,6 @@ void
+ Mem_space::destroy()
+ {}
+ 
+-/**
+- * Destructor.  Deletes the address space and unregisters it from
+- * Space_index.
+- */
+-PRIVATE
+-void
+-Mem_space::dir_shutdown()
+-{
+-  // free all page tables we have allocated for this address space
+-  // except the ones in kernel space which are always shared
+-  _dir->destroy(Virt_addr(0UL),
+-                Virt_addr(Mem_layout::User_max), 0, Pdir::Depth,
+-                Kmem_alloc::q_allocator(_quota));
+-
+-  // free all unshared page table levels for the kernel space
+-  _dir->destroy(Virt_addr(Mem_layout::User_max + 1),
+-                Virt_addr(~0UL), 0, Pdir::Super_level,
+-                Kmem_alloc::q_allocator(_quota));
+-
+-}
+-
+ IMPLEMENT
+ Mem_space::Status
+ Mem_space::v_insert(Phys_addr phys, Vaddr virt, Page_order size,
+@@ -340,6 +319,26 @@ Mem_space::v_delete(Vaddr virt, Page_order size, L4_fpage::Rights page_attribs)
+   return ret;
+ }
+ 
++/**
++ * Destructor.  Deletes the address space and unregisters it from
++ * Space_index.
++ */
++PRIVATE
++void
++Mem_space::dir_shutdown()
++{
++  // free all page tables we have allocated for this address space
++  // except the ones in kernel space which are always shared
++  _dir->destroy(Virt_addr(0UL),
++                Virt_addr(Mem_layout::User_max), 0, Pdir::Depth,
++                Kmem_alloc::q_allocator(_quota));
++
++  // free all unshared page table levels for the kernel space
++  _dir->destroy(Virt_addr(Mem_layout::User_max + 1),
++                Virt_addr(~0UL), 0, Pdir::Super_level,
++                Kmem_alloc::q_allocator(_quota));
++}
++
+ /**
+  * \brief Free all memory allocated for this Mem_space.
+  * \pre Runs after the destructor!
+@@ -371,14 +370,6 @@ IMPLEMENTATION [ia32 || amd64]:
+ #include "config.h"
+ #include "kmem.h"
+ 
+-IMPLEMENT inline NEEDS ["cpu.h", "kmem.h"]
+-void
+-Mem_space::make_current()
+-{
+-  Cpu::set_pdbr((Mem_layout::pmem_to_phys(_dir)));
+-  _current.cpu(current_cpu()) = this;
+-}
+-
+ PUBLIC inline NEEDS ["kmem.h"]
+ Address
+ Mem_space::phys_dir()
+@@ -426,6 +417,20 @@ Mem_space::switchin_context(Mem_space *from)
+     }
+ }
+ 
++// --------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && !cpu_local_map]:
++
++IMPLEMENT inline NEEDS ["cpu.h", "kmem.h"]
++void
++Mem_space::make_current()
++{
++  Cpu::set_pdbr((Mem_layout::pmem_to_phys(_dir)));
++  _current.cpu(current_cpu()) = this;
++}
++
++// --------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32 || ux) && !cpu_local_map]:
++
+ PROTECTED inline
+ int
+ Mem_space::sync_kernel()
+@@ -437,6 +442,36 @@ Mem_space::sync_kernel()
+                     Kmem_alloc::q_allocator(_quota));
+ }
+ 
++
++// --------------------------------------------------------------------
++IMPLEMENTATION [(amd64 || ia32) && cpu_local_map]:
++
++IMPLEMENT inline NEEDS ["cpu.h", "kmem.h"]
++void
++Mem_space::make_current()
++{
++  Mword *pd = reinterpret_cast<Mword *>(Kmem::current_cpu_udir());
++  Mword *d = (Mword *)_dir;
++
++  for (unsigned i = 0; i < 256; ++i)
++    pd[i] = d[i];
++
++  pd[259] = d[259];
++
++  Address pd_pa = access_once(reinterpret_cast<Address *>(Mem_layout::Kentry_cpu_page));
++  Cpu::set_pdbr(pd_pa);
++  _current.cpu(current_cpu()) = this;
++}
++
++
++PROTECTED inline
++int
++Mem_space::sync_kernel()
++{
++  return 0;
++}
++
++
+ // --------------------------------------------------------------------
+ IMPLEMENTATION [amd64]:
+ 
+diff --git a/src/kern/ia32/thread-ia32.cpp b/src/kern/ia32/thread-ia32.cpp
+index 0b85484..0ec2314 100644
+--- a/src/kern/ia32/thread-ia32.cpp
++++ b/src/kern/ia32/thread-ia32.cpp
+@@ -324,6 +324,40 @@ generic_debug:
+   return call_nested_trap_handler(ts);
+ }
+ 
++//----------------------------------------------------------------------------
++IMPLEMENTATION [(ia32 || amd64 || ux) && cpu_local_map]:
++
++PUBLIC inline
++bool
++Thread::update_local_map(Address pfa, Mword /*error_code*/)
++{
++  unsigned idx = (pfa >> 39) & 0x1ff;
++  if (EXPECT_FALSE((idx > 255) && idx != 259))
++    return false;
++
++  auto s = Kmem::current_cpu_udir()->walk(Virt_addr(pfa), 0);
++  if (EXPECT_TRUE(s.is_valid()))
++    return false;
++
++  auto r = vcpu_aware_space()->dir()->walk(Virt_addr(pfa), 0);
++  if (EXPECT_FALSE(!r.is_valid()))
++    return false;
++
++   *s.pte = *r.pte;
++   return true;
++}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [(ia32 || amd64 || ux) && !cpu_local_map]:
++
++PUBLIC inline
++bool
++Thread::update_local_map(Address, Mword)
++{ return false; }
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [ia32 || amd64 || ux]:
++
+ /**
+  * The low-level page fault handler called from entry.S.  We're invoked with
+  * interrupts turned off.  Apart from turning on interrupts in almost
+@@ -347,6 +381,10 @@ thread_page_fault(Address pfa, Mword error_code, Address ip, Mword flags,
+ #endif
+ 
+   Thread *t = current_thread();
++
++  if (t->update_local_map(pfa, error_code))
++    return 1;
++
+   // Pagefault in user mode or interrupts were enabled
+   if (EXPECT_TRUE(PF::is_usermode_error(error_code))
+       && t->vcpu_pagefault(pfa, error_code, ip))

@@ -1,0 +1,93 @@
+"2006-05-02 22:44:04 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 4eb3db052..6841ec96d 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -115,6 +115,18 @@ config CONFIG_DD
+ 	  by default) using specific input and output blocksizes,
+ 	  while optionally performing conversions on it.
+ 
++config CONFIG_FEATURE_DD_SIGNAL_HANDLING
++	bool "Enable DD signal handling for status reporting"
++	default y
++	depends on CONFIG_DD
++	help
++	  sending a SIGUSR1 signal to a running `dd' process makes it 
++	  print to standard error the number of records read and written 
++	  so far, then to resume copying.
++
++	  $ dd if=/dev/zero of=/dev/null& pid=$! $ kill -USR1 $pid; sleep 1; kill $pid 
++	  10899206+0 records in 10899206+0 records out
++
+ config CONFIG_DF
+ 	bool "df"
+ 	default n
+diff --git a/coreutils/dd.c b/coreutils/dd.c
+index ce8bcc6a5..378e212de 100644
+--- a/coreutils/dd.c
++++ b/coreutils/dd.c
+@@ -15,9 +15,9 @@
+ #include <unistd.h>
+ #include <string.h>
+ #include <fcntl.h>
++#include <signal.h>  // For FEATURE_DD_SIGNAL_HANDLING
+ #include "busybox.h"
+ 
+-
+ static const struct suffix_mult dd_suffixes[] = {
+ 	{ "c", 1 },
+ 	{ "w", 2 },
+@@ -31,12 +31,20 @@ static const struct suffix_mult dd_suffixes[] = {
+ 	{ NULL, 0 }
+ };
+ 
++static size_t out_full;
++static size_t out_part;
++static size_t in_full;
++static size_t in_part;
++
++static void dd_output_status(int cur_signal)
++{
++	fprintf(stderr, "%ld+%ld records in\n%ld+%ld records out\n",
++			(long)in_full, (long)in_part,
++			(long)out_full, (long)out_part);
++}
++
+ int dd_main(int argc, char **argv)
+ {
+-	size_t out_full = 0;
+-	size_t out_part = 0;
+-	size_t in_full = 0;
+-	size_t in_part = 0;
+ 	size_t count = -1;
+ 	size_t bs = 512;
+ 	ssize_t n;
+@@ -53,6 +61,17 @@ int dd_main(int argc, char **argv)
+ 	const char *outfile = NULL;
+ 	char *buf;
+ 
++	if (ENABLE_FEATURE_DD_SIGNAL_HANDLING)
++	{
++		struct sigaction sa;
++
++		memset(&sa, 0, sizeof(sa));
++		sa.sa_handler = dd_output_status; 
++		sa.sa_flags = SA_RESTART;
++		sigemptyset(&sa.sa_mask);
++		sigaction(SIGUSR1, &sa, 0); 
++	}
++
+ 	for (i = 1; i < argc; i++) {
+ 		if (strncmp("bs=", argv[i], 3) == 0)
+ 			bs = bb_xparse_number(argv[i]+3, dd_suffixes);
+@@ -180,9 +199,7 @@ int dd_main(int argc, char **argv)
+ 		bb_perror_msg_and_die("%s", outfile);
+ 	}
+ 
+-	fprintf(stderr, "%ld+%ld records in\n%ld+%ld records out\n",
+-			(long)in_full, (long)in_part,
+-			(long)out_full, (long)out_part);
++	dd_output_status(0);
+ 
+ 	return EXIT_SUCCESS;
+ }

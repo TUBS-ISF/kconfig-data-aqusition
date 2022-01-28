@@ -1,0 +1,2100 @@
+"2015-12-05 21:10:30 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index dc7159d0a..df99a5c88 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -40,7 +40,6 @@ choice
+ 	default TARGET_sh if DESIRED_TARGET_ARCH = "sh"
+ 	default TARGET_sparc if DESIRED_TARGET_ARCH = "sparc"
+ 	default TARGET_v850 if DESIRED_TARGET_ARCH = "v850"
+-	default TARGET_vax if DESIRED_TARGET_ARCH = "vax"
+ 	default TARGET_x86_64 if DESIRED_TARGET_ARCH = "x86_64"
+ 	default TARGET_xtensa if DESIRED_TARGET_ARCH = "xtensa"
+ 	help
+@@ -126,9 +125,6 @@ config TARGET_sparc
+ #config TARGET_v850
+ #	bool "v850 (BROKEN)"
+ 
+-#config TARGET_vax
+-#	bool "vax"
+-
+ config TARGET_x86_64
+ 	bool "x86_64"
+ 
+@@ -236,10 +232,6 @@ if TARGET_v850
+ source "extra/Configs/Config.v850"
+ endif
+ 
+-if TARGET_vax
+-source "extra/Configs/Config.vax"
+-endif
+-
+ if TARGET_x86_64
+ source "extra/Configs/Config.x86_64"
+ endif
+@@ -589,7 +581,6 @@ config UCLIBC_HAS_THREADS_NATIVE
+ 		   !TARGET_microblaze && \
+ 		   !TARGET_nios2 && \
+ 		   !TARGET_or1k && \
+-		   !TARGET_vax && \
+ 		   ARCH_USE_MMU
+ 	help
+ 	  If you want to compile uClibc with NPTL support, then answer Y.
+diff --git a/extra/Configs/Config.vax b/extra/Configs/Config.vax
+deleted file mode 100644
+index 418e3e71c..000000000
+--- a/extra/Configs/Config.vax
++++ /dev/null
+@@ -1,15 +0,0 @@
+-#
+-# For a description of the syntax of this configuration file,
+-# see extra/config/Kconfig-language.txt
+-#
+-
+-config TARGET_ARCH
+-	string
+-	default "vax"
+-
+-config FORCE_OPTIONS_FOR_ARCH
+-	bool
+-	default y
+-	select ARCH_LITTLE_ENDIAN
+-	select ARCH_HAS_NO_LDSO
+-	select ARCH_HAS_DEPRECATED_SYSCALLS
+diff --git a/extra/Configs/defconfigs/vax/defconfig b/extra/Configs/defconfigs/vax/defconfig
+deleted file mode 100644
+index 77a464e29..000000000
+--- a/extra/Configs/defconfigs/vax/defconfig
++++ /dev/null
+@@ -1 +0,0 @@
+-TARGET_vax=y
+diff --git a/libc/inet/rpc/xdr_float.c b/libc/inet/rpc/xdr_float.c
+index 5121239ea..f8a2bb399 100644
+--- a/libc/inet/rpc/xdr_float.c
++++ b/libc/inet/rpc/xdr_float.c
+@@ -54,67 +54,12 @@ static char sccsid[] = "@(#)xdr_float.c 1.12 87/08/11 Copyr 1984 Sun Micro";
+ 
+ #define LSW	(__FLOAT_WORD_ORDER == __BIG_ENDIAN)
+ 
+-#ifdef vax
+-
+-/* What IEEE single precision floating point looks like on a Vax */
+-struct	ieee_single {
+-	unsigned int	mantissa: 23;
+-	unsigned int	exp     : 8;
+-	unsigned int	sign    : 1;
+-};
+-
+-/* Vax single precision floating point */
+-struct	vax_single {
+-	unsigned int	mantissa1 : 7;
+-	unsigned int	exp       : 8;
+-	unsigned int	sign      : 1;
+-	unsigned int	mantissa2 : 16;
+-};
+-
+-#define VAX_SNG_BIAS	0x81
+-#define IEEE_SNG_BIAS	0x7f
+-
+-static struct sgl_limits {
+-	struct vax_single s;
+-	struct ieee_single ieee;
+-} sgl_limits[2] = {
+-	{{ 0x7f, 0xff, 0x0, 0xffff },	/* Max Vax */
+-	{ 0x0, 0xff, 0x0 }},		/* Max IEEE */
+-	{{ 0x0, 0x0, 0x0, 0x0 },	/* Min Vax */
+-	{ 0x0, 0x0, 0x0 }}		/* Min IEEE */
+-};
+-#endif /* vax */
+-
+ bool_t
+ xdr_float(XDR *xdrs, float *fp)
+ {
+-#ifdef vax
+-	struct ieee_single is;
+-	struct vax_single vs, *vsp;
+-	struct sgl_limits *lim;
+-	int i;
+-#endif
+ 	switch (xdrs->x_op) {
+ 
+ 	case XDR_ENCODE:
+-#ifdef vax
+-		vs = *((struct vax_single *)fp);
+-		for (i = 0, lim = sgl_limits;
+-			i < sizeof(sgl_limits)/sizeof(struct sgl_limits);
+-			i++, lim++) {
+-			if ((vs.mantissa2 == lim->s.mantissa2) &&
+-				(vs.exp == lim->s.exp) &&
+-				(vs.mantissa1 == lim->s.mantissa1)) {
+-				is = lim->ieee;
+-				goto shipit;
+-			}
+-		}
+-		is.exp = vs.exp - VAX_SNG_BIAS + IEEE_SNG_BIAS;
+-		is.mantissa = (vs.mantissa1 << 16) | vs.mantissa2;
+-	shipit:
+-		is.sign = vs.sign;
+-		return (XDR_PUTLONG(xdrs, (long *)&is));
+-#else
+ 		if (sizeof(float) == sizeof(long))
+ 			return (XDR_PUTLONG(xdrs, (long *)fp));
+ 		else if (sizeof(float) == sizeof(int)) {
+@@ -122,29 +67,8 @@ xdr_float(XDR *xdrs, float *fp)
+ 			return (XDR_PUTLONG(xdrs, &tmp));
+ 		}
+ 		break;
+-#endif
+ 
+ 	case XDR_DECODE:
+-#ifdef vax
+-		vsp = (struct vax_single *)fp;
+-		if (!XDR_GETLONG(xdrs, (long *)&is))
+-			return (FALSE);
+-		for (i = 0, lim = sgl_limits;
+-			i < sizeof(sgl_limits)/sizeof(struct sgl_limits);
+-			i++, lim++) {
+-			if ((is.exp == lim->ieee.exp) &&
+-				(is.mantissa == lim->ieee.mantissa)) {
+-				*vsp = lim->s;
+-				goto doneit;
+-			}
+-		}
+-		vsp->exp = is.exp - IEEE_SNG_BIAS + VAX_SNG_BIAS;
+-		vsp->mantissa2 = is.mantissa;
+-		vsp->mantissa1 = (is.mantissa >> 16);
+-	doneit:
+-		vsp->sign = is.sign;
+-		return (TRUE);
+-#else
+ 		if (sizeof(float) == sizeof(long))
+ 			return (XDR_GETLONG(xdrs, (long *)fp));
+ 		else if (sizeof(float) == sizeof(int)) {
+@@ -155,7 +79,6 @@ xdr_float(XDR *xdrs, float *fp)
+ 			}
+ 		}
+ 		break;
+-#endif
+ 
+ 	case XDR_FREE:
+ 		return (TRUE);
+@@ -163,82 +86,13 @@ xdr_float(XDR *xdrs, float *fp)
+ 	return (FALSE);
+ }
+ 
+-/*
+- * This routine works on Suns (Sky / 68000's) and Vaxen.
+- */
+-
+-#ifdef vax
+-/* What IEEE double precision floating point looks like on a Vax */
+-struct	ieee_double {
+-	unsigned int	mantissa1 : 20;
+-	unsigned int	exp       : 11;
+-	unsigned int	sign      : 1;
+-	unsigned int	mantissa2 : 32;
+-};
+-
+-/* Vax double precision floating point */
+-struct  vax_double {
+-	unsigned int	mantissa1 : 7;
+-	unsigned int	exp       : 8;
+-	unsigned int	sign      : 1;
+-	unsigned int	mantissa2 : 16;
+-	unsigned int	mantissa3 : 16;
+-	unsigned int	mantissa4 : 16;
+-};
+-
+-#define VAX_DBL_BIAS	0x81
+-#define IEEE_DBL_BIAS	0x3ff
+-#define MASK(nbits)	((1 << nbits) - 1)
+-
+-static struct dbl_limits {
+-	struct	vax_double d;
+-	struct	ieee_double ieee;
+-} dbl_limits[2] = {
+-	{{ 0x7f, 0xff, 0x0, 0xffff, 0xffff, 0xffff },	/* Max Vax */
+-	{ 0x0, 0x7ff, 0x0, 0x0 }},			/* Max IEEE */
+-	{{ 0x0, 0x0, 0x0, 0x0, 0x0, 0x0},		/* Min Vax */
+-	{ 0x0, 0x0, 0x0, 0x0 }}				/* Min IEEE */
+-};
+-
+-#endif /* vax */
+-
+-
+ bool_t
+ xdr_double(XDR *xdrs, double *dp)
+ {
+-#ifdef vax
+-	struct	ieee_double id;
+-	struct	vax_double vd;
+-	register struct dbl_limits *lim;
+-	int i;
+-#endif
+ 
+ 	switch (xdrs->x_op) {
+ 
+ 	case XDR_ENCODE:
+-#ifdef vax
+-		vd = *((struct vax_double *)dp);
+-		for (i = 0, lim = dbl_limits;
+-			i < sizeof(dbl_limits)/sizeof(struct dbl_limits);
+-			i++, lim++) {
+-			if ((vd.mantissa4 == lim->d.mantissa4) &&
+-				(vd.mantissa3 == lim->d.mantissa3) &&
+-				(vd.mantissa2 == lim->d.mantissa2) &&
+-				(vd.mantissa1 == lim->d.mantissa1) &&
+-				(vd.exp == lim->d.exp)) {
+-				id = lim->ieee;
+-				goto shipit;
+-			}
+-		}
+-		id.exp = vd.exp - VAX_DBL_BIAS + IEEE_DBL_BIAS;
+-		id.mantissa1 = (vd.mantissa1 << 13) | (vd.mantissa2 >> 3);
+-		id.mantissa2 = ((vd.mantissa2 & MASK(3)) << 29) |
+-				(vd.mantissa3 << 13) |
+-				((vd.mantissa4 >> 3) & MASK(13));
+-	shipit:
+-		id.sign = vd.sign;
+-		dp = (double *)&id;
+-#endif
+ 		if (2*sizeof(long) == sizeof(double)) {
+ 			long *lp = (long *)dp;
+ 			return (XDR_PUTLONG(xdrs, lp+!LSW) &&
+@@ -254,31 +108,6 @@ xdr_double(XDR *xdrs, double *dp)
+ 		break;
+ 
+ 	case XDR_DECODE:
+-#ifdef vax
+-		lp = (long *)&id;
+-		if (!XDR_GETLONG(xdrs, lp++) || !XDR_GETLONG(xdrs, lp))
+-			return (FALSE);
+-		for (i = 0, lim = dbl_limits;
+-			i < sizeof(dbl_limits)/sizeof(struct dbl_limits);
+-			i++, lim++) {
+-			if ((id.mantissa2 == lim->ieee.mantissa2) &&
+-				(id.mantissa1 == lim->ieee.mantissa1) &&
+-				(id.exp == lim->ieee.exp)) {
+-				vd = lim->d;
+-				goto doneit;
+-			}
+-		}
+-		vd.exp = id.exp - IEEE_DBL_BIAS + VAX_DBL_BIAS;
+-		vd.mantissa1 = (id.mantissa1 >> 13);
+-		vd.mantissa2 = ((id.mantissa1 & MASK(13)) << 3) |
+-				(id.mantissa2 >> 29);
+-		vd.mantissa3 = (id.mantissa2 >> 13);
+-		vd.mantissa4 = (id.mantissa2 << 3);
+-	doneit:
+-		vd.sign = id.sign;
+-		*dp = *((double *)&vd);
+-		return (TRUE);
+-#else
+ 		if (2*sizeof(long) == sizeof(double)) {
+ 			long *lp = (long *)dp;
+ 			return (XDR_GETLONG(xdrs, lp+!LSW) &&
+@@ -294,7 +123,6 @@ xdr_double(XDR *xdrs, double *dp)
+ 			}
+ 		}
+ 		break;
+-#endif
+ 
+ 	case XDR_FREE:
+ 		return (TRUE);
+diff --git a/libc/sysdeps/linux/sparc/soft-fp/longlong.h b/libc/sysdeps/linux/sparc/soft-fp/longlong.h
+index ccff2d889..9eebae393 100644
+--- a/libc/sysdeps/linux/sparc/soft-fp/longlong.h
++++ b/libc/sysdeps/linux/sparc/soft-fp/longlong.h
+@@ -1197,51 +1197,6 @@ UDItype __umulsidi3 (USItype, USItype);
+ #define UDIV_TIME 230
+ #endif /* sparc64 */
+ 
+-#if defined (__vax__) && W_TYPE_SIZE == 32
+-#define add_ssaaaa(sh, sl, ah, al, bh, bl) \
+-  __asm__ ("addl2 %5,%1\n\tadwc %3,%0"					\
+-	   : "=g" ((USItype) (sh)),					\
+-	     "=&g" ((USItype) (sl))					\
+-	   : "%0" ((USItype) (ah)),					\
+-	     "g" ((USItype) (bh)),					\
+-	     "%1" ((USItype) (al)),					\
+-	     "g" ((USItype) (bl)))
+-#define sub_ddmmss(sh, sl, ah, al, bh, bl) \
+-  __asm__ ("subl2 %5,%1\n\tsbwc %3,%0"					\
+-	   : "=g" ((USItype) (sh)),					\
+-	     "=&g" ((USItype) (sl))					\
+-	   : "0" ((USItype) (ah)),					\
+-	     "g" ((USItype) (bh)),					\
+-	     "1" ((USItype) (al)),					\
+-	     "g" ((USItype) (bl)))
+-#define umul_ppmm(xh, xl, m0, m1) \
+-  do {									\
+-    union {								\
+-	UDItype __ll;							\
+-	struct {USItype __l, __h;} __i;					\
+-      } __xx;								\
+-    USItype __m0 = (m0), __m1 = (m1);					\
+-    __asm__ ("emul %1,%2,$0,%0"						\
+-	     : "=r" (__xx.__ll)						\
+-	     : "g" (__m0),						\
+-	       "g" (__m1));						\
+-    (xh) = __xx.__i.__h;						\
+-    (xl) = __xx.__i.__l;						\
+-    (xh) += ((((SItype) __m0 >> 31) & __m1)				\
+-	     + (((SItype) __m1 >> 31) & __m0));				\
+-  } while (0)
+-#define sdiv_qrnnd(q, r, n1, n0, d) \
+-  do {									\
+-    union {DItype __ll;							\
+-	   struct {SItype __l, __h;} __i;				\
+-	  } __xx;							\
+-    __xx.__i.__h = n1; __xx.__i.__l = n0;				\
+-    __asm__ ("ediv %3,%2,%0,%1"						\
+-	     : "=g" (q), "=g" (r)					\
+-	     : "g" (__xx.__ll), "g" (d));				\
+-  } while (0)
+-#endif /* __vax__ */
+-
+ #if defined (__xtensa__) && W_TYPE_SIZE == 32
+ /* This code is not Xtensa-configuration-specific, so rely on the compiler
+    to expand builtin functions depending on what configuration features
+diff --git a/libc/sysdeps/linux/vax/Makefile b/libc/sysdeps/linux/vax/Makefile
+deleted file mode 100644
+index b1bf1ef10..000000000
+--- a/libc/sysdeps/linux/vax/Makefile
++++ /dev/null
+@@ -1,15 +0,0 @@
+-# Makefile for uClibc
+-#
+-# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
+-#
+-# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+-#
+-
+-TOPDIR=../../../../
+-
+-top_srcdir=$(TOPDIR)
+-top_builddir=../../../../
+-all: objs
+-include $(top_builddir)Rules.mak
+-include Makefile.arch
+-include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/vax/Makefile.arch b/libc/sysdeps/linux/vax/Makefile.arch
+deleted file mode 100644
+index 04ed10174..000000000
+--- a/libc/sysdeps/linux/vax/Makefile.arch
++++ /dev/null
+@@ -1,10 +0,0 @@
+-# Makefile for uClibc
+-#
+-# Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+-# Copyright (C) 2005-2006 Jan-Benedict Glaw <jbglaw@lug-owl.de>
+-#
+-# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+-#
+-
+-CSRC-y := brk.c
+-SSRC-y := __longjmp.S setjmp.S _setjmp.S clone.S
+diff --git a/libc/sysdeps/linux/vax/__longjmp.S b/libc/sysdeps/linux/vax/__longjmp.S
+deleted file mode 100644
+index 61b37a3b9..000000000
+--- a/libc/sysdeps/linux/vax/__longjmp.S
++++ /dev/null
+@@ -1,47 +0,0 @@
+-#include <features.h>
+-
+-/*
+- * longjmp.S	atp sept 2001
+- *		Jan-Benedict Glaw <jbglaw@lug-owl.de> 2006
+- *
+- * Restore regs and info and jmp back to a previous setjmp
+- */
+-
+-.globl	__longjmp
+-.align	4
+-__longjmp:
+-	.word	0x0040		/* This matches setjmp and PLT	*/
+-	movl	0x4(%ap), %r0	/* Our scratch reg		*/
+-/*	movl	$0, %r0						*/
+-/*	movl	(%r0), %r0					*/
+-	/* We are going to modify our stack frame		*/
+-	/* to the same as that of the setjmp we called earlier	*/
+-	movl	(%r0), (%fp)		/* cond handler		*/
+-	movl	0x4(%r0), 0x4(%fp)	/* psw			*/
+-	movl	0x8(%r0), 0x8(%fp)	/* ap			*/
+-	movl	0xc(%r0), 0xc(%fp)	/* fp			*/
+-	movl	0x10(%r0), 0x10(%fp)	/* pc			*/
+-
+-	/* Restore the regs					*/
+-	movl	0x14(%r0), %r1
+-	movl	0x18(%r0), %r2
+-	movl	0x1c(%r0), %r3
+-	movl	0x20(%r0), %r4
+-	movl	0x24(%r0), %r5
+-	movl	0x28(%r0), %r6
+-	movl	0x2c(%r0), %r7
+-	movl	0x30(%r0), %r8
+-	movl	0x34(%r0), %r9
+-	movl	0x38(%r0), %r10
+-	movl	0x3c(%r0), %r11
+-
+-	/* Check val and set to 1 if set to zero		*/
+-	movl	0x8(%ap), %r0
+-	tstl	%r0
+-	bneq	exit_ok
+-	movl	$0x1, %r0
+-exit_ok:
+-	ret
+-.size __longjmp,.-__longjmp
+-libc_hidden_def(__longjmp)
+-
+diff --git a/libc/sysdeps/linux/vax/_setjmp.S b/libc/sysdeps/linux/vax/_setjmp.S
+deleted file mode 100644
+index 680ddd729..000000000
+--- a/libc/sysdeps/linux/vax/_setjmp.S
++++ /dev/null
+@@ -1,53 +0,0 @@
+-.globl _setjmp
+-.align 4
+-_setjmp:
+-	.word	0x0040
+-
+-	/* push an empty word onto the stack */
+-	pushl	$0
+-
+-	/* now copy handler, psw, ap, fp and pc on the stack up one word */
+-	movl	4(%sp), (%sp)		/* copy handler */
+-	movl	8(%sp), 4(%sp)		/* psw */
+-	movl	12(%sp), 8(%sp)		/* ap */
+-	movl	16(%sp), 12(%sp)	/* fp */
+-	movl	20(%sp), 16(%sp)	/* pc */
+-	movl	24(%sp), 20(%sp)	/* r6 from register mask */
+-
+-	movl	$2, 24(%sp)		/* set the number of arguments to 2 */
+-	movl	32(%sp), 28(%sp)	/* copy the jmp_buf */
+-	movl	$1, 32(%sp)		/* put the 1 on the stack */
+-
+-	addl3	$24, %sp, %ap
+-	movl	%sp, %fp
+-
+-	moval	__sigsetjmp, %r0
+-	addl2	$2, %r0
+-	pushl	%r0
+-	rsb
+-
+-.globl setjmp
+-.align 4
+-setjmp:
+-	.word	0x0040
+-	pushl	$0
+-
+-	/* now copy handler, psw, ap, fp and pc on the stack up one word */
+-	movl	4(%sp), (%sp)
+-	movl	8(%sp), 4(%sp)
+-	movl	12(%sp), 8(%sp)
+-	movl	16(%sp), 12(%sp)
+-	movl	20(%sp), 16(%sp)
+-	movl	24(%sp), 20(%sp)	/* r6 from register mask */
+-
+-	movl	$2, 24(%sp)		/* set the number of arguments to 2 */
+-	movl	32(%sp), 28(%sp)	/* copy the jmp_buf */
+-	movl	$0, 32(%sp)		/* put the 0 on the stack */
+-
+-	addl3	$24, %sp, %ap
+-	movl	%sp, %fp
+-
+-	moval	__sigsetjmp, %r0
+-	addl2	$2, %r0
+-	pushl	%r0
+-	rsb
+diff --git a/libc/sysdeps/linux/vax/bits/endian.h b/libc/sysdeps/linux/vax/bits/endian.h
+deleted file mode 100644
+index 9f0c4e2a9..000000000
+--- a/libc/sysdeps/linux/vax/bits/endian.h
++++ /dev/null
+@@ -1,9 +0,0 @@
+-/* VAX is little endian */
+-
+-#ifndef _ENDIAN_H
+-# error "Never use <bits/endian.h> directly; include <endian.h> instead."
+-#endif
+-
+-#define __BYTE_ORDER __LITTLE_ENDIAN
+-
+-/*#define __FLOAT_WORD_ORDER __BIG_ENDIAN*/
+diff --git a/libc/sysdeps/linux/vax/bits/fcntl.h b/libc/sysdeps/linux/vax/bits/fcntl.h
+deleted file mode 100644
+index a30d5e102..000000000
+--- a/libc/sysdeps/linux/vax/bits/fcntl.h
++++ /dev/null
+@@ -1,215 +0,0 @@
+-/* O_*, F_*, FD_* bit values for Linux.
+-   Copyright (C) 1995, 1996, 1997, 1998 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-#ifndef	_FCNTL_H
+-# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
+-#endif
+-
+-
+-#include <sys/types.h>
+-#ifdef __USE_GNU
+-# include <bits/uio.h>
+-#endif
+-
+-/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
+-   located on an ext2 file system */
+-#define O_ACCMODE	  0003
+-#define O_RDONLY	    00
+-#define O_WRONLY	    01
+-#define O_RDWR		    02
+-#define O_CREAT		  0100	/* not fcntl */
+-#define O_EXCL		  0200	/* not fcntl */
+-#define O_NOCTTY	  0400	/* not fcntl */
+-#define O_TRUNC		 01000	/* not fcntl */
+-#define O_APPEND	 02000
+-#define O_NONBLOCK	 04000
+-#define O_NDELAY	O_NONBLOCK
+-#define O_SYNC		010000
+-#define O_FSYNC		O_SYNC
+-#define O_ASYNC		020000
+-
+-#ifdef __USE_GNU
+-# define O_DIRECTORY	040000	/* Must be a directory.  */
+-# define O_NOFOLLOW	0100000	/* Do not follow links.  */
+-#endif
+-
+-/* XXX missing */
+-#ifdef __USE_LARGEFILE64
+-# define O_LARGEFILE	0
+-#endif
+-
+-/* For now Linux has synchronisity options for data and read operations.
+-   We define the symbols here but let them do the same as O_SYNC since
+-   this is a superset.  */
+-#if defined __USE_POSIX199309 || defined __USE_UNIX98
+-# define O_DSYNC	O_SYNC	/* Synchronize data.  */
+-# define O_RSYNC	O_SYNC	/* Synchronize read operations.  */
+-#endif
+-
+-/* Values for the second argument to `fcntl'.  */
+-#define F_DUPFD		0	/* Duplicate file descriptor.  */
+-#define F_GETFD		1	/* Get file descriptor flags.  */
+-#define F_SETFD		2	/* Set file descriptor flags.  */
+-#define F_GETFL		3	/* Get file status flags.  */
+-#define F_SETFL		4	/* Set file status flags.  */
+-#define F_GETLK		5	/* Get record locking info.  */
+-#define F_SETLK		6	/* Set record locking info (non-blocking).  */
+-#define F_SETLKW	7	/* Set record locking info (blocking).  */
+-
+-/* XXX missing */
+-#define F_GETLK64	5	/* Get record locking info.  */
+-#define F_SETLK64	6	/* Set record locking info (non-blocking).  */
+-#define F_SETLKW64	7	/* Set record locking info (blocking).  */
+-
+-#ifdef __USE_BSD
+-# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
+-# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
+-#endif
+-
+-#ifdef __USE_GNU
+-# define F_SETSIG	10	/* Set number of signal to be sent.  */
+-# define F_GETSIG	11	/* Get number of signal to be sent.  */
+-#endif
+-
+-#ifdef __USE_GNU
+-# define F_SETLEASE	1024	/* Set a lease.	 */
+-# define F_GETLEASE	1025	/* Enquire what lease is active.  */
+-# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
+-# define F_DUPFD_CLOEXEC 1030	/* Duplicate file descriptor with
+-				   close-on-exit set on new fd.  */
+-# define F_SETPIPE_SZ	1031    /* Set pipe page size array.  */
+-# define F_GETPIPE_SZ	1032    /* Get pipe page size array.  */
+-#endif
+-
+-/* For F_[GET|SET]FL.  */
+-#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
+-
+-/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
+-#define F_RDLCK		0	/* Read lock.  */
+-#define F_WRLCK		1	/* Write lock.  */
+-#define F_UNLCK		2	/* Remove lock.  */
+-
+-/* for old implementation of bsd flock () */
+-#define F_EXLCK		4	/* or 3 */
+-#define F_SHLCK		8	/* or 4 */
+-
+-#ifdef __USE_BSD
+-/* Operations for bsd flock(), also used by the kernel implementation */
+-# define LOCK_SH	1	/* shared lock */
+-# define LOCK_EX	2	/* exclusive lock */
+-# define LOCK_NB	4	/* or'd with one of the above to prevent
+-				   blocking */
+-# define LOCK_UN	8	/* remove lock */
+-#endif
+-
+-struct flock
+-  {
+-    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.  */
+-    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
+-#ifndef __USE_FILE_OFFSET64
+-    __off_t l_start;	/* Offset where the lock begins.  */
+-    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
+-#else
+-    __off64_t l_start;	/* Offset where the lock begins.  */
+-    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
+-#endif
+-    __pid_t l_pid;	/* Process holding the lock.  */
+-  };
+-
+-#ifdef __USE_LARGEFILE64
+-struct flock64
+-  {
+-    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.  */
+-    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
+-    __off64_t l_start;	/* Offset where the lock begins.  */
+-    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
+-    __pid_t l_pid;	/* Process holding the lock.  */
+-  };
+-#endif
+-
+-/* Define some more compatibility macros to be backward compatible with
+-   BSD systems which did not managed to hide these kernel macros.  */
+-#ifdef	__USE_BSD
+-# define FAPPEND	O_APPEND
+-# define FFSYNC		O_FSYNC
+-# define FASYNC		O_ASYNC
+-# define FNONBLOCK	O_NONBLOCK
+-# define FNDELAY	O_NDELAY
+-#endif /* Use BSD.  */
+-
+-/* Advise to `posix_fadvise'.  */
+-#ifdef __USE_XOPEN2K
+-# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
+-# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
+-# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
+-# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
+-# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
+-# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
+-#endif
+-
+-
+-#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
+-/* Flags for SYNC_FILE_RANGE.  */
+-# define SYNC_FILE_RANGE_WAIT_BEFORE	1 /* Wait upon writeout of all pages
+-					     in the range before performing the
+-					     write.  */
+-# define SYNC_FILE_RANGE_WRITE		2 /* Initiate writeout of all those
+-					     dirty pages in the range which are
+-					     not presently under writeback.  */
+-# define SYNC_FILE_RANGE_WAIT_AFTER	4 /* Wait upon writeout of all pages in
+-					     the range after performing the
+-					     write.  */
+-
+-/* Flags for SPLICE and VMSPLICE.  */
+-# define SPLICE_F_MOVE		1	/* Move pages instead of copying.  */
+-# define SPLICE_F_NONBLOCK	2	/* Don't block on the pipe splicing
+-					   (but we may still block on the fd
+-					   we splice from/to).  */
+-# define SPLICE_F_MORE		4	/* Expect more data.  */
+-# define SPLICE_F_GIFT		8	/* Pages passed in are a gift.  */
+-#endif
+-
+-__BEGIN_DECLS
+-
+-#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
+-
+-/* Provide kernel hint to read ahead.  */
+-extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
+-    __THROW;
+-
+-
+-/* Selective file content synch'ing.  */
+-extern int sync_file_range (int __fd, __off64_t __from, __off64_t __to,
+-			    unsigned int __flags);
+-
+-/* Splice address range into a pipe.  */
+-extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
+-			 size_t __count, unsigned int __flags);
+-
+-/* Splice two files together.  */
+-extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
+-		       __off64_t *__offout, size_t __len,
+-		       unsigned int __flags);
+-
+-/* In-kernel implementation of tee for pipe buffers.  */
+-extern ssize_t tee (int __fdin, int __fdout, size_t __len,
+-		    unsigned int __flags);
+-
+-#endif
+-__END_DECLS
+-
+diff --git a/libc/sysdeps/linux/vax/bits/huge_val.h b/libc/sysdeps/linux/vax/bits/huge_val.h
+deleted file mode 100644
+index f479021ad..000000000
+--- a/libc/sysdeps/linux/vax/bits/huge_val.h
++++ /dev/null
+@@ -1,25 +0,0 @@
+-/* `HUGE_VAL' constant for Vaxen.
+-   Used by <stdlib.h> and <math.h> functions for overflow.
+-   Copyright (C) 1992, 1996, 1997 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, see
+-   <http://www.gnu.org/licenses/>.  */
+-
+-#ifndef _MATH_H
+-# error "Never use <bits/huge_val.h> directly; include <math.h> instead."
+-#endif
+-
+-
+-#define	   HUGE_VAL	1.70141182460469227e38
+diff --git a/libc/sysdeps/linux/vax/bits/ipc.h b/libc/sysdeps/linux/vax/bits/ipc.h
+deleted file mode 100644
+index e4dba68f2..000000000
+--- a/libc/sysdeps/linux/vax/bits/ipc.h
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/* Copyright (C) 1995, 1996, 1997, 1998 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-#ifndef _SYS_IPC_H
+-# error "Never use <bits/ipc.h> directly; include <sys/ipc.h> instead."
+-#endif
+-
+-#include <sys/types.h>
+-
+-/* Mode bits for `msgget', `semget', and `shmget'.  */
+-#define IPC_CREAT	01000		/* Create key if key does not exist. */
+-#define IPC_EXCL	02000		/* Fail if key exists.  */
+-#define IPC_NOWAIT	04000		/* Return error on wait.  */
+-
+-/* Control commands for `msgctl', `semctl', and `shmctl'.  */
+-#define IPC_RMID	0		/* Remove identifier.  */
+-#define IPC_SET		1		/* Set `ipc_perm' options.  */
+-#define IPC_STAT	2		/* Get `ipc_perm' options.  */
+-#define IPC_INFO	3		/* See ipcs.  */
+-
+-/* Special key values.  */
+-#define IPC_PRIVATE	((__key_t) 0)	/* Private key.  */
+-
+-
+-/* Data structure used to pass permission information to IPC operations.  */
+-struct ipc_perm
+-  {
+-    __key_t __key;			/* Key.  */
+-    unsigned short int uid;		/* Owner's user ID.  */
+-    unsigned short int gid;		/* Owner's group ID.  */
+-    unsigned short int cuid;		/* Creator's user ID.  */
+-    unsigned short int cgid;		/* Creator's group ID.  */
+-    unsigned short int mode;		/* Read/write permission.  */
+-    unsigned short int __seq;		/* Sequence number.  */
+-  };
+diff --git a/libc/sysdeps/linux/vax/bits/kernel_stat.h b/libc/sysdeps/linux/vax/bits/kernel_stat.h
+deleted file mode 100644
+index a6da833c4..000000000
+--- a/libc/sysdeps/linux/vax/bits/kernel_stat.h
++++ /dev/null
+@@ -1,50 +0,0 @@
+-#ifndef _BITS_STAT_STRUCT_H
+-#define _BITS_STAT_STRUCT_H
+-
+-/* This file provides whatever this particular arch's kernel thinks
+- * struct stat should look like...  It turns out each arch has a
+- * different opinion on the subject... */
+-
+-struct kernel_stat {
+-	unsigned short st_dev;
+-	unsigned short __pad1;
+-	unsigned long st_ino;
+-	unsigned short st_mode;
+-	unsigned short st_nlink;
+-	unsigned short st_uid;
+-	unsigned short st_gid;
+-	unsigned short st_rdev;
+-	unsigned short __pad2;
+-	unsigned long  st_size;
+-	unsigned long  st_blksize;
+-	unsigned long  st_blocks;
+-	struct timespec st_atim;
+-	struct timespec st_mtim;
+-	struct timespec st_ctim;
+-	unsigned long  __unused4;
+-	unsigned long  __unused5;
+-};
+-
+-struct kernel_stat64 {
+-	unsigned short	st_dev;
+-	unsigned char	__pad0[10];
+-#define _HAVE_STAT64___ST_INO 1
+-	unsigned long	__st_ino;
+-	unsigned int	st_mode;
+-	unsigned int	st_nlink;
+-	unsigned long	st_uid;
+-	unsigned long	st_gid;
+-	unsigned short	st_rdev;
+-	unsigned char	__pad3[10];
+-	long long	st_size;
+-	unsigned long	st_blksize;
+-	unsigned long	st_blocks;	/* Number 512-byte blocks allocated. */
+-	unsigned long	__pad4;		/* future possible st_blocks high bits */
+-	struct timespec	st_atim;
+-	struct timespec	st_mtim;
+-	struct timespec	st_ctim;
+-	unsigned long long	st_ino;
+-};
+-
+-#endif	/*  _BITS_STAT_STRUCT_H */
+-
+diff --git a/libc/sysdeps/linux/vax/bits/kernel_types.h b/libc/sysdeps/linux/vax/bits/kernel_types.h
+deleted file mode 100644
+index aef74b549..000000000
+--- a/libc/sysdeps/linux/vax/bits/kernel_types.h
++++ /dev/null
+@@ -1,45 +0,0 @@
+-#ifndef _VAX_POSIX_TYPES_H
+-#define _VAX_POSIX_TYPES_H
+-/*
+- * Note that we use the exact same include guard #define names
+- * as asm/posix_types.h.  This will avoid gratuitous conflicts
+- * with the posix_types.h kernel header, and will ensure that
+- * our private content, and not the kernel header, will win.
+- *  -Erik
+- */
+-
+-
+-typedef unsigned short	__kernel_dev_t;
+-typedef unsigned long	__kernel_ino_t;
+-typedef unsigned short	__kernel_mode_t;
+-typedef unsigned short	__kernel_nlink_t;
+-typedef long		__kernel_off_t;
+-typedef int		__kernel_pid_t;
+-typedef unsigned short	__kernel_ipc_pid_t;
+-typedef unsigned short	__kernel_uid_t;
+-typedef unsigned short	__kernel_gid_t;
+-typedef unsigned int	__kernel_size_t;
+-typedef int		__kernel_ssize_t;
+-typedef int		__kernel_ptrdiff_t;
+-typedef long		__kernel_time_t;
+-typedef long		__kernel_suseconds_t;
+-typedef long		__kernel_clock_t;
+-typedef int		__kernel_daddr_t;
+-typedef char *		__kernel_caddr_t;
+-typedef unsigned short	__kernel_uid16_t;
+-typedef unsigned short	__kernel_gid16_t;
+-typedef unsigned int	__kernel_uid32_t;
+-typedef unsigned int	__kernel_gid32_t;
+-typedef unsigned short	__kernel_old_uid_t;
+-typedef unsigned short	__kernel_old_gid_t;
+-typedef long long	__kernel_loff_t;
+-
+-typedef struct {
+-#if defined(__KERNEL__) || defined(__USE_ALL)
+-	int val[2];
+-#else
+-	int __val[2];
+-#endif
+-} __kernel_fsid_t;
+-
+-#endif /* _VAX_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/vax/bits/sem.h b/libc/sysdeps/linux/vax/bits/sem.h
+deleted file mode 100644
+index 99f76a038..000000000
+--- a/libc/sysdeps/linux/vax/bits/sem.h
++++ /dev/null
+@@ -1,86 +0,0 @@
+-/* Copyright (C) 1995, 1996, 1997, 1998, 2000 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-#ifndef _SYS_SEM_H
+-# error "Never include <bits/sem.h> directly; use <sys/sem.h> instead."
+-#endif
+-
+-#include <sys/types.h>
+-
+-/* Flags for `semop'.  */
+-#define SEM_UNDO	0x1000		/* undo the operation on exit */
+-
+-/* Commands for `semctl'.  */
+-#define GETPID		11		/* get sempid */
+-#define GETVAL		12		/* get semval */
+-#define GETALL		13		/* get all semval's */
+-#define GETNCNT		14		/* get semncnt */
+-#define GETZCNT		15		/* get semzcnt */
+-#define SETVAL		16		/* set semval */
+-#define SETALL		17		/* set all semval's */
+-
+-
+-/* Data structure describing a set of semaphores.  */
+-struct semid_ds
+-{
+-  struct ipc_perm sem_perm;		/* operation permission struct */
+-  __time_t sem_otime;			/* last semop() time */
+-  unsigned long int __unused1;
+-  __time_t sem_ctime;			/* last time changed by semctl() */
+-  unsigned long int __unused2;
+-  unsigned long int sem_nsems;		/* number of semaphores in set */
+-  unsigned long int __unused3;
+-  unsigned long int __unused4;
+-};
+-
+-/* The user should define a union like the following to use it for arguments
+-   for `semctl'.
+-
+-   union semun
+-   {
+-     int val;				<= value for SETVAL
+-     struct semid_ds *buf;		<= buffer for IPC_STAT & IPC_SET
+-     unsigned short int *array;		<= array for GETALL & SETALL
+-     struct seminfo *__buf;		<= buffer for IPC_INFO
+-   };
+-
+-   Previous versions of this file used to define this union but this is
+-   incorrect.  One can test the macro _SEM_SEMUN_UNDEFINED to see whether
+-   one must define the union or not.  */
+-#define _SEM_SEMUN_UNDEFINED	1
+-
+-#ifdef __USE_MISC
+-
+-/* ipcs ctl cmds */
+-# define SEM_STAT 18
+-# define SEM_INFO 19
+-
+-struct  seminfo
+-{
+-  int semmap;
+-  int semmni;
+-  int semmns;
+-  int semmnu;
+-  int semmsl;
+-  int semopm;
+-  int semume;
+-  int semusz;
+-  int semvmx;
+-  int semaem;
+-};
+-
+-#endif /* __USE_MISC */
+diff --git a/libc/sysdeps/linux/vax/bits/setjmp.h b/libc/sysdeps/linux/vax/bits/setjmp.h
+deleted file mode 100644
+index 06b00e52d..000000000
+--- a/libc/sysdeps/linux/vax/bits/setjmp.h
++++ /dev/null
+@@ -1,30 +0,0 @@
+-/* Define the machine-dependent type `jmp_buf'.  Vax version. */
+-
+-#ifndef _SETJMP_H
+-# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
+-#endif
+-
+-/* we want to save enough that we can use this to fool RET,
+- * So we basically save all of the CALLS stack frame. Plus regs. */
+-typedef int __jmp_buf[16];
+-
+-/*
+-	jmp_buf layout. jmp_buf[0]
+-	void *__cond;		 The condition handler
+-	void *__psw;		 mask and PSW bits
+-        void *__ap;		 argument pointer
+-	void *__fp;		 frame pointer
+-	void *__pc;		 program counter
+-			         no need to save r0
+-	void *__r1;		 regs, r0->r11.
+-	void *__r2;		 regs, r0->r11.
+-	void *__r3;		 regs, r0->r11.
+-	void *__r4;		 regs, r0->r11.
+-	void *__r5;		 regs, r0->r11.
+-	void *__r6;		 regs, r0->r11.
+-	void *__r7;		 regs, r0->r11.
+-	void *__r8;		 regs, r0->r11.
+-	void *__r9;		 regs, r0->r11.
+-	void *__rA;		 regs, r0->r11.
+-	void *__rB;		 regs, r0->r11.
+-*/
+diff --git a/libc/sysdeps/linux/vax/bits/shm.h b/libc/sysdeps/linux/vax/bits/shm.h
+deleted file mode 100644
+index d271bed76..000000000
+--- a/libc/sysdeps/linux/vax/bits/shm.h
++++ /dev/null
+@@ -1,93 +0,0 @@
+-/* Copyright (C) 1995, 1996, 1997 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-#ifndef _SYS_SHM_H
+-# error "Never include <bits/shm.h> directly; use <sys/shm.h> instead."
+-#endif
+-
+-#include <sys/types.h>
+-
+-/* Permission flag for shmget.  */
+-#define SHM_R		0400		/* or S_IRUGO from <linux/stat.h> */
+-#define SHM_W		0200		/* or S_IWUGO from <linux/stat.h> */
+-
+-/* Flags for `shmat'.  */
+-#define SHM_RDONLY	010000		/* attach read-only else read-write */
+-#define SHM_RND		020000		/* round attach address to SHMLBA */
+-#define SHM_REMAP	040000		/* take-over region on attach */
+-
+-/* Commands for `shmctl'.  */
+-#define SHM_LOCK	11		/* lock segment (root only) */
+-#define SHM_UNLOCK	12		/* unlock segment (root only) */
+-
+-__BEGIN_DECLS
+-/* Segment low boundary address multiple.  */
+-#define SHMLBA		(__getpagesize ())
+-extern int __getpagesize (void) __THROW __attribute__ ((__const__));
+-
+-
+-/* Type to count number of attaches.  */
+-typedef unsigned short int shmatt_t;
+-
+-/* Data structure describing a set of semaphores.  */
+-struct shmid_ds
+-  {
+-    struct ipc_perm shm_perm;		/* operation permission struct */
+-    int shm_segsz;			/* size of segment in bytes */
+-    __time_t shm_atime;			/* time of last shmat() */
+-    __time_t shm_dtime;			/* time of last shmdt() */
+-    __time_t shm_ctime;			/* time of last change by shmctl() */
+-    __pid_t shm_cpid;			/* pid of creator */
+-    __pid_t shm_lpid;			/* pid of last shmop */
+-    shmatt_t shm_nattch;		/* number of current attaches */
+-    unsigned short int __shm_npages;	/* size of segment (pages) */
+-    unsigned long int *__shm_pages;	/* array of ptrs to frames -> SHMMAX */
+-    struct vm_area_struct *__attaches;	/* descriptors for attaches */
+-  };
+-
+-#ifdef __USE_MISC
+-
+-/* ipcs ctl commands */
+-# define SHM_STAT	13
+-# define SHM_INFO	14
+-
+-/* shm_mode upper byte flags */
+-# define SHM_DEST	01000	/* segment will be destroyed on last detach */
+-# define SHM_LOCKED	02000   /* segment will not be swapped */
+-
+-struct	shminfo
+-  {
+-    int shmmax;
+-    int shmmin;
+-    int shmmni;
+-    int shmseg;
+-    int shmall;
+-  };
+-
+-struct shm_info
+-  {
+-    int used_ids;
+-    unsigned long int shm_tot;	/* total allocated shm */
+-    unsigned long int shm_rss;	/* total resident shm */
+-    unsigned long int shm_swp;	/* total swapped shm */
+-    unsigned long int swap_attempts;
+-    unsigned long int swap_successes;
+-  };
+-
+-#endif /* __USE_MISC */
+-
+-__END_DECLS
+diff --git a/libc/sysdeps/linux/vax/bits/sigcontext.h b/libc/sysdeps/linux/vax/bits/sigcontext.h
+deleted file mode 100644
+index e61969458..000000000
+--- a/libc/sysdeps/linux/vax/bits/sigcontext.h
++++ /dev/null
+@@ -1,28 +0,0 @@
+-/* Copyright (C) 1996, 1997, 1998 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-#if !defined _SIGNAL_H && !defined _SYS_UCONTEXT_H
+-# error "Never use <bits/sigcontext.h> directly; include <signal.h> instead."
+-#endif
+-
+-#ifndef sigcontext_struct
+-/* Kernel headers before 2.1.1 define a struct sigcontext_struct, but
+-   we need sigcontext.  */
+-# define sigcontext_struct sigcontext
+-
+-# include <asm/sigcontext.h>
+-#endif
+diff --git a/libc/sysdeps/linux/vax/bits/stackinfo.h b/libc/sysdeps/linux/vax/bits/stackinfo.h
+deleted file mode 100644
+index 4bdad496e..000000000
+--- a/libc/sysdeps/linux/vax/bits/stackinfo.h
++++ /dev/null
+@@ -1,7 +0,0 @@
+-#ifndef _VAX_BITS_STACKINFO_H
+-#define _VAX_BITS_STACKINFO_H
+-
+-/* On VAXen, the stack grows down.  */
+-#define _STACK_GROWS_DOWN	1
+-
+-#endif /* _VAX_BITS_STACKINFO_H */
+diff --git a/libc/sysdeps/linux/vax/bits/syscalls.h b/libc/sysdeps/linux/vax/bits/syscalls.h
+deleted file mode 100644
+index 101aacb2e..000000000
+--- a/libc/sysdeps/linux/vax/bits/syscalls.h
++++ /dev/null
+@@ -1,258 +0,0 @@
+-#ifndef _BITS_SYSCALLS_H
+-#define _BITS_SYSCALLS_H
+-#ifndef _SYSCALL_H
+-# error "Never use <bits/syscall.h> directly; include <sys/syscall.h> instead."
+-#endif
+-
+-#ifndef __ASSEMBLER__
+-
+-#include <errno.h>
+-
+-#define SYS_ify(syscall_name)  (__NR_##syscall_name)
+-
+-#undef _syscall_return
+-#define _syscall_return(type)							\
+-	do {									\
+-		if ((unsigned long) (_sc_ret) >= (unsigned long) (-125)) {	\
+-			__set_errno(-_sc_ret);					\
+-			_sc_ret = -1;						\
+-		}								\
+-										\
+-		return (type) (_sc_ret);					\
+-	} while (0)
+-
+-#define _syscall_clobbers		\
+-	"r1",  "r2",  "r3",  "r4",	\
+-	"r5",  "r6",  "r7",  "r8",	\
+-	"r9", "r10", "r11"
+-
+-#ifdef _syscall0
+-#	undef _syscall0
+-#endif
+-#define _syscall0(type, name)						\
+-type name (void)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	$0x0		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$4, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#ifdef _syscall1
+-#	undef _syscall1
+-#endif
+-#define _syscall1(type, name, type1, arg1)				\
+-type name (type1 arg1)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	%2		\n"				\
+-	"	pushl	$0x1		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$8, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0),							\
+-	  "m" (arg1)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#ifdef _syscall2
+-#	undef _syscall2
+-#endif
+-#define _syscall2(type, name, type1, arg1, type2, arg2)			\
+-type name (type1 arg1,							\
+-	   type2 arg2)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	%3		\n"				\
+-	"	pushl	%2		\n"				\
+-	"	pushl	$0x2		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$12, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0),							\
+-	  "m" (arg1),							\
+-	  "m" (arg2)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#ifdef _syscall3
+-#	undef _syscall3
+-#endif
+-#define _syscall3(type, name, type1, arg1, type2, arg2, type3, arg3)	\
+-type name (type1 arg1,							\
+-	   type2 arg2,							\
+-	   type3 arg3)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	%4		\n"				\
+-	"	pushl	%3		\n"				\
+-	"	pushl	%2		\n"				\
+-	"	pushl	$0x3		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$16, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0),							\
+-	  "m" (arg1),							\
+-	  "m" (arg2),							\
+-	  "m" (arg3)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#ifdef _syscall4
+-#	undef _syscall4
+-#endif
+-#define _syscall4(type, name, type1, arg1, type2, arg2, type3, arg3,	\
+-		type4, arg4)						\
+-type name (type1 arg1,							\
+-	   type2 arg2,							\
+-	   type3 arg3,							\
+-	   type4 arg4)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	%5		\n"				\
+-	"	pushl	%4		\n"				\
+-	"	pushl	%3		\n"				\
+-	"	pushl	%2		\n"				\
+-	"	pushl	$0x4		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$20, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0),							\
+-	  "m" (arg1),							\
+-	  "m" (arg2),							\
+-	  "m" (arg3),							\
+-	  "m" (arg4)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#ifdef _syscall5
+-#	undef _syscall5
+-#endif
+-#define _syscall5(type, name, type1, arg1, type2, arg2, type3, arg3,	\
+-		type4, arg4, type5, arg5)				\
+-type name (type1 arg1,							\
+-	   type2 arg2,							\
+-	   type3 arg3,							\
+-	   type4 arg4,							\
+-	   type5 arg5)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	%6		\n"				\
+-	"	pushl	%5		\n"				\
+-	"	pushl	%4		\n"				\
+-	"	pushl	%3		\n"				\
+-	"	pushl	%2		\n"				\
+-	"	pushl	$0x5		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$24, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0),							\
+-	  "m" (arg1),							\
+-	  "m" (arg2),							\
+-	  "m" (arg3),							\
+-	  "m" (arg4),							\
+-	  "m" (arg5)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#ifdef _syscall6
+-#	undef _syscall6
+-#endif
+-#define _syscall6(type, name, type1, arg1, type2, arg2, type3, arg3,	\
+-		type4, arg4, type5, arg5, type6, arg6)			\
+-type name (type1 arg1,							\
+-	   type2 arg2,							\
+-	   type3 arg3,							\
+-	   type4 arg4,							\
+-	   type5 arg5,							\
+-	   type6 arg6)							\
+-{									\
+-	register long _sc_0 __asm__("r0") = SYS_ify (name);		\
+-	long _sc_ret;							\
+-									\
+-	__asm__ __volatile__ (						\
+-	"	pushl	%%ap		\n"				\
+-	"	pushl	%7		\n"				\
+-	"	pushl	%6		\n"				\
+-	"	pushl	%5		\n"				\
+-	"	pushl	%4		\n"				\
+-	"	pushl	%3		\n"				\
+-	"	pushl	%2		\n"				\
+-	"	pushl	$0x6		\n"				\
+-	"	movl	%%sp, %%ap	\n"				\
+-	"	chmk	%%r0		\n"				\
+-	"	addl2	$28, %%sp	\n"				\
+-	"	movl	(%%sp)+, %%ap	\n"				\
+-	: "=r" (_sc_0)							\
+-	: "0" (_sc_0),							\
+-	  "m" (arg1),							\
+-	  "m" (arg2),							\
+-	  "m" (arg3),							\
+-	  "m" (arg4),							\
+-	  "m" (arg5),							\
+-	  "m" (arg6)							\
+-	: _syscall_clobbers);						\
+-									\
+-	_sc_ret = _sc_0;						\
+-	_syscall_return (type);						\
+-}
+-
+-#endif /* __ASSEMBLER__ */
+-#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/vax/bits/uClibc_arch_features.h b/libc/sysdeps/linux/vax/bits/uClibc_arch_features.h
+deleted file mode 100644
+index c2b189d76..000000000
+--- a/libc/sysdeps/linux/vax/bits/uClibc_arch_features.h
++++ /dev/null
+@@ -1,41 +0,0 @@
+-/*
+- * Track misc arch-specific features that aren't config options
+- */
+-
+-#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
+-#define _BITS_UCLIBC_ARCH_FEATURES_H
+-
+-/* instruction used when calling abort() to kill yourself */
+-#define __UCLIBC_ABORT_INSTRUCTION__	"halt"
+-
+-/* can your target use syscall6() for mmap ? */
+-#define __UCLIBC_MMAP_HAS_6_ARGS__
+-
+-/* does your target align 64bit values in register pairs ? (32bit arches only) */
+-#undef __UCLIBC_SYSCALL_ALIGN_64BIT__
+-
+-/* does your target have a broken create_module() ? */
+-#undef __UCLIBC_BROKEN_CREATE_MODULE__
+-
+-/* does your target have to worry about older [gs]etrlimit() ? */
+-#undef __UCLIBC_HANDLE_OLDER_RLIMIT__
+-
+-/* does your target have an asm .set ? */
+-#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
+-
+-/* define if target supports .weak */
+-#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
+-
+-/* define if target supports .weakext */
+-#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
+-
+-/* define if target supports CFI pseudo ops */
+-#undef __UCLIBC_HAVE_ASM_CFI_DIRECTIVES__
+-
+-/* define if target supports IEEE signed zero floats */
+-#undef __UCLIBC_HAVE_SIGNED_ZERO__
+-
+-/* only weird assemblers generally need this */
+-#undef __UCLIBC_ASM_LINE_SEP__
+-
+-#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/vax/bits/wordsize.h b/libc/sysdeps/linux/vax/bits/wordsize.h
+deleted file mode 100644
+index cbe1418d4..000000000
+--- a/libc/sysdeps/linux/vax/bits/wordsize.h
++++ /dev/null
+@@ -1,18 +0,0 @@
+-/* Copyright (C) 1999 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-#define __WORDSIZE	32
+diff --git a/libc/sysdeps/linux/vax/brk.c b/libc/sysdeps/linux/vax/brk.c
+deleted file mode 100644
+index b67922d93..000000000
+--- a/libc/sysdeps/linux/vax/brk.c
++++ /dev/null
+@@ -1,52 +0,0 @@
+-/* brk system call for Linux/VAX.
+-   Copyright (C) 2000, 2005 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, see
+-   <http://www.gnu.org/licenses/>.  */
+-
+-#include <errno.h>
+-#include <unistd.h>
+-#include <sys/syscall.h>
+-
+-/* This must be initialized data because commons can't have aliases.  */
+-void *__curbrk attribute_hidden = NULL;
+-
+-int
+-brk (void *addr)
+-{
+-	register unsigned long int result __asm__ ("%%r0");
+-
+-	__asm__ (
+-	"	pushl	%%ap		\n"	/* Start frame				*/
+-	"	pushl	%2		\n"	/* New top address we wish to get	*/
+-	"	pushl	$1		\n"	/* One argument				*/
+-	"	movl	%%sp, %%ap	\n"	/* Finish frame				*/
+-	"	chmk	%1		\n"	/* Perform the system call		*/
+-	"	addl2	$8, %%sp	\n"	/* Remove pushed arg			*/
+-	"	movl	(%%sp)+, %%ap	\n"	/* Get back %AP				*/
+-	: "=r" (result)
+-	: "0" (__NR_brk),
+-	  "g" (addr));
+-
+-	if ((void *) result < addr) {
+-		__set_errno (ENOMEM);
+-		return -1;
+-	} else
+-		__curbrk = (void *) result;
+-
+-	return 0;
+-}
+-libc_hidden_def(brk)
+-
+diff --git a/libc/sysdeps/linux/vax/clone.S b/libc/sysdeps/linux/vax/clone.S
+deleted file mode 100644
+index 6eb1927b9..000000000
+--- a/libc/sysdeps/linux/vax/clone.S
++++ /dev/null
+@@ -1,84 +0,0 @@
+-/* Copyright (C) 1996, 1997, 1998, 1999 Free Software Foundation, Inc.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   see <http://www.gnu.org/licenses/>.  */
+-
+-/* clone() is even more special than fork() as it mucks with stacks
+-   and invokes a function in the right context after its all over.  */
+-
+-#include <sys/syscall.h>
+-
+-#warning "This file contains a hardcoded constant for SYS_clone"
+-
+-.section	.rodata
+-		.align 2
+-.LC0:		.long 120	/* SYS_clone */
+-.align 4
+-.text
+-.type	clone,@function
+-.globl	clone;
+-clone:
+-	.word 0x0040
+-	/* subl2	$8, %sp	*/
+-	movl	4(%ap), %r1
+-	movl	8(%ap), %r0
+-	mcoml	$21, %r6
+-
+-	/* Sanity check args.  */
+-	tstl	%r1
+-	jeql	CLONE_ERROR_LABEL
+-	tstl	%r0
+-	jeql	CLONE_ERROR_LABEL
+-
+-	/* Need to setup the child stack the same as the parent.  */
+-	subl2	$24, %r0
+-	movl	16(%ap), 20(%r0)
+-	movl	%r1, 16(%r0)
+-	movl	%r0, %r1
+-	addl2	$16, %r1
+-	movl	%r1, 12(%r0)
+-
+-	/* Do the system call.  */
+-	pushl	%ap
+-	pushl	%r0
+-        pushl	12(%ap)
+-	pushl	$0x2
+-	movl	%sp, %ap
+-        chmk	.LC0	/* %r0 .LC0 -4(%fp) -8(%fp) */
+-	addl2	$12, %sp
+-	movl	(%sp)+, %ap
+-	movl	%r0, %r6
+-	jneq	CLONE_ERROR_LABEL
+-
+-	movl	$0, %fp
+-	pushl	4(%ap)
+-	movl	(%r1), %r0
+-	calls	$1, (%r0)
+-	pushl	%r0
+-	calls	$1, HIDDEN_JUMPTARGET(_exit)
+-
+-CLONE_ERROR_LABEL:
+-	cmpl	%r6, $-126	/* -ENOKEY?!?! Fuck, this must be wrong! FIXME */
+-	jlequ	CLONE_RETURN_LABEL
+-	calls	$0, __errno_location
+-	mnegl	%r6, (%r0)
+-	mcoml	$0, %r6
+-	movl	%r6, %r0
+-	ret
+-
+-CLONE_RETURN_LABEL:
+-	ret
+-
+-.size clone,.-clone
+-
+diff --git a/libc/sysdeps/linux/vax/crt1.S b/libc/sysdeps/linux/vax/crt1.S
+deleted file mode 100644
+index 70960988d..000000000
+--- a/libc/sysdeps/linux/vax/crt1.S
++++ /dev/null
+@@ -1,73 +0,0 @@
+-/*
+- * crt0 for VAX
+- */
+-
+-/*
+- * Program stack looks like:
+- * sp->	argc            argument counter (integer)
+- *	argv[0]         program name (pointer)
+- *	argv[1...N]     program args (pointers)
+- *	argv[argc-1]    end of args (integer)
+- *	NULL
+- *	env[0...N]      environment variables (pointers)
+- *	NULL
+- */
+-
+-#include <features.h>
+-
+-.text
+-.align 4
+-
+-.global __start
+-__start:
+-.global _start
+-_start:
+-	/* Kernel uses a_interp + 2, so __start isn't exactly CALLSed,	*/
+-	/* but we need to have two bytes here, so we use NOPs. This	*/
+-	/* won't hurt, though R0 would be invalid to push, but at	*/
+-	/* lease this looks like a real function.			*/
+-	.word	0x0101
+-
+-	movl	$0, %fp			/* FP = 0, since this is the	*/
+-					/* top-most stack frame		*/
+-	movl	%sp, %r0		/* R0 = %sp			*/
+-	movl	(%sp)+, %r4		/* R4 = argc			*/
+-	movl	%sp, %r3		/* R3 = argv = &argv[0]		*/
+-
+-#if (defined L_crt1 || defined L_gcrt1) && defined __UCLIBC_CTOR_DTOR__
+-	pushl	%r0	/* stack_end					*/
+-	pushl	$0	/* rtld_fini. This is probably needed for the	*/
+-			/* case where a dynamic linker is involved. So	*/
+-			/* this is an open FIXME that needs to be	*/
+-			/* addressed at some time...			*/
+-	pushl	$_fini
+-	pushl	$_init
+-	pushl	%r3	/* Argument pointer				*/
+-	pushl	%r4	/* And the argument count			*/
+-	pushl	$main	/* main()					*/
+-
+-	/* We need to call __uClibc_main which should not return.
+-	 * __uClibc_main (int (*main) (int, char **, char **),
+-	 *                int argc,
+-	 *                char **argv,
+-	 *                void (*init) (void),
+-	 *                void (*fini) (void),
+-	 *                void (*rtld_fini) (void),
+-	 *                void *stack_end);
+-	 */
+-	calls	$7, __uClibc_main
+-#else /* FIXME: THIS IS BROKEN!!! */
+-	/* start to load the arguments from the stack */
+-	/* arguments are on ap stack */
+-	pushl	%r2
+-	pushl	%r3
+-	pushl	%r4
+-
+-	calls	$3, __uClibc_main
+-#endif
+-
+-	/* The above __uClibc_start_main() shouldn't ever return. If it	*/
+-	/* does, we just crash.						*/
+-	halt
+-.align 2
+-
+diff --git a/libc/sysdeps/linux/vax/crti.S b/libc/sysdeps/linux/vax/crti.S
+deleted file mode 100644
+index 0056478bb..000000000
+--- a/libc/sysdeps/linux/vax/crti.S
++++ /dev/null
+@@ -1,21 +0,0 @@
+-	.file	"initfini.c"
+-	.version	"01.01"
+-gcc2_compiled.:
+-__gnu_compiled_c:
+-	.section .init
+-	.align 1
+-.globl _init
+-	.type	 _init,@function
+-_init:
+-	.word 0x0000
+-
+-	.align 1
+-
+-	.section .fini
+-	.align 1
+-.globl _fini
+-	.type	 _fini,@function
+-_fini:
+-	.word 0x0000
+-	.align 1
+-	.ident	"GCC: (GNU) 2.95.2 19991024 (release) (Linux/VAX CVS)"
+diff --git a/libc/sysdeps/linux/vax/crtn.S b/libc/sysdeps/linux/vax/crtn.S
+deleted file mode 100644
+index 1153fd50b..000000000
+--- a/libc/sysdeps/linux/vax/crtn.S
++++ /dev/null
+@@ -1,19 +0,0 @@
+-	.file	"initfini.c"
+-	.version	"01.01"
+-gcc2_compiled.:
+-__gnu_compiled_c:
+-
+-	.section .init
+-	.align 1
+-.globl _init
+-	.type	 _init,@function
+-	ret
+-.Lfe2:
+-
+-	.section .fini
+-	.align 1
+-.globl _fini
+-	.type	 _fini,@function
+-	ret
+-.Lfe3:
+-	.ident	"GCC: (GNU) 2.95.2 19991024 (release) (Linux/VAX CVS)"
+diff --git a/libc/sysdeps/linux/vax/jmpbuf-unwind.h b/libc/sysdeps/linux/vax/jmpbuf-unwind.h
+deleted file mode 100644
+index 18bbd9642..000000000
+--- a/libc/sysdeps/linux/vax/jmpbuf-unwind.h
++++ /dev/null
+@@ -1,11 +0,0 @@
+-/*
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-#include <setjmp.h>
+-
+-/* Test if longjmp to JMPBUF would unwind the frame
+-   containing a local variable at ADDRESS.  */
+-#define _JMPBUF_UNWINDS(jmpbuf, address) \
+-  ((void *) (address) < (void *) (jmpbuf[4]))
+diff --git a/libc/sysdeps/linux/vax/setjmp.S b/libc/sysdeps/linux/vax/setjmp.S
+deleted file mode 100644
+index bdbde4b13..000000000
+--- a/libc/sysdeps/linux/vax/setjmp.S
++++ /dev/null
+@@ -1,39 +0,0 @@
+-
+-/*
+- * setjmp.S	atp. Sept. 2001
+- *		Jan-Benedict Glaw <jbglaw@lug-owl.de> 2006
+- *
+- * Save regs and info needed for a longjmp
+- */
+-
+-.globl __sigsetjmp
+-.align 4
+-__sigsetjmp:
+-	.word	0x0000		/* We look after reg saving here - this	*/
+-				/* must match longjmp.			*/
+-	movl	0x4(%ap), %r0	/* Our scratch reg			*/
+-	/* kenn would probably use movq here. :-)			*/
+-	movl	%r1, 0x14(%r0)	/* save regs				*/
+-	movl	%r2, 0x18(%r0)
+-	movl	%r3, 0x1c(%r0)
+-	movl	%r4, 0x20(%r0)
+-	movl	%r5, 0x24(%r0)
+-	movl	%r6, 0x28(%r0)
+-	movl	%r7, 0x2c(%r0)
+-	movl	%r8, 0x30(%r0)
+-	movl	%r9, 0x34(%r0)
+-	movl	%r10, 0x38(%r0)
+-	movl	%r11, 0x3c(%r0)
+-	/* Now save our call frame					*/
+-	movl	(%fp), (%r0)		/* Condition handler (for VMS emulation) */
+-	movl	0x4(%fp), 0x4(%r0)	/* psw				*/
+-	movl	0x8(%fp), 0x8(%r0)	/* ap				*/
+-	movl	0xc(%fp), 0xc(%r0)	/* fp				*/
+-	movl	0x10(%fp), 0x10(%r0)	/* pc				*/
+-	/* Call the sigjmp save routine					*/
+-	pushl	8(%ap)
+-	pushl	%r0
+-	calls	$2, __sigjmp_save
+-	/* Done								*/
+-	ret
+-
+diff --git a/libc/sysdeps/linux/vax/sys/procfs.h b/libc/sysdeps/linux/vax/sys/procfs.h
+deleted file mode 100644
+index 218897cd2..000000000
+--- a/libc/sysdeps/linux/vax/sys/procfs.h
++++ /dev/null
+@@ -1,122 +0,0 @@
+-/* Copyright (C) 1996, 1997, 1999, 2001 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, see
+-   <http://www.gnu.org/licenses/>.  */
+-
+-#ifndef _SYS_PROCFS_H
+-#define _SYS_PROCFS_H	1
+-
+-/* This is somewhat modelled after the file of the same name on SVR4
+-   systems.  It provides a definition of the core file format for ELF
+-   used on Linux.  It doesn't have anything to do with the /proc file
+-   system, even though Linux has one.
+-
+-   Anyway, the whole purpose of this file is for GDB and GDB only.
+-   Don't read too much into it.  Don't use it for anything other than
+-   GDB unless you know what you are doing.  */
+-
+-#include <features.h>
+-#include <sys/time.h>
+-#include <sys/types.h>
+-#include <sys/user.h>
+-
+-__BEGIN_DECLS
+-
+-/* Type for a general-purpose register.  */
+-typedef unsigned long elf_greg_t;
+-
+-/* And the whole bunch of them.  We could have used `struct
+-   user_regs' directly in the typedef, but tradition says that
+-   the register set is an array, which does have some peculiar
+-   semantics, so leave it that way.  */
+-#define ELF_NGREG (sizeof (struct user_regs_struct) / sizeof(elf_greg_t))
+-typedef elf_greg_t elf_gregset_t[ELF_NGREG];
+-
+-/* Register set for the floating-point registers.  */
+-typedef struct user_regs_struct elf_fpregset_t;
+-
+-/* Signal info.  */
+-struct elf_siginfo
+-  {
+-    int si_signo;			/* Signal number.  */
+-    int si_code;			/* Extra code.  */
+-    int si_errno;			/* Errno.  */
+-  };
+-
+-/* Definitions to generate Intel SVR4-like core files.  These mostly
+-   have the same names as the SVR4 types with "elf_" tacked on the
+-   front to prevent clashes with Linux definitions, and the typedef
+-   forms have been avoided.  This is mostly like the SVR4 structure,
+-   but more Linuxy, with things that Linux does not support and which
+-   GDB doesn't really use excluded.  */
+-
+-struct elf_prstatus
+-  {
+-    struct elf_siginfo pr_info;		/* Info associated with signal.  */
+-    short int pr_cursig;		/* Current signal.  */
+-    unsigned long int pr_sigpend;	/* Set of pending signals.  */
+-    unsigned long int pr_sighold;	/* Set of held signals.  */
+-    __pid_t pr_pid;
+-    __pid_t pr_ppid;
+-    __pid_t pr_pgrp;
+-    __pid_t pr_sid;
+-    struct timeval pr_utime;		/* User time.  */
+-    struct timeval pr_stime;		/* System time.  */
+-    struct timeval pr_cutime;		/* Cumulative user time.  */
+-    struct timeval pr_cstime;		/* Cumulative system time.  */
+-    elf_gregset_t pr_reg;		/* GP registers.  */
+-    int pr_fpvalid;			/* True if math copro being used.  */
+-  };
+-
+-
+-#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
+-
+-struct elf_prpsinfo
+-  {
+-    char pr_state;			/* Numeric process state.  */
+-    char pr_sname;			/* Char for pr_state.  */
+-    char pr_zomb;			/* Zombie.  */
+-    char pr_nice;			/* Nice val.  */
+-    unsigned long int pr_flag;		/* Flags.  */
+-    unsigned short int pr_uid;
+-    unsigned short int pr_gid;
+-    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
+-    /* Lots missing */
+-    char pr_fname[16];			/* Filename of executable.  */
+-    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
+-  };
+-
+-/* The rest of this file provides the types for emulation of the
+-   Solaris <proc_service.h> interfaces that should be implemented by
+-   users of libthread_db.  */
+-
+-/* Addresses.  */
+-typedef void *psaddr_t;
+-
+-/* Register sets.  Linux has different names.  */
+-typedef elf_gregset_t prgregset_t;
+-typedef elf_fpregset_t prfpregset_t;
+-
+-/* We don't have any differences between processes and threads,
+-   therefore have only one PID type.  */
+-typedef __pid_t lwpid_t;
+-
+-/* Process status and info.  In the end we do provide typedefs for them.  */
+-typedef struct elf_prstatus prstatus_t;
+-typedef struct elf_prpsinfo prpsinfo_t;
+-
+-__END_DECLS
+-
+-#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/vax/sys/ucontext.h b/libc/sysdeps/linux/vax/sys/ucontext.h
+deleted file mode 100644
+index 3f3e40c9f..000000000
+--- a/libc/sysdeps/linux/vax/sys/ucontext.h
++++ /dev/null
+@@ -1,79 +0,0 @@
+-/* Copyright (C) 1997, 1998, 2000 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, see
+-   <http://www.gnu.org/licenses/>.  */
+-
+-/* Don't rely on this, the interface is currently messed up and may need to
+-   be broken to be fixed.  */
+-#ifndef _SYS_UCONTEXT_H
+-#define _SYS_UCONTEXT_H	1
+-
+-#include <features.h>
+-#include <signal.h>
+-
+-/* We need the signal context definitions even if they are not used
+-   included in <signal.h>.  */
+-#include <bits/sigcontext.h>
+-
+-
+-/* Type for general register.  */
+-typedef unsigned long int greg_t;
+-
+-/* Number of general registers.  */
+-#define NGREG	37
+-#define NFPREG	33
+-
+-/* Container for all general registers.  */
+-/* gregset_t must be an array.  The below declared array corresponds to:
+-typedef struct gregset {
+-	greg_t	g_regs[32];
+-	greg_t	g_hi;
+-	greg_t	g_lo;
+-	greg_t	g_pad[3];
+-} gregset_t;  */
+-typedef greg_t gregset_t[NGREG];
+-
+-/* Container for all FPU registers.  */
+-typedef struct fpregset {
+-	union {
+-		double	fp_dregs[32];
+-		struct {
+-			float		_fp_fregs;
+-			unsigned int	_fp_pad;
+-		} fp_fregs[32];
+-	} fp_r;
+-	unsigned int	fp_csr;
+-	unsigned int	fp_pad;
+-} fpregset_t;
+-
+-
+-/* Context to describe whole processor state.  */
+-typedef struct
+-  {
+-    gregset_t gregs;
+-    fpregset_t fpregs;
+-  } mcontext_t;
+-
+-/* Userlevel context.  */
+-typedef struct ucontext
+-  {
+-    unsigned long int uc_flags;
+-    struct ucontext *uc_link;
+-    stack_t uc_stack;
+-    mcontext_t uc_mcontext;
+-    __sigset_t uc_sigmask;
+-  } ucontext_t;
+-
+-#endif /* sys/ucontext.h */

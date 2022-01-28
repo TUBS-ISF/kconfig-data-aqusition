@@ -1,0 +1,78 @@
+"2013-04-04 00:25:06 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index ed2cf2458..3737d854c 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -669,6 +669,16 @@ config COMPAT_ATEXIT
+ 	  Enable this option if you want to update from 0.9.28 to git/0.9.29,
+ 	  else you will be missing atexit() until you rebuild all apps.
+ 
++config UCLIBC_SUSV2_LEGACY
++	bool "Enable SuSv2 LEGACY functions"
++	help
++	  Enable this option if you want to have SuSv2 LEGACY functions
++	  Currently applies to:
++
++	  valloc
++
++	  WARNING! ABI incompatibility.
++
+ config UCLIBC_SUSV3_LEGACY
+ 	bool "Enable SuSv3 LEGACY functions"
+ 	#vfork,
+diff --git a/include/malloc.h b/include/malloc.h
+index 20d799ca5..3209fb070 100644
+--- a/include/malloc.h
++++ b/include/malloc.h
+@@ -125,8 +125,10 @@ extern void free __MALLOC_P ((__malloc_ptr_t __ptr));
+ extern __malloc_ptr_t memalign __MALLOC_P ((size_t __alignment, size_t __size));
+ libc_hidden_proto(memalign)
+ 
++#ifdef __UCLIBC_SUSV2_LEGACY__
+ /* Allocate SIZE bytes on a page boundary.  */
+ extern __malloc_ptr_t valloc __MALLOC_P ((size_t __size)) __attribute_malloc__;
++#endif
+ 
+ #ifdef __MALLOC_STANDARD__
+ 
+diff --git a/libc/stdlib/Makefile.in b/libc/stdlib/Makefile.in
+index b92f7ceeb..880de78d8 100644
+--- a/libc/stdlib/Makefile.in
++++ b/libc/stdlib/Makefile.in
+@@ -17,7 +17,8 @@ CSRC-y := \
+ 	getpt.c drand48-iter.c jrand48.c \
+ 	jrand48_r.c lcong48.c lrand48.c lrand48_r.c mrand48.c mrand48_r.c nrand48.c \
+ 	nrand48_r.c rand_r.c srand48.c srand48_r.c seed48.c seed48_r.c \
+-	valloc.c a64l.c l64a.c __uc_malloc.c
++	a64l.c l64a.c __uc_malloc.c
++CSRC-$(UCLIBC_SUSV2_LEGACY) += valloc.c
+ CSRC-$(UCLIBC_HAS_ADVANCED_REALTIME) += posix_memalign.c
+ CSRC-$(UCLIBC_HAS_PTY) += grantpt.c unlockpt.c ptsname.c
+ CSRC-$(UCLIBC_HAS_ARC4RANDOM) += arc4random.c
+diff --git a/libc/stdlib/malloc-simple/Makefile.in b/libc/stdlib/malloc-simple/Makefile.in
+index 05a2ebeee..c3ef4b73f 100644
+--- a/libc/stdlib/malloc-simple/Makefile.in
++++ b/libc/stdlib/malloc-simple/Makefile.in
+@@ -11,7 +11,9 @@ STDLIB_MALLOC_SIMPLE_DIR := $(top_srcdir)libc/stdlib/malloc-simple
+ STDLIB_MALLOC_SIMPLE_OUT := $(top_builddir)libc/stdlib/malloc-simple
+ 
+ CSRC-y := $(notdir $(wildcard $(STDLIB_MALLOC_SIMPLE_DIR)/*.c))
+-CSRC-y := $(filter-out alloc.c,$(CSRC-y))
++# multi source alloc.c
++CSRC-  := alloc.c
++CSRC-y := $(filter-out $(CSRC-),$(CSRC-y))
+ 
+ STDLIB_MALLOC_SIMPLE_SRC := $(patsubst %.c,$(STDLIB_MALLOC_SIMPLE_DIR)/%.c,$(CSRC-y))
+ STDLIB_MALLOC_SIMPLE_OBJ := $(patsubst %.c,$(STDLIB_MALLOC_SIMPLE_OUT)/%.o,$(CSRC-y))
+diff --git a/test/malloc/Makefile.in b/test/malloc/Makefile.in
+index 7b8c0fabd..d14617d31 100644
+--- a/test/malloc/Makefile.in
++++ b/test/malloc/Makefile.in
+@@ -2,3 +2,7 @@
+ # Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+ 
+ TESTS_DISABLED := time_malloc
++
++ifneq ($(UCLIBC_SUSV2_LEGACY),y)
++TESTS_DISABLED += tst-valloc
++endif

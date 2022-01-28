@@ -1,0 +1,197 @@
+"2007-03-25 21:50:18 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 000f3a8af..baac799db 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -536,6 +536,14 @@ config FEATURE_SORT_BIG
+ 	  The SuSv3 sort standard is available at:
+ 	  http://www.opengroup.org/onlinepubs/007904975/utilities/sort.html
+ 
++config SPLIT
++	bool "split"
++	default n
++	help
++	  split a file into pieces.
++	  
++	  http://www.opengroup.org/onlinepubs/007904975/utilities/split.html
++
+ config STAT
+ 	bool "stat"
+ 	default n
+diff --git a/coreutils/Kbuild b/coreutils/Kbuild
+index dfdcbd43c..1c6e6ed23 100644
+--- a/coreutils/Kbuild
++++ b/coreutils/Kbuild
+@@ -60,6 +60,7 @@ lib-$(CONFIG_RMDIR)     += rmdir.o
+ lib-$(CONFIG_SEQ)       += seq.o
+ lib-$(CONFIG_SHA1SUM)   += md5_sha1_sum.o
+ lib-$(CONFIG_SLEEP)     += sleep.o
++lib-$(CONFIG_SPLIT)     += split.o
+ lib-$(CONFIG_SORT)      += sort.o
+ lib-$(CONFIG_STAT)      += stat.o
+ lib-$(CONFIG_STTY)      += stty.o
+diff --git a/coreutils/split.c b/coreutils/split.c
+new file mode 100644
+index 000000000..312906f6e
+--- /dev/null
++++ b/coreutils/split.c
+@@ -0,0 +1,118 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * split - split a file into pieces
++ * Copyright (c) 2007 Bernhard Fischer
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++/* BB_AUDIT: not yet SUSV3 compliant; FIXME: add -bN{k,m}
++ * SUSv3 requirements:
++ * http://www.opengroup.org/onlinepubs/009695399/utilities/split.html
++ */
++#include "busybox.h"
++static unsigned suffix_len = 2;
++
++/* Increment the suffix part of the filename.
++ * Returns 0 on success and 1 on error (if we are out of files)
++ */
++static bool next_file(char **old)
++{
++	size_t end = strlen(*old);
++	unsigned i = 1;
++	char *curr;
++
++	do {
++//		if (**(old + end - i) < 'z') {
++		curr = *old + end - i;
++		if (*curr < 'z') {
++			*(*old + end - i) += 1;
++			break;
++		}
++		*(*old +end - i) = 'a';
++		i++;
++	} while (i <= suffix_len);
++	if ((*curr == 'z') && (i == suffix_len))
++		return 1;
++	return 0;
++}
++#define SPLIT_OPT_l (1<<0)
++#define SPLIT_OPT_b (1<<1)
++
++int split_main(int argc, char **argv);
++int split_main(int argc, char **argv)
++{
++	char *pfx;
++	char *count_p = NULL;
++	char *sfx_len = NULL;
++	unsigned cnt = 1000;
++	char *input_file;
++
++//XXX: FIXME	opt_complementary = "+2"; /* at most 2 non-option arguments */
++	getopt32(argc, argv, "l:b:a:", &count_p, &count_p, &sfx_len);
++	argv += optind;
++
++	if (count_p)
++		cnt = xatoi(count_p);
++	if (sfx_len)
++		suffix_len = xatoul(sfx_len);
++
++	if (!*argv)
++		*--argv = (char*) "-";
++	input_file = *argv;
++	if (NAME_MAX < strlen(*argv) + suffix_len)
++		bb_error_msg_and_die("Suffix too long");
++
++	{
++		char *char_p = xzalloc(suffix_len);
++		memset(char_p, 'a', suffix_len);
++		pfx = xasprintf("%s%s", (argc > optind + 1) ? *++argv : "x", char_p);
++		if (ENABLE_FEATURE_CLEAN_UP)
++			free(char_p);
++	}
++//XXX:FIXME: unify those two file-handling schemata below (FILE vs fd) !
++	if (option_mask32 & SPLIT_OPT_b) {
++		char *buf;
++		ssize_t i;
++		ssize_t bytes = 0;
++		int inp = xopen(input_file, O_RDONLY);
++		int flags = O_WRONLY | O_CREAT | O_TRUNC;
++		do {
++			int out = xopen(pfx, flags);
++			buf = xzalloc(cnt);
++			lseek(inp, bytes, SEEK_SET);
++			bytes += i = full_read(inp, buf, cnt);
++			xwrite(out, buf, i);
++			close(out);
++			free(buf);
++			if (next_file(&pfx))
++				flags = O_WRONLY | O_APPEND;
++		} while(i > 0);
++	} else { /* -l */
++		FILE *fp = fopen_or_warn_stdin(input_file);
++		char *buf;
++		do {
++			unsigned i = cnt;
++			int flags = O_WRONLY | O_CREAT | O_TRUNC;
++			int out = xopen(pfx, flags);
++			buf = NULL;
++			while (i--) {
++			    buf = xmalloc_fgets(fp);
++				if (buf == NULL)
++					break;
++				xwrite(out, buf, buf ? strlen(buf) : 0);
++				free(buf);
++			};
++			close(out);
++
++			if (next_file(&pfx))
++				flags = O_WRONLY | O_APPEND;
++		} while (buf);
++		if (ENABLE_FEATURE_CLEAN_UP)
++			fclose_if_not_stdin(fp);
++	}
++
++	if (ENABLE_FEATURE_CLEAN_UP) {
++		free(pfx);
++	}
++	return EXIT_SUCCESS;
++}
+diff --git a/include/applets.h b/include/applets.h
+index 3f5bf9bde..77258be42 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -274,6 +274,7 @@ USE_SHA1SUM(APPLET_ODDNAME(sha1sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_NEVE
+ USE_SLEEP(APPLET(sleep, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_SOFTLIMIT(APPLET_ODDNAME(softlimit, chpst, _BB_DIR_USR_BIN, _BB_SUID_NEVER, softlimit))
+ USE_SORT(APPLET(sort, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_SPLIT(APPLET(split, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_START_STOP_DAEMON(APPLET_ODDNAME(start-stop-daemon, start_stop_daemon, _BB_DIR_SBIN, _BB_SUID_NEVER, start_stop_daemon))
+ USE_STAT(APPLET(stat, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_STRINGS(APPLET(strings, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 7adc1fc78..4843f5f67 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2952,6 +2952,12 @@
+ 	) \
+        ""
+ 
++#define split_trivial_usage \
++	"[OPTION] [INPUT [PREFIX]]"
++#define split_full_usage \
++	"Options:" \
++	"\n	-blah XXX: Fixme: usage.h"
++
+ #define start_stop_daemon_trivial_usage \
+        "[OPTIONS] [--start|--stop] ... [-- arguments...]"
+ #define start_stop_daemon_full_usage \
+diff --git a/scripts/defconfig b/scripts/defconfig
+index c6c200263..6ca10b63d 100644
+--- a/scripts/defconfig
++++ b/scripts/defconfig
+@@ -193,6 +193,7 @@ CONFIG_SEQ=y
+ CONFIG_SHA1SUM=y
+ CONFIG_SLEEP=y
+ CONFIG_FEATURE_FANCY_SLEEP=y
++CONFIG_SPLIT=y
+ CONFIG_SORT=y
+ CONFIG_FEATURE_SORT_BIG=y
+ CONFIG_STAT=y

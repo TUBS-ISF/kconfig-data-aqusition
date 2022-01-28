@@ -1,0 +1,202 @@
+"2004-08-26 17:03:09 +0000"
+diff --git a/Rules.mak b/Rules.mak
+index 2f000303d..61e32bfd5 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -220,8 +220,13 @@ ifeq ($(strip $(TARGET_ARCH)),arm)
+ endif
+ endif
+ 
++ifeq ($(SSP_CFLAGS),)
++SSP_CFLAGS=$(call check_gcc,-fno-stack-protector-all,)
++SSP_CFLAGS+=$(call check_gcc,-fstack-protector,)
++endif
++
+ # Some nice CFLAGS to work with
+-CFLAGS=$(XWARNINGS) $(OPTIMIZATION) $(XARCH_CFLAGS) $(CPU_CFLAGS) \
++CFLAGS=$(XWARNINGS) $(OPTIMIZATION) $(XARCH_CFLAGS) $(CPU_CFLAGS) $(SSP_CFLAGS) \
+ 	-fno-builtin -nostdinc -D_LIBC -I$(TOPDIR)include -I.
+ 
+ ifeq ($(DODEBUG),y)
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index be80a3a7d..02eba213a 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -201,13 +201,14 @@ config FORCE_SHAREABLE_TEXT_SEGMENTS
+ config UCLIBC_PIE_SUPPORT
+ 	bool "Support ET_DYN in shared library loader"
+ 	select FORCE_SHAREABLE_TEXT_SEGMENTS
++	select UCLIBC_COMPLETELY_PIC
+ 	default n
+ 	help
+ 	  If you answer Y here, the uClibc native shared library loader will
+ 	  support ET_DYN/PIE executables.
+ 	  It requires binutils-2.14.90.0.6 or later and the usage of the
+ 	  -pie option.
+-	  More about ET_DYN/PIE binaries on <http://pageexec.virtualave.net/> .
++	  More about ET_DYN/PIE binaries on <http://pax.grsecurity.net/> .
+ 	  WARNING: This option also enables FORCE_SHAREABLE_TEXT_SEGMENTS, so all
+ 		libraries have to be built with -fPIC or -fpic, and all assembler
+ 		functions must be written as position independent code (PIC).
+@@ -251,6 +252,34 @@ config UCLIBC_PROPOLICE
+ 	  gcc version, were __guard and __stack_smash_handler are removed from libgcc.
+ 	  Most people will answer N.
+ 
++choice
++	prompt "Propolice protection blocking signal"
++	depends on UCLIBC_PROPOLICE
++	default PROPOLICE_BLOCK_ABRT if ! DODEBUG
++	default PROPOLICE_BLOCK_SEGV if DODEBUG
++	help
++	  "abort" use SIGABRT to block offending programs.
++	  This is the default implementation.
++
++	  "segfault" use SIGSEGV to block offending programs.
++	  Use this for debugging.
++
++	  "kill" use SIGKILL to block offending programs.
++	  Perhaps the best for security.
++
++	  If unsure, answer "abort".
++
++config PROPOLICE_BLOCK_ABRT
++	bool "abort"
++
++config PROPOLICE_BLOCK_SEGV
++	bool "segfault"
++
++config PROPOLICE_BLOCK_KILL
++	bool "kill"
++
++endchoice
++
+ config HAS_NO_THREADS
+ 	bool
+ 	default n
+diff --git a/extra/scripts/fix_includes.sh b/extra/scripts/fix_includes.sh
+index ae25267d8..4930ff7e5 100755
+--- a/extra/scripts/fix_includes.sh
++++ b/extra/scripts/fix_includes.sh
+@@ -59,10 +59,10 @@ while [ -n "$1" ]; do
+     esac;
+ done;
+ 
+-if [ ! -f "$KERNEL_SOURCE/Makefile" ]; then
++if [ ! -f "$KERNEL_SOURCE/Makefile" -a ! -f "$KERNEL_SOURCE/include/linux/version.h" ]; then
+     echo "";
+     echo "";
+-    echo "The file $KERNEL_SOURCE/Makefile is missing!";
++    echo "The file $KERNEL_SOURCE/Makefile or $KERNEL_SOURCE/include/linux/version.h is missing!";
+     echo "Perhaps your kernel source is broken?"
+     echo "";
+     echo "";
+@@ -78,8 +78,21 @@ if [ ! -d "$KERNEL_SOURCE" ]; then
+     exit 1;
+ fi;
+ 
+-# set current VERSION, PATCHLEVEL, SUBLEVEL, EXTERVERSION
++if [ -f "$KERNEL_SOURCE/Makefile" ] ; then
++# set current VERSION, PATCHLEVEL, SUBLEVEL, EXTRAVERSION
+ eval `sed -n -e 's/^\([A-Z]*\) = \([0-9]*\)$/\1=\2/p' -e 's/^\([A-Z]*\) = \(-[-a-z0-9]*\)$/\1=\2/p' $KERNEL_SOURCE/Makefile`
++else
++ver=`grep UTS_RELEASE $KERNEL_SOURCE/include/linux/version.h | cut -d '"' -f 2`
++VERSION=`echo "$ver" | cut -d '.' -f 1`
++PATCHLEVEL=`echo "$ver" | cut -d '.' -f 2`
++if echo "$ver" | grep -q '-' ; then
++SUBLEVEL=`echo "$ver" | sed "s/${VERSION}.${PATCHLEVEL}.//" | cut -d '-' -f 1`
++EXTRAVERSION=`echo "$ver" | sed "s/${VERSION}.${PATCHLEVEL}.${SUBLEVEL}-//"`
++else
++SUBLEVEL=`echo "$ver" | cut -d '.' -f 3`
++#EXTRAVERSION=
++fi
++fi
+ if [ -z "$VERSION" -o -z "$PATCHLEVEL" -o -z "$SUBLEVEL" ]
+ then
+     echo "Unable to determine version for kernel headers"
+diff --git a/include/elf.h b/include/elf.h
+index 75042ca94..94bb4f84e 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -569,6 +569,7 @@ typedef struct
+ #define PT_GNU_EH_FRAME	0x6474e550	/* GCC .eh_frame_hdr segment */
+ #define PT_GNU_STACK	0x6474e551	/* Indicates stack executability */
+ #define PT_GNU_RELRO	0x6474e552	/* Read-only after relocation */
++#define PT_PAX_FLAGS	0x65041580	/* Indicates PaX flag markings */
+ #define PT_LOSUNW	0x6ffffffa
+ #define PT_SUNWBSS	0x6ffffffa	/* Sun Specific segment */
+ #define PT_SUNWSTACK	0x6ffffffb	/* Stack segment */
+@@ -582,6 +583,18 @@ typedef struct
+ #define PF_X		(1 << 0)	/* Segment is executable */
+ #define PF_W		(1 << 1)	/* Segment is writable */
+ #define PF_R		(1 << 2)	/* Segment is readable */
++#define PF_PAGEEXEC	(1 << 4)	/* Enable  PAGEEXEC */
++#define PF_NOPAGEEXEC	(1 << 5)	/* Disable PAGEEXEC */
++#define PF_SEGMEXEC	(1 << 6)	/* Enable  SEGMEXEC */
++#define PF_NOSEGMEXEC	(1 << 7)	/* Disable SEGMEXEC */
++#define PF_MPROTECT	(1 << 8)	/* Enable  MPROTECT */
++#define PF_NOMPROTECT	(1 << 9)	/* Disable MPROTECT */
++#define PF_RANDEXEC	(1 << 10)	/* Enable  RANDEXEC */
++#define PF_NORANDEXEC	(1 << 11)	/* Disable RANDEXEC */
++#define PF_EMUTRAMP	(1 << 12)	/* Enable  EMUTRAMP */
++#define PF_NOEMUTRAMP	(1 << 13)	/* Disable EMUTRAMP */
++#define PF_RANDMMAP	(1 << 14)	/* Enable  RANDMMAP */
++#define PF_NORANDMMAP	(1 << 15)	/* Disable RANDMMAP */
+ #define PF_MASKOS	0x0ff00000	/* OS-specific */
+ #define PF_MASKPROC	0xf0000000	/* Processor-specific */
+ 
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index 01a26193a..dde68bd98 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -21,7 +21,9 @@ TOPDIR=../../
+ include $(TOPDIR)Rules.mak
+ LDSO_FULLNAME=ld-uClibc-$(MAJOR_VERSION).$(MINOR_VERSION).$(SUBLEVEL).so
+ 
+-XXFLAGS=$(XWARNINGS) $(LIBRARY_CACHE)
++SSPFLAGS=$(call check_gcc,-fno-stack-protector,)
++
++XXFLAGS=$(XWARNINGS) $(LIBRARY_CACHE) $(SSPFLAGS)
+ ifeq ($(DODEBUG),y)
+ # Not really much point in including debugging info, since gdb
+ # can't really debug ldso, since gdb requires help from ldso to
+diff --git a/test/Makefile b/test/Makefile
+index 397cc42b7..203484290 100644
+--- a/test/Makefile
++++ b/test/Makefile
+@@ -22,19 +22,19 @@ TOPDIR=../
+ .EXPORT_ALL_VARIABLES:
+ 
+ 
+-ALL_SUBDIRS = args assert ctype dlopen pwd_grp signal silly stdlib string unistd crypt #misc
++ALL_SUBDIRS = args assert ctype pwd_grp signal silly stdlib string unistd crypt #misc
+ DIRS = $(ALL_SUBDIRS)
+ #ifeq ($(TARGET_ARCH), $(HOST_ARCH))
+ #	DIRS = $(ALL_SUBDIRS)
+ #else
+ #	DIRS =
+ #endif
+-ifeq ($(strip $(HAVE_SHARED)),true)
+-  ifeq ($(strip $(DODYNAMIC)),true)
++ifeq ($(HAVE_SHARED),y)
++  ifeq ($(BUILD_UCLIBC_LDSO),y)
+ 	DIRS += dlopen
+   endif	
+ endif	
+-ifeq ($(strip $(INCLUDE_THREADS)),true)
++ifeq ($(UCLIBC_HAS_THREADS),y)
+     DIRS += pthread
+ endif	
+ 
+diff --git a/test/Rules.mak b/test/Rules.mak
+index dcba2452a..141cf10f6 100644
+--- a/test/Rules.mak
++++ b/test/Rules.mak
+@@ -44,7 +44,7 @@ export TARGET_ARCH
+ CROSS=
+ CC= $(CROSS)gcc
+ STRIPTOOL=strip
+-LDD=../$(TESTDIR)ldso/util/ldd
++LDD=../$(TOPDIR)/utils/ldd
+ 
+ RM= rm -f
+ 

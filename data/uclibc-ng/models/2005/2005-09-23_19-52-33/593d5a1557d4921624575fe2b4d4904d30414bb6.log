@@ -1,0 +1,400 @@
+"2005-09-23 19:52:33 +0000"
+diff --git a/Makefile b/Makefile
+index 6f00c0686..597e9d930 100644
+--- a/Makefile
++++ b/Makefile
+@@ -166,6 +166,7 @@ install_dev:
+ 	fi ; \
+ 	tar -chf - include --exclude .svn --exclude CVS $$extra_exclude \
+ 		| tar -xf - -C $(PREFIX)$(DEVEL_PREFIX)
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/ssp-internal.h
+ ifneq ($(strip $(UCLIBC_HAS_FLOATS)),y)
+ 	# Remove floating point related headers since float support is disabled.
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/complex.h
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index c6a364942..018f6a0ee 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1188,9 +1188,6 @@ choice
+ 	  "segfault" use SIGSEGV to block offending programs.
+ 	  Use this for debugging.
+ 
+-	  "kill" use SIGKILL to block offending programs.
+-	  Perhaps the best for security.
+-
+ 	  If unsure, answer "abort".
+ 
+ config PROPOLICE_BLOCK_ABRT
+@@ -1199,9 +1196,6 @@ config PROPOLICE_BLOCK_ABRT
+ config PROPOLICE_BLOCK_SEGV
+ 	bool "segfault"
+ 
+-config PROPOLICE_BLOCK_KILL
+-	bool "kill"
+-
+ endchoice
+ 
+ config UCLIBC_BUILD_SSP
+diff --git a/include/ssp-internal.h b/include/ssp-internal.h
+new file mode 100644
+index 000000000..c82debbd5
+--- /dev/null
++++ b/include/ssp-internal.h
+@@ -0,0 +1,90 @@
++/*
++ * Distributed under the terms of the GNU Lesser General Public License
++ *  $Header: $
++ */
++
++#ifndef _SSP_INTERNAL_H
++#define _SSP_INTERNAL_H 1
++
++#ifdef __SSP__
++#error "file must not be compiled with stack protection enabled on it. Use -fno-stack-protector"
++#endif
++
++#ifdef __PROPOLICE_BLOCK_SEGV__
++# define SSP_SIGTYPE SIGSEGV
++#else
++# define SSP_SIGTYPE SIGABRT
++#endif
++
++#include <sys/types.h>
++#include <sys/time.h>
++#include <signal.h>
++#include <linux/unistd.h>
++
++#ifdef __SSP_USE_ERANDOM__
++# include <sys/sysctl.h>
++#if 1
++# define SYSCTL __sysctl
++#else
++#define __NR__kernel_sysctl		__NR_sysctl
++static __always_inline _syscall6(int,__kernel_sysctl,int *,name,int,nlen,void *,oldval,size_t *,oldlenp,void *,newval,size_t,newlen);
++#define SYSCTL(name,nlen,oldval,oldlenp,newval,newlen) __kernel_sysctl(name,nlen,oldval,oldlenp,newval,newlen)
++#endif
++#endif
++
++#ifndef __SSP_QUICK_CANARY__
++#define __NR___kernel_open		__NR_open
++static __always_inline _syscall2(int,__kernel_open,const char *,path,int,flags);
++#define OPEN(path, flags)		__kernel_open(path, flags)
++
++/* void * = __ptr_t */
++#define __NR___kernel_read		__NR_read
++static __always_inline _syscall3(ssize_t,__kernel_read,int,fd,void *,buf,size_t,count);
++#define READ(fd, buf, count)		__kernel_read(fd, buf, count)
++
++#define __NR___kernel_close		__NR_close
++static __always_inline _syscall1(int,__kernel_close,int,fd);
++#define CLOSE(fd)			__kernel_close(fd)
++#endif
++
++/* const void * = const __ptr_t */
++#define __NR___kernel_write		__NR_write
++static __always_inline _syscall3(ssize_t,__kernel_write,int,fd,const void *,buf,size_t,count);
++#define WRITE(fd, buf, count)		__kernel_write(fd, buf, count)
++
++/* not using __NR_ */
++#define __NR___kernel_gettimeofday	__NR_gettimeofday
++static __always_inline _syscall2(int,__kernel_gettimeofday,struct timeval *,tv,struct timezone *,tz);
++#define GETTIMEOFDAY(tv, tz)		__kernel_gettimeofday(tv, tz)
++
++#define __NR___kernel_getpid		__NR_getpid
++static __always_inline _syscall0(pid_t,__kernel_getpid);
++#define GETPID()			__kernel_getpid()
++
++//#ifdef __NR_rt_sigaction
++//#define __NR___kernel_sigaction	__NR_rt_sigaction
++//static __always_inline _syscall4(...);
++//#else
++#define __NR___kernel_sigaction		__NR_sigaction
++static __always_inline _syscall3(int,__kernel_sigaction,int,signum,const struct sigaction *,act,struct sigaction *,oldact);
++//#endif
++#define SIGACTION(signum, act, oldact)	__kernel_sigaction(signum, act, oldact)
++
++//#ifdef __NR_rt_sigprocmask
++//#define __NR___kernel_sigprocmask	__NR_rt_sigprocmask
++//static __always_inline _syscall4(...);
++//#else
++#define __NR___kernel_sigprocmask	__NR_sigprocmask
++static __always_inline _syscall3(int,__kernel_sigprocmask,int,how,const sigset_t *,set,sigset_t *,oldset);
++//#endif
++#define SIGPROCMASK(how, set, oldset)	__kernel_sigprocmask(how, set, oldset)
++
++#define __NR___kernel_kill		__NR_kill
++static __always_inline _syscall2(int,__kernel_kill,__kernel_pid_t,pid,int,sig);
++#define KILL(pid, sig)			__kernel_kill(pid, sig)
++
++#define __NR___kernel_exit		__NR_exit
++static __always_inline _syscall1(void,__kernel_exit,int,status);
++#define EXIT(status)			__kernel_exit(status)
++
++#endif /* _SSP_INTERNAL_H */
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 167b77a33..c88649def 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -26,9 +26,10 @@
+ #include <sys/stat.h>
+ #include <sys/sysmacros.h>
+ #ifdef __UCLIBC_HAS_SSP__
+-extern void __guard_setup(void);
+-#endif
++#include <ssp-internal.h>
+ 
++unsigned long __guard = 0UL;
++#endif
+ 
+ /*
+  * Prototypes.
+@@ -105,6 +106,62 @@ static int __check_suid(void)
+     return 1;
+ }
+ 
++#ifdef __UCLIBC_HAS_SSP__
++static __always_inline void __guard_setup(void)
++{
++	if (__guard != 0UL)
++		return;
++
++#ifndef __SSP_QUICK_CANARY__
++
++	size_t size;
++
++# ifdef __SSP_USE_ERANDOM__
++	{
++		int mib[3];
++		/* Random is another depth in Linux, hence an array of 3. */
++		mib[0] = CTL_KERN;
++		mib[1] = KERN_RANDOM;
++		mib[2] = RANDOM_ERANDOM;
++
++		size = sizeof(unsigned long);
++		if (SYSCTL(mib, 3, &__guard, &size, NULL, 0) != (-1))
++			if (__guard != 0UL)
++				return;
++	}
++# endif /* ifdef __SSP_USE_ERANDOM__ */
++	{
++		int fd;
++
++# ifdef __SSP_USE_ERANDOM__
++		/* 
++		 * Attempt to open kernel pseudo random device if one exists before 
++		 * opening urandom to avoid system entropy depletion.
++		 */
++		if ((fd = OPEN("/dev/erandom", O_RDONLY)) == (-1))
++# endif
++			fd = OPEN("/dev/urandom", O_RDONLY);
++		if (fd != (-1)) {
++			size = READ(fd, (char *) &__guard, sizeof(__guard));
++			CLOSE(fd);
++			if (size == sizeof(__guard))
++				return;
++		}
++	}
++#endif /* ifndef __SSP_QUICK_CANARY__ */
++
++	/* Start with the "terminator canary". */
++	__guard = 0xFF0A0D00UL;
++
++	/* Everything failed? Or we are using a weakened model of the 
++	 * terminator canary */
++	{
++		struct timeval tv;
++		GETTIMEOFDAY(&tv, NULL);
++		__guard ^= tv.tv_usec ^ tv.tv_sec;
++	}
++}
++#endif /* __UCLIBC_HAS_SSP__ */
+ 
+ /* __uClibc_init completely initialize uClibc so it is ready to use.
+  *
+@@ -140,6 +197,10 @@ void __uClibc_init(void)
+ 	__pthread_initialize_minimal();
+ #endif
+ 
++#ifdef __UCLIBC_HAS_SSP__
++    __guard_setup ();
++#endif
++
+ #ifdef __UCLIBC_HAS_LOCALE__
+     /* Initialize the global locale structure. */
+     if (likely(_locale_init!=NULL))
+@@ -235,10 +296,6 @@ __uClibc_main(int (*main)(int, char **, char **), int argc,
+     }
+ #endif
+ 
+-#ifdef __UCLIBC_HAS_SSP__
+-    __guard_setup ();
+-#endif
+-
+     /* Note: It is possible that any initialization done above could
+      * have resulted in errno being set nonzero, so set it to 0 before
+      * we call main.
+diff --git a/libc/sysdeps/linux/common/ssp.c b/libc/sysdeps/linux/common/ssp.c
+index 31833cbb9..8d8d89653 100644
+--- a/libc/sysdeps/linux/common/ssp.c
++++ b/libc/sysdeps/linux/common/ssp.c
+@@ -20,126 +20,57 @@
+ # include <config.h>
+ #endif
+ 
+-#ifdef __SSP__
+-# error ssp.c has to be built w/ -fno-stack-protector
+-#endif
+-
+-#include <stdio.h>
+ #include <string.h>
+-#include <fcntl.h>
+ #include <unistd.h>
+-#include <signal.h>
+-#include <sys/types.h>
+-#include <sys/un.h>
+ #include <sys/syslog.h>
+-#include <sys/time.h>
+-#ifdef __SSP_USE_ERANDOM__
+-# include <sys/sysctl.h>
+-#endif
+-
+-#ifdef __PROPOLICE_BLOCK_SEGV__
+-# define SSP_SIGTYPE SIGSEGV
+-#elif __PROPOLICE_BLOCK_KILL__
+-# define SSP_SIGTYPE SIGKILL
+-#else
+-# define SSP_SIGTYPE SIGABRT
+-#endif
+-
+-unsigned long __guard = 0UL;
+ 
+-/* Use of __* functions from the rest of glibc here avoids
+- * initialisation problems for executables preloaded with
+- * libraries that overload the associated standard library
+- * functions.
+- */
+-#ifdef __UCLIBC__
+-extern int __libc_open(__const char *file, int flags, ...);
+-extern ssize_t __libc_read(int fd, void *buf, size_t count);
+-extern int __libc_close(int fd);
+-#else
+-# define __libc_open(file, flags) __open(file, flags)
+-# define __libc_read(fd, buf, count) __read(fd, buf, count)
+-# define __libc_close(fd) __close(fd)
+-#endif
++#include <ssp-internal.h>
+ 
+-void __guard_setup(void) __attribute__ ((constructor));
+-void __guard_setup(void)
++static __always_inline void block_signals(void)
+ {
+-	size_t size;
+-
+-	if (__guard != 0UL)
+-		return;
++	struct sigaction sa;
++	sigset_t mask;
+ 
+-	/* Start with the "terminator canary". */
+-	__guard = 0xFF0A0D00UL;
++	sigfillset(&mask);
+ 
+-#ifndef __SSP_QUICK_CANARY__
+-# ifdef __SSP_USE_ERANDOM__
+-	{
+-		int mib[3];
+-		/* Random is another depth in Linux, hence an array of 3. */
+-		mib[0] = CTL_KERN;
+-		mib[1] = KERN_RANDOM;
+-		mib[2] = RANDOM_ERANDOM;
++	sigdelset(&mask, SSP_SIGTYPE);	/* Block all signal handlers */
++	SIGPROCMASK(SIG_BLOCK, &mask, NULL);	/* except SSP_SIGTYPE */
+ 
+-		size = sizeof(unsigned long);
+-		if (__sysctl(mib, 3, &__guard, &size, NULL, 0) != (-1))
+-			if (__guard != 0UL)
+-				return;
+-	}
+-# endif /* ifdef __SSP_USE_ERANDOM__ */
+-	/* 
+-	 * Attempt to open kernel pseudo random device if one exists before 
+-	 * opening urandom to avoid system entropy depletion.
+-	 */
+-	{
+-		int fd;
++	/* Make the default handler associated with the signal handler */
++	memset(&sa, 0, sizeof(struct sigaction));
++	sigfillset(&sa.sa_mask);	/* Block all signals */
++	sa.sa_flags = 0;
++	sa.sa_handler = SIG_DFL;
++	SIGACTION(SSP_SIGTYPE, &sa, NULL);
++}
+ 
+-# ifdef __SSP_USE_ERANDOM__
+-		if ((fd = __libc_open("/dev/erandom", O_RDONLY)) == (-1))
+-# endif
+-			fd = __libc_open("/dev/urandom", O_RDONLY);
+-		if (fd != (-1)) {
+-			size = __libc_read(fd, (char *) &__guard, sizeof(__guard));
+-			__libc_close(fd);
+-			if (size == sizeof(__guard))
+-				return;
+-		}
+-	}
+-#endif /* ifndef __SSP_QUICK_CANARY__ */
++static __always_inline void ssp_write(int fd, const char *msg1, const char *msg2, const char *msg3)
++{
++	WRITE(fd, msg1, strlen(msg1));
++	WRITE(fd, msg2, strlen(msg2));
++	WRITE(fd, msg3, strlen(msg3));
++	WRITE(fd, "()\n", 3);
++	openlog("ssp", LOG_CONS | LOG_PID, LOG_USER);
++	syslog(LOG_INFO, "%s%s%s()", msg1, msg2, msg3);
++	closelog();
++}
+ 
+-	/* Everything failed? Or we are using a weakened model of the 
+-	 * terminator canary */
+-	{
+-		struct timeval tv;
+-		gettimeofday(&tv, NULL);
+-		__guard ^= tv.tv_usec ^ tv.tv_sec;
+-	}
++static __always_inline void terminate(void)
++{
++	(void) KILL(GETPID(), SSP_SIGTYPE);
++	EXIT(127);
+ }
+ 
+-void __stack_smash_handler(char func[], int damaged __attribute__ ((unused)));
+-void __stack_smash_handler(char func[], int damaged)
++void __attribute__ ((noreturn)) __stack_smash_handler(char func[], int damaged __attribute__ ((unused)));
++void __attribute__ ((noreturn)) __stack_smash_handler(char func[], int damaged)
+ {
+ 	extern char *__progname;
+ 	const char message[] = ": stack smashing attack in function ";
+-	struct sigaction sa;
+-	sigset_t mask;
+ 
+-	sigfillset(&mask);
+-
+-	sigdelset(&mask, SSP_SIGTYPE);	/* Block all signal handlers */
+-	sigprocmask(SIG_BLOCK, &mask, NULL);	/* except SSP_SIGTYPE */
++	block_signals();
+ 
+-	/* Print error message to stderr and syslog */
+-	fprintf(stderr, "%s%s%s()\n", __progname, message, func);
+-	syslog(LOG_INFO, "%s%s%s()", __progname, message, func);
++	ssp_write(STDERR_FILENO, __progname, message, func);
+ 
+-	/* Make the default handler associated with the signal handler */
+-	memset(&sa, 0, sizeof(struct sigaction));
+-	sigfillset(&sa.sa_mask);	/* Block all signals */
+-	sa.sa_flags = 0;
+-	sa.sa_handler = SIG_DFL;
+-	sigaction(SSP_SIGTYPE, &sa, NULL);
+-	(void) kill(getpid(), SSP_SIGTYPE);
+-	_exit(127);
++	while(1)
++		terminate();
+ }

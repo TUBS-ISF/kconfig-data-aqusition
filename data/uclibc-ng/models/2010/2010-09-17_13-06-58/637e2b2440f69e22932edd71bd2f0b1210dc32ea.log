@@ -1,0 +1,411 @@
+"2010-09-17 13:06:58 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index e8d522d71..97211864b 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -342,6 +342,23 @@ config LDSO_BASE_FILENAME
+ 	  WARNING: Changing the default prefix could cause problems with
+ 	           binutils' ld !
+ 
++config LDSO_STANDALONE_SUPPORT
++	bool "Dynamic linker stand-alone mode support"
++	depends on HAVE_SHARED
++	default n
++	help
++	  The dynamic linker can be run either indirectly through running some
++	  dynamically linked program or library (in which case no command line
++	  options to the dynamic linker can be passed and, in the ELF case, the
++	  dynamic linker which is stored in the .interp section of the program
++	  is executed) or directly by running:
++
++	  /lib/ld-uClibc.so.*  [OPTIONS] [PROGRAM [ARGUMENTS]]
++
++	  Stand-alone execution is a prerequisite for adding prelink
++	  capabilities to uClibc dynamic linker, as well useful for testing an
++	  updated version of the dynamic linker without breaking the system.
++
+ config UCLIBC_STATIC_LDCONFIG
+ 	bool "Link ldconfig statically"
+ 	depends on HAVE_SHARED
+diff --git a/ldso/include/dl-elf.h b/ldso/include/dl-elf.h
+index cbb2100b1..dc4af7bce 100644
+--- a/ldso/include/dl-elf.h
++++ b/ldso/include/dl-elf.h
+@@ -35,7 +35,7 @@ extern struct elf_resolve * _dl_load_shared_library(int secure,
+ 	struct dyn_elf **rpnt, struct elf_resolve *tpnt, char *full_libname,
+ 	int trace_loaded_objects);
+ extern struct elf_resolve * _dl_load_elf_shared_library(int secure,
+-	struct dyn_elf **rpnt, char *libname);
++	struct dyn_elf **rpnt, const char *libname);
+ extern struct elf_resolve *_dl_check_if_named_library_is_loaded(const char *full_libname,
+ 	int trace_loaded_objects);
+ extern int _dl_linux_resolve(void);
+diff --git a/ldso/include/dl-hash.h b/ldso/include/dl-hash.h
+index 34333f40f..edef9d81b 100644
+--- a/ldso/include/dl-hash.h
++++ b/ldso/include/dl-hash.h
+@@ -60,6 +60,10 @@ struct elf_resolve {
+ #endif
+ 
+   ElfW(Addr) mapaddr;
++#ifdef __LDSO_STANDALONE_SUPPORT__
++  /* Store the entry point from the ELF header (e_entry) */
++  ElfW(Addr) l_entry;
++#endif
+   enum {elf_lib, elf_executable,program_interpreter, loaded_file} libtype;
+   struct dyn_elf * symbol_scope;
+   unsigned short usage_count;
+diff --git a/ldso/include/ldso.h b/ldso/include/ldso.h
+index 69b5dd75a..120889216 100644
+--- a/ldso/include/ldso.h
++++ b/ldso/include/ldso.h
+@@ -144,7 +144,7 @@ extern void _dl_dprintf(int, const char *, ...);
+ # define DL_GET_READY_TO_RUN_EXTRA_ARGS
+ #endif
+ 
+-extern void _dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
++extern void *_dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ 		ElfW(auxv_t) auxvt[AT_EGID + 1], char **envp, char **argv
+ 		DL_GET_READY_TO_RUN_EXTRA_PARMS);
+ 
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index 5562e0784..2a77587db 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -322,7 +322,7 @@ goof:
+  */
+ 
+ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+-	struct dyn_elf **rpnt, char *libname)
++	struct dyn_elf **rpnt, const char *libname)
+ {
+ 	ElfW(Ehdr) *epnt;
+ 	unsigned long dynamic_addr = 0;
+@@ -397,11 +397,15 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 		return NULL;
+ 	}
+ 
+-	if ((epnt->e_type != ET_DYN) || (epnt->e_machine != MAGIC1
++	if ((epnt->e_type != ET_DYN
++#ifdef __LDSO_STANDALONE_SUPPORT__
++		&& epnt->e_type != ET_EXEC
++#endif
++		) || (epnt->e_machine != MAGIC1
+ #ifdef MAGIC2
+ 				&& epnt->e_machine != MAGIC2
+ #endif
+-				))
++			))
+ 	{
+ 		_dl_internal_error_number =
+ 			(epnt->e_type != ET_DYN ? LD_ERROR_NOTDYN : LD_ERROR_NOTMAGIC);
+@@ -462,6 +466,11 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 		ppnt++;
+ 	}
+ 
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	if (epnt->e_type == ET_EXEC)
++		piclib = 0;
++#endif
++
+ 	DL_CHECK_LIB_TYPE (epnt, piclib, _dl_progname, libname);
+ 
+ 	maxvma = (maxvma + ADDR_ALIGN) & PAGE_ALIGN;
+@@ -701,7 +710,11 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 
+ 	dpnt = (ElfW(Dyn) *) dynamic_addr;
+ 	_dl_memset(dynamic_info, 0, sizeof(dynamic_info));
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	rtld_flags = _dl_parse_dynamic_info(dpnt, dynamic_info, NULL, piclib ? lib_loadaddr : 0);
++#else
+ 	rtld_flags = _dl_parse_dynamic_info(dpnt, dynamic_info, NULL, lib_loadaddr);
++#endif
+ 	/* If the TEXTREL is set, this means that we need to make the pages
+ 	   writable before we perform relocations.  Do this now. They get set
+ 	   back again later. */
+@@ -734,6 +747,9 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 	tpnt->ppnt = (ElfW(Phdr) *) DL_RELOC_ADDR(tpnt->loadaddr, epnt->e_phoff);
+ 	tpnt->n_phent = epnt->e_phnum;
+ 	tpnt->rtld_flags |= rtld_flags;
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	tpnt->l_entry = epnt->e_entry;
++#endif
+ 
+ #if defined(USE_TLS) && USE_TLS
+ 	if (tlsppnt) {
+@@ -755,7 +771,11 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 		tpnt->l_tls_modid = _dl_next_tls_modid ();
+ 
+ 		/* We know the load address, so add it to the offset. */
++#ifdef __LDSO_STANDALONE_SUPPORT__
++		if ((tpnt->l_tls_initimage != NULL) && piclib)
++#else
+ 		if (tpnt->l_tls_initimage != NULL)
++#endif
+ 		{
+ # ifdef __SUPPORT_LD_DEBUG_EARLY__
+ 			unsigned int tmp = (unsigned int) tpnt->l_tls_initimage;
+@@ -772,7 +792,12 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 	/*
+ 	 * Add this object into the symbol chain
+ 	 */
+-	if (*rpnt) {
++	if (*rpnt
++#ifdef __LDSO_STANDALONE_SUPPORT__
++		/* Do not create a new chain entry for the main executable */
++		&& (*rpnt)->dyn
++#endif
++		) {
+ 		(*rpnt)->next = _dl_malloc(sizeof(struct dyn_elf));
+ 		_dl_memset((*rpnt)->next, 0, sizeof(struct dyn_elf));
+ 		(*rpnt)->next->prev = (*rpnt);
+@@ -791,7 +816,11 @@ struct elf_resolve *_dl_load_elf_shared_library(int secure,
+ 	(*rpnt)->dyn = tpnt;
+ 	tpnt->symbol_scope = _dl_symbol_tables;
+ 	tpnt->usage_count++;
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	tpnt->libtype = (epnt->e_type == ET_DYN) ? elf_lib : elf_executable;
++#else
+ 	tpnt->libtype = elf_lib;
++#endif
+ 
+ 	/*
+ 	 * OK, the next thing we need to do is to insert the dynamic linker into
+diff --git a/ldso/ldso/dl-startup.c b/ldso/ldso/dl-startup.c
+index a51b583a4..2aefa6d74 100644
+--- a/ldso/ldso/dl-startup.c
++++ b/ldso/ldso/dl-startup.c
+@@ -321,12 +321,12 @@ DL_START(unsigned long args)
+ 
+ 	__rtld_stack_end = (void *)(argv - 1);
+ 
+-	_dl_get_ready_to_run(tpnt, load_addr, auxvt, envp, argv
+-			     DL_GET_READY_TO_RUN_EXTRA_ARGS);
++	_dl_elf_main = (int (*)(int, char **, char **))
++			_dl_get_ready_to_run(tpnt, (DL_LOADADDR_TYPE) header, auxvt, envp, argv
++					     DL_GET_READY_TO_RUN_EXTRA_ARGS);
+ 
+ 	/* Transfer control to the application.  */
+ 	SEND_STDERR_DEBUG("transfering control to application @ ");
+-	_dl_elf_main = (int (*)(int, char **, char **)) auxvt[AT_ENTRY].a_un.a_val;
+ 	SEND_ADDRESS_STDERR_DEBUG(_dl_elf_main, 1);
+ 
+ #if !defined(START)
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index ea4ad0f1c..bb394714f 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -70,8 +70,18 @@ char *_dl_debug_bindings  = NULL;
+ int   _dl_debug_file      = 2;
+ #endif
+ 
+-/* Needed for standalone execution. */
++#if defined (__LDSO_STANDALONE_SUPPORT__) && defined (__sh__)
++/* Not hidden, needed for standalone execution. */
++/*
++ * FIXME: align dl_start for SH to other archs so that we can keep this symbol
++ *        hidden and we don't need to handle in __uClibc_main
++ */
++
++unsigned long _dl_skip_args = 0;
++#else
+ unsigned long attribute_hidden _dl_skip_args = 0;
++#endif
++
+ const char *_dl_progname = UCLIBC_LDSO;      /* The name of the executable being run */
+ #include "dl-startup.c"
+ #include "dl-symbols.c"
+@@ -274,9 +284,8 @@ static void __attribute__ ((destructor)) __attribute_used__ _dl_fini(void)
+ 	}
+ }
+ 
+-void _dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+-			  ElfW(auxv_t) auxvt[AT_EGID + 1], char **envp,
+-			  char **argv
++void *_dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
++			  ElfW(auxv_t) auxvt[AT_EGID + 1], char **envp, char **argv
+ 			  DL_GET_READY_TO_RUN_EXTRA_PARMS)
+ {
+ 	ElfW(Addr) app_mapaddr = 0;
+@@ -327,10 +336,12 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ 		_dl_progname = argv[0];
+ 	}
+ 
++#ifndef __LDSO_STANDALONE_SUPPORT__
+ 	if (_start == (void *) auxvt[AT_ENTRY].a_un.a_val) {
+-		_dl_dprintf(_dl_debug_file, "Standalone execution is not supported yet\n");
++		_dl_dprintf(_dl_debug_file, "Standalone execution is not enabled\n");
+ 		_dl_exit(1);
+ 	}
++#endif
+ 
+ 	/* Start to build the tables of the modules that are required for
+ 	 * this beast to run.  We start with the basic executable, and then
+@@ -382,6 +393,102 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ 	_dl_init_static_tls = &_dl_nothread_init_static_tls;
+ #endif
+ 
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	if (_start == (void *) auxvt[AT_ENTRY].a_un.a_val) {
++		char *ptmp;
++		unsigned int *aux_dat = (unsigned int *) argv;
++		int argc = aux_dat[-1];
++
++		tpnt->libname = argv[0];
++		while (argc > 1)
++			if (! _dl_strcmp (argv[1], "--library-path") && argc > 2) {
++				_dl_library_path = argv[2];
++				_dl_skip_args += 2;
++				argc -= 2;
++				argv += 2;
++			} else
++				break;
++
++	/*
++	 * If we have no further argument the program was called incorrectly.
++	 * Grant the user some education.
++	 */
++
++		if (argc < 2) {
++			_dl_dprintf(1, "\
++Usage: ld.so [OPTION]... EXECUTABLE-FILE [ARGS-FOR-PROGRAM...]\n\
++You have invoked `ld.so', the helper program for shared library executables.\n\
++This program usually lives in the file `/lib/ld.so', and special directives\n\
++in executable files using ELF shared libraries tell the system's program\n\
++loader to load the helper program from this file.  This helper program loads\n\
++the shared libraries needed by the program executable, prepares the program\n\
++to run, and runs it.  You may invoke this helper program directly from the\n\
++command line to load and run an ELF executable file; this is like executing\n\
++that file itself, but always uses this helper program from the file you\n\
++specified, instead of the helper program file specified in the executable\n\
++file you run.  This is mostly of use for maintainers to test new versions\n\
++of this helper program; chances are you did not intend to run this program.\n\
++\n\
++  --library-path PATH   use given PATH instead of content of the environment\n\
++                        variable LD_LIBRARY_PATH\n");
++			_dl_exit(1);
++		}
++
++		++_dl_skip_args;
++		++argv;
++		_dl_progname = argv[0];
++
++		_dl_symbol_tables = rpnt = _dl_zalloc(sizeof(struct dyn_elf));
++		/*
++		 * It needs to load the _dl_progname and to map it
++		 * Usually it is the main application launched by means of the ld.so
++		 * but it could be also a shared object (when ld.so used for tracing)
++		 * We keep the misleading app_tpnt name to avoid variable pollution
++		 */
++		app_tpnt = _dl_load_elf_shared_library(_dl_secure, &rpnt, _dl_progname);
++		if (!app_tpnt) {
++			_dl_dprintf(_dl_debug_file, "can't load '%s'\n", _dl_progname);
++			_dl_exit(16);
++		}
++		/*
++		 * FIXME: it needs to properly handle a PIE executable
++		 * Usually for a main application, loadaddr is computed as difference
++		 * between auxvt entry points and phdr, so if it is not 0, that it is a
++		 * PIE executable. In this case instead we need to set the loadaddr to 0
++		 * because we are actually mapping the ELF for the main application by
++		 * ourselves. So the PIE case must be checked.
++		 */
++
++		app_tpnt->rtld_flags = unlazy | RTLD_GLOBAL;
++
++		if (app_tpnt->libtype == elf_executable)
++			app_tpnt->loadaddr = 0;
++
++		/*
++		 * This is used by gdb to locate the chain of shared libraries that are
++		 * currently loaded.
++		 */
++		debug_addr = _dl_zalloc(sizeof(struct r_debug));
++		ppnt = (ElfW(Phdr) *)app_tpnt->ppnt;
++		for (i = 0; i < app_tpnt->n_phent; i++, ppnt++) {
++			if (ppnt->p_type == PT_DYNAMIC) {
++				dpnt = (ElfW(Dyn) *) DL_RELOC_ADDR(app_tpnt->loadaddr, ppnt->p_vaddr);
++				_dl_parse_dynamic_info(dpnt, app_tpnt->dynamic_info, debug_addr, app_tpnt->loadaddr);
++			}
++		}
++
++		/* Store the path where the shared lib loader was found
++		 * for later use
++		 */
++		_dl_ldsopath = _dl_strdup(tpnt->libname);
++		ptmp = _dl_strrchr(_dl_ldsopath, '/');
++		if (ptmp != _dl_ldsopath)
++			*ptmp = '\0';
++
++		_dl_debug_early("Lib Loader: (%x) %s\n", (unsigned) DL_LOADADDR_BASE(tpnt->loadaddr), tpnt->libname);
++	} else {
++#endif
++
+ 	/* At this point we are now free to examine the user application,
+ 	 * and figure out which libraries are supposed to be called.  Until
+ 	 * we have this list, we will not be completely ready for dynamic
+@@ -538,6 +645,10 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ 	}
+ #endif
+ 
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	} /* ! ldso standalone mode */
++#endif
++
+ #ifdef __SUPPORT_LD_DEBUG__
+ 	_dl_debug = _dl_getenv("LD_DEBUG", envp);
+ 	if (_dl_debug) {
+@@ -1084,6 +1195,13 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, DL_LOADADDR_TYPE load_addr,
+ 	/* Notify the debugger that all objects are now mapped in.  */
+ 	_dl_debug_addr->r_state = RT_CONSISTENT;
+ 	_dl_debug_state();
++
++#ifdef __LDSO_STANDALONE_SUPPORT__
++	if (_start == (void *) auxvt[AT_ENTRY].a_un.a_val)
++		return (void *) app_tpnt->l_entry;
++	else
++#endif
++		return (void *) auxvt[AT_ENTRY].a_un.a_val;
+ }
+ 
+ #include "dl-hash.c"
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 58f6643b2..36c0c6c63 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -153,6 +153,10 @@ extern void (*__fini_array_end []) (void) attribute_hidden;
+ # endif
+ #endif
+ 
++#if defined (__LDSO_STANDALONE_SUPPORT__) && defined (SHARED) && defined __sh__
++extern unsigned long _dl_skip_args;
++#endif
++
+ attribute_hidden const char *__uclibc_progname = "";
+ #ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
+ const char *program_invocation_short_name = "";
+@@ -341,11 +345,23 @@ void __uClibc_main(int (*main)(int, char **, char **), int argc,
+ 
+     __rtld_fini = rtld_fini;
+ 
++#if defined __LDSO_STANDALONE_SUPPORT__ && defined SHARED && defined __sh__
++	/*
++	 * Skip ld.so and its arguments
++	 * Other archs except for SH do this in _dl_start before passing
++	 * control to the application.
++	 * FIXME: align SH _dl_start to other archs and remove this from here,
++	 *        so that we can keep the visibility hidden.
++	 */
++	argc -= _dl_skip_args;
++	argv += _dl_skip_args;
++#endif
++
+     /* The environment begins right after argv.  */
+     __environ = &argv[argc + 1];
+ 
+     /* If the first thing after argv is the arguments
+-     * the the environment is empty. */
++     * then the environment is empty. */
+     if ((char *) __environ == *argv) {
+ 	/* Make __environ point to the NULL at argv[argc] */
+ 	__environ = &argv[argc];

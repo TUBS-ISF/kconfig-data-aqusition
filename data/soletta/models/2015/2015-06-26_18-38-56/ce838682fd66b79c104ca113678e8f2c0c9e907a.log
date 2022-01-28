@@ -1,0 +1,5406 @@
+"2015-06-26 18:38:56 -0300"
+diff --git a/.gitignore b/.gitignore
+index 27e23472..b49eeb7d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,37 +1,11 @@
+-/Makefile
+-/Makefile.in
+-/aclocal.m4
+-/autom4te.cache/
+-/compile
+-/config.guess
+-/sol_config.h*
+-/config.log
+-/config.status
+-/config.sub
+-/configure
+-/depcomp
+ /soletta-*.tar.gz
+ /soletta-*/
+-/doltcompile
+-/doltlibtool
+-/install-sh
+-/libtool
+-/ltmain.sh
+-/missing
+-/stamp-h1
+-/test-driver
+-/test-suite.log
+-/test-suite-drd.log
+-/test-suite-helgrind.log
+-/test-suite-memcheck.log
+-/test-suite-sgcheck.log
++/test-suite*.log
+ *~
+-.deps
+-.dirstamp
+-.libs
+ *.la
+ *.lo
+ *.o
++*.so
+ *.a
+ *.pc
+ *.aux
+@@ -41,7 +15,9 @@
+ *.gcno
+ /coverage
+ /svg
+-/sol_flow_modules.mk
+-/sol_linux_micro_modules.mk
+-/sol_pin_mux_modules.mk
+ *.uncrustify
++.config*
++Makefile.gen
++Kconfig.gen
++/build/
++/include/
+diff --git a/Kconfig b/Kconfig
+new file mode 100644
+index 00000000..689c384f
+--- /dev/null
++++ b/Kconfig
+@@ -0,0 +1,120 @@
++mainmenu "soletta configuration"
++
++source "Kconfig.gen"
++
++menu "Basic"
++# backward compatibility with autotools vars
++config ENABLE_DYNAMIC_MODULES
++        bool
++	default n
++
++config MODULES
++        bool "Enable loadable module support"
++	option modules
++	select ENABLE_DYNAMIC_MODULES
++	default y
++
++config PREFIX
++        string "Installation prefix"
++	default "/usr"
++
++config USE_GTK
++	bool
++	default n
++
++config USE_UDEV
++	bool
++	default n
++
++config USE_SYSTEMD
++	bool
++	default n
++
++config USE_GLIB
++	bool
++	default n
++
++config USE_CHECK
++	bool
++	default y
++endmenu
++
++menu "Core library"
++source "src/lib/common/Kconfig"
++source "src/lib/flow/Kconfig"
++source "src/lib/coap/Kconfig"
++source "src/shared/Kconfig"
++endmenu
++
++menu "Node types"
++source "src/modules/flow/accelerometer/Kconfig"
++source "src/modules/flow/aio/Kconfig"
++source "src/modules/flow/app/Kconfig"
++source "src/modules/flow/boolean/Kconfig"
++source "src/modules/flow/byte/Kconfig"
++source "src/modules/flow/calamari/Kconfig"
++source "src/modules/flow/color/Kconfig"
++source "src/modules/flow/console/Kconfig"
++source "src/modules/flow/constant/Kconfig"
++source "src/modules/flow/converter/Kconfig"
++source "src/modules/flow/evdev/Kconfig"
++source "src/modules/flow/file/Kconfig"
++source "src/modules/flow/filter-repeated/Kconfig"
++source "src/modules/flow/float/Kconfig"
++source "src/modules/flow/fs/Kconfig"
++source "src/modules/flow/gpio/Kconfig"
++source "src/modules/flow/grove/Kconfig"
++source "src/modules/flow/gtk/Kconfig"
++source "src/modules/flow/gyroscope/Kconfig"
++source "src/modules/flow/hub/Kconfig"
++source "src/modules/flow/int/Kconfig"
++source "src/modules/flow/keyboard/Kconfig"
++source "src/modules/flow/network/Kconfig"
++source "src/modules/flow/oic/Kconfig"
++source "src/modules/flow/piezo-speaker/Kconfig"
++source "src/modules/flow/platform/Kconfig"
++source "src/modules/flow/process/Kconfig"
++source "src/modules/flow/pwm/Kconfig"
++source "src/modules/flow/random/Kconfig"
++source "src/modules/flow/servo-motor/Kconfig"
++source "src/modules/flow/string/Kconfig"
++source "src/modules/flow/test/Kconfig"
++source "src/modules/flow/timer/Kconfig"
++source "src/modules/flow/trigonometry/Kconfig"
++source "src/modules/flow/udev/Kconfig"
++source "src/modules/flow/unix-socket/Kconfig"
++source "src/modules/flow/wallclock/Kconfig"
++endmenu
++
++menu "Linux micro"
++config LINUX_MICRO
++       bool "Linux micro"
++       depends on PLATFORM_LINUX_MICRO
++       default n
++
++source "src/modules/linux-micro/bluetooth/Kconfig"
++source "src/modules/linux-micro/console/Kconfig"
++source "src/modules/linux-micro/dbus/Kconfig"
++source "src/modules/linux-micro/fstab/Kconfig"
++source "src/modules/linux-micro/hostname/Kconfig"
++source "src/modules/linux-micro/locale/Kconfig"
++source "src/modules/linux-micro/network-up/Kconfig"
++source "src/modules/linux-micro/rc-d/Kconfig"
++source "src/modules/linux-micro/sysctl/Kconfig"
++source "src/modules/linux-micro/watchdog/Kconfig"
++endmenu
++
++menu "Pin mux"
++source "src/modules/pin-mux/intel-galileo-rev-g/Kconfig"
++endmenu
++
++menu "Tools"
++source "src/bin/sol-fbp-generator/Kconfig"
++source "src/bin/sol-fbp-runner/Kconfig"
++source "src/bin/sol-fbp-to-dot/Kconfig"
++source "src/bin/sol-flow-node-types/Kconfig"
++endmenu
++
++menu "Test suite"
++source "src/test/Kconfig"
++endmenu
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 00000000..3a0b27f6
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,48 @@
++top_srcdir = ./
++MAKEFLAGS += -r --no-print-directory
++
++# kconfig settings
++KCONFIG_CONFIG ?= $(top_srcdir).config
++KCONFIG_INCLUDE := $(top_srcdir)include/
++KCONFIG_AUTOHEADER := $(KCONFIG_INCLUDE)generated/sol_config.h
++HAVE_KCONFIG_CONFIG := $(if $(wildcard $(KCONFIG_CONFIG)),y,)
++export KCONFIG_AUTOHEADER
++
++-include $(KCONFIG_CONFIG)
++
++# dependency-resolver generated, deps resolution
++-include Makefile.gen
++
++# basic variable definitions
++include $(top_srcdir)tools/build/Makefile.vars
++
++# soletta rules themselves
++include $(top_srcdir)tools/build/Makefile.rules
++
++# kconfig interface rules
++include $(top_srcdir)tools/build/Makefile.kconfig
++
++ifeq (n,$(HAVE_DEPENDENCY_FILES))
++PRE_GEN += $(DEPENDENCY_FILES)
++endif
++
++ifeq ($(HAVE_KCONFIG_CONFIG),)
++warning:
++	$(Q)echo "You need a config file first. Please run a config target, e.g.: make menuconfig"
++	$(Q)echo "For a quick default config run: make alldefconfig"
++	$(Q)echo "For more information/options run: make help"
++$(warning-targets)
++else
++ifeq (n,$(HAVE_PYTHON_JSONSCHEMA))
++warning:
++	$(Q)echo "Cannot proceed, python module \"jsonschema\" was not found in your system..."
++	$(Q)echo "If you've just installed it, run: make reconf"
++$(warning-targets)
++else
++all: $(PRE_GEN) $(SOL_LIB_SO) $(SOL_LIB_AR) $(bins-out) $(modules-out)
++include $(top_srcdir)tools/build/Makefile.targets
++endif # HAVE_PYTHON_JSONSCHEMA
++endif # HAVE_KCONFIG_CONFIG
++
++.DEFAULT_GOAL = all
++.PHONY = $(PHONY) all
+diff --git a/Makefile.am b/Makefile.am
+deleted file mode 100644
+index efb0bca1..00000000
+--- a/Makefile.am
++++ /dev/null
+@@ -1,858 +0,0 @@
+-DISTCLEAN_LOCAL_HOOKS =
+-EXTRA_DIST =
+-CLEANFILES = $(BUILT_FILES) $(BUILT_SOURCES)
+-DISTCLEANFILES =
+-BUILT_FILES =
+-BUILT_SOURCES =
+-ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
+-AM_MAKEFLAGS = --no-print-directory
+-
+-GCC_COLORS ?= 'yes'
+-export GCC_COLORS
+-
+-pkgsysconfdir=$(sysconfdir)/soletta
+-
+-pkgconfigdir = $(libdir)/pkgconfig
+-pkgconfig_DATA =
+-
+-flowtypedescdir=$(pkgdatadir)/flow/descriptions
+-flowtypedesc_DATA =
+-
+-flowtypeschemasdir=$(pkgdatadir)/flow/schemas
+-flowtypeschemas_DATA=
+-
+-dist_pkgdata_DATA = \
+-$(top_builddir)/data/jsons/platform_detect.json
+-
+-if MAINTAINER_MODE
+-flowmodulesdir=$(abs_top_builddir)/src/modules/flow/.libs
+-else
+-flowmodulesdir = $(SOL_CONFFILE_MODULES_DIR)/flow
+-endif
+-flowmodules_LTLIBRARIES =
+-
+-AM_CPPFLAGS = \
+-	-include $(top_builddir)/sol_config.h \
+-	-I$(top_builddir)/src/lib/common \
+-	-I$(top_builddir)/src/lib/flow \
+-	-I$(top_builddir)/src/modules/flow/accelerometer \
+-	-I$(top_builddir)/src/modules/flow/aio \
+-	-I$(top_builddir)/src/modules/flow/app \
+-	-I$(top_builddir)/src/modules/flow/boolean \
+-	-I$(top_builddir)/src/modules/flow/byte \
+-	-I$(top_builddir)/src/modules/flow/calamari \
+-	-I$(top_builddir)/src/modules/flow/color \
+-	-I$(top_builddir)/src/modules/flow/console \
+-	-I$(top_builddir)/src/modules/flow/constant \
+-	-I$(top_builddir)/src/modules/flow/converter \
+-	-I$(top_builddir)/src/modules/flow/dummy \
+-	-I$(top_builddir)/src/modules/flow/evdev \
+-	-I$(top_builddir)/src/modules/flow/file \
+-	-I$(top_builddir)/src/modules/flow/filter-repeated \
+-	-I$(top_builddir)/src/modules/flow/float \
+-	-I$(top_builddir)/src/modules/flow/fs \
+-	-I$(top_builddir)/src/modules/flow/gpio \
+-	-I$(top_builddir)/src/modules/flow/grove \
+-	-I$(top_builddir)/src/modules/flow/gtk \
+-	-I$(top_builddir)/src/modules/flow/gyroscope \
+-	-I$(top_builddir)/src/modules/flow/hub \
+-	-I$(top_builddir)/src/modules/flow/int \
+-	-I$(top_builddir)/src/modules/flow/keyboard \
+-	-I$(top_builddir)/src/modules/flow/network \
+-	-I$(top_builddir)/src/modules/flow/oic \
+-	-I$(top_builddir)/src/modules/flow/piezo-speaker \
+-	-I$(top_builddir)/src/modules/flow/platform \
+-	-I$(top_builddir)/src/modules/flow/process \
+-	-I$(top_builddir)/src/modules/flow/pwm \
+-	-I$(top_builddir)/src/modules/flow/random \
+-	-I$(top_builddir)/src/modules/flow/servo-motor \
+-	-I$(top_builddir)/src/modules/flow/string \
+-	-I$(top_builddir)/src/modules/flow/test \
+-	-I$(top_builddir)/src/modules/flow/timer \
+-	-I$(top_builddir)/src/modules/flow/trigonometry \
+-	-I$(top_builddir)/src/modules/flow/udev \
+-	-I$(top_builddir)/src/modules/flow/unix-socket \
+-	-I$(top_builddir)/src/modules/flow/wallclock \
+-	-I$(top_srcdir)/src/lib/flow \
+-	-I$(top_srcdir)/src/lib/common \
+-	-I$(top_srcdir)/src/shared \
+-	-I$(top_builddir) \
+-	-DDATADIR=\"$(pkgdatadir)\" \
+-	-DPKGSYSCONFDIR=\"$(pkgsysconfdir)\" \
+-	-DFLOWMODULESDIR=\"$(flowmodulesdir)\" \
+-	-DLINUXMICROMODULESDIR=\"$(linuxmicromodulesdir)\" \
+-	-DPINMUXDIR=\"$(pinmuxdir)\"
+-AM_CFLAGS = $(SOL_COMMON_CFLAGS) -std=gnu99
+-AM_LDFLAGS = $(SOL_COMMON_LDFLAGS)
+-
+-if BUILD_COAP
+-AM_CPPFLAGS += -I$(top_srcdir)/src/lib/coap
+-endif
+-
+-# conf files
+-EXTRA_DIST += \
+-	$(wildcard src/tests-fbp/*.conf)
+-
+-# fbp files
+-EXTRA_DIST += \
+-	$(wildcard src/tests-fbp/*.fbp) \
+-	$(wildcard src/samples/flow/*/*.fbp) \
+-	$(wildcard src/samples/flow/*/README)
+-
+-bin_PROGRAMS =
+-dist_bin_SCRIPTS =
+-lib_LTLIBRARIES =
+-noinst_PROGRAMS =
+-noinst_LTLIBRARIES =
+-pkginclude_HEADERS =
+-nodist_pkginclude_HEADERS =
+-
+-dist_bin_SCRIPTS += \
+-data/scripts/sol-flow-node-type-gen.py \
+-data/scripts/sol-flow-node-type-find.py \
+-data/scripts/sol-flow-node-type-validate.py
+-
+-EXTRA_DIST += \
+-data/scripts/sol-builtins-gen.py \
+-data/scripts/sol-flow-node-type-find.py.in \
+-data/scripts/sol-flow-node-type-gen-cheat-sheet.py \
+-data/scripts/sol-flow-node-type-gen-html.py \
+-data/scripts/sol-flow-node-type-stub-gen.py \
+-data/scripts/sol-flow-node-types-h-gen.py \
+-data/scripts/json-format.py \
+-data/scripts/json-format-check.sh \
+-data/scripts/flow-merge-builtins.py \
+-data/gdb/libsoletta.so-gdb.py \
+-data/vim/fbp.vim
+-
+-gdbautoloaddir = $(datadir)/gdb/auto-load/$(libdir)
+-gdbautoload_DATA = data/gdb/libsoletta.so-gdb.py
+-
+-install-data-hook:
+-	cd $(DESTDIR)$(gdbautoloaddir) && \
+-		rm -f libsoletta.so.0.0.0-gdb.py && \
+-		$(LN_S) libsoletta.so-gdb.py libsoletta.so.0.0.0-gdb.py
+-
+-data/scripts/sol-flow-node-type-find.py: data/scripts/sol-flow-node-type-find.py.in Makefile
+-	@mkdir -p data/scripts
+-	$(AM_V_GEN)sed 's:@flowtypedescdir@:$(flowtypedescdir):g' $< > $@ && chmod +x $@
+-BUILT_FILES += data/scripts/sol-flow-node-type-find.py
+-
+-data/scripts/sol-flow-node-type-gen.py: data/scripts/sol-flow-node-type-gen.py.in Makefile
+-	@mkdir -p data/scripts
+-	$(AM_V_GEN)sed 's:@pkgdatadir@:$(pkgdatadir):g' $< > $@ && chmod +x $@
+-BUILT_FILES += data/scripts/sol-flow-node-type-gen.py
+-
+-lib_LTLIBRARIES += src/lib/libsoletta.la
+-src_lib_libsoletta_la_SOURCES = \
+-src/lib/common/sol-log-impl.h \
+-src/lib/common/sol-log-internal.h \
+-src/lib/common/sol-mainloop.c \
+-src/lib/common/sol-mainloop-impl.h \
+-src/lib/common/sol-platform.c \
+-src/lib/common/sol-platform-impl.h \
+-src/lib/common/sol-blob.c \
+-src/lib/common/sol-socket.h \
+-src/lib/common/sol-types.c \
+-src/lib/flow/sol-flow-internal.h \
+-src/lib/flow/sol-flow-packet.c \
+-src/lib/flow/sol-flow-resolver.c \
+-src/lib/flow/sol-flow-static.c \
+-src/lib/flow/sol-flow-node-options.c \
+-src/lib/flow/sol-flow.c
+-
+-if SOL_LOG_ENABLED
+-src_lib_libsoletta_la_SOURCES += src/lib/common/sol-log.c
+-
+-if HAVE_PLATFORM_LINUX
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-log-impl-linux.c \
+-src/lib/common/sol-platform-detect.c \
+-src/lib/common/sol-platform-detect.h
+-endif
+-if HAVE_PLATFORM_RIOT
+-src_lib_libsoletta_la_SOURCES += src/lib/common/sol-log-impl-riot.c
+-endif
+-
+-endif
+-
+-SOLETTA_FLOW_TYPE_JSONS =
+-
+-SOLETTA_FLOW_NODE_TYPE_SCHEMA = $(top_srcdir)/data/schemas/node-type-genspec.schema
+-flowtypeschemas_DATA += $(SOLETTA_FLOW_NODE_TYPE_SCHEMA)
+-
+-SOLETTA_FLOW_BUILT_SRCS = $(patsubst %.json,%-gen.c,$(SOLETTA_FLOW_TYPE_JSONS))
+-SOLETTA_FLOW_BUILT_HDRS = $(patsubst %.json,%-gen.h,$(SOLETTA_FLOW_TYPE_JSONS))
+-nodist_pkginclude_HEADERS += $(SOLETTA_FLOW_BUILT_HDRS)
+-EXTRA_DIST += $(SOLETTA_FLOW_TYPE_JSONS) $(SOLETTA_FLOW_NODE_TYPE_SCHEMA)
+-
+-BUILT_SOURCES += $(SOLETTA_FLOW_BUILT_HDRS) $(SOLETTA_FLOW_BUILT_SRCS)
+-
+-# BUILT_SOURCES are generated before any other target, but they are also part
+-# of parallel builds, so with enough processing we may end up trying to build
+-# the library before the files are generated. By adding this explicit
+-# depdendency we can ensure that all the required files will be there by the
+-# time they are needed.
+-$(src_lib_libsoletta_la_OBJECTS): $(SOLETTA_FLOW_BUILT_HDRS) $(SOLETTA_FLOW_BUILT_SRCS) src/lib/flow/sol-flow-node-types.h src/lib/flow/sol-flow-builtins-gen.h
+-
+-src/lib/flow/sol-flow-node-types.h: $(SOLETTA_FLOW_BUILT_HDRS) $(top_srcdir)/data/scripts/sol-flow-node-types-h-gen.py
+-	$(AM_V_GEN)$(PYTHON) $(top_srcdir)/data/scripts/sol-flow-node-types-h-gen.py  src/lib/flow/sol-flow-node-types.h $(SOLETTA_FLOW_BUILT_HDRS)
+-BUILT_SOURCES += src/lib/flow/sol-flow-node-types.h
+-
+-if SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-if HAVE_SOL_FLOW_NODE_TYPES
+-bin_PROGRAMS += src/bin/sol-flow-node-types/sol-flow-node-types
+-src_bin_sol_flow_node_types_sol_flow_node_types_CFLAGS = \
+-	$(src_lib_libsoletta_la_CFLAGS)
+-src_bin_sol_flow_node_types_sol_flow_node_types_LDADD = \
+-	src/lib/libsoletta.la \
+-	src/shared/libshared.la \
+-	@dl_libs@
+-src_bin_sol_flow_node_types_sol_flow_node_types_SOURCES = \
+-	src/bin/sol-flow-node-types/main.c
+-endif
+-
+-src_lib_libsoletta_la_SOURCES += \
+-	src/lib/flow/sol-flow-builder.c \
+-	src/lib/flow/sol-flow-parser.c
+-
+-pkginclude_HEADERS += \
+-	src/lib/flow/sol-flow-builder.h \
+-	src/lib/flow/sol-flow-parser.h
+-
+-if HAVE_SOL_FLOW_NODE_TYPES
+-flowtypedesc_DATA += src/lib/flow/builtins.json
+-BUILT_FILES += ${flowtypedesc_DATA}
+-src/lib/flow/builtins.json: src/lib/libsoletta.la
+-	$(AM_V_GEN)$(PYTHON) $(top_srcdir)/data/scripts/flow-merge-builtins.py --modules-dir=$(top_builddir)/src/modules/flow $@ $(flow_builtin_modules)
+-endif # HAVE_SOL_FLOW_NODE_TYPES
+-endif
+-
+-if BUILD_SOL_FLOW_MODULE_RESOLVER_CONFFILE
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/flow/sol-flow-resolver-conffile.c
+-endif
+-
+-src_lib_libsoletta_la_CFLAGS = \
+-$(AM_CFLAGS)
+-src_lib_libsoletta_la_LIBADD = \
+-src/shared/libshared.la \
+--lm \
+-@dl_libs@
+-
+-if HAVE_PLATFORM_LINUX
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-socket-linux.c \
+-src/lib/common/sol-platform-linux-common.c
+-pkginclude_HEADERS += \
+-src/lib/common/sol-platform-linux.h
+-endif
+-
+-if HAVE_MAINLOOP_GLIB
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-mainloop-impl-glib.c
+-src_lib_libsoletta_la_CFLAGS += @GLIB_CFLAGS@
+-src_lib_libsoletta_la_LIBADD += @GLIB_LIBS@
+-endif
+-
+-if HAVE_MAINLOOP_POSIX
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-mainloop-impl-posix.c
+-endif
+-
+-if HAVE_MAINLOOP_RIOT
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-mainloop-impl-riot.c \
+-src/lib/common/sol-interrupt_scheduler_riot.c \
+-src/lib/common/sol-interrupt_scheduler_riot.h
+-endif
+-
+-if HAVE_PLATFORM_SYSTEMD
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-bus.c \
+-src/lib/common/sol-bus.h \
+-src/lib/common/sol-platform-impl-systemd.c
+-src_lib_libsoletta_la_CFLAGS += @SYSTEMD_CFLAGS@
+-src_lib_libsoletta_la_LIBADD += @SYSTEMD_LIBS@
+-endif
+-
+-if HAVE_PLATFORM_LINUX_MICRO
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-platform-impl-linux-micro.c
+-pkginclude_HEADERS += \
+-src/lib/common/sol-platform-linux-micro.h
+-
+-if MAINTAINER_MODE
+-linuxmicromodulesdir = $(abs_top_builddir)/src/modules/linux-micro/.libs
+-else
+-linuxmicromodulesdir = $(SOL_CONFFILE_MODULES_DIR)/linux-micro
+-endif
+-linuxmicromodules_LTLIBRARIES =
+-
+-linuxmicromodules_DATA = data/linux-micro/initial-services
+-
+-data/linux-micro/initial-services: Makefile.am
+-	@rm -f $@
+-	@mkdir -p data/linux-micro
+-	$(AM_V_GEN)echo "$(linux_micro_initial_services)" | tr ' ' '\n' > $@
+-BUILT_FILES += data/linux-micro/initial-services
+-
+-src/lib/common/sol-platform-linux-micro-builtins-gen.h: Makefile data/scripts/sol-builtins-gen.py
+-	@rm -f $@
+-	@mkdir -p src/lib/common
+-	$(AM_V_GEN)$(PYTHON) $(top_srcdir)/data/scripts/sol-builtins-gen.py \
+-		--output=$@ \
+-		--array="static const struct sol_platform_linux_micro_module *SOL_PLATFORM_LINUX_MICRO_MODULE_ALL[]" \
+-		--count="SOL_PLATFORM_LINUX_MICRO_MODULE_COUNT" \
+-		--decl="struct sol_platform_linux_micro_module SOL_PLATFORM_LINUX_MICRO_MODULE_@NAME@" \
+-		--item="&SOL_PLATFORM_LINUX_MICRO_MODULE_@NAME@" \
+-		$(linux_micro_builtin_modules)
+-
+-BUILT_SOURCES += src/lib/common/sol-platform-linux-micro-builtins-gen.h
+-
+-include sol_linux_micro_modules.mk
+-endif # HAVE_PLATFORM_LINUX_MICRO
+-
+-if HAVE_PLATFORM_LINUX_DUMMY
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-platform-impl-dummy.c
+-endif
+-
+-if HAVE_PLATFORM_RIOT
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/common/sol-platform-impl-riot.c
+-endif
+-
+-pkginclude_HEADERS += \
+-src/lib/common/sol-macros.h \
+-src/lib/common/sol-log.h \
+-src/lib/common/sol-mainloop.h \
+-src/lib/common/sol-platform.h \
+-src/lib/common/sol-blob.h \
+-src/lib/common/sol-types.h \
+-src/lib/common/sol-missing.h \
+-src/lib/flow/sol-flow.h \
+-src/lib/flow/sol-flow-resolver.h \
+-src/lib/flow/sol-flow-packet.h
+-
+-nodist_pkginclude_HEADERS += \
+-src/lib/common/sol-common-buildopts.h \
+-src/lib/flow/sol-flow-buildopts.h \
+-src/lib/flow/sol-flow-node-types.h \
+-src/lib/flow/sol-flow-builtins-gen.h
+-
+-if SOL_FLOW_INSPECTOR_ENABLED
+-pkginclude_HEADERS += src/lib/flow/sol-flow-inspector.h
+-endif
+-
+-pkgconfig_DATA += \
+-pc/soletta.pc
+-
+-src_shared_libshared_la_CFLAGS =
+-src_shared_libshared_la_LIBADD =
+-
+-noinst_LTLIBRARIES += src/shared/libshared.la
+-src_shared_libshared_la_SOURCES = \
+-src/shared/sol-arena.c \
+-src/shared/sol-arena.h \
+-src/shared/sol-buffer.c \
+-src/shared/sol-buffer.h \
+-src/shared/sol-fbp-graph.c \
+-src/shared/sol-fbp-internal-log.c \
+-src/shared/sol-fbp-internal-log.h \
+-src/shared/sol-fbp-internal-scanner.c \
+-src/shared/sol-fbp-internal-scanner.h \
+-src/shared/sol-fbp-parser.c \
+-src/shared/sol-fbp.h \
+-src/shared/sol-util.c \
+-src/shared/sol-util.h \
+-src/shared/sol-file-reader.h \
+-src/shared/sol-gpio-common.c \
+-src/shared/sol-gpio.h \
+-src/shared/sol-i2c.h \
+-src/shared/sol-i2c-common.c \
+-src/shared/sol-list.h \
+-src/shared/sol-monitors.c \
+-src/shared/sol-monitors.h \
+-src/shared/sol-network.h \
+-src/shared/sol-pwm-common.c \
+-src/shared/sol-pwm.h \
+-src/shared/sol-spi.h \
+-src/shared/sol-str-slice.c \
+-src/shared/sol-str-slice.h \
+-src/shared/sol-str-table.c \
+-src/shared/sol-str-table.h \
+-src/shared/sol-vector.c \
+-src/shared/sol-uart.h \
+-src/shared/sol-vector.h \
+-src/shared/sol-worker-thread.h \
+-src/shared/sol-json.h \
+-src/shared/sol-json.c
+-
+-if HAVE_GLIB
+-if SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-src_shared_libshared_la_SOURCES += \
+-src/shared/sol-conffile.c \
+-src/shared/sol-conffile.h
+-
+-src_shared_libshared_la_CFLAGS += @GLIB_CFLAGS@
+-src_shared_libshared_la_LIBADD += @GLIB_LIBS@
+-endif # SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-endif # HAVE_GLIB
+-
+-if HAVE_PLATFORM_LINUX
+-src_shared_libshared_la_SOURCES += \
+-src/shared/sol-file-reader.c \
+-src/shared/sol-gpio-linux.c \
+-src/shared/sol-network-linux.c \
+-src/shared/sol-pwm-linux.c \
+-src/shared/sol-i2c-linux.c \
+-src/shared/sol-spi-linux.c \
+-src/shared/sol-uart-linux.c
+-
+-if PTHREAD_LIBS
+-src_shared_libshared_la_SOURCES += \
+-src/shared/sol-worker-thread-pthread.c
+-endif
+-
+-endif
+-
+-if HAVE_PLATFORM_RIOT
+-src_shared_libshared_la_SOURCES += \
+-src/shared/sol-gpio-riot.c \
+-src/shared/sol-i2c-riot.c \
+-src/shared/sol-pwm-riot.c \
+-src/shared/sol-spi-riot.c \
+-src/shared/sol-uart-riot.c \
+-src/shared/sol-network-riot.c
+-endif
+-
+-src_shared_libshared_la_CFLAGS += $(AM_CFLAGS)
+-
+-if PTHREAD_LIBS
+-src_shared_libshared_la_LIBADD += \
+-	@PTHREAD_LIBS@
+-endif
+-
+-if BUILD_COAP
+-src_lib_libsoletta_la_SOURCES += \
+-src/lib/coap/coap.c \
+-src/lib/coap/coap.h \
+-src/lib/coap/sol-coap.c \
+-src/lib/coap/sol-coap.h \
+-src/lib/coap/sol-oic-server.c \
+-src/lib/coap/sol-oic-server.h \
+-src/lib/coap/sol-oic-client.c \
+-src/lib/coap/sol-oic-client.h
+-endif
+-
+-if BUILD_SAMPLES
+-
+-noinst_PROGRAMS += src/samples/common/platform-simple
+-src_samples_common_platform_simple_CFLAGS = $(src_lib_libsoletta_la_CFLAGS)
+-src_samples_common_platform_simple_LDADD = src/lib/libsoletta.la
+-
+-if HAVE_PLATFORM_LINUX_MICRO
+-noinst_PROGRAMS += src/samples/common/linux-micro-init
+-src_samples_common_linux_micro_init_CFLAGS = $(src_lib_libsoletta_la_CFLAGS)
+-src_samples_common_linux_micro_init_LDADD = src/lib/libsoletta.la src/shared/libshared.la
+-if ENABLE_STATIC
+-if ENABLE_DYNAMIC_MODULES
+-src_samples_common_linux_micro_init_LDFLAGS = -static -rdynamic
+-else
+-src_samples_common_linux_micro_init_LDFLAGS = -all-static
+-endif
+-endif
+-
+-noinst_PROGRAMS += src/samples/common/uart
+-src_samples_common_uart_CFLAGS = $(src_lib_libsoletta_la_CFLAGS)
+-src_samples_common_uart_LDADD = src/lib/libsoletta.la src/shared/libshared.la
+-
+-endif
+-
+-noinst_LTLIBRARIES += src/samples/flow/c-api/libcustom-node-types.la
+-src_samples_flow_c_api_libcustom_node_types_la_CFLAGS = $(src_lib_libsoletta_la_CFLAGS) -I$(top_builddir)/src/samples/flow/c-api
+-src_samples_flow_c_api_libcustom_node_types_la_LIBADD = src/lib/libsoletta.la
+-src_samples_flow_c_api_libcustom_node_types_la_SOURCES = src/samples/flow/c-api/custom-node-types.c
+-
+-src/samples/flow/c-api/custom-node-types-gen.h src/samples/flow/c-api/custom-node-types-gen.c src/samples/flow/c-api/custom-node-types.json: src/samples/flow/c-api/custom-node-types-spec.json $(top_builddir)/data/scripts/sol-flow-node-type-gen.py
+-	$(AM_V_GEN)$(PYTHON) $(top_builddir)/data/scripts/sol-flow-node-type-gen.py --genspec-schema=$(SOLETTA_FLOW_NODE_TYPE_SCHEMA) $<  src/samples/flow/c-api/custom-node-types-gen.h src/samples/flow/c-api/custom-node-types-gen.c src/samples/flow/c-api/custom-node-types.json
+-
+-
+-BUILT_SOURCES += src/samples/flow/c-api/custom-node-types-gen.h src/samples/flow/c-api/custom-node-types-gen.c
+-
+-noinst_PROGRAMS += src/samples/flow/c-api/lowlevel
+-src_samples_flow_c_api_lowlevel_CFLAGS = $(src_lib_libsoletta_la_CFLAGS) -I$(top_builddir)/src/samples/flow/c-api
+-src_samples_flow_c_api_lowlevel_LDADD = src/lib/libsoletta.la src/samples/flow/c-api/libcustom-node-types.la
+-
+-if SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-noinst_PROGRAMS += src/samples/flow/c-api/highlevel
+-src_samples_flow_c_api_highlevel_CFLAGS = $(src_lib_libsoletta_la_CFLAGS) -I$(top_builddir)/src/samples/flow/c-api
+-src_samples_flow_c_api_highlevel_LDADD = src/lib/libsoletta.la src/samples/flow/c-api/libcustom-node-types.la
+-endif
+-
+-EXTRA_DIST += src/samples/flow/c-api/custom-node-types-spec.json
+-
+-if BUILD_COAP
+-
+-noinst_PROGRAMS += \
+-src/samples/coap/simple-server
+-src_samples_coap_simple_server_CFLAGS = \
+-$(src_lib_libsoletta_la_CFLAGS)
+-src_samples_coap_simple_server_LDADD = \
+-src/lib/libsoletta.la \
+-src/shared/libshared.la
+-
+-noinst_PROGRAMS += \
+-src/samples/coap/simple-client
+-src_samples_coap_simple_client_CFLAGS = \
+-$(src_lib_libsoletta_la_CFLAGS)
+-src_samples_coap_simple_client_LDADD = \
+-src/lib/libsoletta.la \
+-src/shared/libshared.la
+-
+-noinst_PROGRAMS += \
+-src/samples/coap/oic-server
+-src_samples_coap_oic_server_CFLAGS = \
+-$(src_lib_coap_libcoap_la_CFLAGS) \
+--I$(top_srcdir)/src/lib/coap
+-src_samples_coap_oic_server_LDADD = \
+-src/lib/libsoletta.la \
+-src/shared/libshared.la
+-
+-noinst_PROGRAMS += \
+-src/samples/coap/oic-client
+-src_samples_coap_oic_client_CFLAGS = \
+-$(src_lib_coap_libcoap_la_CFLAGS) \
+--I$(top_srcdir)/src/lib/coap
+-src_samples_coap_oic_client_LDADD = \
+-src/lib/libsoletta.la \
+-src/shared/libshared.la
+-endif
+-
+-endif # BUILD_SAMPLES
+-
+-if HAVE_PIN_MUX
+-src_lib_libsoletta_la_SOURCES += \
+-	src/lib/common/sol-pin-mux.c \
+-	src/lib/common/sol-pin-mux.h \
+-	src/lib/common/sol-pin-mux-impl.h
+-
+-pkginclude_HEADERS += \
+-src/lib/common/sol-pin-mux-impl.h
+-
+-if MAINTAINER_MODE
+-pinmuxdir = $(abs_top_builddir)/src/modules/pin-mux/.libs
+-else
+-pinmuxdir = $(SOL_CONFFILE_MODULES_DIR)/pin-mux
+-endif
+-pinmux_LTLIBRARIES =
+-
+-src/lib/common/sol-pin-mux-builtins-gen.h: Makefile data/scripts/sol-builtins-gen.py
+-	@rm -f $@
+-	@mkdir -p src/lib/common
+-	$(AM_V_GEN)$(PYTHON) $(top_srcdir)/data/scripts/sol-builtins-gen.py \
+-	    --output=$@ \
+-	    --array="static const struct sol_pin_mux *SOL_PIN_MUX_BUILTINS_ALL[]" \
+-	    --count="SOL_PIN_MUX_BUILTIN_COUNT" \
+-	    --decl="const struct sol_pin_mux SOL_PIN_MUX_@NAME@" \
+-	    --item="&SOL_PIN_MUX_@NAME@" \
+-	    $(pin_mux_builtins)
+-
+-BUILT_SOURCES += src/lib/common/sol-pin-mux-builtins-gen.h
+-
+-include sol_pin_mux_modules.mk
+-endif #HAVE_PIN_MUX
+-
+-if MODULE_OR_BUILTIN_FLOW_DUMMY
+-
+-BUILT_SOURCES += src/modules/flow/dummy/dummy.c
+-
+-src/modules/flow/dummy/dummy.c: src/modules/flow/dummy/dummy.json $(top_builddir)/data/scripts/sol-flow-node-type-stub-gen.py src/modules/flow/dummy/dummy-gen.c  src/modules/flow/dummy/dummy-gen.h
+-	$(AM_V_GEN)$(PYTHON) $(top_builddir)/data/scripts/sol-flow-node-type-stub-gen.py --prefix=sol-flow-node-type --force=yes src/modules/flow/dummy/dummy.c src/modules/flow/dummy/dummy.json
+-
+-endif #MODULE_OR_BUILTIN_FLOW_DUMMY
+-
+-src/modules/flow/%-gen.h src/modules/flow/%-gen.c: src/modules/flow/%.json $(top_builddir)/data/scripts/sol-flow-node-type-gen.py
+-	$(AM_V_GEN)$(PYTHON) $(top_builddir)/data/scripts/sol-flow-node-type-gen.py --prefix=sol-flow-node-type --genspec-schema=$(SOLETTA_FLOW_NODE_TYPE_SCHEMA) $<  src/modules/flow/$*-gen.h src/modules/flow/$*-gen.c $(@D).json
+-
+-flowtypedescs =
+-
+-src/lib/flow/sol-flow-builtins-gen.h: Makefile data/scripts/sol-builtins-gen.py $(SOLETTA_FLOW_BUILT_HDRS)
+-	@rm -f $@
+-	@mkdir -p src/lib/flow
+-	$(AM_V_GEN)$(PYTHON) $(top_srcdir)/data/scripts/sol-builtins-gen.py \
+-		--output=$@ \
+-		--array="static const void *SOL_FLOW_BUILTIN_NODE_TYPE_ALL[]" \
+-		--count="SOL_FLOW_BUILTIN_NODE_TYPE_COUNT" \
+-		--decl="const struct sol_flow_node_type *sol_flow_foreach_builtin_node_type_@name@(bool (*)(void *, const struct sol_flow_node_type *), const void *)" \
+-		--item="sol_flow_foreach_builtin_node_type_@name@" \
+-		$(flow_builtin_modules)
+-BUILT_SOURCES += src/lib/flow/sol-flow-builtins-gen.h
+-
+-include sol_flow_modules.mk
+-
+-
+-if HAVE_SOL_FLOW_NODE_TYPES
+-if SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-
+-flowtypedesc_DATA += $(flowtypedescs)
+-endif
+-endif # HAVE_SOL_FLOW_NODE_TYPES
+-
+-if BUILD_SAMPLES
+-if BUILD_SOL_FLOW_MODULE_RESOLVER_CONFFILE
+-
+-if !HAVE_MAINLOOP_GLIB
+-src_lib_libsoletta_la_CFLAGS += @GLIB_CFLAGS@
+-src_lib_libsoletta_la_LIBADD += @GLIB_LIBS@
+-endif
+-
+-endif # BUILD_SOL_FLOW_MODULE_RESOLVER_CONFFILE
+-endif # BUILD_SAMPLES
+-
+-if HAVE_SOL_FBP_GENERATOR
+-bin_PROGRAMS += src/bin/sol-fbp-generator/sol-fbp-generator
+-src_bin_sol_fbp_generator_sol_fbp_generator_CFLAGS = $(src_lib_libsoletta_la_CFLAGS)
+-src_bin_sol_fbp_generator_sol_fbp_generator_LDADD = src/lib/libsoletta.la src/shared/libshared.la
+-src_bin_sol_fbp_generator_sol_fbp_generator_SOURCES = \
+-	src/bin/sol-fbp-generator/type-store.c \
+-	src/bin/sol-fbp-generator/type-store.h \
+-	src/bin/sol-fbp-generator/main.c
+-
+-%-fbp.c: %.fbp src/lib/flow/builtins.json src/bin/sol-fbp-generator/sol-fbp-generator
+-	$(AM_V_GEN)$(sol_fbp_generator) -j src/lib/flow/builtins.json $< > $@
+-
+-
+-if BUILD_SAMPLES
+-noinst_PROGRAMS += src/samples/flow/basics/simple-fbp
+-src_samples_flow_basics_simple_fbp_CFLAGS = \
+-	$(src_lib_libsoletta_la_CFLAGS)
+-src_samples_flow_basics_simple_fbp_LDADD = \
+-	src/lib/libsoletta.la
+-nodist_src_samples_flow_basics_simple_fbp_SOURCES = \
+-	src/samples/flow/basics/simple-fbp.c
+-dist_noinst_DATA = \
+-	src/samples/flow/basics/simple.fbp
+-
+-BUILT_SOURCES += src/samples/flow/basics/simple-fbp.c
+-endif # BUILD_SAMPLES
+-endif # HAVE_SOL_FBP_GENERATOR
+-
+-if HAVE_SOL_FBP_RUNNER
+-bin_PROGRAMS += src/bin/sol-fbp-runner/sol-fbp-runner
+-src_bin_sol_fbp_runner_sol_fbp_runner_CFLAGS = \
+-	$(src_lib_libsoletta_la_CFLAGS)
+-src_bin_sol_fbp_runner_sol_fbp_runner_LDADD = \
+-	src/lib/libsoletta.la \
+-	src/shared/libshared.la
+-src_bin_sol_fbp_runner_sol_fbp_runner_SOURCES = \
+-	src/bin/sol-fbp-runner/main.c \
+-	src/bin/sol-fbp-runner/runner.c \
+-	src/bin/sol-fbp-runner/runner.h
+-if SOL_FLOW_INSPECTOR_ENABLED
+-src_bin_sol_fbp_runner_sol_fbp_runner_SOURCES += \
+-	src/bin/sol-fbp-runner/inspector.c
+-endif
+-endif # HAVE_SOL_FBP_RUNNER
+-
+-check_LTLIBRARIES = \
+-	src/test/libtest.la
+-
+-src_test_libtest_la_SOURCES = \
+-	src/test/test.c \
+-	src/test/test.h
+-src_test_libtest_la_LIBADD = \
+-	src/lib/libsoletta.la \
+-	src/shared/libshared.la
+-
+-if HAVE_SOL_FBP_TO_DOT
+-bin_PROGRAMS += src/bin/sol-fbp-to-dot/sol-fbp-to-dot
+-src_bin_sol_fbp_to_dot_sol_fbp_to_dot_CFLAGS = \
+-	$(src_lib_libsoletta_la_CFLAGS) -O0
+-src_bin_sol_fbp_to_dot_sol_fbp_to_dot_LDADD = \
+-	src/lib/libsoletta.la \
+-	src/shared/libshared.la
+-src_bin_sol_fbp_to_dot_sol_fbp_to_dot_SOURCES = \
+-	src/bin/sol-fbp-to-dot/main.c
+-endif # HAVE_SOL_FBP_TO_DOT
+-
+-check_PROGRAMS = \
+-	src/test/test-arena \
+-	src/test/test-buffer \
+-	src/test/test-coap \
+-	src/test/test-fbp \
+-	src/test/test-fbp-scanner \
+-	src/test/test-flow \
+-	src/test/test-mainloop \
+-	src/test/test-monitors \
+-	src/test/test-str-slice \
+-	src/test/test-str-split \
+-	src/test/test-str-table \
+-	src/test/test-util \
+-	src/test/test-vector
+-
+-if BUILD_COAP
+-check_PROGRAMS += src/test/test-coap
+-endif
+-
+-if HAVE_PLATFORM_LINUX
+-check_PROGRAMS += src/test/test-mainloop-linux
+-src_test_test_mainloop_linux_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_mainloop_linux_LDADD = $(TEST_LDADD)
+-
+-if HAVE_MAINLOOP_POSIX
+-if PTHREAD_LIBS
+-check_PROGRAMS += \
+-	src/test/test-mainloop-threads \
+-	src/test/test-mainloop-threads-sol-run
+-src_test_test_mainloop_threads_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_mainloop_threads_LDADD = $(TEST_LDADD) -lpthread
+-src_test_test_mainloop_threads_sol_run_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_mainloop_threads_sol_run_LDADD = $(TEST_LDADD) -lpthread
+-endif # PTHREAD_LIBS
+-endif # HAVE_MAINLOOP_POSIX
+-endif # HAVE_PLATFORM_LINUX
+-
+-if SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-check_PROGRAMS += \
+-	src/test/test-flow-builder \
+-	src/test/test-flow-parser
+-endif
+-
+-TESTS = $(check_PROGRAMS)
+-
+-TEST_CFLAGS = $(AM_CFLAGS)
+-TEST_LDADD = \
+-	src/lib/libsoletta.la \
+-	src/shared/libshared.la \
+-	src/test/libtest.la
+-
+-EXTRA_DIST += src/test/test.h
+-
+-src_test_test_arena_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_arena_LDADD = $(TEST_LDADD)
+-
+-src_test_test_buffer_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_buffer_LDADD = $(TEST_LDADD)
+-
+-src_test_test_fbp_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_fbp_LDADD = $(TEST_LDADD)
+-
+-src_test_test_fbp_scanner_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_fbp_scanner_LDADD = $(TEST_LDADD)
+-
+-src_test_test_flow_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_flow_LDADD = $(TEST_LDADD)
+-
+-if SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED
+-src_test_test_flow_builder_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_flow_builder_LDADD = $(TEST_LDADD)
+-endif
+-
+-if BUILD_COAP
+-src_test_test_coap_SOURCES = \
+-	src/lib/coap/coap.c \
+-	src/lib/coap/coap.h \
+-	src/test/test-coap.c
+-
+-src_test_test_coap_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_coap_LDADD = \
+-	$(TEST_LDADD)
+-endif
+-
+-src_test_test_mainloop_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_mainloop_LDADD = $(TEST_LDADD)
+-
+-src_test_test_monitors_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_monitors_LDADD = $(TEST_LDADD)
+-
+-src_test_test_flow_parser_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_flow_parser_LDADD = $(TEST_LDADD)
+-
+-src_test_test_str_slice_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_str_slice_LDADD = $(TEST_LDADD)
+-
+-src_test_test_str_split_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_str_split_LDADD = $(TEST_LDADD)
+-
+-src_test_test_str_table_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_str_table_LDADD = $(TEST_LDADD)
+-
+-src_test_test_util_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_util_LDADD = $(TEST_LDADD)
+-
+-src_test_test_vector_CFLAGS = $(TEST_CFLAGS)
+-src_test_test_vector_LDADD = $(TEST_LDADD)
+-
+-if HAVE_SOL_FBP_RUNNER
+-check-fbp: src/bin/sol-fbp-runner/sol-fbp-runner $(flowmodules_LTLIBRARIES)
+-	@$(top_srcdir)/src/test-fbp/run
+-
+-check-fbp-valgrind: src/bin/sol-fbp-runner/sol-fbp-runner $(flowmodules_LTLIBRARIES)
+-	@VALGRIND=yes $(top_srcdir)/src/test-fbp/run
+-
+-EXTRA_DIST += \
+-	src/test-fbp/run \
+-	$(wildcard src/test-fbp/*.fbp)
+-
+-EXTRA_DIST += \
+-	src/samples/flow/systemd/unix-socket-writer.service.in \
+-	src/samples/flow/systemd/unix-socket-reader-fail.service.in \
+-	src/samples/flow/systemd/unix-socket-reader.service.in
+-endif # HAVE_SOL_FBP_RUNNER
+-
+-CHEAT_SHEET_RESOURCES = \
+-	$(wildcard doc/node-types-html/images/*.jpg) \
+-	$(wildcard doc/node-types-html/js/*.js) \
+-	doc/node-types-html/index.html.in \
+-	doc/node-types-html/styles.css
+-
+-cheat-sheet: $(top_srcdir)/data/scripts/sol-flow-node-type-gen-cheat-sheet.py $(CHEAT_SHEET_RESOURCES) $(flowtypedesc_DATA)
+-	$(top_srcdir)/data/scripts/sol-flow-node-type-gen-html.py $(top_srcdir)/doc/node-types-html/index.html.in doc/node-types-html/index.html $(flowtypedesc_DATA)
+-
+-DISTCLEANFILES += $(DOLT_CLEANFILES)
+-
+-@VALGRIND_CHECK_RULES@
+-VALGRIND_SUPPRESSIONS_FILES = $(top_srcdir)/src/test/test.supp
+-EXTRA_DIST += src/test/test.supp
+-
+-# ------------------------------------------------------------------------------
+-# coverage
+-# ------------------------------------------------------------------------------
+-
+-# .PHONY so it always rebuilds it
+-.PHONY: coverage lcov-run lcov-report coverage-sync check-fbp check-fbp-valgrind
+-
+-# run lcov from scratch, always
+-coverage: all
+-	$(MAKE) lcov-run
+-	$(MAKE) lcov-report
+-
+-coverage_dir = coverage
+-coverage_opts = --base-directory $(srcdir) --directory $(builddir) \
+-		--rc 'geninfo_adjust_src_path=$(abspath $(srcdir))=>$(abspath $(builddir))'
+-
+-if ENABLE_COVERAGE
+-# reset run coverage tests
+-lcov-run:
+-	@rm -rf $(coverage_dir)
+-	lcov $(coverage_opts) --zerocounters
+-	-$(MAKE) check
+-	-$(MAKE) check-fbp
+-
+-# generate report based on current coverage data
+-lcov-report:
+-	$(MKDIR_P) $(coverage_dir)
+-	lcov $(coverage_opts) --capture --no-external --ignore-errors graph \
+-		| sed 's|$(abspath $(builddir))|$(abspath $(srcdir))|' > $(coverage_dir)/.lcov.info
+-	lcov --remove $(coverage_dir)/.lcov.info --output-file $(coverage_dir)/.lcov-clean.info 'test-*'
+-	genhtml -t "soletta test coverage" -o $(coverage_dir) $(coverage_dir)/.lcov-clean.info
+-	@echo "Coverage report generated in $(abs_builddir)/$(coverage_dir)/index.html"
+-
+-else
+-
+-lcov-run lcov-report:
+-	echo "Need to reconfigure with --enable-coverage"
+-
+-endif
+diff --git a/README.kconfig b/README.kconfig
+new file mode 100644
+index 00000000..29d2e928
+--- /dev/null
++++ b/README.kconfig
+@@ -0,0 +1,21 @@
++KCONFIG
++=====
++
++The SOLETTA project uses kconfig[1] as its configuration system. It's
++kept within tools/kconfig/ directory and we maintain it as clean
++as possible, meaning we don't intend to add/change/remove any file there.
++All the source code therein should be as is.
++
++The current kconfig version is the one present on linux kernel v4.0-rc1.
++The process to update kconfig is fairly simple:
++
++1 - download linux kernel source code;
++2 - git rm tools/kconfig/*
++3 - cp -R $path-to-linux-source/scripts/kconfig/* tools/kconfig/
++4 - git add tools/kconfig/*
++
++There's a tools/build/Makefile.kconfig which defines an interface between
++SOLETTA's build system and kconfig itself - so we don't need to touch
++tools/kconfig/Makefile at all.
++
++[1] - https://www.kernel.org/doc/Documentation/kbuild/kconfig.txt
+\ No newline at end of file
+diff --git a/README.md b/README.md
+index 80a7faa4..21b95bc4 100644
+--- a/README.md
++++ b/README.md
+@@ -25,40 +25,36 @@ It uses a main loop to provide single threaded cooperative tasks
+ is based on Glib's GMainLoop, while some smaller OS have their own
+ implementation, see `--with-mainloop` documentaion.
+ 
+-The build system is based on autotools (autoconf/automake). If you got
+-the unreleased source code from GIT, you must run:
++The build system is based on linux kernel's kconfig. To configure it
++with default configuration values run:
+ 
+-        ./autogen.sh
++        make alldefconfig
+ 
+-If you got the release tarballs then run:
++To update the configurations using a curses based interface run:
++        make menuconfig
+ 
+-        ./configure --prefix=/usr CFLAGS="-O2"
++To update the configurations using a line-oriented interface run:
++        make config
+ 
+ More options and variables are available with:
+ 
+-        ./configure --help
++        make help
+ 
+ To compile use (from top directory)
+ 
+-        make all
++        make
+ 
+ or to be verbose and get all the commands being executed:
+ 
+-        make all V=1
++        make V=1
+ 
+-To install run (sudo only required if installing to privileged
+-directories):
++To install run:
++        make install
+ 
+-        sudo make install
+-
+-Note that to run applications that rely on modules to be installed
+-(such as sol-io and conffile) one needs to either `make install` or
+-configure as maintainer using:
+-
+-        ./configure --enable-maintainer-mode
+-
+-Then they will run from inside the build tree.
++the default behavior is to install in the root dir (namely /), but
++to install in a different root dir run install as:
+ 
++        make install DESTDIR=/path/to/install/root/
+ 
+ ### Debug
+ 
+@@ -110,9 +106,8 @@ environment variables affect sol-log behavior:
+ 
+ Note that at compile time some levels may be disabled by usage of
+ `SOL_LOG_LEVEL_MAXIMUM` C-pre-processor macro, which may be set for
+-soletta itself (internally) with:
+-
+-        ./configure --with-maximum-internal-log-level=NUMBER
++soletta itself (internally) by resetting it on kconfig (i.e menuconfig:
++Core library -> Log -> Maximum log level).
+ 
+ or by applications if they define that in some way. Then messages
+ above that number will be compiled out and using `$SOL_LOG_LEVEL` or
+@@ -195,7 +190,7 @@ sol_fd_add() and sol_fd_del() are thread-safe and can be used from
+ worker threads.
+ 
+ 
+-##### GLib (`--with-mainloop=glib`)
++##### GLib (kconfig: Core library -> Mainloop -> glib)
+ 
+ The well known GMainLoop is used by soletta so GLib-based frameworks
+ can be easily integrated, things like social network services,
+@@ -211,24 +206,14 @@ in-depth information, the summary of environment variables to use:
+         export G_SLICE="all" # always-malloc, debug-blocks
+         export G_MESSAGES_DEBUG="all" # print all debug
+ 
+-        ./configure CFLAGS="-O0 -ggdb3" # disable optimizations
++	make CFLAGS="-O0 -ggdb3" # disable optimizations
+ 
+-To debug binaries that are not yet installed (in-build tree), remember
+-that they are actually libtool scripts and you need to call libtool
+-command to get them right:
+-
+-        libtool --mode=execute valgrind ./my-binary
+-        libtool --mode=execute gdb ./my-binary
+-
+-
+-##### POSIX  (`--with-mainloop=posix`)
++##### POSIX (kconfig: Core library -> Mainloop -> posix)
+ 
+ If GLib is too big then you can use a simpler implementation based
+ solely on POSIX syscalls (poll/ppoll). As it's fully implemented in
+ soletta there is no extra variables to debug it.
+ 
+-It is a nice match for `--with-platform=micro-linux`
+-
+ ### Platforms
+ 
+ Platforms is about target states and services.
+@@ -248,7 +233,7 @@ monitors about their state changes. They are platform-specific and
+ depends on underlying platform setup.
+ 
+ 
+-##### Systemd (`--with-platform=systemd`)
++##### Systemd (kconfig: Core library -> Target Platform -> systemd)
+ 
+ This uses systemd as base. Whenever a target is set or a service is
+ started it will call systemd. The D-Bus events from systemd will be
+@@ -258,7 +243,7 @@ Thus both targets and services are implemented according to systemd
+ using units in standard locations such as /usr/lib/systemd/system and
+ /etc/systemd/system.
+ 
+-##### Micro-Linux (`--with-platform=micro-linux`)
++##### Micro-Linux (kconfig: Core library -> Target Platform -> micro-linux)
+ 
+ Micro-Linux implementation allows your Soletta binary to be used as
+ PID1, it will do required initialization and will handle services as
+@@ -269,9 +254,9 @@ binaries with well known target name such as "/sbin/rescue" or
+ "/sbin/emergency".
+ 
+ Services are handled as modules, they can be compiled into Soletta
+-using --with-linux-micro-MODULE=builtin or as dynamically loadable
+-modules. They have a simple API and is extensible by third party, so
+-if Soletta lacks a service it easy to add that without patch Soletta
++by selecting them using config or menuconfig as builtin or as dynamically
++loadable modules. They have a simple API and is extensible by third party,
++so if Soletta lacks a service it easy to add that without patch Soletta
+ itself.
+ 
+ Soletta provides a init.d/rc.d compatibility service called rc-d.so,
+diff --git a/autogen.sh b/autogen.sh
+deleted file mode 100755
+index 489eb0e7..00000000
+--- a/autogen.sh
++++ /dev/null
+@@ -1,67 +0,0 @@
+-#!/bin/sh
+-
+-# This file is part of the Soletta Project
+-#
+-# Copyright (C) 2015 Intel Corporation. All rights reserved.
+-#
+-# Redistribution and use in source and binary forms, with or without
+-# modification, are permitted provided that the following conditions
+-# are met:
+-#
+-#   * Redistributions of source code must retain the above copyright
+-#     notice, this list of conditions and the following disclaimer.
+-#   * Redistributions in binary form must reproduce the above copyright
+-#     notice, this list of conditions and the following disclaimer in
+-#     the documentation and/or other materials provided with the
+-#     distribution.
+-#   * Neither the name of Intel Corporation nor the names of its
+-#     contributors may be used to endorse or promote products derived
+-#     from this software without specific prior written permission.
+-#
+-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-
+-/usr/bin/env python3 data/oic/oicgen.py \
+-             data/oic \
+-             src/modules/flow/oic/oic.json \
+-             src/modules/flow/oic/oic.c || exit 1
+-
+-/usr/bin/env python3 data/scripts/sol-modules-mk-gen.py \
+-             --built-sources-suffix=-gen.c \
+-             --built-sources-suffix=-gen.h \
+-             --if-module-rule="flowtypedescs += @path@.json" \
+-             --extra-rule="SOLETTA_FLOW_TYPE_JSONS += @path@/@name@.json" \
+-             --am-conditional=FLOW \
+-             --ltlibraries=flowmodules \
+-             --if-module-cflags="-DSOL_FLOW_NODE_TYPE_MODULE_EXTERNAL=1" \
+-             --outfile=sol_flow_modules.mk \
+-             --modules-path=src/modules/flow || exit 1
+-
+-/usr/bin/env python3 data/scripts/sol-modules-mk-gen.py \
+-             --am-conditional=PLATFORM_LINUX_MICRO \
+-             --ltlibraries=linuxmicromodules \
+-             --if-module-cflags="-DSOL_PLATFORM_LINUX_MICRO_MODULE_EXTERNAL=1" \
+-             --outfile=sol_linux_micro_modules.mk \
+-             --modules-path=src/modules/linux-micro || exit 1
+-
+-/usr/bin/env python3 data/scripts/sol-modules-mk-gen.py \
+-             --am-conditional=PIN_MUX \
+-             --ltlibraries=pinmux \
+-             --if-module-cflags="-DSOL_PIN_MUX_MODULE=1" \
+-             --outfile=sol_pin_mux_modules.mk \
+-             --modules-path=src/modules/pin-mux || exit 1
+-
+-autoreconf -f -i || exit 1
+-
+-if [ -z "$NOCONFIGURE" ]; then
+-    ./configure "$@"
+-fi
+diff --git a/configure.ac b/configure.ac
+deleted file mode 100644
+index 526327ac..00000000
+--- a/configure.ac
++++ /dev/null
+@@ -1,585 +0,0 @@
+-AC_PREREQ([2.64])
+-AC_INIT([soletta], [1])
+-
+-orig_CFLAGS="$CFLAGS"
+-CFLAGS=`echo "$CFLAGS" | sed -e "s/-W\(fatal-errors\|error\|error=@<:@^ \t@:>@\+\)//g"`
+-if test "$orig_CFLAGS" != "$CFLAGS"; then
+-   AC_MSG_WARN([Original \$CFLAGS="$orig_CFLAGS" contains -Werror or -Wfatal-errors which may break autoconf's checks. Removed these flags during autoconf tests, using CFLAGS="$CFLAGS"])
+-fi
+-
+-AC_CONFIG_MACRO_DIR([m4])
+-AC_CONFIG_HEADERS([sol_config.h])
+-AC_PROG_CC_C99
+-AC_PROG_LN_S
+-AC_USE_SYSTEM_EXTENSIONS
+-AC_SYS_LARGEFILE
+-
+-AM_SILENT_RULES([yes])
+-AM_INIT_AUTOMAKE([foreign subdir-objects silent-rules])
+-AM_MAINTAINER_MODE
+-LT_INIT([pic-only])
+-DOLT
+-
+-AM_CONDITIONAL([ENABLE_STATIC], [test "${enable_static}" = "yes"])
+-
+-AC_PROG_MKDIR_P
+-PKG_PROG_PKG_CONFIG
+-
+-AC_CHECK_DECLS([IFLA_INET6_ADDR_GEN_MODE],
+-[], [], [[
+-#include <netinet/in.h>
+-#include <netinet/ether.h>
+-#include <linux/rtnetlink.h>
+-#include <net/if.h>
+-#include <linux/if_link.h>
+-#include <linux/if_addr.h>
+-]])
+-
+-# MUSL does not have strndupa()
+-AC_CHECK_DECLS_ONCE([strndupa],,,[
+-#include <string.h>
+-])
+-
+-# accept4() is Linux-only and GLIBC requires __GNU_SOURCE to enable it
+-AC_CHECK_FUNCS([accept4])
+-
+-CC_CHECK_FLAGS_APPEND(with_cflags, [CFLAGS], [\
+-		       -pipe \
+-		       -Wall \
+-		       -W \
+-		       -Wextra \
+-		       -Wundef \
+-		       -Wformat=2 \
+-		       -Wlogical-op \
+-		       -Wsign-compare \
+-		       -Wformat-security \
+-		       -Wmissing-include-dirs \
+-		       -Wformat-nonliteral \
+-		       -Wold-style-definition \
+-		       -Wpointer-arith \
+-		       -Winit-self \
+-		       -Wdeclaration-after-statement \
+-		       -Wfloat-equal \
+-		       -Wmissing-prototypes \
+-		       -Wstrict-prototypes \
+-		       -Wredundant-decls \
+-		       -Wmissing-declarations \
+-		       -Wmissing-noreturn \
+-		       -Wno-unused-parameter \
+-		       -Wshadow \
+-		       -Wendif-labels \
+-		       -Wstrict-aliasing=3 \
+-		       -Wwrite-strings \
+-		       -Wno-long-long \
+-		       -Wno-missing-field-initializers \
+-		       -Wno-override-init \
+-		       -Wnested-externs \
+-		       -Wchar-subscripts \
+-		       -Wtype-limits \
+-		       -Wuninitialized \
+-		       -fno-common \
+-		       -fdiagnostics-show-option \
+-		       -fvisibility=hidden \
+-		       -ffunction-sections \
+-		       -fdata-sections])
+-
+-AS_CASE([$CFLAGS], [*-O[[s12345\ ]]*],
+-        [CC_CHECK_FLAGS_APPEND([with_cflags], [CFLAGS], [-flto -ffat-lto-objects])],
+-        [AC_MSG_RESULT([skipping link-time-optimization (LTO) since no optimizations were used])])
+-
+-CC_CHECK_FLAGS_APPEND([with_ldflags], [LDFLAGS], [ \
+-		       -Wl,--as-needed \
+-		       -Wl,--gc-sections])
+-
+-AC_ARG_ENABLE([coverage],
+-	AS_HELP_STRING([--enable-coverage], [enable test coverage @<:@default=disabled@:>@]),
+-	[], [enable_coverage=no])
+-AS_IF([test "x$enable_coverage" = "xyes"], [
+-	AC_CHECK_PROG(have_coverage, [lcov], [yes], [no])
+-	AS_IF([test "x$have_coverage" = xno],[
+-		AC_MSG_ERROR([*** lcov support requested but the program was not found])
+-	], [
+-		lcov_version_major="`lcov --version | cut -d ' ' -f 4 | cut -d '.' -f 1`"
+-		lcov_version_minor="`lcov --version | cut -d ' ' -f 4 | cut -d '.' -f 2`"
+-		AS_IF([test "$lcov_version_major" -lt 1 -o "$lcov_version_minor" -lt 10], [
+-			AC_MSG_ERROR([*** lcov version is too old. 1.10 required])
+-		], [
+-			have_coverage=yes
+-                        CC_CHECK_FLAGS_APPEND([with_coverage_cflags], [CFLAGS], [\
+-                        -fprofile-arcs \
+-                        -ftest-coverage])
+-		])
+-        ])
+-])
+-AM_CONDITIONAL([ENABLE_COVERAGE], [test "x$enable_coverage" = "xyes"])
+-
+-AC_ARG_ENABLE([dynamic-modules],
+-        AS_HELP_STRING([--disable-dynamic-modules], [Disable dlopen() and dynamic modules (.so), this is required to enable full-static builds]),
+-        [], [enable_dynamic_modules=yes])
+-AM_CONDITIONAL([ENABLE_DYNAMIC_MODULES], [test "${enable_dynamic_modules}" != "no"])
+-if test "${enable_dynamic_modules}" != "no"; then
+-    AC_DEFINE([ENABLE_DYNAMIC_MODULES], [1], [dynamic modules are enabled.])
+-    dl_libs="-ldl"
+-fi
+-AC_SUBST(dl_libs)
+-
+-AC_SUBST([SOL_COMMON_CFLAGS], "$with_cflags $with_coverage_cflags")
+-AC_SUBST([SOL_COMMON_LDFLAGS], $with_ldflags)
+-AC_SUBST([SOL_CONFFILE_MODULES_DIR], ${libdir}/soletta/modules/)
+-
+-AC_CHECK_FUNCS([isatty])
+-
+-AC_ARG_WITH([pthread],
+-	AS_HELP_STRING([--without-pthread], [Disable pthread]))
+-
+-AS_IF([test "x$with_pthread" = "xno"],
+-	[have_pthread=no], [AC_CHECK_HEADERS([pthread.h], [have_pthread=yes], [have_pthread=no])])
+-
+-PTHREAD_LIBS=""
+-if test "${have_pthread}" = "yes"; then
+-   save_LIBS="$LIBS"
+-   AC_SEARCH_LIBS([pthread_create], [pthread])
+-   LIBS="${save_LIBS}"
+-   if test "${ac_cv_search_pthread_create}" = "no"; then
+-      AC_MSG_ERROR([Could not find pthread_create()])
+-   elif test "${ac_cv_search_pthread_create}" != "none required"; then
+-      PTHREAD_LIBS="${ac_cv_search_pthread_create}"
+-   fi
+-fi
+-AC_SUBST(PTHREAD_LIBS)
+-
+-AM_CONDITIONAL([PTHREAD_LIBS], [test "${have_pthread}" = "yes"])
+-
+-AC_ARG_ENABLE([sanitizer],
+-	AS_HELP_STRING([--disable-sanitizer],
+-		       [Enable sanitizer, one of: undefined,address]))
+-AC_MSG_CHECKING([sanitizer to be used])
+-AC_MSG_RESULT([${enable_sanitizer}])
+-case "${enable_sanitizer}" in
+-    yes|"")
+-	enable_sanitizer=undefined
+-	;;
+-    undefined|address)
+-	CC_CHECK_FLAGS_APPEND(with_cflags, [CFLAGS], [-fsanitize=${enable_sanitizer}])
+-	CC_CHECK_FLAGS_APPEND(with_ldflags, [LDFLAGS], [-fsanitize=${enable_sanitizer}])
+-	;;
+-    no)
+-	enable_sanitizer=none
+-	;;
+-    *)
+-	AC_MSG_ERROR([unknown sanitizer: ${enable_sanitizer}; valid: undefined,address])
+-	;;
+-esac
+-
+-SOL_WITH_BIN([sol-fbp-generator], [src/bin/sol-fbp-generator/sol-fbp-generator])
+-SOL_WITH_BIN([sol-fbp-runner], [src/bin/sol-fbp-runner/sol-fbp-runner])
+-SOL_WITH_BIN([sol-fbp-to-dot], [src/bin/sol-fbp-to-dot/sol-fbp-to-dot])
+-SOL_WITH_BIN([sol-flow-node-types], [src/bin/sol-flow-node-types/sol-flow-node-types])
+-
+-AC_ARG_WITH([sol-fbp-generator],
+-	AS_HELP_STRING([--without-sol-fbp-generator], [Do not build sol-fbp-generator]))
+-
+-AC_ARG_WITH([sol-fbp-runner],
+-    AS_HELP_STRING([--without-sol-fbp-runner], [Do not build sol-fbp-runner]))
+-
+-AC_ARG_WITH([sol-fbp-to-dot],
+-    AS_HELP_STRING([--without-sol-fbp-to-dot], [Do not build sol-fbp-to-dot]))
+-
+-AC_ARG_WITH([glib],
+-    AS_HELP_STRING([--without-glib], [Disable usage of Glib]),
+-    [], [with_glib=auto])
+-have_glib=no
+-if test "${with_glib}" != "no"; then
+-    PKG_CHECK_MODULES([GLIB], [glib-2.0], [have_glib=yes], [have_glib=no])
+-fi
+-if test "${with_glib}" = "yes" -a "${have_glib}" = "no"; then
+-   AC_MSG_ERROR([Glib is to be used but was not found.])
+-fi
+-AM_CONDITIONAL([HAVE_GLIB], [test "${have_glib}" = "yes"])
+-
+-AC_ARG_WITH([platform],
+-        AS_HELP_STRING([--with-platform=IMPLEMENTATION],
+-                       [enable integration with one of: systemd, riot, linux-micro or linux-dummy]),
+-        [],
+-        [with_platform="linux-dummy"])
+-AC_MSG_CHECKING([platform to be used])
+-AC_MSG_RESULT([${with_platform}])
+-platform_linux="no"
+-case "${with_platform}" in
+-    systemd)
+-        platform_linux="yes"
+-        have_systemd=no
+-        CC_PKG_CHECK_MODULES_WITH_FUNC(SYSTEMD, [ libsystemd ], [systemd], [sd_event_prepare],
+-                       [have_systemd=yes], [have_systemd=no])
+-        AS_IF([test "$have_systemd" = "yes"],
+-            [AC_DEFINE(HAVE_SYSTEMD, 1, [Define if libsystemd is available])],
+-            [AC_MSG_ERROR([*** systemd requested but not found with required symbols.])])
+-        ;;
+-    linux-micro)
+-        platform_linux="yes"
+-        ;;
+-    linux-dummy)
+-        platform_linux="yes"
+-        ;;
+-    riot)
+-        default_mainloop="riot"
+-        possible_mainloops="riot"
+-        ;;
+-    *)
+-        AC_MSG_ERROR([unknown platform=${with_platform}])
+-        ;;
+-esac
+-
+-if test "${platform_linux}" = "yes"; then
+-    if test "${have_glib}" = "yes"; then
+-        default_mainloop="glib"
+-        possible_mainloops="glib posix"
+-    else
+-        default_mainloop="posix"
+-        possible_mainloops="posix"
+-    fi
+-    AC_CHECK_HEADERS([linux/rtnetlink.h linux/netlink.h linux/watchdog.h], ,[linux_headers=no; break;])
+-    AS_IF([test "$linux_headers" = "no"],
+-	  [AC_MSG_ERROR([Unable to find linux headers. Set your CFLAGS properly before run configure, e.g. CFLAGS=\"-I/path/to/linux/headers\"])])
+-fi
+-
+-AM_CONDITIONAL(HAVE_PLATFORM_SYSTEMD, [test "$with_platform" = "systemd"])
+-AM_CONDITIONAL(HAVE_PLATFORM_LINUX_MICRO, [test "$with_platform" = "linux-micro"])
+-AM_CONDITIONAL(HAVE_PLATFORM_LINUX_DUMMY, [test "$with_platform" = "linux-dummy"])
+-AM_CONDITIONAL(HAVE_PLATFORM_RIOT, [test "$with_platform" = "riot"])
+-
+-AM_CONDITIONAL(HAVE_PLATFORM_LINUX, [test "$platform_linux" = "yes"])
+-
+-if test "${platform_linux}" = "yes"; then
+-    SOL_PLATFORM_LINUX="#define SOL_PLATFORM_LINUX (1)"
+-else
+-    SOL_PLATFORM_LINUX="/* #undef SOL_PLATFORM_LINUX */"
+-fi
+-AC_SUBST(SOL_PLATFORM_LINUX)
+-if test "${platform_riot}" = "yes"; then
+-    SOL_PLATFORM_RIOT="#define SOL_PLATFORM_RIOT (1)"
+-else
+-    SOL_PLATFORM_RIOT="/* #undef SOL_PLATFORM_RIOT */"
+-fi
+-AC_SUBST(SOL_PLATFORM_RIOT)
+-
+-linux_rc_micro_rc_default="${enable_dynamic_modules}"
+-AC_DEFUN([CHECK_LINUX_MICRO_RC_D], [dnl
+-   if test "${with_linux_micro_rc_d}" = "builtin"; then
+-      AC_MSG_ERROR([--with-linux-micro-rc-d=builtin is unusable. Either use --enable-dynamic-modules and --with-linux-micro-rc-d=yes, or --with-linux-micro-rc-d.])
+-   fi
+-])
+-
+-SOL_LINUX_MICRO_MODULE([hostname], [builtin], [yes])
+-SOL_LINUX_MICRO_MODULE([locale], [yes], [yes])
+-SOL_LINUX_MICRO_MODULE([dbus], [yes], [yes])
+-SOL_LINUX_MICRO_MODULE([bluetooth], [yes], [yes])
+-SOL_LINUX_MICRO_MODULE([rc-d], [${linux_rc_micro_rc_default}], [no], [CHECK_LINUX_MICRO_RC_D])
+-SOL_LINUX_MICRO_MODULE([sysctl], [builtin], [yes])
+-SOL_LINUX_MICRO_MODULE([fstab], [builtin], [yes])
+-SOL_LINUX_MICRO_MODULE([network-up], [builtin], [yes])
+-SOL_LINUX_MICRO_MODULE([console], [yes], [yes])
+-SOL_LINUX_MICRO_MODULE([watchdog], [yes], [yes])
+-
+-AC_SUBST(linux_micro_builtin_modules)
+-AC_SUBST(linux_micro_initial_services)
+-
+-AC_ARG_WITH([mainloop],
+-        AS_HELP_STRING([--with-mainloop=IMPLEMENTATION],
+-                       [enable mainloop integration with one of platform-dependent implementation: Linux=(glib, posix), RIOT=riot.]),
+-        [],
+-        [with_mainloop="${default_mainloop}"])
+-AC_MSG_CHECKING([mainloop to be used])
+-if ! echo "${possible_mainloops}" | grep "${with_mainloop}" >/dev/null 2>/dev/null; then
+-   AC_MSG_ERROR([unsupported mainloop=${with_mainloop} for platform ${with_platform}, supported: ${possible_mainloops}])
+-fi
+-AC_MSG_RESULT([${with_mainloop}])
+-
+-case "${with_mainloop}" in
+-    glib)
+-        ;;
+-    posix)
+-        AC_CHECK_FUNCS([ppoll])
+-        ;;
+-    riot)
+-        ;;
+-    *)
+-        AC_MSG_ERROR([unknown platform=${with_platform}])
+-        ;;
+-esac
+-
+-AM_CONDITIONAL([HAVE_MAINLOOP_GLIB], [test "${with_mainloop}" = "glib"])
+-AM_CONDITIONAL([HAVE_MAINLOOP_POSIX], [test "${with_mainloop}" = "posix"])
+-AM_CONDITIONAL([HAVE_MAINLOOP_RIOT], [test "${with_mainloop}" = "riot"])
+-
+-flow_module_resolvers=""
+-
+-AC_DEFUN([SOL_FLOW_MODULE_RESOLVER_CONFFILE_CHECKS],
+-[
+-AS_IF([test "$have_glib" = "no" -a "$enable_flow_module_resolver_conffile" = "yes"],
+-	[AC_MSG_ERROR([--enable-flow-module-resolver-conffile depends on --with-glib, not to be used])])
+-AS_IF([test "$enable_flow_node_type_description" = "no" -a "$enable_flow_module_resolver_conffile" = "yes"],
+-	[AC_MSG_ERROR([--enable-flow-module-resolver-conffile depends on --enable-flow-node-type-description, not to be used])])
+-AS_IF([test "$enable_dynamic_modules" = "no" -a "$enable_flow_module_resolver_conffile" = "yes"],
+-	[AC_MSG_ERROR([--enable-flow-module-resolver-conffile depends on --enable-dynamic-modules, not to be used])])
+-])
+-
+-SOL_FLOW_MODULE_RESOLVER([conffile], [yes],
+-                        [SOL_FLOW_MODULE_RESOLVER_CONFFILE_CHECKS],
+-                        [that uses configuration files (ini-like)])
+-
+-SOL_FLOW_MODULE_RESOLVER_DEFAULT([conffile])
+-
+-AC_ARG_WITH([sol-flow-node-types],
+-    AS_HELP_STRING([--without-sol-flow-node-types], [Do not build sol-flow-node-types]))
+-
+-
+-AM_CONDITIONAL([BUILD_COAP], [test "$with_coap" != "no"])
+-
+-AC_DEFUN([CHECK_FLOW_OIC], [dnl
+-    AS_IF([test "${with_coap}" = "no"],
+-          [AC_MSG_ERROR([--with-flow-module-oic depends on --with-coap, not to be used.])])
+-])
+-
+-AC_DEFUN([CHECK_FLOW_UDEV], [dnl
+-    PKG_CHECK_MODULES([UDEV], [libudev])
+-])
+-
+-AC_DEFUN([CHECK_FLOW_GTK], [dnl
+-   PKG_CHECK_MODULES([GTK], [gtk+-3.0])
+-])
+-
+-SOL_FLOW_MODULE([accelerometer], [${platform_linux}])
+-SOL_FLOW_MODULE([calamari], [yes])
+-SOL_FLOW_MODULE([dummy], [no])
+-SOL_FLOW_MODULE([evdev], [${platform_linux}])
+-SOL_FLOW_MODULE([file], [${have_pthread}])
+-SOL_FLOW_MODULE([fs], [yes])
+-SOL_FLOW_MODULE([grove], [yes])
+-SOL_FLOW_MODULE([gtk], [${platform_linux}], [CHECK_FLOW_GTK])
+-SOL_FLOW_MODULE([gyroscope], [${platform_linux}])
+-SOL_FLOW_MODULE([keyboard], [${platform_linux}])
+-SOL_FLOW_MODULE([network], [${platform_linux}])
+-SOL_FLOW_MODULE([oic], [yes], [CHECK_FLOW_OIC])
+-SOL_FLOW_MODULE([piezo-speaker], [yes])
+-SOL_FLOW_MODULE([servo-motor], [yes])
+-SOL_FLOW_MODULE([test], [yes])
+-SOL_FLOW_MODULE([udev], [${platform_linux}], [CHECK_FLOW_UDEV])
+-SOL_FLOW_MODULE([unix-socket], [${platform_linux}])
+-SOL_FLOW_MODULE([process], [${platform_linux}])
+-
+-SOL_FLOW_MODULE([constant], [builtin])
+-SOL_FLOW_MODULE([console], [builtin])
+-SOL_FLOW_MODULE([timer], [builtin])
+-SOL_FLOW_MODULE([aio], [builtin])
+-SOL_FLOW_MODULE([app], [builtin])
+-SOL_FLOW_MODULE([boolean], [builtin])
+-SOL_FLOW_MODULE([byte], [builtin])
+-SOL_FLOW_MODULE([color], [builtin])
+-SOL_FLOW_MODULE([converter], [builtin])
+-SOL_FLOW_MODULE([float], [builtin])
+-SOL_FLOW_MODULE([filter-repeated], [builtin])
+-SOL_FLOW_MODULE([gpio], [builtin])
+-SOL_FLOW_MODULE([hub], [builtin])
+-SOL_FLOW_MODULE([platform], [builtin])
+-SOL_FLOW_MODULE([pwm], [builtin])
+-SOL_FLOW_MODULE([int], [builtin])
+-SOL_FLOW_MODULE([random], [builtin])
+-SOL_FLOW_MODULE([string], [builtin])
+-SOL_FLOW_MODULE([trigonometry], [builtin])
+-SOL_FLOW_MODULE([wallclock], [builtin])
+-
+-AC_SUBST(flow_builtin_modules)
+-
+-
+-AC_ARG_WITH([samples],
+-	AS_HELP_STRING([--without-samples], [Do not build samples]))
+-
+-AS_IF([test "x$with_samples" != "xno"],
+-	[build_samples=yes],
+-	[build_samples=no])
+-
+-AM_CONDITIONAL([BUILD_SAMPLES], [test "x$build_samples" = "xyes"])
+-
+-AC_ARG_WITH([coap],
+-	AS_HELP_STRING([--without-coap], [Do not build COAP support]))
+-
+-AS_IF([test "x$with_coap" != "xno"],
+-	[build_coap=yes],
+-	[build_coap=no])
+-
+-AM_CONDITIONAL([BUILD_COAP], [test "x$build_coap" = "xyes"])
+-
+-AC_ARG_ENABLE([log],
+-        AS_HELP_STRING([--disable-log], [Disable sol-log functionality.]),
+-        [], [enable_log=yes])
+-if test "${enable_log}" != "no"; then
+-   SOL_LOG_ENABLED="#define SOL_LOG_ENABLED (1)"
+-else
+-   SOL_LOG_ENABLED="/* #undef SOL_LOG_ENABLED */"
+-fi
+-AC_SUBST(SOL_LOG_ENABLED)
+-AM_CONDITIONAL([SOL_LOG_ENABLED], [test "${enable_log}" != "no"])
+-
+-AC_ARG_WITH([platform-name],
+-	AS_HELP_STRING([--with-platform-name=NAME],
+-                       [Use NAME as platform name. Disable auto detect mechanisms]),
+-        [],
+-        [with_platform_name="no"])
+-
+-if test "x$with_platform_name" != "xno" -a "x$with_platform_name" != "xyes"; then
+-    AC_DEFINE([PLATFORM_NAME], [${with_platform_name}], [String to be used as platform name])
+-else
+-    with_platform_name="auto"
+-fi
+-
+-AC_ARG_WITH([pin-mux],
+-	AS_HELP_STRING([--with-pin-mux], [Build pin multiplexer support]),
+-        [],
+-        [with_pin_mux="no"])
+-
+-AM_CONDITIONAL([HAVE_PIN_MUX], [test "x$with_pin_mux" != "xno"])
+-if test "x$with_pin_mux" != "xno"; then
+-    AC_DEFINE([HAVE_PIN_MUX], [1], [Pin multiplexer is enabled.])
+-fi
+-
+-SOL_PIN_MUX_MODULE([intel-galileo-rev-g], [no], [Add Intel Galileo 2 pin mux support])
+-
+-AC_SUBST(pin_mux_builtins)
+-
+-AC_ARG_WITH([maximum-internal-log-level],
+-        AS_HELP_STRING([--with-maximum-internal-log-level=NUMBER],
+-                       [Specifies the maximum log level to be used in soletta library. This will remove all log messages greater than the given number from the final binary if it is compiled with optimizations. By default all log levels are allowed]))
+-if test "x${with_maximum_internal_log_level}" != "x" -a "${enable_log}" != "no"; then
+-   AC_DEFINE_UNQUOTED([SOL_LOG_LEVEL_MAXIMUM], [${with_maximum_internal_log_level}], [Maximum log level to compile in Soletta library])
+-fi
+-
+-AC_ARG_ENABLE([flow-node-type-description],
+-        AS_HELP_STRING([--disable-flow-node-type-description],
+-                       [Disable flow's node type description, this saves memory but disables introspection and automatically parse of options -- only to be used in very constrained systems.]),
+-        [], [enable_flow_node_type_description=yes])
+-if test "x${enable_flow_node_type_description}" = "xno"; then
+-   SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED="/* #undef SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED */"
+-else
+-   SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED="#define SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED (1)"
+-fi
+-AC_SUBST(SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED)
+-AM_CONDITIONAL([SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED], [test "x${enable_flow_node_type_description}" != "xno"])
+-
+-AC_ARG_ENABLE([flow-inspector],
+-        AS_HELP_STRING([--disable-flow-inspector],
+-                       [Disable flow's inspector support. Inspector has minimal impact when not used -- only to be used in very constrained systems.]),
+-        [], [enable_flow_inspector=yes])
+-if test "x${enable_flow_inspector}" = "xno"; then
+-   SOL_FLOW_INSPECTOR_ENABLED="/* #undef SOL_FLOW_INSPECTOR_ENABLED */"
+-else
+-   SOL_FLOW_INSPECTOR_ENABLED="#define SOL_FLOW_INSPECTOR_ENABLED (1)"
+-fi
+-AC_SUBST(SOL_FLOW_INSPECTOR_ENABLED)
+-AM_CONDITIONAL([SOL_FLOW_INSPECTOR_ENABLED], [test "x${enable_flow_inspector}" != "xno"])
+-
+-AC_CHECK_SIZEOF([time_t])
+-if test "x$ac_cv_sizeof_time_t" != "x4" -a "x$ac_cv_sizeof_time_t" != "x8"; then
+-   AC_MSG_ERROR([time_t size ${ac_cv_sizeof_time_t} is neither 32 or!64-bit])
+-fi
+-
+-# TODO: Python is used by data/scripts/sol-flow-node-type-gen.py to
+-# generate source/headers from JSON at compile time.  Eventually it
+-# will be rewritten in C and not require 3rd party dependencies.
+-AM_PATH_PYTHON([3.2], [], [
+-    AC_MSG_ERROR([Python3.2 is required by data/scripts/sol-flow-node-type-gen.py])])
+-if [ ! $PYTHON -c 'import jsonschema' > /dev/null 2>&1 ]; then
+-    AC_MSG_ERROR([Python module 'jsonschema' not found.])
+-fi
+-
+-CFLAGS="$orig_CFLAGS"
+-
+-AX_VALGRIND_CHECK
+-
+-AC_CONFIG_LINKS([
+-doc/node-types-html/styles.css:doc/node-types-html/styles.css
+-])
+-
+-AC_CONFIG_COMMANDS([cheat-sheet],
+-[( $MKDIR_P doc/node-types-html && cd doc/node-types-html/ &&
+-   [[ ! -e images ]] &&  $LN_S $ac_abs_srcdir/doc/node-types-html/images
+-   [[ ! -e js ]] &&  $LN_S $ac_abs_srcdir/doc/node-types-html/js
+-)]
+-)
+-
+-AC_CONFIG_FILES([
+-Makefile
+-pc/soletta.pc
+-src/lib/common/sol-common-buildopts.h
+-src/lib/flow/sol-flow-buildopts.h
+-src/samples/flow/systemd/unix-socket-reader.service
+-src/samples/flow/systemd/unix-socket-reader-fail.service
+-src/samples/flow/systemd/unix-socket-writer.service
+-])
+-
+-AC_OUTPUT
+-AC_MSG_RESULT([
+-
+-$PACKAGE $VERSION
+-
+-general:
+-        prefix:                         ${prefix}
+-        sysconfdir:                     ${sysconfdir}
+-        libdir:                         ${libdir}
+-        includedir:                     ${includedir}
+-        bindir:                         ${bindir}
+-
+-        compiler:                       ${CC}
+-        cflags:                         ${with_cflags} ${CFLAGS}
+-        ldflags:                        ${with_ldflags} ${LDFLAGS}
+-
+-        maximum internal log level:     ${with_maximum_internal_log_level}
+-        log enabled:                    ${enable_log}
+-
+-        sanitizer:                      ${enable_sanitizer}
+-        coverage:                       ${enable_coverage}
+-
+-        build samples:                  ${build_samples}
+-        build COAP:                     ${build_coap}
+-
+-        threads:                        ${have_pthread}
+-        dynamic modules:                ${enable_dynamic_modules}
+-
+-sol-common:
+-        platform:                       ${with_platform}
+-        platform name:                  ${with_platform_name}
+-        mainloop:                       ${with_mainloop}
+-        pin mux:                        ${with_pin_mux}dnl
+-])
+-
+-if test -n "${pin_mux_modules}"; then
+-   AC_MSG_RESULT([dnl
+-        pin mux modules:               ${pin_mux_modules}dnl
+-])
+-fi
+-
+-if test -n "${pin_mux_builtins}"; then
+-   AC_MSG_RESULT([dnl
+-        pin mux builtins:              ${pin_mux_builtins}dnl
+-])
+-fi
+-
+-if test "${with_platform}" = "linux-micro"; then
+-   AC_MSG_RESULT([dnl
+-        linux-micro modules:           ${linux_micro_modules}
+-        linux-micro initial services:  ${linux_micro_initial_services}dnl
+-])
+-fi
+-
+-AC_MSG_RESULT([
+-
+-sol-flow:
+-        sol-fbp-generator:               ${with_sol_fbp_generator}
+-        sol-fbp-runner:                  ${with_sol_fbp_runner}
+-        sol-flow-node-types:             ${with_sol_flow_node_types}
+-        node type descriptions:         ${enable_flow_node_type_description}
+-        inspector:                      ${enable_flow_inspector}
+-        module resolvers:               ${flow_module_resolvers}
+-        default module resolver:        ${with_flow_module_default_resolver}
+-        modules:                       ${flow_modules}
+-])
+diff --git a/data/scripts/dependency-resolver.py b/data/scripts/dependency-resolver.py
+new file mode 100755
+index 00000000..45527e23
+--- /dev/null
++++ b/data/scripts/dependency-resolver.py
+@@ -0,0 +1,235 @@
++#!/usr/bin/env python3
++
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++import argparse
++import os
++import subprocess
++import sys
++import tempfile
++from shutil import which
++
++pkg_config_deps = {
++    "CHECK": "check",
++    "GLIB": "glib-2.0",
++    "GTK": "gtk+-3.0",
++    "SYSTEMD": "libsystemd",
++    "UDEV": "libudev",
++}
++
++header_deps = {
++    "KDBUS": "<systemd/sd-bus.h>",
++    "PTHREAD": "<pthread.h>",
++    "RIOTOS": "<riotos/cpu.h>",
++    "DLFCN_H": "<dlfcn.h>",
++    "INTTYPES_H": "<inttypes.h>",
++    "LINUX_NETLINK_H": "<linux/netlink.h>",
++    "LINUX_RTNETLINK_H": "<linux/rtnetlink.h>",
++    "LINUX_WATCHDOG_H": "<linux/watchdog.h>",
++    "MEMORY_H": "<memory.h>",
++    "PTHREAD_H": "<pthread.h>",
++    "STDINT_H": "<stdint.h>",
++    "STDLIB_H": "<stdlib.h>",
++    "STRINGS_H": "<strings.h>",
++    "STRING_H": "<string.h>",
++    "SYS_STAT_H": "<sys/stat.h>",
++    "SYS_TYPES_H": "<sys/types.h>",
++    "UNISTD_H": "<unistd.h>",
++}
++
++exec_deps = {
++    "VALGRIND": "valgrind",
++    "LCOV": "lcov",
++    "GENHTML": "genhtml",
++}
++
++cfragment_deps = {
++    "ACCEPT4": {"fragment": "accept4(0, 0, 0, 0);", "headers": ["<sys/socket.h>"]},
++    "ISATTY": {"fragment": "isatty(0);", "headers": ["<unistd.h>"]},
++    "PPOLL": {"fragment": "ppoll(0, 0, 0, 0);", "headers": ["<poll.h>"]},
++    "DECL_STRNDUPA": {"fragment": "strndupa(0, 0);", "headers": ["<string.h>"]},
++    "DECL_IFLA_INET6_ADDR_GEN_MODE": {"fragment": "int v = IFLA_INET6_ADDR_GEN_MODE;", \
++                                      "headers": ["<netinet/in.h>", "<netinet/ether.h>", \
++                                                  "<linux/rtnetlink.h>", "<net/if.h>" \
++                                                  "<linux/if_link.h>", "<linux/if_addr.h>"]},
++}
++
++python_pkg_deps = {
++    "PYTHON_JSONSCHEMA" : "jsonschema"
++}
++
++makefile_gen = []
++kconfig_gen = []
++
++compiler = "gcc"
++cflags = ""
++
++def kconfig_add(key, enabled):
++    item = "config {config}\n{indent}bool\n{indent}default {enabled}". \
++           format(config="HAVE_%s" % key, indent="       ", enabled=enabled)
++    kconfig_gen.append(item)
++
++def pkg_config_discover():
++    for k,v in pkg_config_deps.items():
++        cmd = "pkg-config --libs %s --cflags" % v
++        enabled = "n"
++        flags = ""
++        try:
++            flags = subprocess.check_output(cmd, stderr=subprocess.STDOUT,
++                                            shell=True, universal_newlines=True)
++            flags = flags.replace("\n", "")
++            enabled = "y"
++        except subprocess.CalledProcessError as e:
++            flags = None
++
++        if flags is not None:
++            line = "ifeq (y,$(USE_%s))\n" % k
++            line = "%s%s_CFLAGS += %s\n" % (line, k, flags)
++            line = "%sendif\n" % line
++            makefile_gen.append(line)
++
++        kconfig_add(k, enabled)
++
++def python_dep_test():
++    for k,v in python_pkg_deps.items():
++        found = "y"
++        source = "import jsonschema"
++        f = tempfile.NamedTemporaryFile(suffix=".py",delete=False)
++        f.write(bytes(source, 'UTF-8'))
++        f.close()
++
++        try:
++            cmd = "%s %s" % (sys.executable, f.name)
++            subprocess.check_output(cmd, stderr=subprocess.STDOUT,
++                                    shell=True, universal_newlines=True)
++        except subprocess.CalledProcessError as e:
++            found = "n"
++
++        line = "HAVE_%s := %s\n" % (k, found)
++        makefile_gen.append(line)
++        os.unlink(f.name)
++
++def fragment_dep_test():
++    for k,v in cfragment_deps.items():
++        enabled = "y"
++
++        headers = ""
++        for h in v["headers"]:
++            headers = "%s#include %s\n" %(headers, h)
++
++        source = "%s\nint main(int argc, char **argv){\n %s return 0;\n}" % (headers, v["fragment"])
++        f = tempfile.NamedTemporaryFile(suffix=".c",delete=False)
++        f.write(bytes(source, 'UTF-8'))
++        f.close()
++
++        try:
++            output = "%s-bin" % f.name
++            cmd = "{compiler} {cflags} {src} -o {out}".format(compiler=compiler, cflags=cflags,
++                                                              src=f.name, out=output)
++            subprocess.check_output(cmd, stderr=subprocess.STDOUT,
++                                    shell=True, universal_newlines=True)
++            os.unlink(output)
++        except subprocess.CalledProcessError as e:
++            enabled = "n"
++
++        os.unlink(f.name)
++        kconfig_add(k, enabled)
++
++def header_dep_test():
++    for k,v in header_deps.items():
++        enabled = "y"
++        source = "#include %s\nint main(int argc, char **argv){\n    return 0;\n}" % v
++        f = tempfile.NamedTemporaryFile(suffix=".c",delete=False)
++        f.write(bytes(source, 'UTF-8'))
++        f.close()
++
++        try:
++            output = "%s-bin" % f.name
++            cmd = "{compiler} {cflags} {src} -o {out}".format(compiler=compiler, cflags=cflags,
++                                                              src=f.name, out=output)
++            subprocess.check_output(cmd, stderr=subprocess.STDOUT,
++                                    shell=True, universal_newlines=True)
++            os.unlink(output)
++        except subprocess.CalledProcessError as e:
++            enabled = "n"
++
++        os.unlink(f.name)
++        kconfig_add(k, enabled)
++
++def exec_discover():
++    for k,v in exec_deps.items():
++        path = which(v) or ""
++        
++        line = "%s ?= %s\n" % (k, path)
++        makefile_gen.append(line)
++
++if __name__ == "__main__":
++    kconfig = "Kconfig.gen"
++    makefile = "Makefile.gen"
++
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--compiler", help="The gcc compiler[for headers based tests]", type=str)
++    parser.add_argument("--cflags", help="Additional cflags[for headers based tests]", type=str)
++    parser.add_argument("--kconfig-output", help="The kconfig fragment output file", type=str)
++    parser.add_argument("--makefile-output", help="The makefile fragment output file", type=str)
++
++    args = parser.parse_args()
++
++    if (args.compiler):
++        compiler = args.compiler
++
++    if (args.cflags):
++        cflags = args.cflags
++
++    if (args.kconfig_output):
++        kconfig = args.kconfig_output
++
++    pkg_config_discover()
++    header_dep_test()
++    fragment_dep_test()
++    exec_discover()
++    python_dep_test()
++
++    fragment = ""
++    for i in kconfig_gen:
++        fragment += "%s\n" % i
++
++    f = open(kconfig, mode="w+")
++    f.write(fragment)
++    f.close()
++
++    fragment = ""
++    for i in makefile_gen:
++        fragment += "%s\n" % i
++
++    f = open(makefile, mode="w+")
++    f.write(fragment)
++    f.close()
+diff --git a/data/scripts/suite.py b/data/scripts/suite.py
+new file mode 100755
+index 00000000..d05f04fd
+--- /dev/null
++++ b/data/scripts/suite.py
+@@ -0,0 +1,150 @@
++#!/usr/bin/env python3
++
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++from multiprocessing import Manager
++from threading import Thread
++import argparse
++import subprocess
++
++WARN = '\033[93m'
++PASS = '\033[92m'
++FAIL = '\033[31m'
++ENDC = '\033[0m'
++
++STATUS_COLOR = [FAIL, PASS]
++STATUS_TAG = ["FAIL", "PASS"]
++
++def run_test_program(cmd, test, stat, log):
++    success = 1
++    print("%sRUNNING: %s%s" % (WARN, ENDC, test))
++    try:
++        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT,
++                                         shell=True, universal_newlines=True)
++        log.append(output)
++    except subprocess.CalledProcessError as e:
++        success = 0
++        log.append(e.output)
++
++    stat[test] = success
++
++    # print out each test's result right away
++    print("%s%s:%s %s" % (STATUS_COLOR[success], STATUS_TAG[success], ENDC, test))
++
++def print_log(log_file, stat, log):
++    output = ""
++    status_cnt = {'FAIL': 0, 'PASS': 0}
++    for k,v in sorted(stat.items()):
++        curr_status = STATUS_TAG[v]
++        status_cnt[curr_status] = status_cnt[curr_status] + 1
++
++    output += "============================================================================\n"
++    output += "Testsuite summary\n"
++    output += "============================================================================\n"
++    output += "# TOTAL: %d\n" % len(stat)
++    output += "# SUCCESS: %d\n" % status_cnt["PASS"]
++    output += "# FAIL: %d\n" % status_cnt["FAIL"]
++    output += "============================================================================\n"
++    output += "See %s\n" % log_file
++    output += "============================================================================\n"
++
++    # show the stat in the stdout
++    print(output)
++
++    log_output = ""
++    f = open(log_file, mode="w+")
++    for i in log:
++        log_output += "%s\n" % i
++    f.write(log_output)
++    f.close()
++
++def run_valgrind_test(args):
++    manager = Manager()
++    common_args = "--error-exitcode=1 --num-callers=30"
++    valgrind_tools = {
++        'memcheck': '--leak-check=full --show-reachable=no',
++        'helgrind': '--history-level=approx',
++        'drd': None,
++        'exp-sgcheck': None,
++    }
++
++    for k,v in valgrind_tools.items():
++        stat = manager.dict()
++        log = manager.list()
++        threads = []
++
++        for i in args.tests.split():
++            cmd = "{valgrind} {test_path} {supp} --tool={tool} {tool_args} {common}". \
++                  format(valgrind=args.valgrind, test_path=i, supp=args.valgrind_supp, \
++                         tool=k, tool_args=v, common=common_args)
++            t = Thread(target=run_test_program, args=(cmd, i, stat, log,))
++            t.start()
++            threads.append(t)
++
++        for t in threads:
++            t.join()
++
++        print_log("test-suite-%s.log" % k, stat, log)
++
++def run_test(args):
++    manager = Manager()
++    stat = manager.dict()
++    log = manager.list()
++    threads = []
++
++    for i in args.tests.split():
++        t = Thread(target=run_test_program, args=(i, i, stat, log,))
++        t.start()
++        threads.append(t)
++
++    for t in threads:
++        t.join()
++
++    print_log("test-suite.log", stat, log)
++
++def run_suite(args):
++    if args.valgrind:
++        run_valgrind_test(args)
++    else:
++        run_test(args)
++
++if __name__ == "__main__":
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--tests", help="List of tests to run", type=str)
++    parser.add_argument("--valgrind", help="Path to valgrind, if provided " \
++                        "the tests are run with it", type=str)
++    parser.add_argument("--valgrind-supp", help="Path to valgrind's suppression file", type=str)
++
++    args = parser.parse_args()
++    if args.valgrind_supp:
++        args.valgrind_supp = "--suppressions=%s" % args.valgrind_supp
++
++    run_suite(args)
+diff --git a/m4/.gitignore b/m4/.gitignore
+deleted file mode 100644
+index 38066ddf..00000000
+--- a/m4/.gitignore
++++ /dev/null
+@@ -1,5 +0,0 @@
+-libtool.m4
+-ltoptions.m4
+-ltsugar.m4
+-ltversion.m4
+-lt~obsolete.m4
+diff --git a/m4/attributes.m4 b/m4/attributes.m4
+deleted file mode 100644
+index bfdb50fe..00000000
+--- a/m4/attributes.m4
++++ /dev/null
+@@ -1,306 +0,0 @@
+-dnl Macros to check the presence of generic (non-typed) symbols.
+-dnl Copyright (c) 2006-2008 Diego Petten <flameeyes@gmail.com>
+-dnl Copyright (c) 2006-2008 xine project
+-dnl Copyright (c) 2012 Lucas De Marchi <lucas.de.marchi@gmail.com>
+-dnl
+-dnl This program is free software; you can redistribute it and/or modify
+-dnl it under the terms of the GNU General Public License as published by
+-dnl the Free Software Foundation; either version 2, or (at your option)
+-dnl any later version.
+-dnl
+-dnl This program is distributed in the hope that it will be useful,
+-dnl but WITHOUT ANY WARRANTY; without even the implied warranty of
+-dnl MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-dnl GNU General Public License for more details.
+-dnl
+-dnl You should have received a copy of the GNU General Public License
+-dnl along with this program; if not, write to the Free Software
+-dnl Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+-dnl 02110-1301, USA.
+-dnl
+-dnl As a special exception, the copyright owners of the
+-dnl macro gives unlimited permission to copy, distribute and modify the
+-dnl configure scripts that are the output of Autoconf when processing the
+-dnl Macro. You need not follow the terms of the GNU General Public
+-dnl License when using or distributing such scripts, even though portions
+-dnl of the text of the Macro appear in them. The GNU General Public
+-dnl License (GPL) does govern all other use of the material that
+-dnl constitutes the Autoconf Macro.
+-dnl
+-dnl This special exception to the GPL applies to versions of the
+-dnl Autoconf Macro released by this project. When you make and
+-dnl distribute a modified version of the Autoconf Macro, you may extend
+-dnl this special exception to the GPL to apply to your modified version as
+-dnl well.
+-
+-dnl Check if FLAG in ENV-VAR is supported by compiler and append it
+-dnl to WHERE-TO-APPEND variable. Note that we invert -Wno-* checks to
+-dnl -W* as gcc cannot test for negated warnings.
+-dnl CC_CHECK_FLAG_APPEND([WHERE-TO-APPEND], [ENV-VAR], [FLAG])
+-
+-AC_DEFUN([CC_CHECK_FLAG_APPEND], [
+-  AC_CACHE_CHECK([if $CC supports flag $3 in envvar $2],
+-                 AS_TR_SH([cc_cv_$2_$3]),
+-                 [eval "AS_TR_SH([cc_save_$2])='${$2}'"
+-                  eval "AS_TR_SH([$2])='-Werror `echo "$3" | sed 's/^-Wno-/-W/'`'"
+-                  AC_LINK_IFELSE([AC_LANG_SOURCE([int main(void) { return 0; } ])],
+-                          [eval "AS_TR_SH([cc_cv_$2_$3])='yes'"],
+-                          [eval "AS_TR_SH([cc_cv_$2_$3])='no'"])
+-                  eval "AS_TR_SH([$2])='$cc_save_$2'"])
+-
+-  AS_IF([eval test x$]AS_TR_SH([cc_cv_$2_$3])[ = xyes],
+-        [eval "$1='${$1} $3'"])
+-])
+-
+-dnl CC_CHECK_FLAGS_APPEND([WHERE-TO-APPEND], [ENV-VAR], [FLAG1 FLAG2])
+-AC_DEFUN([CC_CHECK_FLAGS_APPEND], [
+-  for flag in $3; do
+-    CC_CHECK_FLAG_APPEND($1, $2, $flag)
+-  done
+-])
+-
+-dnl Check if the flag is supported by linker (cacheable)
+-dnl CC_CHECK_LDFLAGS([FLAG], [ACTION-IF-FOUND],[ACTION-IF-NOT-FOUND])
+-
+-
+-dnl Check if the flag is supported by linker
+-dnl CC_CHECK_LDFLAGS_SILENT([FLAG], [ACTION-IF-FOUND],[ACTION-IF-NOT-FOUND])
+-AC_DEFUN([CC_CHECK_LDFLAGS_SILENT], [
+-  AC_CACHE_VAL(AS_TR_SH([cc_cv_ldflags_$1]),
+-    [ac_save_LDFLAGS="$LDFLAGS"
+-     LDFLAGS="$LDFLAGS $1"
+-     AC_LINK_IFELSE([AC_LANG_SOURCE([int main() { return 1; }])],
+-       [eval "AS_TR_SH([cc_cv_ldflags_$1])='yes'"],
+-       [eval "AS_TR_SH([cc_cv_ldflags_$1])="])
+-     LDFLAGS="$ac_save_LDFLAGS"
+-    ])
+-
+-  AS_IF([eval test x$]AS_TR_SH([cc_cv_ldflags_$1])[ = xyes],
+-    [$2], [$3])
+-])
+-
+-dnl Check if the flag is supported by linker (cacheable)
+-dnl CC_CHECK_LDFLAGS([FLAG], [ACTION-IF-FOUND],[ACTION-IF-NOT-FOUND])
+-
+-AC_DEFUN([CC_CHECK_LDFLAGS], [
+-  AC_CACHE_CHECK([if $CC supports $1 flag],
+-    AS_TR_SH([cc_cv_ldflags_$1]),
+-    CC_CHECK_LDFLAGS_SILENT([$1]) dnl Don't execute actions here!
+-  )
+-
+-  AS_IF([eval test x$]AS_TR_SH([cc_cv_ldflags_$1])[ = xyes],
+-    [$2], [$3])
+-])
+-
+-dnl define the LDFLAGS_NOUNDEFINED variable with the correct value for
+-dnl the current linker to avoid undefined references in a shared object.
+-AC_DEFUN([CC_NOUNDEFINED], [
+-  dnl We check $host for which systems to enable this for.
+-  AC_REQUIRE([AC_CANONICAL_HOST])
+-
+-  case $host in
+-     dnl FreeBSD (et al.) does not complete linking for shared objects when pthreads
+-     dnl are requested, as different implementations are present; to avoid problems
+-     dnl use -Wl,-z,defs only for those platform not behaving this way.
+-     *-freebsd* | *-openbsd*) ;;
+-     *)
+-        dnl First of all check for the --no-undefined variant of GNU ld. This allows
+-        dnl for a much more readable command line, so that people can understand what
+-        dnl it does without going to look for what the heck -z defs does.
+-        for possible_flags in "-Wl,--no-undefined" "-Wl,-z,defs"; do
+-          CC_CHECK_LDFLAGS([$possible_flags], [LDFLAGS_NOUNDEFINED="$possible_flags"])
+-          break
+-        done
+-        ;;
+-  esac
+-
+-  AC_SUBST([LDFLAGS_NOUNDEFINED])
+-])
+-
+-dnl Check for a -Werror flag or equivalent. -Werror is the GCC
+-dnl and ICC flag that tells the compiler to treat all the warnings
+-dnl as fatal. We usually need this option to make sure that some
+-dnl constructs (like attributes) are not simply ignored.
+-dnl
+-dnl Other compilers don't support -Werror per se, but they support
+-dnl an equivalent flag:
+-dnl  - Sun Studio compiler supports -errwarn=%all
+-AC_DEFUN([CC_CHECK_WERROR], [
+-  AC_CACHE_CHECK(
+-    [for $CC way to treat warnings as errors],
+-    [cc_cv_werror],
+-    [CC_CHECK_CFLAGS_SILENT([-Werror], [cc_cv_werror=-Werror],
+-      [CC_CHECK_CFLAGS_SILENT([-errwarn=%all], [cc_cv_werror=-errwarn=%all])])
+-    ])
+-])
+-
+-AC_DEFUN([CC_CHECK_ATTRIBUTE], [
+-  AC_REQUIRE([CC_CHECK_WERROR])
+-  AC_CACHE_CHECK([if $CC supports __attribute__(( ifelse([$2], , [$1], [$2]) ))],
+-    AS_TR_SH([cc_cv_attribute_$1]),
+-    [ac_save_CFLAGS="$CFLAGS"
+-     CFLAGS="$CFLAGS $cc_cv_werror"
+-     AC_COMPILE_IFELSE([AC_LANG_SOURCE([$3])],
+-       [eval "AS_TR_SH([cc_cv_attribute_$1])='yes'"],
+-       [eval "AS_TR_SH([cc_cv_attribute_$1])='no'"])
+-     CFLAGS="$ac_save_CFLAGS"
+-    ])
+-
+-  AS_IF([eval test x$]AS_TR_SH([cc_cv_attribute_$1])[ = xyes],
+-    [AC_DEFINE(
+-       AS_TR_CPP([SUPPORT_ATTRIBUTE_$1]), 1,
+-         [Define this if the compiler supports __attribute__(( ifelse([$2], , [$1], [$2]) ))]
+-         )
+-     $4],
+-    [$5])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_CONSTRUCTOR], [
+-  CC_CHECK_ATTRIBUTE(
+-    [constructor],,
+-    [void __attribute__((constructor)) ctor() { int a; }],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_FORMAT], [
+-  CC_CHECK_ATTRIBUTE(
+-    [format], [format(printf, n, n)],
+-    [void __attribute__((format(printf, 1, 2))) printflike(const char *fmt, ...) { fmt = (void *)0; }],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_FORMAT_ARG], [
+-  CC_CHECK_ATTRIBUTE(
+-    [format_arg], [format_arg(printf)],
+-    [char *__attribute__((format_arg(1))) gettextlike(const char *fmt) { fmt = (void *)0; }],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_VISIBILITY], [
+-  CC_CHECK_ATTRIBUTE(
+-    [visibility_$1], [visibility("$1")],
+-    [void __attribute__((visibility("$1"))) $1_function() { }],
+-    [$2], [$3])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_NONNULL], [
+-  CC_CHECK_ATTRIBUTE(
+-    [nonnull], [nonnull()],
+-    [void __attribute__((nonnull())) some_function(void *foo, void *bar) { foo = (void*)0; bar = (void*)0; }],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_UNUSED], [
+-  CC_CHECK_ATTRIBUTE(
+-    [unused], ,
+-    [void some_function(void *foo, __attribute__((unused)) void *bar);],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_SENTINEL], [
+-  CC_CHECK_ATTRIBUTE(
+-    [sentinel], ,
+-    [void some_function(void *foo, ...) __attribute__((sentinel));],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_DEPRECATED], [
+-  CC_CHECK_ATTRIBUTE(
+-    [deprecated], ,
+-    [void some_function(void *foo, ...) __attribute__((deprecated));],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_ALIAS], [
+-  CC_CHECK_ATTRIBUTE(
+-    [alias], [weak, alias],
+-    [void other_function(void *foo) { }
+-     void some_function(void *foo) __attribute__((weak, alias("other_function")));],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_MALLOC], [
+-  CC_CHECK_ATTRIBUTE(
+-    [malloc], ,
+-    [void * __attribute__((malloc)) my_alloc(int n);],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_PACKED], [
+-  CC_CHECK_ATTRIBUTE(
+-    [packed], ,
+-    [struct astructure { char a; int b; long c; void *d; } __attribute__((packed));],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_CONST], [
+-  CC_CHECK_ATTRIBUTE(
+-    [const], ,
+-    [int __attribute__((const)) twopow(int n) { return 1 << n; } ],
+-    [$1], [$2])
+-])
+-
+-AC_DEFUN([CC_FLAG_VISIBILITY], [
+-  AC_REQUIRE([CC_CHECK_WERROR])
+-  AC_CACHE_CHECK([if $CC supports -fvisibility=hidden],
+-    [cc_cv_flag_visibility],
+-    [cc_flag_visibility_save_CFLAGS="$CFLAGS"
+-     CFLAGS="$CFLAGS $cc_cv_werror"
+-     CC_CHECK_CFLAGS_SILENT([-fvisibility=hidden],
+-        cc_cv_flag_visibility='yes',
+-        cc_cv_flag_visibility='no')
+-     CFLAGS="$cc_flag_visibility_save_CFLAGS"])
+-
+-  AS_IF([test "x$cc_cv_flag_visibility" = "xyes"],
+-    [AC_DEFINE([SUPPORT_FLAG_VISIBILITY], 1,
+-       [Define this if the compiler supports the -fvisibility flag])
+-     $1],
+-    [$2])
+-])
+-
+-AC_DEFUN([CC_CHECK_FUNC_BUILTIN], [
+-  m4_pushdef([UPNAME], m4_translit([$1], [-a-z], [_A-Z]))
+-  AC_CACHE_CHECK([if compiler has $1 builtin function],
+-    [cc_cv_have_$1],
+-    [AC_LINK_IFELSE([AC_LANG_PROGRAM([], [
+-       m4_case([$1],
+-         [__builtin_clz], [$1(0)],
+-         [__builtin_types_compatible_p], [$1(int, int)],
+-         [__builtin_uaddl_overflow], [$1(0UL, 0UL, (void*)0)],
+-         [__builtin_uaddll_overflow], [$1(0ULL, 0ULL, (void*)0)],
+-         [__builtin_expect], [$1(0, 0)]
+-       )])],
+-       [cc_cv_have_$1=yes],
+-       [cc_cv_have_$1=no])])
+-
+-  AS_IF([test "x$cc_cv_have_$1" = "xyes"],
+-    [AC_DEFINE([HAVE_]m4_defn([UPNAME]), 1, [Define to 1 if compiler has $1() builtin function])
+-     $2],
+-    [AS_IF([test "x$3" = "x"], [AC_MSG_ERROR([*** builtin function not found: $1()])],
+-           [AC_DEFINE([HAVE_]m4_defn([UPNAME]), 0)
+-            $3])]
+-  )
+-  m4_popdef([UPNAME])
+-])
+-
+-AC_DEFUN([CC_ATTRIBUTE_ALIGNED], [
+-  AC_REQUIRE([CC_CHECK_WERROR])
+-  AC_CACHE_CHECK([highest __attribute__ ((aligned ())) supported],
+-    [cc_cv_attribute_aligned],
+-    [ac_save_CFLAGS="$CFLAGS"
+-     CFLAGS="$CFLAGS $cc_cv_werror"
+-     for cc_attribute_align_try in 64 32 16 8 4 2; do
+-        AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+-          int main() {
+-            static char c __attribute__ ((aligned($cc_attribute_align_try))) = 0;
+-            return c;
+-          }])], [cc_cv_attribute_aligned=$cc_attribute_align_try; break])
+-     done
+-     CFLAGS="$ac_save_CFLAGS"
+-  ])
+-
+-  if test "x$cc_cv_attribute_aligned" != "x"; then
+-     AC_DEFINE_UNQUOTED([ATTRIBUTE_ALIGNED_MAX], [$cc_cv_attribute_aligned],
+-       [Define the highest alignment supported])
+-  fi
+-])
+diff --git a/m4/ax_valgrind_check.m4 b/m4/ax_valgrind_check.m4
+deleted file mode 100644
+index 25d5b092..00000000
+--- a/m4/ax_valgrind_check.m4
++++ /dev/null
+@@ -1,181 +0,0 @@
+-# ===========================================================================
+-#     http://www.gnu.org/software/autoconf-archive/ax_valgrind_check.html
+-# ===========================================================================
+-#
+-# SYNOPSIS
+-#
+-#   AX_VALGRIND_CHECK()
+-#
+-# DESCRIPTION
+-#
+-#   Checks whether Valgrind is present and, if so, allows running `make
+-#   check` under a variety of Valgrind tools to check for memory and
+-#   threading errors.
+-#
+-#   Defines VALGRIND_CHECK_RULES which should be substituted in your
+-#   Makefile; and $enable_valgrind which can be used in subsequent configure
+-#   output. VALGRIND_ENABLED is defined and substituted, and corresponds to
+-#   the value of the --enable-valgrind option, which defaults to being
+-#   enabled if Valgrind is installed and disabled otherwise.
+-#
+-#   If unit tests are written using a shell script and automake's
+-#   LOG_COMPILER system, the $(VALGRIND) variable can be used within the
+-#   shell scripts to enable Valgrind, as described here:
+-#
+-#     https://www.gnu.org/software/gnulib/manual/html_node/Running-self_002dtests-under-valgrind.html
+-#
+-#   Usage example:
+-#
+-#   configure.ac:
+-#
+-#     AX_VALGRIND_CHECK
+-#
+-#   Makefile.am:
+-#
+-#     @VALGRIND_CHECK_RULES@
+-#     VALGRIND_SUPPRESSIONS_FILES = my-project.supp
+-#     EXTRA_DIST = my-project.supp
+-#
+-#   This results in a "check-valgrind" rule being added to any Makefile.am
+-#   which includes "@VALGRIND_CHECK_RULES@" (assuming the module has been
+-#   configured with --enable-valgrind). Running `make check-valgrind` in
+-#   that directory will run the module's test suite (`make check`) once for
+-#   each of the available Valgrind tools (out of memcheck, helgrind, drd and
+-#   sgcheck), and will output results to test-suite-$toolname.log for each.
+-#   The target will succeed if there are zero errors and fail otherwise.
+-#
+-#   The macro supports running with and without libtool.
+-#
+-# LICENSE
+-#
+-#   Copyright (c) 2014, 2015 Philip Withnall <philip.withnall@collabora.co.uk>
+-#
+-#   Copying and distribution of this file, with or without modification, are
+-#   permitted in any medium without royalty provided the copyright notice
+-#   and this notice are preserved.  This file is offered as-is, without any
+-#   warranty.
+-
+-#serial 3
+-
+-AC_DEFUN([AX_VALGRIND_CHECK],[
+-	dnl Check for --enable-valgrind
+-	AC_MSG_CHECKING([whether to enable Valgrind on the unit tests])
+-	AC_ARG_ENABLE([valgrind],
+-	              [AS_HELP_STRING([--enable-valgrind], [Whether to enable Valgrind on the unit tests])],
+-	              [enable_valgrind=$enableval],[enable_valgrind=])
+-
+-	# Check for Valgrind.
+-	AC_CHECK_PROG([VALGRIND],[valgrind],[valgrind])
+-
+-	AS_IF([test "$enable_valgrind" = "yes" -a "$VALGRIND" = ""],[
+-		AC_MSG_ERROR([Could not find valgrind; either install it or reconfigure with --disable-valgrind])
+-	])
+-	AS_IF([test "$enable_valgrind" != "no"],[enable_valgrind=yes])
+-
+-	AM_CONDITIONAL([VALGRIND_ENABLED],[test "$enable_valgrind" = "yes"])
+-	AC_SUBST([VALGRIND_ENABLED],[$enable_valgrind])
+-	AC_MSG_RESULT([$enable_valgrind])
+-
+-	# Check for Valgrind tools we care about.
+-	m4_define([valgrind_tool_list],[[memcheck], [helgrind], [drd], [exp-sgcheck]])
+-
+-	AS_IF([test "$VALGRIND" != ""],[
+-		m4_foreach([vgtool],[valgrind_tool_list],[
+-			m4_define([vgtooln],AS_TR_SH(vgtool))
+-			m4_define([ax_cv_var],[ax_cv_valgrind_tool_]vgtooln)
+-			AC_CACHE_CHECK([for Valgrind tool ]vgtool,ax_cv_var,[
+-				ax_cv_var=
+-				AS_IF([`$VALGRIND --tool=vgtool --help 2&>/dev/null`],[
+-					ax_cv_var="vgtool"
+-				])
+-			])
+-
+-			AC_SUBST([VALGRIND_HAVE_TOOL_]vgtooln,[$ax_cv_var])
+-		])
+-	])
+-
+-VALGRIND_CHECK_RULES='
+-# Valgrind check
+-#
+-# Optional:
+-#  - VALGRIND_SUPPRESSIONS_FILES: Space-separated list of Valgrind suppressions
+-#    files to load. (Default: empty)
+-#  - VALGRIND_FLAGS: General flags to pass to all Valgrind tools.
+-#    (Default: --num-callers=30)
+-#  - VALGRIND_$toolname_FLAGS: Flags to pass to Valgrind $toolname (one of:
+-#    memcheck, helgrind, drd, sgcheck). (Default: various)
+-
+-# Optional variables
+-VALGRIND_SUPPRESSIONS ?= $(addprefix --suppressions=,$(VALGRIND_SUPPRESSIONS_FILES))
+-VALGRIND_FLAGS ?= --num-callers=30
+-VALGRIND_memcheck_FLAGS ?= --leak-check=full --show-reachable=no
+-VALGRIND_helgrind_FLAGS ?= --history-level=approx
+-VALGRIND_drd_FLAGS ?=
+-VALGRIND_sgcheck_FLAGS ?=
+-
+-# Internal use
+-valgrind_tools = memcheck helgrind drd sgcheck
+-valgrind_log_files = $(addprefix test-suite-,$(addsuffix .log,$(valgrind_tools)))
+-
+-valgrind_memcheck_flags = --tool=memcheck $(VALGRIND_memcheck_FLAGS)
+-valgrind_helgrind_flags = --tool=helgrind $(VALGRIND_helgrind_FLAGS)
+-valgrind_drd_flags = --tool=drd $(VALGRIND_drd_FLAGS)
+-valgrind_sgcheck_flags = --tool=exp-sgcheck $(VALGRIND_sgcheck_FLAGS)
+-
+-valgrind_quiet = $(valgrind_quiet_$(V))
+-valgrind_quiet_ = $(valgrind_quiet_$(AM_DEFAULT_VERBOSITY))
+-valgrind_quiet_0 = --quiet
+-
+-# Support running with and without libtool.
+-ifneq ($(LIBTOOL),)
+-valgrind_lt = $(LIBTOOL) $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=execute
+-else
+-valgrind_lt =
+-endif
+-
+-# Use recursive makes in order to ignore errors during check
+-check-valgrind:
+-ifeq ($(VALGRIND_ENABLED),yes)
+-	-$(foreach tool,$(valgrind_tools), \
+-		$(if $(VALGRIND_HAVE_TOOL_$(tool))$(VALGRIND_HAVE_TOOL_exp_$(tool)), \
+-			$(MAKE) $(AM_MAKEFLAGS) -k check-valgrind-tool VALGRIND_TOOL=$(tool); \
+-		) \
+-	)
+-else
+-	@echo "Need to reconfigure with --enable-valgrind"
+-endif
+-
+-# Valgrind running
+-VALGRIND_TESTS_ENVIRONMENT = \
+-	$(TESTS_ENVIRONMENT) \
+-	env VALGRIND=$(VALGRIND) \
+-	G_SLICE=always-malloc,debug-blocks \
+-	G_DEBUG=fatal-warnings,fatal-criticals,gc-friendly
+-
+-VALGRIND_LOG_COMPILER = \
+-	$(valgrind_lt) \
+-	$(VALGRIND) $(VALGRIND_SUPPRESSIONS) --error-exitcode=1 $(VALGRIND_FLAGS)
+-
+-check-valgrind-tool:
+-ifeq ($(VALGRIND_ENABLED),yes)
+-	$(MAKE) check-TESTS \
+-		TESTS_ENVIRONMENT="$(VALGRIND_TESTS_ENVIRONMENT)" \
+-		LOG_COMPILER="$(VALGRIND_LOG_COMPILER)" \
+-		LOG_FLAGS="$(valgrind_$(VALGRIND_TOOL)_flags)" \
+-		TEST_SUITE_LOG=test-suite-$(VALGRIND_TOOL).log
+-else
+-	@echo "Need to reconfigure with --enable-valgrind"
+-endif
+-
+-DISTCHECK_CONFIGURE_FLAGS ?=
+-DISTCHECK_CONFIGURE_FLAGS += --disable-valgrind
+-
+-MOSTLYCLEANFILES ?=
+-MOSTLYCLEANFILES += $(valgrind_log_files)
+-
+-.PHONY: check-valgrind check-valgrind-tool
+-'
+-
+-	AC_SUBST([VALGRIND_CHECK_RULES])
+-	m4_ifdef([_AM_SUBST_NOTMAKE], [_AM_SUBST_NOTMAKE([VALGRIND_CHECK_RULES])])
+-])
+diff --git a/m4/dolt.m4 b/m4/dolt.m4
+deleted file mode 100644
+index 775a5725..00000000
+--- a/m4/dolt.m4
++++ /dev/null
+@@ -1,181 +0,0 @@
+-dnl dolt, a replacement for libtool
+-dnl Copyright  2007-2010 Josh Triplett <josh@joshtriplett.org>
+-dnl Copying and distribution of this file, with or without modification,
+-dnl are permitted in any medium without royalty provided the copyright
+-dnl notice and this notice are preserved.
+-dnl
+-dnl To use dolt, invoke the DOLT macro immediately after the libtool macros.
+-dnl Optionally, copy this file into acinclude.m4, to avoid the need to have it
+-dnl installed when running autoconf on your project.
+-
+-AC_DEFUN([DOLT], [
+-AC_REQUIRE([AC_CANONICAL_HOST])
+-# dolt, a replacement for libtool
+-# Josh Triplett <josh@freedesktop.org>
+-AC_PATH_PROG([DOLT_BASH], [bash])
+-AC_MSG_CHECKING([if dolt supports this host])
+-dolt_supported=yes
+-AS_IF([test x$DOLT_BASH = x], [dolt_supported=no])
+-AS_IF([test x$GCC != xyes], [dolt_supported=no])
+-
+-AS_CASE([$host],
+-    [*-*-linux*|*-*-freebsd*], [pic_options='-fPIC'],
+-    [*-apple-darwin*],         [pic_options='-fno-common'],
+-    [*mingw*|*nacl*],          [pic_options='']
+-    [*],                       [dolt_supported=no]
+-)
+-AS_IF([test x$dolt_supported = xno], [
+-    AC_MSG_RESULT([no, falling back to libtool])
+-    LTCOMPILE='$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(COMPILE)'
+-    LTCXXCOMPILE='$(LIBTOOL) $(AM_V_lt) --tag=CXX $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CXXCOMPILE)'
+-    m4_pattern_allow([AM_V_lt])
+-], [
+-    AC_MSG_RESULT([yes, replacing libtool])
+-
+-dnl Start writing out doltcompile.
+-    cat <<__DOLTCOMPILE__EOF__ >doltcompile
+-#!$DOLT_BASH
+-__DOLTCOMPILE__EOF__
+-    cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-args=("$[]@")
+-for ((arg=0; arg<${#args@<:@@@:>@}; arg++)) ; do
+-    if test x"${args@<:@$arg@:>@}" = x-o ; then
+-        objarg=$((arg+1))
+-        break
+-    fi
+-done
+-if test x$objarg = x ; then
+-    echo 'Error: no -o on compiler command line' 1>&2
+-    exit 1
+-fi
+-lo="${args@<:@$objarg@:>@}"
+-obj="${lo%.lo}"
+-if test x"$lo" = x"$obj" ; then
+-    echo "Error: libtool object file name \"$lo\" does not end in .lo" 1>&2
+-    exit 1
+-fi
+-objbase="${obj##*/}"
+-__DOLTCOMPILE__EOF__
+-
+-dnl Write out shared compilation code.
+-    if test x$enable_shared = xyes; then
+-        cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-libobjdir="${obj%$objbase}.libs"
+-if test ! -d "$libobjdir" ; then
+-    mkdir_out="$(mkdir "$libobjdir" 2>&1)"
+-    mkdir_ret=$?
+-    if test "$mkdir_ret" -ne 0 && test ! -d "$libobjdir" ; then
+-	echo "$mkdir_out" 1>&2
+-        exit $mkdir_ret
+-    fi
+-fi
+-pic_object="$libobjdir/$objbase.o"
+-args@<:@$objarg@:>@="$pic_object"
+-__DOLTCOMPILE__EOF__
+-    cat <<__DOLTCOMPILE__EOF__ >>doltcompile
+-    pic_options="$pic_options"
+-    if test x\$passthrough = xtrue; then
+-        pic_options=""
+-    fi
+-__DOLTCOMPILE__EOF__
+-    cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-"${args@<:@@@:>@}" $pic_options -DPIC || exit $?
+-__DOLTCOMPILE__EOF__
+-    fi
+-
+-dnl Write out static compilation code.
+-dnl Avoid duplicate compiler output if also building shared objects.
+-    if test x$enable_static = xyes; then
+-        cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-non_pic_object="$obj.o"
+-args@<:@$objarg@:>@="$non_pic_object"
+-__DOLTCOMPILE__EOF__
+-        if test x$enable_shared = xyes; then
+-            cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-"${args@<:@@@:>@}" >/dev/null 2>&1 || exit $?
+-__DOLTCOMPILE__EOF__
+-        else
+-            cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-"${args@<:@@@:>@}" || exit $?
+-__DOLTCOMPILE__EOF__
+-        fi
+-    fi
+-
+-dnl Write out the code to write the .lo file.
+-dnl The second line of the .lo file must match "^# Generated by .*libtool"
+-    cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-{
+-echo "# $lo - a libtool object file"
+-echo "# Generated by doltcompile, not libtool"
+-__DOLTCOMPILE__EOF__
+-
+-    if test x$enable_shared = xyes; then
+-        cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-echo "pic_object='.libs/${objbase}.o'"
+-__DOLTCOMPILE__EOF__
+-    else
+-        cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-echo pic_object=none
+-__DOLTCOMPILE__EOF__
+-    fi
+-
+-    if test x$enable_static = xyes; then
+-        cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-echo "non_pic_object='${objbase}.o'"
+-__DOLTCOMPILE__EOF__
+-    else
+-        cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-echo non_pic_object=none
+-__DOLTCOMPILE__EOF__
+-    fi
+-
+-    cat <<'__DOLTCOMPILE__EOF__' >>doltcompile
+-} > "$lo"
+-__DOLTCOMPILE__EOF__
+-
+-dnl Done writing out doltcompile; substitute it for libtool compilation.
+-    chmod +x doltcompile
+-    LTCOMPILE='$(top_builddir)/doltcompile $(COMPILE)'
+-    LTCXXCOMPILE='$(top_builddir)/doltcompile $(CXXCOMPILE)'
+-
+-dnl automake ignores LTCOMPILE and LTCXXCOMPILE when it has separate CFLAGS for
+-dnl a target, so write out a libtool wrapper to handle that case.
+-dnl Note that doltlibtool does not handle inferred tags or option arguments
+-dnl without '=', because automake does not use them.
+-    cat <<__DOLTLIBTOOL__EOF__ > doltlibtool
+-#!$DOLT_BASH
+-__DOLTLIBTOOL__EOF__
+-    cat <<'__DOLTLIBTOOL__EOF__' >>doltlibtool
+-top_builddir_slash="${0%%doltlibtool}"
+-: ${top_builddir_slash:=./}
+-args=()
+-modeok=false
+-tagok=false
+-for arg in "$[]@"; do
+-    case "$arg" in
+-        --mode=compile) modeok=true ;;
+-        --tag=CC|--tag=CXX) tagok=true ;;
+-        --tag=disable-static) tagok=true ;;
+-        --tag=ASM|--tag=YASM) tagok=true; passthrough=true;;
+-        --silent|--quiet) ;;
+-        *) args@<:@${#args[@]}@:>@="$arg" ;;
+-    esac
+-done
+-if $modeok && $tagok ; then
+-    . ${top_builddir_slash}doltcompile "${args@<:@@@:>@}"
+-else
+-    exec ${top_builddir_slash}libtool "$[]@"
+-fi
+-__DOLTLIBTOOL__EOF__
+-
+-dnl Done writing out doltlibtool; substitute it for libtool.
+-    chmod +x doltlibtool
+-    LIBTOOL='$(top_builddir)/doltlibtool'
+-
+-DOLT_CLEANFILES="doltlibtool doltcompile"
+-AC_SUBST(DOLT_CLEANFILES)
+-])
+-AC_SUBST(LTCOMPILE)
+-AC_SUBST(LTCXXCOMPILE)
+-# end dolt
+-])
+diff --git a/m4/flowmodules.m4 b/m4/flowmodules.m4
+deleted file mode 100644
+index 976c104e..00000000
+--- a/m4/flowmodules.m4
++++ /dev/null
+@@ -1,90 +0,0 @@
+-dnl SOL_FLOW_MODULE([NAME], [DEFAULT], [CHECKS_IF_ENABLED])
+-AC_DEFUN([SOL_FLOW_MODULE],
+-[dnl
+-m4_pushdef([DOWNNAME], m4_translit([$1], [-A-Z], [_a-z]))dnl
+-m4_pushdef([UPNAME], m4_translit([$1], [-a-z], [_A-Z]))dnl
+-        AC_ARG_WITH([flow-module-]$1,
+-                AS_HELP_STRING([--with-flow-module-]$1[=OPTION],
+-                        [choose how to build flow module for `$1', options: `yes', `no' or `builtin']),
+-                        [], [with_flow_module_]m4_defn([DOWNNAME])[=$2])
+-
+-        strprefix=""
+-        AC_MSG_CHECKING([whenever `$1' flow module is to be built])
+-        AC_MSG_RESULT([${with_flow_module_[]m4_defn([DOWNNAME])}])
+-        case "${with_flow_module_[]m4_defn([DOWNNAME])}" in
+-             yes)
+-                strprefix="+"
+-                if test "${enable_dynamic_modules}" = "no"; then
+-                    AC_MSG_WARN([--with-flow-module-]$1[=yes but --disable-dynamic-modules was used. Either --enable-dynamic-modules or use --with-flow-module-]$1[=builtin. Assuming builtin.])
+-                    with_flow_module_[]m4_defn([DOWNNAME])="builtin"
+-                    flow_builtin_modules="$flow_builtin_modules m4_defn([DOWNNAME])"
+-                    strprefix="*"
+-                fi
+-                ;;
+-             no)
+-                strprefix="-"
+-                ;;
+-             builtin)
+-                flow_builtin_modules="$flow_builtin_modules m4_defn([DOWNNAME])"
+-                strprefix="*"
+-                ;;
+-             *)
+-                AC_MSG_ERROR([unsupported option: ${with_flow_module_[]m4_defn([DOWNNAME])}. Must be one of `yes', `no' or `builtin'])
+-                ;;
+-        esac
+-        if test "${with_flow_module_[]m4_defn([DOWNNAME])}" != "no"; then
+-           $3
+-           :
+-        fi
+-        AM_CONDITIONAL([BUILTIN_FLOW_]m4_defn([UPNAME]), [test "${with_flow_module_[]m4_defn([DOWNNAME])}" = "builtin"])
+-        AM_CONDITIONAL([MODULE_FLOW_]m4_defn([UPNAME]), [test "${with_flow_module_[]m4_defn([DOWNNAME])}" = "yes"])
+-        AM_CONDITIONAL([MODULE_OR_BUILTIN_FLOW_]m4_defn([UPNAME]), [test "${with_flow_module_[]m4_defn([DOWNNAME])}" != "no"])
+-        flow_modules="${flow_modules} ${strprefix}$1"
+-m4_popdef([UPNAME])dnl
+-m4_popdef([DOWNNAME])dnl
+-])
+-
+-AC_DEFUN([SOL_FLOW_MODULE_RESOLVER],
+-[dnl
+-m4_pushdef([DOWNNAME], m4_translit([$1], [-A-Z], [_a-z]))dnl
+-m4_pushdef([UPNAME], m4_translit([$1], [-a-z], [_A-Z]))dnl
+-        AC_ARG_ENABLE([flow-module-resolver-]m4_defn([DOWNNAME]),
+-                AS_HELP_STRING([--disable-flow-module-resolver-]m4_defn([DOWNNAME]),
+-                        [disable build of I/O module resolver $4 @<:@default=$2@:>@]),
+-                        [enable_flow_module_resolver_[]m4_defn([DOWNNAME])=${enableval}],
+-                        [enable_flow_module_resolver_[]m4_defn([DOWNNAME])=$2])
+-        $3
+-        AM_CONDITIONAL([BUILD_SOL_FLOW_MODULE_RESOLVER_]m4_defn([UPNAME]), [test "${enable_flow_module_resolver_[]m4_defn([DOWNNAME])}" = "yes"])
+-        if test "${enable_flow_module_resolver_[]m4_defn([DOWNNAME])}" = "yes"; then
+-           flow_module_resolvers="m4_defn([DOWNNAME]) ${flow_module_resolvers}"
+-           SOL_BUILD_FLOW_MODULE_RESOLVER_[]m4_defn([UPNAME])=["#define SOL_BUILD_FLOW_MODULE_RESOLVER_]m4_defn([UPNAME])[ 1"]
+-        fi
+-        AC_SUBST([SOL_BUILD_FLOW_MODULE_RESOLVER_]m4_defn([UPNAME]))
+-m4_popdef([UPNAME])dnl
+-m4_popdef([DOWNNAME])dnl
+-])
+-
+-AC_DEFUN([SOL_FLOW_MODULE_RESOLVER_DEFAULT],
+-[dnl
+-m4_pushdef([DOWNNAME], m4_translit([$1], [-A-Z], [_a-z]))dnl
+-AC_ARG_WITH([flow-module-default-resolver],
+-        AS_HELP_STRING([--with-flow-module-default-resolver=RESOLVER],
+-                [choose default module resolver to use. @<:@default=]m4_defn([DOWNNAME])[@:>@]),
+-                [with_flow_module_default_resolver=${withval}],
+-                [with_flow_module_default_resolver=[]m4_defn([DOWNNAME])])
+-
+-sol_flow_module_resolver_default=""
+-if test "${with_flow_module_default_resolver}" = "none"; then
+-   sol_flow_module_resolver_default="NULL"
+-   AC_MSG_CHECKING([flow-module-default-resolver])
+-   AC_MSG_RESULT([${with_flow_module_default_resolver}])
+-elif echo "${flow_module_resolvers}" | grep -e "${with_flow_module_default_resolver}" >/dev/null 2>/dev/null; then
+-   sol_flow_module_resolver_default="sol_flow_resolver_${with_flow_module_default_resolver}"
+-   AC_MSG_CHECKING([flow-module-default-resolver])
+-   AC_MSG_RESULT([${with_flow_module_default_resolver}])
+-else
+-   AC_MSG_ERROR([unknown or disabled module flow-module-resolver "${with_flow_module_default_resolver}"])
+-fi
+-AC_DEFINE_UNQUOTED([sol_flow_default_resolver], [${sol_flow_module_resolver_default}], [default flow resolver to use])
+-m4_popdef([DOWNNAME])dnl
+-])
+diff --git a/m4/linuxmicromodules.m4 b/m4/linuxmicromodules.m4
+deleted file mode 100644
+index 3c3400eb..00000000
+--- a/m4/linuxmicromodules.m4
++++ /dev/null
+@@ -1,50 +0,0 @@
+-dnl SOL_LINUX_MICRO_MODULE([NAME], [DEFAULT], [INITIAL_SERVICE], [CHECKS_IF_ENABLED])
+-AC_DEFUN([SOL_LINUX_MICRO_MODULE],
+-[dnl
+-m4_pushdef([DOWNNAME], m4_translit([$1], [-A-Z], [_a-z]))dnl
+-m4_pushdef([UPNAME], m4_translit([$1], [-a-z], [_A-Z]))dnl
+-        AC_ARG_WITH([linux-micro-]$1,
+-                AS_HELP_STRING([--with-linux-micro-]$1[=OPTION],
+-                        [choose how to build linux-micro module for `$1', options: `yes', `no' or `builtin']),
+-                        [], [with_linux_micro_[]m4_defn([DOWNNAME])=$2])
+-
+-        strprefix=""
+-        AC_MSG_CHECKING([whenever `$1' linux-micro module is to be built])
+-        AC_MSG_RESULT([${with_linux_micro_[]m4_defn([DOWNNAME])}])
+-        initial_service_suffix=""
+-        case "${with_linux_micro_[]m4_defn([DOWNNAME])}" in
+-             yes)
+-                strprefix="+"
+-                initial_service_suffix="?"
+-                if test "${enable_dynamic_modules}" = "no"; then
+-                    AC_MSG_WARN([--with-linux-micro-]$1[=yes but --disable-dynamic-modules was used. Either --enable-dynamic-modules or use --with-linux-micro-]$1[=builtin. Assuming builtin.])
+-                    with_linux_micro_[]m4_defn([DOWNNAME])="builtin"
+-                    initial_service_suffix=""
+-                    linux_micro_builtin_modules="$linux_micro_builtin_modules m4_defn([DOWNNAME])"
+-                    strprefix="*"
+-                fi
+-                ;;
+-             no)
+-                strprefix="-"
+-                ;;
+-             builtin)
+-                linux_micro_builtin_modules="$linux_micro_builtin_modules m4_defn([DOWNNAME])"
+-                strprefix="*"
+-                ;;
+-             *)
+-                AC_MSG_ERROR([unsupported option: ${with_linux_micro_[]m4_defn([DOWNNAME])}. Must be one of `yes', `no' or `builtin'])
+-                ;;
+-        esac
+-        if test "${with_linux_micro_[]m4_defn([DOWNNAME])}" != "no"; then
+-           $4
+-           :
+-           if test "$3" = "yes"; then
+-              linux_micro_initial_services="${linux_micro_initial_services} $1${initial_service_suffix}"
+-           fi
+-        fi
+-        AM_CONDITIONAL([BUILTIN_PLATFORM_LINUX_MICRO_]m4_defn([UPNAME]), [test "${with_linux_micro_[]m4_defn([DOWNNAME])}" = "builtin"])
+-        AM_CONDITIONAL([MODULE_PLATFORM_LINUX_MICRO_]m4_defn([UPNAME]), [test "${with_linux_micro_[]m4_defn([DOWNNAME])}" = "yes"])
+-        linux_micro_modules="${linux_micro_modules} ${strprefix}$1"
+-m4_popdef([UPNAME])dnl
+-m4_popdef([DOWNNAME])dnl
+-])
+diff --git a/m4/pkg-check-module-with-func.m4 b/m4/pkg-check-module-with-func.m4
+deleted file mode 100644
+index e70cd011..00000000
+--- a/m4/pkg-check-module-with-func.m4
++++ /dev/null
+@@ -1,22 +0,0 @@
+-dnl Macro to check the presence of package with a specific function
+-dnl It combines AC_PKG_CHECK_MODULES() and AC_CHECK_LIB(), correctly
+-dnl overriding CFLAGS and LDFLAGS
+-dnl CC_PKG_CHECK_MODULES_WITH_FUNC(prefix, list-of-modules, library, function, action-if-found
+-dnl                                action-if-not-found)
+-AC_DEFUN([CC_PKG_CHECK_MODULES_WITH_FUNC], [
+-  PKG_CHECK_MODULES([$1], [$2], [
+-    cc_save_CFLAGS="$CFLAGS"
+-    cc_save_LDFLAGS="$LDFLAGS"
+-    CFLAGS="$CFLAGS $$1_CFLAGS"
+-    LDFLAGS="$LDFLAGS $$1_LIBS"
+-
+-    AC_CHECK_LIB([$3], [$4], [$5], [
+-      $1_CFLAGS=""
+-      $1_LDFLAGS=""
+-      $6]
+-    )
+-
+-    CFLAGS="$cc_save_CFLAGS"
+-    LDFLAGS="$cc_save_LDFLAGS"
+-  ], [$6])
+-])
+diff --git a/m4/withbin.m4 b/m4/withbin.m4
+deleted file mode 100644
+index 238e5309..00000000
+--- a/m4/withbin.m4
++++ /dev/null
+@@ -1,37 +0,0 @@
+-
+-dnl Usage: SOL_WITH_BIN(binary, default)
+-dnl Call AC_SUBST(_binary) (_binary is the lowercase of binary, - being transformed into _ by default, or the value set by the user)
+-
+-AC_DEFUN([SOL_WITH_BIN],
+-[
+-
+-m4_pushdef([DOWN], m4_translit([[$1]], [-A-Z], [_a-z]))dnl
+-m4_pushdef([UP], m4_translit([[$1]], [-a-z], [_A-Z]))dnl
+-dnl configure option
+-
+-DOWN=$2
+-
+-AC_ARG_WITH([$1],
+-   [AC_HELP_STRING([--with-$1=PATH], [specify a specific path to ]DOWN[ @<:@default=]DOWN[@:>@])],
+-   [
+-    if [test "x${withval}" = "xno"]; then
+-        DOWN=
+-    elif [test "x${withval}" != "xyes"]; then
+-        DOWN=${withval}
+-        with_[]DOWN="yes"
+-    fi
+-   ],
+-   [with_[]DOWN="yes"])
+-
+-if test "x${with_[]DOWN}" = "xno"; then
+-    AC_MSG_NOTICE(DOWN[ not set])
+-    with_binary_[]m4_defn([DOWN])="no"
+-else
+-    AC_MSG_NOTICE(DOWN[ set to ${DOWN}])
+-    with_binary_[]m4_defn([DOWN])=${DOWN}
+-fi
+-
+-AM_CONDITIONAL(HAVE_[]UP, [test "x${with_[]DOWN}" = "xyes"])
+-AC_SUBST(DOWN)
+-
+-])
+diff --git a/src/bin/sol-fbp-generator/Kconfig b/src/bin/sol-fbp-generator/Kconfig
+new file mode 100644
+index 00000000..74ee6996
+--- /dev/null
++++ b/src/bin/sol-fbp-generator/Kconfig
+@@ -0,0 +1,4 @@
++config FBP_GENERATOR
++	bool "fbp generator"
++	depends on SOCKET_LINUX && FLOW && RESOLVER_CONFFILE && INSPECTOR
++	default y
+diff --git a/src/bin/sol-fbp-generator/Makefile b/src/bin/sol-fbp-generator/Makefile
+new file mode 100644
+index 00000000..7435768f
+--- /dev/null
++++ b/src/bin/sol-fbp-generator/Makefile
+@@ -0,0 +1,2 @@
++bin-$(FBP_GENERATOR) += sol-fbp-generator
++bin-sol-fbp-generator-$(FBP_GENERATOR) := main.c type-store.c
+diff --git a/src/bin/sol-fbp-runner/Kconfig b/src/bin/sol-fbp-runner/Kconfig
+new file mode 100644
+index 00000000..81426bda
+--- /dev/null
++++ b/src/bin/sol-fbp-runner/Kconfig
+@@ -0,0 +1,4 @@
++config FBP_RUNNER
++	bool "fbp runner"
++	depends on SOCKET_LINUX && FLOW && RESOLVER_CONFFILE && INSPECTOR
++	default y
+diff --git a/src/bin/sol-fbp-runner/Makefile b/src/bin/sol-fbp-runner/Makefile
+new file mode 100644
+index 00000000..a1cd11ba
+--- /dev/null
++++ b/src/bin/sol-fbp-runner/Makefile
+@@ -0,0 +1,2 @@
++bin-$(FBP_RUNNER) += sol-fbp-runner
++bin-sol-fbp-runner-$(FBP_RUNNER) := main.c inspector.c runner.c
+diff --git a/src/bin/sol-fbp-to-dot/Kconfig b/src/bin/sol-fbp-to-dot/Kconfig
+new file mode 100644
+index 00000000..d3592df5
+--- /dev/null
++++ b/src/bin/sol-fbp-to-dot/Kconfig
+@@ -0,0 +1,4 @@
++config FBP_TO_DOT
++	bool "fbp-to-dot converter"
++	depends on SOCKET_LINUX && RESOLVER_CONFFILE && INSPECTOR
++	default y
+diff --git a/src/bin/sol-fbp-to-dot/Makefile b/src/bin/sol-fbp-to-dot/Makefile
+new file mode 100644
+index 00000000..7815a1dc
+--- /dev/null
++++ b/src/bin/sol-fbp-to-dot/Makefile
+@@ -0,0 +1,2 @@
++bin-$(FBP_TO_DOT) += sol-fbp-to-dot
++bin-sol-fbp-to-dot-$(FBP_TO_DOT) := main.c
+diff --git a/src/bin/sol-flow-node-types/Kconfig b/src/bin/sol-flow-node-types/Kconfig
+new file mode 100644
+index 00000000..36e36521
+--- /dev/null
++++ b/src/bin/sol-flow-node-types/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPES
++	bool "flow node types"
++	depends on SOCKET_LINUX && RESOLVER_CONFFILE && INSPECTOR
++	default y
+diff --git a/src/bin/sol-flow-node-types/Makefile b/src/bin/sol-flow-node-types/Makefile
+new file mode 100644
+index 00000000..0dc08d45
+--- /dev/null
++++ b/src/bin/sol-flow-node-types/Makefile
+@@ -0,0 +1,2 @@
++bin-$(FLOW_NODE_TYPES) += sol-flow-node-types
++bin-sol-flow-node-types-$(FLOW_NODE_TYPES) := main.c
+diff --git a/src/lib/coap/Kconfig b/src/lib/coap/Kconfig
+new file mode 100644
+index 00000000..73d5dfb6
+--- /dev/null
++++ b/src/lib/coap/Kconfig
+@@ -0,0 +1,3 @@
++config COAP
++	bool "CoAP"
++	default y
+\ No newline at end of file
+diff --git a/src/lib/coap/Makefile b/src/lib/coap/Makefile
+new file mode 100644
+index 00000000..082aaed0
+--- /dev/null
++++ b/src/lib/coap/Makefile
+@@ -0,0 +1,4 @@
++obj-$(COAP) += coap.mod
++
++obj-coap-$(COAP) := coap.o sol-coap.o
++obj-coap-$(COAP) += sol-oic-client.o sol-oic-server.o
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+new file mode 100644
+index 00000000..98ee554d
+--- /dev/null
++++ b/src/lib/common/Kconfig
+@@ -0,0 +1,92 @@
++config CORE
++	bool
++	default y
++
++config PLATFORM_LINUX_COMMON
++	bool
++	default n
++
++choice
++	prompt "Target platform"
++	default PLATFORM_LINUX_MICRO
++	help
++	  The platform of your target.
++
++config PLATFORM_LINUX_MICRO
++	select PLATFORM_LINUX_COMMON
++	bool "micro-linux"
++
++config PLATFORM_RIOTOS
++	bool "riotos"
++
++config PLATFORM_DUMMY
++	bool "dummy"
++	select PLATFORM_LINUX_COMMON
++
++config PLATFORM_SYSTEMD
++	bool "systemd"
++	depends on HAVE_SYSTEMD
++	select USE_SYSTEMD
++	select PLATFORM_LINUX_COMMON
++endchoice
++
++choice
++	prompt "Mainloop"
++	help
++	  The mainloop implementation.
++
++config MAINLOOP_GLIB
++	bool "glib"
++	depends on (PLATFORM_LINUX_MICRO || PLATFORM_SYSTEMD) && HAVE_GLIB
++	select USE_GLIB
++
++config MAINLOOP_POSIX
++	bool "posix"
++	depends on PLATFORM_LINUX_MICRO || PLATFORM_SYSTEMD
++
++config MAINLOOP_RIOTOS
++	bool "riotos"
++	depends on PLATFORM_RIOTOS && HAVE_RIOTOS
++
++endchoice
++
++config LOG
++	bool "Log"
++	default y
++
++choice
++	prompt "Maximum log level"
++	default DEFAULT_LOG_LEVEL_ERROR
++	depends on LOG
++	help
++	  Default log level.
++
++config DEFAULT_LOG_LEVEL_CRITICAL
++	bool "critical"
++
++config DEFAULT_LOG_LEVEL_ERROR
++	bool "error"
++
++config DEFAULT_LOG_LEVEL_WARNING
++	bool "warning"
++
++config DEFAULT_LOG_LEVEL_INFO
++	bool "info"
++
++config DEFAULT_LOG_LEVEL_DEBUG
++	bool "debug"
++endchoice
++
++config INSPECTOR
++	bool "Inspector"
++	default y
++
++config KDBUS
++	bool "Kdbus"
++	depends on (PLATFORM_LINUX_MICRO || PLATFORM_SYSTEMD) && HAVE_SYSTEMD && HAVE_KDBUS
++	default n
++
++config SOCKET_LINUX
++	bool "Linux sockets"
++	depends on PLATFORM_LINUX_MICRO || PLATFORM_SYSTEMD
++	default y
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+new file mode 100644
+index 00000000..e3b23db3
+--- /dev/null
++++ b/src/lib/common/Makefile
+@@ -0,0 +1,21 @@
++obj-$(CORE) += core.mod
++
++obj-core-$(CORE)             := sol-log.o sol-blob.o sol-mainloop.o
++obj-core-$(CORE)             += sol-platform.o sol-types.o sol-platform-detect.o
++
++obj-core-$(KDBUS)            += sol-bus.o
++obj-core-$(KDBUS)-extra-cflags := $(SYSTEMD_CFLAGS)
++
++obj-core-$(MAINLOOP_GLIB)    += sol-mainloop-impl-glib.o
++obj-core-$(MAINLOOP_GLIB)-extra-cflags := $(GLIB_CFLAGS)
++
++obj-core-$(MAINLOOP_POSIX)   += sol-mainloop-impl-posix.o
++obj-core-$(MAINLOOP_RIOTOS)  += sol-mainloop-impl-riot.o
++obj-core-$(PLATFORM_LINUX_MICRO) += sol-log-impl-linux.o sol-platform-impl-linux-micro.o
++obj-core-$(SOCKET_LINUX)     += sol-socket-linux.o
++obj-core-$(PLATFORM_RIOTOS)  += sol-platform-impl-riot.o
++obj-core-$(PLATFORM_DUMMY)   += sol-platform-impl-dummy.o
++obj-core-$(PLATFORM_LINUX_COMMON) += sol-platform-linux-common.o
++
++obj-core-$(PLATFORM_SYSTEMD) += sol-platform-impl-systemd.o
++obj-core-$(PLATFORM_SYSTEMD)-extra-cflags := $(SYSTEMD_CFLAGS) $(UDEV_CFLAGS)
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+new file mode 100644
+index 00000000..7694ba09
+--- /dev/null
++++ b/src/lib/flow/Kconfig
+@@ -0,0 +1,11 @@
++config FLOW
++	bool "Flow support"
++	default y
++
++config RESOLVER_CONFFILE
++	bool "Resolver conffile"
++	default y
++
++config FLOW_RESOLVER
++	bool "Flow resolver"
++	default y
+diff --git a/src/lib/flow/Makefile b/src/lib/flow/Makefile
+new file mode 100644
+index 00000000..ed23f990
+--- /dev/null
++++ b/src/lib/flow/Makefile
+@@ -0,0 +1,8 @@
++obj-$(FLOW) += flow.mod
++
++obj-flow-$(FLOW)              := sol-flow.o sol-flow-node-options.o
++obj-flow-$(FLOW)              += sol-flow-packet.o sol-flow-parser.o sol-flow-static.o
++
++obj-flow-$(FLOW_RESOLVER)     += sol-flow-resolver-conffile.o
++obj-flow-$(RESOLVER_CONFFILE) += sol-flow-builder.o sol-flow-resolver.o
++obj-flow-$(RESOLVER_CONFFILE)-extra-cflags := $(GLIB_CFLAGS)
+diff --git a/src/modules/flow/accelerometer/Kconfig b/src/modules/flow/accelerometer/Kconfig
+new file mode 100644
+index 00000000..567e2d0c
+--- /dev/null
++++ b/src/modules/flow/accelerometer/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_ACCELEROMETER
++	tristate "Node type: accelerometer"
++	depends on FLOW && PLATFORM_LINUX_COMMON
++	default m
+diff --git a/src/modules/flow/accelerometer/Makefile b/src/modules/flow/accelerometer/Makefile
+new file mode 100644
+index 00000000..4d28bcd6
+--- /dev/null
++++ b/src/modules/flow/accelerometer/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_ACCELEROMETER) += accelerometer.mod
++obj-accelerometer-$(FLOW_NODE_TYPE_ACCELEROMETER) := accelerometer.json accelerometer.o
+diff --git a/src/modules/flow/aio/Kconfig b/src/modules/flow/aio/Kconfig
+new file mode 100644
+index 00000000..3ce81237
+--- /dev/null
++++ b/src/modules/flow/aio/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_AIO
++	tristate "Node type: aio"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/aio/Makefile b/src/modules/flow/aio/Makefile
+new file mode 100644
+index 00000000..0e0a0fb9
+--- /dev/null
++++ b/src/modules/flow/aio/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_AIO) += aio.mod
++obj-aio-$(FLOW_NODE_TYPE_AIO) := aio.json aio.o
+diff --git a/src/modules/flow/app/Kconfig b/src/modules/flow/app/Kconfig
+new file mode 100644
+index 00000000..6664182c
+--- /dev/null
++++ b/src/modules/flow/app/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_APP
++	tristate "Node type: app"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/app/Makefile b/src/modules/flow/app/Makefile
+new file mode 100644
+index 00000000..7badf5b9
+--- /dev/null
++++ b/src/modules/flow/app/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_APP) += app.mod
++obj-app-$(FLOW_NODE_TYPE_APP) := app.json app.o
+diff --git a/src/modules/flow/boolean/Kconfig b/src/modules/flow/boolean/Kconfig
+new file mode 100644
+index 00000000..9223183e
+--- /dev/null
++++ b/src/modules/flow/boolean/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_BOOLEAN
++	tristate "Node type: boolean"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/boolean/Makefile b/src/modules/flow/boolean/Makefile
+new file mode 100644
+index 00000000..c4ca655a
+--- /dev/null
++++ b/src/modules/flow/boolean/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_BOOLEAN) += boolean.mod
++obj-boolean-$(FLOW_NODE_TYPE_BOOLEAN) := boolean.json boolean.o
+diff --git a/src/modules/flow/byte/Kconfig b/src/modules/flow/byte/Kconfig
+new file mode 100644
+index 00000000..c42f2b38
+--- /dev/null
++++ b/src/modules/flow/byte/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_BYTE
++	tristate "Node type: byte"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/byte/Makefile b/src/modules/flow/byte/Makefile
+new file mode 100644
+index 00000000..2e193d05
+--- /dev/null
++++ b/src/modules/flow/byte/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_BYTE) += byte.mod
++obj-byte-$(FLOW_NODE_TYPE_BYTE) := byte.json byte.o
+diff --git a/src/modules/flow/calamari/Kconfig b/src/modules/flow/calamari/Kconfig
+new file mode 100644
+index 00000000..cb72464a
+--- /dev/null
++++ b/src/modules/flow/calamari/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_CALAMARI
++	tristate "Node type: calamari"
++	depends on FLOW && (FLOW_NODE_TYPE_GPIO = y)
++	default m
+diff --git a/src/modules/flow/calamari/Makefile b/src/modules/flow/calamari/Makefile
+new file mode 100644
+index 00000000..42a1a561
+--- /dev/null
++++ b/src/modules/flow/calamari/Makefile
+@@ -0,0 +1,3 @@
++obj-$(FLOW_NODE_TYPE_CALAMARI) += calamari.mod
++obj-calamari-$(FLOW_NODE_TYPE_CALAMARI) := calamari.json calamari.o
++obj-calamari-$(FLOW_NODE_TYPE_CALAMARI)-deps := flow-node-type-gpio.mod
+diff --git a/src/modules/flow/color/Kconfig b/src/modules/flow/color/Kconfig
+new file mode 100644
+index 00000000..3db969a1
+--- /dev/null
++++ b/src/modules/flow/color/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_COLOR
++	tristate "Node type: color"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/color/Makefile b/src/modules/flow/color/Makefile
+new file mode 100644
+index 00000000..d2fcb37a
+--- /dev/null
++++ b/src/modules/flow/color/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_COLOR) += color.mod
++obj-color-$(FLOW_NODE_TYPE_COLOR) := color.json color.o
+diff --git a/src/modules/flow/console/Kconfig b/src/modules/flow/console/Kconfig
+new file mode 100644
+index 00000000..31872e22
+--- /dev/null
++++ b/src/modules/flow/console/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_CONSOLE
++	tristate "Node type: console"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/console/Makefile b/src/modules/flow/console/Makefile
+new file mode 100644
+index 00000000..3c293d32
+--- /dev/null
++++ b/src/modules/flow/console/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_CONSOLE) += console.mod
++obj-console-$(FLOW_NODE_TYPE_CONSOLE) := console.json console.o
+diff --git a/src/modules/flow/constant/Kconfig b/src/modules/flow/constant/Kconfig
+new file mode 100644
+index 00000000..02f02df0
+--- /dev/null
++++ b/src/modules/flow/constant/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_CONSTANT
++	tristate "Node type: constant"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/constant/Makefile b/src/modules/flow/constant/Makefile
+new file mode 100644
+index 00000000..3c67565b
+--- /dev/null
++++ b/src/modules/flow/constant/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_CONSTANT) += constant.mod
++obj-constant-$(FLOW_NODE_TYPE_CONSTANT) := constant.json constant.o
+diff --git a/src/modules/flow/converter/Kconfig b/src/modules/flow/converter/Kconfig
+new file mode 100644
+index 00000000..c719277c
+--- /dev/null
++++ b/src/modules/flow/converter/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_CONVERTER
++	tristate "Node type: converter"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/converter/Makefile b/src/modules/flow/converter/Makefile
+new file mode 100644
+index 00000000..249dc4d0
+--- /dev/null
++++ b/src/modules/flow/converter/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_CONVERTER) += converter.mod
++obj-converter-$(FLOW_NODE_TYPE_CONVERTER) := converter.json converter.o
+diff --git a/src/modules/flow/evdev/Kconfig b/src/modules/flow/evdev/Kconfig
+new file mode 100644
+index 00000000..ca13fe92
+--- /dev/null
++++ b/src/modules/flow/evdev/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_EVDEV
++	tristate "Node type: evdev"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/evdev/Makefile b/src/modules/flow/evdev/Makefile
+new file mode 100644
+index 00000000..7515d966
+--- /dev/null
++++ b/src/modules/flow/evdev/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_EVDEV) += evdev.mod
++obj-evdev-$(FLOW_NODE_TYPE_EVDEV) := evdev.json evdev.o
+diff --git a/src/modules/flow/file/Kconfig b/src/modules/flow/file/Kconfig
+new file mode 100644
+index 00000000..9db83505
+--- /dev/null
++++ b/src/modules/flow/file/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_FILE
++	tristate "Node type: file"
++	depends on FLOW && PTHREAD
++	default m
+diff --git a/src/modules/flow/file/Makefile b/src/modules/flow/file/Makefile
+new file mode 100644
+index 00000000..ce416429
+--- /dev/null
++++ b/src/modules/flow/file/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_FILE) += file.mod
++obj-file-$(FLOW_NODE_TYPE_FILE) := file.json file.o
+diff --git a/src/modules/flow/filter-repeated/Kconfig b/src/modules/flow/filter-repeated/Kconfig
+new file mode 100644
+index 00000000..ed983993
+--- /dev/null
++++ b/src/modules/flow/filter-repeated/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_FILTER_REPEATED
++	tristate "Node type: filter-repeated"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/filter-repeated/Makefile b/src/modules/flow/filter-repeated/Makefile
+new file mode 100644
+index 00000000..dd2dde40
+--- /dev/null
++++ b/src/modules/flow/filter-repeated/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_FILTER_REPEATED) += filter-repeated.mod
++obj-filter-repeated-$(FLOW_NODE_TYPE_AIO) := filter-repeated.json filter-repeated.o
+diff --git a/src/modules/flow/float/Kconfig b/src/modules/flow/float/Kconfig
+new file mode 100644
+index 00000000..2c06d40b
+--- /dev/null
++++ b/src/modules/flow/float/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_FLOAT
++	tristate "Node type: float"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/float/Makefile b/src/modules/flow/float/Makefile
+new file mode 100644
+index 00000000..ec2b7675
+--- /dev/null
++++ b/src/modules/flow/float/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_FLOAT) += float.mod
++obj-float-$(FLOW_NODE_TYPE_FLOAT) := float.json float.o
+diff --git a/src/modules/flow/fs/Kconfig b/src/modules/flow/fs/Kconfig
+new file mode 100644
+index 00000000..2fadfe07
+--- /dev/null
++++ b/src/modules/flow/fs/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_FS
++	tristate "Node type: fs"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/fs/Makefile b/src/modules/flow/fs/Makefile
+new file mode 100644
+index 00000000..1eea622f
+--- /dev/null
++++ b/src/modules/flow/fs/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_FS) += fs.mod
++obj-fs-$(FLOW_NODE_TYPE_FS) := fs.json fs.o flow-node-type-gpio.mod
+diff --git a/src/modules/flow/gpio/Kconfig b/src/modules/flow/gpio/Kconfig
+new file mode 100644
+index 00000000..1910a8a5
+--- /dev/null
++++ b/src/modules/flow/gpio/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_GPIO
++	tristate "Node type: gpio"
++	depends on FLOW
++	default y
+\ No newline at end of file
+diff --git a/src/modules/flow/gpio/Makefile b/src/modules/flow/gpio/Makefile
+new file mode 100644
+index 00000000..43018afd
+--- /dev/null
++++ b/src/modules/flow/gpio/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_GPIO) += gpio.mod
++obj-gpio-$(FLOW_NODE_TYPE_GPIO) := gpio.json gpio.o
+diff --git a/src/modules/flow/grove/Kconfig b/src/modules/flow/grove/Kconfig
+new file mode 100644
+index 00000000..db47705a
+--- /dev/null
++++ b/src/modules/flow/grove/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_GROVE
++	tristate "Node type: grove"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/grove/Makefile b/src/modules/flow/grove/Makefile
+new file mode 100644
+index 00000000..1c6e0132
+--- /dev/null
++++ b/src/modules/flow/grove/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_GROVE) += grove.mod
++obj-grove-$(FLOW_NODE_TYPE_GROVE) := grove.json grove.o
+diff --git a/src/modules/flow/gtk/Kconfig b/src/modules/flow/gtk/Kconfig
+new file mode 100644
+index 00000000..cf84ff1e
+--- /dev/null
++++ b/src/modules/flow/gtk/Kconfig
+@@ -0,0 +1,5 @@
++config FLOW_NODE_TYPE_GTK
++	tristate "Node type: gtk"
++	depends on FLOW && HAVE_GTK
++	default m
++	select USE_GTK
+diff --git a/src/modules/flow/gtk/Makefile b/src/modules/flow/gtk/Makefile
+new file mode 100644
+index 00000000..0c18842b
+--- /dev/null
++++ b/src/modules/flow/gtk/Makefile
+@@ -0,0 +1,6 @@
++obj-$(FLOW_NODE_TYPE_GTK) += gtk.mod
++obj-gtk-$(FLOW_NODE_TYPE_GTK) := gtk.json gtk.o byte-editor.o
++obj-gtk-$(FLOW_NODE_TYPE_GTK) += label.o led.o pushbutton.o pwm-editor.o
++obj-gtk-$(FLOW_NODE_TYPE_GTK) += pwm-viewer.o rgb-editor.o slider.o
++obj-gtk-$(FLOW_NODE_TYPE_GTK) += spinbutton.o toggle.o window.o
++obj-gtk-$(FLOW_NODE_TYPE_GTK)-extra-cflags := $(GTK_CFLAGS)
+diff --git a/src/modules/flow/gyroscope/Kconfig b/src/modules/flow/gyroscope/Kconfig
+new file mode 100644
+index 00000000..f41f963e
+--- /dev/null
++++ b/src/modules/flow/gyroscope/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_GYROSCOPE
++	tristate "Node type: gyroscope"
++	depends on FLOW && PLATFORM_LINUX_COMMON
++	default m
+diff --git a/src/modules/flow/gyroscope/Makefile b/src/modules/flow/gyroscope/Makefile
+new file mode 100644
+index 00000000..3df80cc1
+--- /dev/null
++++ b/src/modules/flow/gyroscope/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_GYROSCOPE) += gyroscope.mod
++obj-gyroscope-$(FLOW_NODE_TYPE_GYROSCOPE) := gyroscope.json gyroscope.o
+diff --git a/src/modules/flow/hub/Kconfig b/src/modules/flow/hub/Kconfig
+new file mode 100644
+index 00000000..5bf02ff0
+--- /dev/null
++++ b/src/modules/flow/hub/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_HUB
++	tristate "Node type: hub"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/hub/Makefile b/src/modules/flow/hub/Makefile
+new file mode 100644
+index 00000000..34ef41d3
+--- /dev/null
++++ b/src/modules/flow/hub/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_HUB) += hub.mod
++obj-hub-$(FLOW_NODE_TYPE_HUB) := hub.json hub.o
+diff --git a/src/modules/flow/int/Kconfig b/src/modules/flow/int/Kconfig
+new file mode 100644
+index 00000000..3bd084c9
+--- /dev/null
++++ b/src/modules/flow/int/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_INT
++	tristate "Node type: int"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/int/Makefile b/src/modules/flow/int/Makefile
+new file mode 100644
+index 00000000..de5b68eb
+--- /dev/null
++++ b/src/modules/flow/int/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_INT) += int.mod
++obj-int-$(FLOW_NODE_TYPE_INT) := int.json int.o
+diff --git a/src/modules/flow/keyboard/Kconfig b/src/modules/flow/keyboard/Kconfig
+new file mode 100644
+index 00000000..608fd889
+--- /dev/null
++++ b/src/modules/flow/keyboard/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_KEYBOARD
++	tristate "Node type: keyboard"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/keyboard/Makefile b/src/modules/flow/keyboard/Makefile
+new file mode 100644
+index 00000000..823f1c34
+--- /dev/null
++++ b/src/modules/flow/keyboard/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_KEYBOARD) += keyboard.mod
++obj-keyboard-$(FLOW_NODE_TYPE_KEYBOARD) := keyboard.json keyboard.o
+diff --git a/src/modules/flow/network/Kconfig b/src/modules/flow/network/Kconfig
+new file mode 100644
+index 00000000..6aad08db
+--- /dev/null
++++ b/src/modules/flow/network/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_NETWORK
++	tristate "Node type: network"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/network/Makefile b/src/modules/flow/network/Makefile
+new file mode 100644
+index 00000000..de7c6620
+--- /dev/null
++++ b/src/modules/flow/network/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_NETWORK) += network.mod
++obj-network-$(FLOW_NODE_TYPE_NETWORK) := network.json network.o
+diff --git a/src/modules/flow/oic/Kconfig b/src/modules/flow/oic/Kconfig
+new file mode 100644
+index 00000000..b97fe42a
+--- /dev/null
++++ b/src/modules/flow/oic/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_OIC
++	tristate "Node type: oic"
++	depends on FLOW && COAP && SOCKET_LINUX
++	default m
+diff --git a/src/modules/flow/oic/Makefile b/src/modules/flow/oic/Makefile
+new file mode 100644
+index 00000000..fdd27c35
+--- /dev/null
++++ b/src/modules/flow/oic/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_OIC) += oic.mod
++obj-oic-$(FLOW_NODE_TYPE_OIC) := oic.json oic.o
+diff --git a/src/modules/flow/piezo-speaker/Kconfig b/src/modules/flow/piezo-speaker/Kconfig
+new file mode 100644
+index 00000000..91a7b420
+--- /dev/null
++++ b/src/modules/flow/piezo-speaker/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_PIEZO_SPEAKER
++	tristate "Node type: piezo-speaker"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/piezo-speaker/Makefile b/src/modules/flow/piezo-speaker/Makefile
+new file mode 100644
+index 00000000..98823001
+--- /dev/null
++++ b/src/modules/flow/piezo-speaker/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_PIEZO_SPEAKER) += piezo-speaker.mod
++obj-piezo-speaker-$(FLOW_NODE_TYPE_PIEZO_SPEAKER) := piezo-speaker.json piezo-speaker.o
+diff --git a/src/modules/flow/platform/Kconfig b/src/modules/flow/platform/Kconfig
+new file mode 100644
+index 00000000..44956f65
+--- /dev/null
++++ b/src/modules/flow/platform/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_PLATFORM
++	tristate "Node type: platform"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/platform/Makefile b/src/modules/flow/platform/Makefile
+new file mode 100644
+index 00000000..0bc84231
+--- /dev/null
++++ b/src/modules/flow/platform/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_PLATFORM) += platform.mod
++obj-platform-$(FLOW_NODE_TYPE_PLATFORM) := platform.json platform.o
+diff --git a/src/modules/flow/process/Kconfig b/src/modules/flow/process/Kconfig
+new file mode 100644
+index 00000000..c3006fd5
+--- /dev/null
++++ b/src/modules/flow/process/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_PROCESS
++	tristate "Node type: process"
++	depends on FLOW && PLATFORM_LINUX_COMMON
++	default m
+diff --git a/src/modules/flow/process/Makefile b/src/modules/flow/process/Makefile
+new file mode 100644
+index 00000000..32d68082
+--- /dev/null
++++ b/src/modules/flow/process/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_PROCESS) += process.mod
++obj-process-$(FLOW_NODE_TYPE_PROCESS) := process.json common.h output.o process.o stdin.o subprocess.o
+diff --git a/src/modules/flow/pwm/Kconfig b/src/modules/flow/pwm/Kconfig
+new file mode 100644
+index 00000000..fa295d04
+--- /dev/null
++++ b/src/modules/flow/pwm/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_PWM
++	tristate "Node type: pwm"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/pwm/Makefile b/src/modules/flow/pwm/Makefile
+new file mode 100644
+index 00000000..28e16fe6
+--- /dev/null
++++ b/src/modules/flow/pwm/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_PWM) += pwm.mod
++obj-pwm-$(FLOW_NODE_TYPE_PWM) := pwm.json pwm.o
+diff --git a/src/modules/flow/random/Kconfig b/src/modules/flow/random/Kconfig
+new file mode 100644
+index 00000000..7fb7dce7
+--- /dev/null
++++ b/src/modules/flow/random/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_RANDOM
++	tristate "Node type: random"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/random/Makefile b/src/modules/flow/random/Makefile
+new file mode 100644
+index 00000000..9c497581
+--- /dev/null
++++ b/src/modules/flow/random/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_RANDOM) += random.mod
++obj-random-$(FLOW_NODE_TYPE_RANDOM) := random.json random.o
+diff --git a/src/modules/flow/servo-motor/Kconfig b/src/modules/flow/servo-motor/Kconfig
+new file mode 100644
+index 00000000..09cbb1c7
+--- /dev/null
++++ b/src/modules/flow/servo-motor/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_SERVO_MOTOR
++	tristate "Node type: servo-motor"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/servo-motor/Makefile b/src/modules/flow/servo-motor/Makefile
+new file mode 100644
+index 00000000..8febaa17
+--- /dev/null
++++ b/src/modules/flow/servo-motor/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_SERVO_MOTOR) += servo-motor.mod
++obj-servo-motor-$(FLOW_NODE_TYPE_SERVO_MOTOR) := servo-motor.json servo-motor.o
+diff --git a/src/modules/flow/string/Kconfig b/src/modules/flow/string/Kconfig
+new file mode 100644
+index 00000000..e49a9dde
+--- /dev/null
++++ b/src/modules/flow/string/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_STRING
++	tristate "Node type: string"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/string/Makefile b/src/modules/flow/string/Makefile
+new file mode 100644
+index 00000000..91b42575
+--- /dev/null
++++ b/src/modules/flow/string/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_STRING) += string.mod
++obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string.o
+diff --git a/src/modules/flow/test/Kconfig b/src/modules/flow/test/Kconfig
+new file mode 100644
+index 00000000..f960fa76
+--- /dev/null
++++ b/src/modules/flow/test/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_TEST
++	tristate "Node type: test"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/test/Makefile b/src/modules/flow/test/Makefile
+new file mode 100644
+index 00000000..14540683
+--- /dev/null
++++ b/src/modules/flow/test/Makefile
+@@ -0,0 +1,5 @@
++obj-$(FLOW_NODE_TYPE_TEST) += test.mod
++obj-test-$(FLOW_NODE_TYPE_TEST) += boolean-generator.o boolean-validator.o
++obj-test-$(FLOW_NODE_TYPE_TEST) += int-generator.o int-validator.o
++obj-test-$(FLOW_NODE_TYPE_TEST) += result.o test.o test.json float-validator.o
++obj-test-$(FLOW_NODE_TYPE_TEST) += float-generator.o blob-validator.o
+diff --git a/src/modules/flow/timer/Kconfig b/src/modules/flow/timer/Kconfig
+new file mode 100644
+index 00000000..80349417
+--- /dev/null
++++ b/src/modules/flow/timer/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_TIMER
++	tristate "Node type: timer"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/timer/Makefile b/src/modules/flow/timer/Makefile
+new file mode 100644
+index 00000000..e681576c
+--- /dev/null
++++ b/src/modules/flow/timer/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_TIMER) += timer.mod
++obj-timer-$(FLOW_NODE_TYPE_TIMER) := timer.json timer.o
+diff --git a/src/modules/flow/trigonometry/Kconfig b/src/modules/flow/trigonometry/Kconfig
+new file mode 100644
+index 00000000..94eca7c2
+--- /dev/null
++++ b/src/modules/flow/trigonometry/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_TRIGONOMETRY
++	tristate "Node type: trigonometry"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/trigonometry/Makefile b/src/modules/flow/trigonometry/Makefile
+new file mode 100644
+index 00000000..1762509d
+--- /dev/null
++++ b/src/modules/flow/trigonometry/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_TRIGONOMETRY) += trigonometry.mod
++obj-trigonometry-$(FLOW_NODE_TYPE_TRIGONOMETRY) := trigonometry.json trigonometry.o
+diff --git a/src/modules/flow/udev/Kconfig b/src/modules/flow/udev/Kconfig
+new file mode 100644
+index 00000000..407e3434
+--- /dev/null
++++ b/src/modules/flow/udev/Kconfig
+@@ -0,0 +1,5 @@
++config FLOW_NODE_TYPE_UDEV
++	tristate "Node type: udev"
++	depends on FLOW
++	select USE_UDEV
++	default m
+diff --git a/src/modules/flow/udev/Makefile b/src/modules/flow/udev/Makefile
+new file mode 100644
+index 00000000..044fcbc9
+--- /dev/null
++++ b/src/modules/flow/udev/Makefile
+@@ -0,0 +1,3 @@
++obj-$(FLOW_NODE_TYPE_UDEV) += udev.mod
++obj-udev-$(FLOW_NODE_TYPE_UDEV) := udev.json udev.o
++obj-udev-$(FLOW_NODE_TYPE_UDEV)-extra-cflags := $(UDEV_CFLAGS)
+diff --git a/src/modules/flow/unix-socket/Kconfig b/src/modules/flow/unix-socket/Kconfig
+new file mode 100644
+index 00000000..8b043c3e
+--- /dev/null
++++ b/src/modules/flow/unix-socket/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_UNIX_SOCKET
++	tristate "Node type: unix-socket"
++	depends on FLOW
++	default m
+diff --git a/src/modules/flow/unix-socket/Makefile b/src/modules/flow/unix-socket/Makefile
+new file mode 100644
+index 00000000..4ec4ecc9
+--- /dev/null
++++ b/src/modules/flow/unix-socket/Makefile
+@@ -0,0 +1,3 @@
++obj-$(FLOW_NODE_TYPE_UNIX_SOCKET) += unix-socket.mod
++obj-unix-socket-$(FLOW_NODE_TYPE_UNIX_SOCKET) := unix-socket.json unix-socket.o
++obj-unix-socket-$(FLOW_NODE_TYPE_UNIX_SOCKET) += unix-socket-impl.o
+diff --git a/src/modules/flow/wallclock/Kconfig b/src/modules/flow/wallclock/Kconfig
+new file mode 100644
+index 00000000..ea16dc5f
+--- /dev/null
++++ b/src/modules/flow/wallclock/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NODE_TYPE_WALLCLOCK
++	tristate "Node type: wallclock"
++	depends on FLOW
++	default y
+diff --git a/src/modules/flow/wallclock/Makefile b/src/modules/flow/wallclock/Makefile
+new file mode 100644
+index 00000000..eeddcf9d
+--- /dev/null
++++ b/src/modules/flow/wallclock/Makefile
+@@ -0,0 +1,2 @@
++obj-$(FLOW_NODE_TYPE_WALLCLOCK) += wallclock.mod
++obj-wallclock-$(FLOW_NODE_TYPE_WALLCLOCK) := wallclock.json wallclock.o
+diff --git a/src/modules/linux-micro/bluetooth/Kconfig b/src/modules/linux-micro/bluetooth/Kconfig
+new file mode 100644
+index 00000000..249e0efc
+--- /dev/null
++++ b/src/modules/linux-micro/bluetooth/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_BLUETOOTH
++	tristate "bluetooth"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/bluetooth/Makefile b/src/modules/linux-micro/bluetooth/Makefile
+new file mode 100644
+index 00000000..bc410c68
+--- /dev/null
++++ b/src/modules/linux-micro/bluetooth/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_BLUETOOTH) += linux-micro-bluetooth.mod
++obj-linux-micro-bluetooth-$(LINUX_MICRO_BLUETOOTH) += bluetooth.o
+diff --git a/src/modules/linux-micro/console/Kconfig b/src/modules/linux-micro/console/Kconfig
+new file mode 100644
+index 00000000..70e2e223
+--- /dev/null
++++ b/src/modules/linux-micro/console/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_CONSOLE
++	tristate "console"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/console/Makefile b/src/modules/linux-micro/console/Makefile
+new file mode 100644
+index 00000000..49e84f92
+--- /dev/null
++++ b/src/modules/linux-micro/console/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_CONSOLE) += linux-micro-console.mod
++obj-linux-micro-console-$(LINUX_MICRO_CONSOLE) += console.o
+diff --git a/src/modules/linux-micro/dbus/Kconfig b/src/modules/linux-micro/dbus/Kconfig
+new file mode 100644
+index 00000000..70e788dc
+--- /dev/null
++++ b/src/modules/linux-micro/dbus/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_DBUS
++	tristate "dbus"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/dbus/Makefile b/src/modules/linux-micro/dbus/Makefile
+new file mode 100644
+index 00000000..14afb6e1
+--- /dev/null
++++ b/src/modules/linux-micro/dbus/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_DBUS) += linux-micro-dbus.mod
++obj-linux-micro-dbus-$(LINUX_MICRO_DBUS) += dbus.o
+diff --git a/src/modules/linux-micro/fstab/Kconfig b/src/modules/linux-micro/fstab/Kconfig
+new file mode 100644
+index 00000000..a2cb624d
+--- /dev/null
++++ b/src/modules/linux-micro/fstab/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_FSTAB
++	tristate "fstab"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/fstab/Makefile b/src/modules/linux-micro/fstab/Makefile
+new file mode 100644
+index 00000000..a8a9989c
+--- /dev/null
++++ b/src/modules/linux-micro/fstab/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_FSTAB) += linux-micro-fstab.mod
++obj-linux-micro-fstab-$(LINUX_MICRO_FSTAB) += fstab.o
+diff --git a/src/modules/linux-micro/hostname/Kconfig b/src/modules/linux-micro/hostname/Kconfig
+new file mode 100644
+index 00000000..187f2e9e
+--- /dev/null
++++ b/src/modules/linux-micro/hostname/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_HOSTNAME
++	tristate "hostname"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/hostname/Makefile b/src/modules/linux-micro/hostname/Makefile
+new file mode 100644
+index 00000000..ecc7f33f
+--- /dev/null
++++ b/src/modules/linux-micro/hostname/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_HOSTNAME) += linux-micro-hostname.mod
++obj-linux-micro-hostname-$(LINUX_MICRO_HOSTNAME) += hostname.o
+diff --git a/src/modules/linux-micro/locale/Kconfig b/src/modules/linux-micro/locale/Kconfig
+new file mode 100644
+index 00000000..6284f788
+--- /dev/null
++++ b/src/modules/linux-micro/locale/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_LOCALE
++	tristate "locale"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/locale/Makefile b/src/modules/linux-micro/locale/Makefile
+new file mode 100644
+index 00000000..73a1e4cb
+--- /dev/null
++++ b/src/modules/linux-micro/locale/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_LOCALE) += linux-micro-locale.mod
++obj-linux-micro-locale-$(LINUX_MICRO_LOCALE) += locale.o
+diff --git a/src/modules/linux-micro/network-up/Kconfig b/src/modules/linux-micro/network-up/Kconfig
+new file mode 100644
+index 00000000..7b970456
+--- /dev/null
++++ b/src/modules/linux-micro/network-up/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_NETWORK_UP
++	tristate "network-up"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/network-up/Makefile b/src/modules/linux-micro/network-up/Makefile
+new file mode 100644
+index 00000000..b5e6c3d4
+--- /dev/null
++++ b/src/modules/linux-micro/network-up/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_NETWORK_UP) += linux-micro-network-up.mod
++obj-linux-micro-network-up-$(LINUX_MICRO_NETWORK_UP) += network-up.o
+diff --git a/src/modules/linux-micro/rc-d/Kconfig b/src/modules/linux-micro/rc-d/Kconfig
+new file mode 100644
+index 00000000..06f5d785
+--- /dev/null
++++ b/src/modules/linux-micro/rc-d/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_RC_D
++	tristate "rc-d"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/rc-d/Makefile b/src/modules/linux-micro/rc-d/Makefile
+new file mode 100644
+index 00000000..b776fb37
+--- /dev/null
++++ b/src/modules/linux-micro/rc-d/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_RC_D) += linux-micro-rc-d.mod
++obj-linux-micro-rc-d-$(LINUX_MICRO_RC_D) += rc-d.o
+diff --git a/src/modules/linux-micro/sysctl/Kconfig b/src/modules/linux-micro/sysctl/Kconfig
+new file mode 100644
+index 00000000..e9b03929
+--- /dev/null
++++ b/src/modules/linux-micro/sysctl/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_SYSCTL
++	tristate "sysctl"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/sysctl/Makefile b/src/modules/linux-micro/sysctl/Makefile
+new file mode 100644
+index 00000000..b1398514
+--- /dev/null
++++ b/src/modules/linux-micro/sysctl/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_SYSCTL) += linux-micro-sysctl.mod
++obj-linux-micro-sysctl-$(LINUX_MICRO_SYSCTL) += sysctl.o
+diff --git a/src/modules/linux-micro/watchdog/Kconfig b/src/modules/linux-micro/watchdog/Kconfig
+new file mode 100644
+index 00000000..3a7d36a5
+--- /dev/null
++++ b/src/modules/linux-micro/watchdog/Kconfig
+@@ -0,0 +1,4 @@
++config LINUX_MICRO_WATCHDOG
++	tristate "watchdog"
++	depends on LINUX_MICRO
++	default n
+diff --git a/src/modules/linux-micro/watchdog/Makefile b/src/modules/linux-micro/watchdog/Makefile
+new file mode 100644
+index 00000000..84c9ccb1
+--- /dev/null
++++ b/src/modules/linux-micro/watchdog/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_WATCHDOG) += linux-micro-watchdog.mod
++obj-linux-micro-watchdog-$(LINUX_MICRO_WATCHDOG) += watchdog.o
+diff --git a/src/modules/pin-mux/intel-galileo-rev-g/Kconfig b/src/modules/pin-mux/intel-galileo-rev-g/Kconfig
+new file mode 100644
+index 00000000..ee19d0e3
+--- /dev/null
++++ b/src/modules/pin-mux/intel-galileo-rev-g/Kconfig
+@@ -0,0 +1,3 @@
++config PIN_MUX_INTEL_GALILEO_REV_G
++	tristate "intel galileo rev g"
++	default m
+\ No newline at end of file
+diff --git a/src/modules/pin-mux/intel-galileo-rev-g/Makefile b/src/modules/pin-mux/intel-galileo-rev-g/Makefile
+new file mode 100644
+index 00000000..064cf7d9
+--- /dev/null
++++ b/src/modules/pin-mux/intel-galileo-rev-g/Makefile
+@@ -0,0 +1,2 @@
++obj-$(PIN_MUX_INTEL_GALILEO_REV_G) += intel-galileo-rev-g.mod
++obj-intel-galileo-rev-g-$(PIN_MUX_INTEL_GALILEO_REV_G) := intel-galileo-rev-g.o
+diff --git a/src/shared/Kconfig b/src/shared/Kconfig
+new file mode 100644
+index 00000000..07474408
+--- /dev/null
++++ b/src/shared/Kconfig
+@@ -0,0 +1,8 @@
++config INTERNAL_SHARED
++	tristate
++	default m
++
++config PTHREAD
++	bool "Pthread"
++	depends on HAVE_PTHREAD && HAVE_GLIB && (PLATFORM_LINUX_MICRO || PLATFORM_SYSTEMD)
++	default y
+\ No newline at end of file
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+new file mode 100644
+index 00000000..d29ebfc4
+--- /dev/null
++++ b/src/shared/Makefile
+@@ -0,0 +1,36 @@
++obj-$(INTERNAL_SHARED) += libshared.mod
++obj-libshared-static := yes
++
++obj-libshared-$(INTERNAL_SHARED)   := sol-arena.o sol-fbp-graph.o sol-fbp-internal-log.o
++obj-libshared-$(INTERNAL_SHARED)   += sol-fbp-internal-scanner.o sol-util.o
++obj-libshared-$(INTERNAL_SHARED)   += sol-monitors.o sol-str-slice.o sol-str-table.o
++obj-libshared-$(INTERNAL_SHARED)   += sol-vector.o sol-json.o sol-buffer.o
++obj-libshared-$(INTERNAL_SHARED)   += sol-pwm-common.o sol-gpio-common.o
++obj-libshared-$(INTERNAL_SHARED)   += sol-i2c-common.o
++
++ifeq (y,$(RESOLVER_CONFFILE))
++obj-libshared-m += sol-fbp-parser.o
++endif
++
++ifeq (y,$(MODULES))
++obj-libshared-m += sol-conffile.o
++obj-libshared-m-extra-cflags := $(GLIB_CFLAGS)
++endif
++
++ifeq (y,$(PTHREAD))
++obj-libshared-m += sol-worker-thread-pthread.o
++endif
++
++ifeq (y,$(PLATFORM_GALILEO))
++obj-libshared-m  += sol-galileo.o
++endif
++
++ifeq (y,$(PLATFORM_RIOTOS))
++obj-libshared-m += sol-gpio-riot.o sol-i2c-riot.o sol-pwm-riot.o
++obj-libshared-m += sol-spi-riot.o sol-uart-riot.o sol-network-riot.o
++endif
++
++ifeq (y,$(PLATFORM_LINUX_MICRO))
++obj-libshared-m += sol-file-reader.o sol-gpio-linux.o sol-network-linux.o
++obj-libshared-m += sol-pwm-linux.o sol-i2c-linux.o sol-spi-linux.o sol-uart-linux.o
++endif
+diff --git a/src/test-fbp/run b/src/test-fbp/run
+index e66cb2a7..68c3ed19 100755
+--- a/src/test-fbp/run
++++ b/src/test-fbp/run
+@@ -31,13 +31,23 @@
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ SCRIPT_DIR=$(dirname $(realpath ${BASH_SOURCE[0]}))
+-RUNNER=$PWD/src/bin/sol-fbp-runner/sol-fbp-runner
++
++# default build location
++RUNNER=$PWD/build/soletta_sysroot/usr/bin/sol-fbp-runner
++
++if [ -n "$SOL_FBP_RUNNER_BIN" ]; then
++    RUNNER=$SOL_FBP_RUNNER_BIN
++fi
++
+ COUNT=0
+ CMD_PREFIX=
+ TMP_FILE=$(mktemp -t check-fbp.XXXXXX)
+ 
+ if [ -n "$VALGRIND" ]; then
+-    CMD_PREFIX="libtool e valgrind --show-reachable=no --quiet --error-exitcode=1 --leak-check=full --suppressions=$SCRIPT_DIR/../test/test.supp"
++    CMD_PREFIX="$VALGRIND --show-reachable=no --quiet --error-exitcode=1 --leak-check=full"
++    if [ -e "$TEST_VALGRIND_SUPP" ]; then
++	CMD_PREFIX="$CMD_PREFIX --suppressions=$TEST_VALGRIND_SUPP"
++    fi
+ fi
+ 
+ cd $SCRIPT_DIR
+diff --git a/src/test/Kconfig b/src/test/Kconfig
+new file mode 100644
+index 00000000..9c39268c
+--- /dev/null
++++ b/src/test/Kconfig
+@@ -0,0 +1,71 @@
++config TEST_ARENA
++	bool "arena"
++	default y
++
++config TEST_BUFFER
++	bool "buffer"
++	default y
++
++config TEST_COAP
++	bool "coap"
++	depends on COAP
++	default y
++
++config TEST_FBP
++	bool "fbp"
++	default y
++
++config TEST_FBP_SCANNER
++	bool "fbp scanner"
++	default y
++
++config TEST_FLOW
++	bool "flow"
++	default y
++
++config TEST_FLOW_BUILDER
++	bool "flow builder"
++	default y
++
++config TEST_FLOW_PARSER
++	bool "flow parser"
++	default y
++
++config TEST_MAINLOOP
++	bool "mainloop"
++	default y
++
++config TEST_MAINLOOP_LINUX
++	bool "mainloop linux"
++	depends on PLATFORM_LINUX
++	default y
++
++config TEST_MAINLOOP_THREADS
++	bool "mainloop threads"
++	depends on PTHREAD
++	default y
++
++config TEST_MAINLOOP_THREADS_SOL_RUN
++	bool "mainloop threads sol run"
++	depends on PTHREAD
++	default n
++
++config TEST_MONITORS
++	bool "monitors"
++	default y
++
++config TEST_STR_SLICE
++	bool "str-slice"
++	default y
++
++config TEST_STR_SPLIT
++	bool "str-split"
++	default y
++
++config TEST_STR_TABLE
++	bool "str-table"
++	default y
++
++config TEST_VECTOR
++	bool "vector"
++	default y
+\ No newline at end of file
+diff --git a/src/test/Makefile b/src/test/Makefile
+new file mode 100644
+index 00000000..2114a08e
+--- /dev/null
++++ b/src/test/Makefile
+@@ -0,0 +1,51 @@
++test-$(TEST_ARENA) += test-arena
++test-test-arena-$(TEST_ARENA) := test.c test-arena.c
++
++test-$(TEST_COAP) += test-coap
++test-test-coap-$(TEST_COAP) := test.c test-coap.c
++
++test-$(TEST_FBP) += test-fbp
++test-test-fbp-$(TEST_FBP) := test.c test-fbp.c
++
++test-$(TEST_FBP_SCANNER) += test-fbp-scanner
++test-test-fbp-scanner-$(TEST_FBP_SCANNER) := test.c test-fbp-scanner.c
++
++test-$(TEST_FLOW) += test-flow
++test-test-flow-$(TEST_FLOW) := test.c test-flow.c
++test-test-flow-$(TEST_FLOW)-deps := flow-node-type-timer.mod flow-node-type-pwm.mod flow-node-type-console.mod
++
++test-$(TEST_FLOW_BUILDER) += test-flow-builder
++test-test-flow-builder-$(TEST_FLOW_BUILDER) := test.c test-flow-builder.c
++
++test-$(TEST_FLOW_PARSER) += test-flow-parser
++test-test-flow-parser-$(TEST_FLOW_PARSER) := test.c test-flow-parser.c
++
++test-$(TEST_MAINLOOP) += test-mainloop
++test-test-mainloop-$(TEST_MAINLOOP) := test-mainloop.c
++
++test-$(MAINLOOP_LINUX) += test-mainloop-linux
++test-test-mainloop-linux-$(MAINLOOP_LINUX) := test-mainloop-linux.c
++
++test-$(TEST_MAINLOOP_THREADS) += test-mainloop-threads
++test-test-mainloop-threads-$(TEST_MAINLOOP_THREADS) := test-mainloop-threads.c
++
++test-$(TEST_MAINLOOP_THREADS_SOL_RUN) += test-mainloop-threads-sol-run
++test-test-mainloop-threads-sol-run-$(TEST_MAINLOOP_THREADS_SOL_RUN) := test-mainloop-threads-sol-run.c
++
++test-$(TEST_MONITORS) += test-monitors
++test-test-monitors-$(TEST_MONITORS) := test.c test-monitors.c
++
++test-$(TEST_STR_SLICE) += test-str-slice
++test-test-str-slice-$(TEST_STR_SLICE) := test.c test-str-slice.c
++
++test-$(TEST_STR_SPLIT) += test-str-split
++test-test-str-split-$(TEST_STR_SPLIT) := test.c test-str-split.c
++
++test-$(TEST_STR_TABLE) += test-str-table
++test-test-str-table-$(TEST_STR_TABLE) := test.c test-str-table.c
++
++test-$(TEST_VECTOR) += test-vector
++test-test-vector-$(TEST_VECTOR) := test.c test-vector.c
++
++test-$(TEST_BUFFER) += test-buffer
++test-test-buffer-$(TEST_VECTOR) := test.c test-buffer.c
+diff --git a/tools/build/Makefile.kconfig b/tools/build/Makefile.kconfig
+new file mode 100644
+index 00000000..aebe9540
+--- /dev/null
++++ b/tools/build/Makefile.kconfig
+@@ -0,0 +1,84 @@
++kconfig-clean-objs += $(mconf-objs) $(nconf-objs) $(conf-objs)
++kconfig-clean-objs += $(obj)/mconf $(obj)/conf
++
++HOST_EXTRACFLAGS += -DCONFIG_='""'
++
++cmd_kconfig_cc.u = $(HOSTCC) $(filter-out $(PHONY),$^) $(DEPS-$(notdir $@)) \
++		-o $@ $(BUILD_LDFLAGS) $(HOST_EXTRACFLAGS) $(BUILD_LDFLAGS-$(notdir $(^D))) \
++		$(BUILD_LDFLAGS-$(notdir $@)) $(BUILD_CFLAGS) \
++		$(BUILD_CFLAGS-$(notdir $(^D))) $(BUILD_CFLAGS-$(notdir $@))
++
++cmd_kconfig_cc.o = $(HOSTCC) $(filter-out $(PHONY),$<) $(DEPS-$(notdir $@)) \
++		-c -o $@ $(BUILD_CFLAGS) $(HOST_EXTRACFLAGS) $(BUILD_CFLAGS-$(notdir $(^D))) \
++		$(BUILD_CFLAGS-$(notdir $@))
++
++cmd_kconfig_cc.c = $(HOSTCC) $(subst .o,.c,$@) -c -o $@ $(BUILD_CFLAGS) \
++		$(HOST_EXTRACFLAGS) $(BUILD_CFLAGS-$(notdir $(^D))) \
++		$(BUILD_CFLAGS-$(notdir $@))
++
++kconfig_cc.u= $(Q)echo "  "HOSTCC $(@); $(cmd_kconfig_cc.u)
++kconfig_cc.o= $(Q)echo "  "HOSTCC $(@); $(cmd_kconfig_cc.o)
++kconfig_cc.c= $(Q)echo "  "HOSTCC $(@); $(cmd_kconfig_cc.c)
++
++disp_gen       = echo " "GEN $(@)
++
++obj = $(top_srcdir)tools/kconfig
++src = $(top_srcdir)tools/kconfig
++srctree = $(abspath $(top_srcdir))
++
++generated := $(patsubst %_shipped,%,$(wildcard *_shipped))
++generated := $(addprefix $(obj)/,$(generated:.c=.o))
++
++include $(top_srcdir)tools/kconfig/Makefile
++
++$(obj)/dochecklxdialog: CONFIG_SHELL:=cd $(obj) && $(CONFIG_SHELL)
++HOSTCFLAGS_zconf.lex.o	:= -I$(top_srcdir)$(src)
++HOSTCFLAGS_zconf.tab.o	:= -I$(top_srcdir)$(src)
++conf-objs := $(addprefix $(obj)/,$(conf-objs))
++mconf-objs := $(addprefix $(obj)/,$(mconf-objs))
++nconf-objs := $(addprefix $(obj)/,$(nconf-objs))
++gconf-objs := $(addprefix $(obj)/,$(gconf-objs))
++kxgettext-objs := $(addprefix $(obj)/,$(kxgettext-objs))
++
++ifeq ($(findstring mconf,$(MAKECMDGOALS)),mconf)
++hostprogs-y += mconf
++endif
++ifeq ($(findstring nconf,$(MAKECMDGOALS)),nconf)
++hostprogs-y += nconf
++endif
++
++__hostprogs := $(sort $(hostprogs-y) $(hostprogs-m))
++host-csingle:= $(foreach m,$(__hostprogs),$(if $($(m)-objs),,$(m)))
++host-cmulti := $(foreach m,$(__hostprogs),\
++           $(if $($(m)-cxxobjs),,$(if $($(m)-objs),$(m))))
++host-cobjs  := $(sort $(foreach m,$(__hostprogs),$($(m)-objs)))
++
++conf mconf nconf kxgettext: %: $(obj)/%
++$(obj)/conf $(obj)/mconf $(obj)/nconf $(obj)/kxgettext: BUILD_LDFLAGS=$(HOSTLOADLIBES_$(@F))
++$(obj)/conf: $(conf-objs)
++	$(kconfig_cc.u)
++$(obj)/mconf: $(mconf-objs)
++	$(kconfig_cc.u)
++$(obj)/nconf: $(nconf-objs)
++	$(kconfig_cc.u)
++$(obj)/kxgettext: $(kxgettext-objs)
++	$(kconfig_cc.u)
++
++host-cobjs.nogen := $(filter-out $(generated),$(host-cobjs))
++host-cobjs.nogen := $(addprefix $(obj)/,$(host-cobjs.nogen))
++
++host-cobjs.generated := $(filter $(generated),$(host-cobjs))
++host-cobjs.generated := $(addprefix $(obj)/,$(host-cobjs.generated))
++
++$(host-cobjs.nogen): $(obj)/%.o: $(top_srcdir)$(src)/%.c
++	$(kconfig_cc.o)
++$(host-cobjs.generated): $(obj)/%.o: $(obj)/%.c
++	$(kconfig_cc.o)
++
++# we use the pre-generated always
++$(obj)/%:: $(top_srcdir)$(src)/%_shipped
++	@$(disp_gen)
++	$(Q)cat $< > $@
++
++$(obj)/%.o: $(subst .o,.c,$@)
++	$(kconfig_cc.c)
+diff --git a/tools/build/Makefile.rules b/tools/build/Makefile.rules
+new file mode 100644
+index 00000000..a3465b6e
+--- /dev/null
++++ b/tools/build/Makefile.rules
+@@ -0,0 +1,354 @@
++find-deps = $(foreach dep,$($(1)-deps),$($(dep)-out))
++
++known-module-type = \
++	$(foreach curr,$(module-types), \
++		$(if $(filter $(curr)%,$(subst ./src/modules/,,$(1))),$(strip $(curr))) \
++	) \
++
++module-type = \
++	$(eval curr-mod-type:=$(call known-module-type,$(1))) \
++	$(if $(curr-mod-type),$(curr-mod-type),external) \
++
++flow-type = \
++	$(sort $(if $(filter $(flow-dir)%,$(1)), \
++		$(subst /,,$(subst $(flow-dir),,$(dir $(1))))) \
++	)
++
++linux-micro-type = \
++	$(sort $(if $(filter $(linux-micro-dir)%,$(1)), \
++		$(subst /,,$(subst $(linux-micro-dir),,$(dir $(1))))) \
++	)
++
++all-gen-hdrs = $(foreach gen,$(all-gens),$($(gen)-hdr))
++
++gen-artifact = \
++	$(foreach json,$(filter %.json,$(2)), \
++		$(eval $(json)-hdr   := $(build_includedir)$(notdir $(subst .json,-gen.h,$(json)))) \
++		$(eval $(json)-src   := $(subst .json,-gen.c,$(json))) \
++		$(eval all-gens      += $(json)) \
++		$(eval $(json)-desc  := $(build_descdir)$(1).json) \
++		$(eval all-mod-descs += $($(json)-desc)) \
++		$(eval $(1)-gens     += $(json)) \
++	) \
++
++parse-common-module = \
++	$(eval artifacts    := $(addprefix $(2),$(obj-$(1)-$(3)))) \
++	$(call gen-artifact,$(1),$(filter %.json,$(artifacts))) \
++	$(eval mod-objs     := $(filter %.o,$(artifacts))) \
++	$(eval $(1)-cflags  := $(obj-$(1)-$(3)-extra-cflags)) \
++	$(eval $(1)-bs      := $(addprefix $(2),Makefile Kconfig)) \
++	$(eval $(1)-hdrs    := $(filter %.h,$(artifacts))) \
++	$(foreach obj,$(mod-objs), \
++		$(eval dest-obj        := $(subst $(top_srcdir)src/,$(build_stagedir),$(obj))) \
++		$(eval $(dest-obj)-src := $(subst .o,.c,$(obj))) \
++		$(eval $(1)-srcs       := $($(dest-obj)-src)) \
++	        $(eval $(1)-objs       += $(dest-obj)) \
++		$(eval all-objs        += $(dest-obj)) \
++	)\
++
++parse-builtin-module = \
++	$(call parse-common-module,$(1),$(2),y) \
++	$(eval builtin-cflags      += $($(1)-cflags)) \
++	$(eval builtin-objs        += $($(1)-objs)) \
++	$(eval builtin-flows       += $(call flow-type,$(artifacts))) \
++	$(eval builtin-linux-micro += $(call linux-micro-type,$(artifacts))) \
++
++parse-mod-output = \
++	$(if $(filter yes,$(obj-$(1)-static)), \
++		$(eval $(mod)-out := $(addprefix $(subst $(top_srcdir)src/,$(build_stagedir),$(subdir)),$(mod)).a) \
++		$(eval mod-ar     += $(1)), \
++		$(eval out-prefix := $(build_modulesdir)$(strip $(call module-type,$(2)))) \
++	        $(eval $(1)-out   := $(out-prefix)/$(1).so) \
++		$(eval mod-so     += $(1)) \
++	) \
++
++parse-mod-module = \
++	$(call parse-common-module,$(1),$(2),m) \
++	$(eval mod-flows       += $(call flow-type,$(artifacts))) \
++	$(eval mod-linux-micro += $(call linux-micro-type,$(artifacts))) \
++	$(eval $(mod)-deps     := $(subst .mod,,$(obj-$(mod)-m-deps))) \
++	$(call parse-mod-output,$(1),$(2)) \
++	$(eval modules-out += $($(mod)-out)) \
++
++parse-bin = \
++	$(eval bin-$(1)-srcs := $(addprefix $(2),$(bin-$(1)-y))) \
++	$(eval bin-$(1)-out  := $(addprefix $(build_bindir),$(1))) \
++	$(eval $(1)-deps     := $(subst .mod,,$(bin-$(1)-y-deps))) \
++	$(eval bins-out      += $(bin-$(1)-out)) \
++
++parse-test = \
++	$(eval test-$(1)-srcs := $(addprefix $(2),$(test-$(1)-y))) \
++	$(eval test-$(1)-out  := $(addprefix $(2),$(1))) \
++	$(eval $(1)-deps      := $(subst .mod,,$(test-$(1)-y-deps))) \
++	$(eval tests-out      += $(test-$(1)-out)) \
++
++clean-control = $(eval obj-y:=) $(eval obj-m:=) $(eval bin-y:=) $(eval test-y:=)
++
++inc-subdirs = \
++	$(foreach subdir,$(SUBDIRS), $(clean-control) \
++		$(eval -include $(subdir)Makefile) \
++		$(eval curr-builtins        := $(subst .mod,,$(filter %.mod,$(obj-y)))) \
++		$(eval builtins             += $(curr-builtins)) \
++		$(foreach buin,$(curr-builtins), \
++			$(call parse-builtin-module,$(buin),$(subdir)) \
++		) \
++		$(eval curr-modules        := $(subst .mod,,$(filter %.mod,$(obj-m)))) \
++		$(eval modules             += $(curr-modules)) \
++		$(foreach mod,$(curr-modules), \
++			$(call parse-mod-module,$(mod),$(subdir)) \
++		) \
++		$(eval curr-bins := $(bin-y)) \
++		$(eval bins += $(curr-bins)) \
++		$(foreach bin,$(curr-bins), \
++			$(call parse-bin,$(bin),$(subdir)) \
++		) \
++		$(eval tests += $(test-y)) \
++		$(foreach test,$(test-y), \
++			$(call parse-test,$(test),$(subdir)) \
++		) \
++		$(clean-control) \
++	)
++
++extra-headers = \
++	$(foreach hdr,$(EXTRA_HEADERS), \
++		$(eval $(hdr)-dest  := $(build_includedir)$(notdir $(hdr))) \
++		$(eval all-dest-hdr += $($(hdr)-dest)) \
++	) \
++
++extra-bins = \
++	$(foreach bin,$(EXTRA_BINS), \
++		$(eval $(bin)-dest  := $(build_bindir)$(notdir $(bin))) \
++		$(eval all-dest-bin += $($(bin)-dest)) \
++	) \
++
++ifneq ($(M),)
++SUBDIRS += $(M)/
++endif # $(M)
++
++$(eval $(call inc-subdirs))
++$(eval $(call extra-headers))
++$(eval $(call extra-bins))
++
++PRE_GEN += $(all-gen-hdrs) $(all-dest-hdr) $(all-dest-bin)
++LIB_CFLAGS += $(addprefix -I,$(sort $(dir $(all-gen-hdrs))))
++
++define make-extra-header
++$($(1)-dest): $(1)
++	$(Q)echo "    "INST"   "$$@
++	$(Q)$(MKDIR) -p $(dir $($(1)-dest))
++	$(Q)$(CP) $(1) $($(1)-dest)
++endef
++$(foreach hdr,$(EXTRA_HEADERS),$(eval $(call make-extra-header,$(hdr))))
++
++define make-extra-bin
++$($(1)-dest): $(1)
++	$(Q)echo "    "INST"   "$$@
++	$(Q)$(MKDIR) -p $(dir $($(1)-dest))
++	$(Q)$(INSTALL) -m755 $(1) $($(1)-dest)
++endef
++$(foreach bin,$(EXTRA_BINS),$(eval $(call make-extra-bin,$(bin))))
++
++define make-bin
++$(bin-$(1)-out): $(PRE_GEN) $(SOL_LIB_SO) $(INT_LIB_AR) $(bin-$(1)-srcs) $(call find-deps,$(1))
++	$(Q)echo "     "BIN"   "$$@
++	$(Q)$(MKDIR) -p $(dir $(bin-$(1)-out))
++	$(Q)$(TARGETCC) $(BIN_CFLAGS) $(filter-out %.h,$(bin-$(1)-srcs)) -o $(bin-$(1)-out) $(LIB_COVERAGE_FLAGS)
++endef
++$(foreach curr,$(bins),$(eval $(call make-bin,$(curr))))
++
++define make-test
++$(test-$(1)-out): $(PRE_GEN) $(SOL_LIB_SO) $(test-$(1)-srcs) $(call find-deps,$(1))
++	$(Q)echo "     "TST"   "$$@
++	$(Q)$(TARGETCC) $(filter-out %.h,$(test-$(1)-srcs)) -o $$@ \
++		$(BIN_CFLAGS) $(TEST_CFLAGS) $(call find-deps,$(1)) $(LIB_COVERAGE_FLAGS)
++endef
++$(foreach curr,$(tests),$(eval $(call make-test,$(curr))))
++
++find-gen-hdrs = $(foreach gen,$($(2)-gens),$($(gen)-hdr))
++external-module-flags = -DSOL_FLOW_NODE_TYPE_MODULE_EXTERNAL=1 -DSOL_PLATFORM_LINUX_MICRO_MODULE_EXTERNAL=1
++
++define make-object
++$(1): $(PRE_GEN) $($(1)-src) $(call find-deps,$(2)) $(find-gen-hdrs)
++	$(Q)echo "      "CC"   "$$@
++	$(Q)$(MKDIR) -p $(dir $(1))
++	$(Q)$(TARGETCC) $(LIB_CFLAGS) $($(1)-src) -c -o $(1) $(3) $(LIB_COVERAGE_FLAGS) $($(2)-cflags)
++endef
++$(foreach mod,$(modules), \
++	$(foreach obj,$($(mod)-objs),$(eval $(call make-object,$(obj),$(mod),$(external-module-flags)))) \
++)
++
++$(foreach buin,$(builtins), \
++	$(foreach obj,$($(buin)-objs), $(eval $(call make-object,$(obj),$(buin)))) \
++)
++
++define make-mod-so
++$($(1)-out): $(LIB_SO) $(INT_LIB_AR) $(PRE_GEN) $($(1)-objs) $(call find-deps,$(1)) $($(1)-bs)
++	$(Q)echo "     "MOD"   "$$@
++	$(Q)$(MKDIR) -p $(dir $($(1)-out))
++	$(Q)$(TARGETCC) $($(1)-objs) -shared -o $($(1)-out) $(LIB_COVERAGE_FLAGS) $($(1)-cflags)
++endef
++$(foreach curr,$(mod-so),$(eval $(call make-mod-so,$(curr))))
++
++define make-mod-ar
++$($(1)-out): $(PRE_GEN) $($(1)-objs) $(call find-deps,$(1)) $($(1)-bs)
++	$(Q)echo "      "AR"   "$$@
++	$(Q)$(MKDIR) -p $(dir $($(1)-out))
++	$(Q)$(TARGETAR) $(TARGET_ARFLAGS) $($(1)-out) $($(1)-objs)
++endef
++$(foreach curr,$(mod-ar),$(eval $(call make-mod-ar,$(curr))))
++
++$(SOL_LIB_AR): $(PRE_GEN) $(builtin-objs)
++	$(Q)echo "      "AR"   "$(@)
++	$(Q)$(MKDIR) -p $(dir $(SOL_LIB_AR))
++	$(Q)$(TARGETAR) $(TARGET_ARFLAGS) $(@) $(builtin-objs)
++
++$(SOL_LIB_SO): $(PRE_GEN) $(SOL_LIB_AR) $(INT_LIB_AR) $(builtin-objs)
++	$(Q)echo "      "LD"   "$(@)
++	$(Q)$(MKDIR) -p $(dir $(SOL_LIB_SO))
++	$(Q)$(TARGETCC) $(builtin-objs) -shared -o $(@).$(VERSION) $(TARGET_LINKFLAGS) \
++		$(LIB_COVERAGE_FLAGS) $(builtin-cflags)
++	$(Q)$(LN) -fs $(notdir $(@).$(VERSION)) $(@)
++
++$(DEPENDENCY_FILES): $(DEPENDENCY_SCRIPT)
++	$(Q)$(PYTHON) $(DEPENDENCY_SCRIPT) --compiler=$(TARGETCC) --cflags="$(COMMON_CFLAGS)"
++
++reconf: $(DEPENDENCY_SCRIPT)
++	$(Q)echo "[re]running dependency-resolver..."
++	$(Q)$(RM) -f $(DEPENDENCY_FILES)
++	$(Q)$(PYTHON) $(DEPENDENCY_SCRIPT) --compiler=$(TARGETCC) --cflags="$(COMMON_CFLAGS)"
++
++PHONY += reconf
++
++# generators
++define make-gen
++$($(1)-hdr) $($(1)-src) $($(1)-desc): $(1) $(NODE_TYPE_GEN_SCRIPT)
++	$(Q)echo "     "GEN"   "$$@
++	$(Q)$(MKDIR) -p $(dir $($(1)-hdr))
++	$(Q)$(MKDIR) -p $(dir $($(1)-desc))
++	$(Q)$(PYTHON) $(NODE_TYPE_GEN_SCRIPT) --prefix=sol-flow-node-type \
++		--genspec-schema=$(NODE_TYPE_SCHEMA) $(1) $($(1)-hdr) $($(1)-src) $($(1)-desc)
++endef
++$(foreach gen,$(all-gens),$(eval $(call make-gen,$(gen))))
++
++$(FLOW_BUILTINS_DESC): $(PRE_GEN) $(SOL_LIB_SO) $(SOL_LIB_AR) $(all-mod-descs) $(JSON_FORMAT_SCRIPT)
++	$(Q)echo "     "GEN"   "$@
++	$(Q)$(MKDIR) -p $(dir $(@))
++	$(Q)$(PYTHON) $(FLOW_MERGE_BUILTINS_SCRIPT) --modules-dir=$(build_descdir) $(@) $(builtin-flows)
++
++define install-resource
++$(2): $(1)
++	$(Q)echo "    "INST"   "$(1)
++	$(Q)$(MKDIR) -p $(dir $(2))
++	$(Q)$(CP) $(1) $(2)
++endef
++
++$(eval $(call install-resource,$(NODE_TYPE_SCHEMA),$(NODE_TYPE_SCHEMA_DEST)))
++$(eval $(call install-resource,$(PLATFORM_DETECT),$(PLATFORM_DETECT_DEST)))
++$(eval $(call install-resource,$(GDB_AUTOLOAD_PY),$(GDB_AUTOLOAD_PY_DEST)))
++
++$(FLOW_OIC_GEN): $(FLOW_OIC_GEN_SCRIPT)
++	$(Q)echo "     "GEN"   "$(@)
++	$(Q)$(PYTHON) $(FLOW_OIC_GEN_SCRIPT) $(FLOW_OIC_SPEC_DIR) $(FLOW_OIC_GEN) &>/dev/null
++
++$(FLOW_NODE_TYPES_H): $(NODE_TYPE_H_GEN_SCRIPT) $(KCONFIG_CONFIG)
++	$(Q)echo "     "GEN"   "$(@)
++	$(Q)$(PYTHON) $(NODE_TYPE_H_GEN_SCRIPT) $(FLOW_NODE_TYPES_H) $(all-gen-hdrs)
++
++$(LINUX_MICRO_BUILTINS_H): $(BUILTINS_SCRIPT) $(KCONFIG_CONFIG)
++	$(Q)echo "     "GEN"   "$(@)
++	$(Q)$(PYTHON) $(BUILTINS_SCRIPT) --output=$@ \
++		--array="static const struct sol_platform_linux_micro_module *SOL_PLATFORM_LINUX_MICRO_MODULE_ALL[]" \
++		--count="SOL_PLATFORM_LINUX_MICRO_MODULE_COUNT" \
++		--decl="struct sol_platform_linux_micro_module SOL_PLATFORM_LINUX_MICRO_MODULE_@NAME@" \
++		--item="&SOL_PLATFORM_LINUX_MICRO_MODULE_@NAME@" \
++		$(subst -,_,$(builtin-linux-micro))
++
++$(FLOW_BUILTINS_H): $(BUILTINS_SCRIPT) $(KCONFIG_CONFIG) $(KCONFIG_CONFIG)
++	$(Q)echo "     "GEN"   "$(@)
++	$(Q)$(PYTHON) $(BUILTINS_SCRIPT) \
++		--output=$@ \
++		--array="static const void *SOL_FLOW_BUILTIN_NODE_TYPE_ALL[]" \
++		--count="SOL_FLOW_BUILTIN_NODE_TYPE_COUNT" \
++		--decl="const struct sol_flow_node_type *sol_flow_foreach_builtin_node_type_@name@(bool (*)(void *, const struct sol_flow_node_type *), const void *)" \
++		--item="sol_flow_foreach_builtin_node_type_@name@" \
++		$(subst -,_,$(builtin-flows))
++
++ifeq (y,$(MODULES))
++node-type-desc-enabled = \#define SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED 1
++endif
++
++ifeq (y,$(INSPECTOR))
++inspector-enabled = \#define SOL_FLOW_INSPECTOR_ENABLED 1
++endif
++
++ifeq (y,$(RESOLVER_CONFFILE))
++resolver-conffile-enabled = \#define SOL_BUILD_FLOW_MODULE_RESOLVER_CONFFILE 1
++endif
++
++$(FLOW_BUILDOPTS_H): $(FLOW_BUILDOPTS_H_IN) $(KCONFIG_CONFIG)
++	$(Q)echo "     "GEN"   "$(@)
++	$(Q)$(CAT) $(<) | $(SED) 's/@SOL_FLOW_NODE_TYPE_DESCRIPTION_ENABLED@/$(node-type-desc-enabled)/g' | \
++		$(SED) 's/@SOL_FLOW_INSPECTOR_ENABLED@/$(inspector-enabled)/g' | \
++		$(SED) 's/@SOL_BUILD_FLOW_MODULE_RESOLVER_CONFFILE@/$(resolver-conffile-enabled)/' > $(@)
++
++ifeq (y,$(PLATFORM_LINUX_MICRO))
++platform-linux-enabled  := \#define SOL_PLATFORM_LINUX 1
++endif
++
++ifeq (y,$(PLATFORM_RIOTOS))
++platform-riotos-enabled := \#define SOL_PLATFORM_RIOT 1
++endif
++
++ifeq (y,$(LOG))
++log-enabled := \#define SOL_LOG_ENABLED 1
++endif
++
++$(COMMON_BUILDOPTS_H): $(COMMON_BUILDOPTS_H_IN) $(KCONFIG_CONFIG)
++	$(Q)echo "     "GEN"   "$(@)
++	$(Q)$(CAT) $(<) | $(SED) 's/@SOL_PLATFORM_LINUX@/$(platform-linux-enabled)/g' | \
++		$(SED) 's/@SOL_PLATFORM_RIOT@/$(platform-riotos-enabled)/g' | \
++		$(SED) 's/@SOL_LOG_ENABLED@/$(log-enabled)/' > $(@)
++
++$(PC_GEN): $(PC_GEN_IN)
++	$(Q)echo "     "GEN"   "$(PC_GEN)
++	$(Q)$(MKDIR) -p $(dir $(PC_GEN))
++	$(Q)$(CAT) $(<) | $(SED) 's#@prefix@#$(CONFG_PREFIX)#g' | \
++		$(SED) 's#@exec_prefix@#$(PREFIX)#g' | \
++		$(SED) 's#@libdir@#$(LIBDIR)#g' | \
++		$(SED) 's#@includedir@#$(INCLUDEDIR)#g' | \
++		$(SED) 's#@SOL_CONFFILE_MODULES_DIR@#$(MODULESDIR)#g' | \
++		$(SED) 's#@datadir@#$(DATADIR)#g' | \
++		$(SED) 's#@VERSION@#$(VERSION)#g' > $(@)
++
++$(NODE_TYPE_GEN_SCRIPT): $(NODE_TYPE_GEN_SCRIPT_IN)
++	$(Q)echo "     "GEN"   "$(NODE_TYPE_GEN_SCRIPT)
++	$(Q)$(MKDIR) -p $(dir $(NODE_TYPE_GEN_SCRIPT))
++	$(Q)$(CAT) $(<) | $(SED) 's#@pkgdatadir@#$(DATADIR)#g' > $(@) && $(CHMOD) +x $(@)
++
++$(FLOW_NODE_TYPE_FIND): $(FLOW_NODE_TYPE_FIND_IN)
++	$(Q)echo "     "GEN"   "$(FLOW_NODE_TYPE_FIND)
++	$(Q)$(CAT) $(<) | $(SED) 's#@flowtypedescdir@#$(DESCDIR)#' > $(@)
++
++# common build targets
++define clean-resource
++	$(Q)echo "   "CLEAN"   "$(1)
++	$(Q)$(RM) -Rf $(1)
++
++endef
++
++cleanup-files := $(shell find $(top_srcdir)src/ -name '*.o' -o -name '*.so' -o -name '*.a')
++cleanup-files += $(shell find $(top_srcdir) -name '*.gcda' -o -name '*.gcno')
++cleanup-files += $(CLEANUP_GEN) $(kconfig-clean-objs) $(BUILDDIR)
++
++clean:
++	$(foreach curr,$(wildcard $(cleanup-files)),$(call clean-resource,$(curr)))
++
++PHONY += clean
++
++distclean: clean
++	$(Q)$(RM) -Rf .config* $(DEPENDENCY_FILES) $(KCONFIG_INCLUDE)
++
++PHONY += distclean
++
++$(KCONFIG_AUTOHEADER): $(KCONFIG_CONFIG)
++	$(MAKE) -f $(top_srcdir)Makefile silentoldconfig
+diff --git a/tools/build/Makefile.targets b/tools/build/Makefile.targets
+new file mode 100644
+index 00000000..1165a59d
+--- /dev/null
++++ b/tools/build/Makefile.targets
+@@ -0,0 +1,68 @@
++check: $(SOL_LIB_SO) $(SOL_LIB_AR) $(tests-out)
++	$(Q)$(PYTHON) $(TEST_SUITE_RUN_SCRIPT) --tests="$(tests-out)"
++
++PHONY += check
++
++check-fbp: $(SOL_LIB_SO) $(SOL_LIB_AR) $(bins-out) $(modules-out)
++	$(Q)echo $(shell SOL_FBP_RUNNER_BIN="$(abspath $(SOL_FBP_RUNNER_BIN))" $(TEST_FBP_SCRIPT))
++
++PHONY += check-fbp
++
++ifeq (y,$(HAVE_VALGRIND))
++check-valgrind: $(SOL_LIB_SO) $(SOL_LIB_AR) $(tests-out)
++	$(Q)$(PYTHON) $(TEST_SUITE_RUN_SCRIPT) --tests="$(tests-out)" \
++		--valgrind=$(VALGRIND) --valgrind-supp=$(abpath $(TEST_VALGRIND_SUPP))
++
++check-fbp-valgrind: $(SOL_LIB_SO) $(SOL_LIB_AR) $(bins-out) $(modules-out)
++	$(Q)SOL_FBP_RUNNER_BIN="$(abspath $(SOL_FBP_RUNNER_BIN))" \
++		TEST_VALGRIND_SUPP="$(abspath $(TEST_VALGRIND_SUPP))" \
++		VALGRIND="$(VALGRIND)" $(TEST_FBP_SCRIPT)
++else
++check-valgrind:
++	$(Q)echo "No such valgrind installation: $(VALGRIND), either make sure your valgrind"
++	$(Q)echo " installation is correct or provide a valid VALGRIND= variable"
++	$(Q)echo "If you've just installed it, run: make reconf"
++
++check-fbp-valgrind: check-valgrind
++endif # HAVE_VALGRIND
++
++PHONY += check-valgrind check-fbp-valgrind
++
++ifneq (,$(LCOV))
++run-coverage: check check-fbp
++	$(Q)$(MKDIR) -p $(coveragedir)
++	$(Q)$(LCOV) --capture --directory $(top_srcdir) --output-file $(coveragedir)coverage.info
++	$(Q)$(MV) *.gcda $(build_bindir)
++	$(Q)$(GENHTML) coverage/coverage.info --output-directory coverage/
++
++coverage: clean
++	$(Q)$(RM) -Rf $(coveragedir)
++	$(Q)$(MAKE) -f $(top_srcdir)Makefile run-coverage
++else
++coverage:
++	$(Q)echo "No such lcov installation, check your system and run it again."
++	$(Q)echo "If you've just installed it, run: make reconf"
++endif
++
++PHONY += run-coverage coverage
++
++PRE_INSTALL := $(PC_GEN) $(SOL_LIB_SO) $(SOL_LIB_AR) $(bins-out) $(modules-out) $(all-mod-descs)
++PRE_INSTALL += $(FLOW_BUILTINS_DESC) $(NODE_TYPE_SCHEMA_DEST) $(PLATFORM_DETECT_DEST) $(GDB_AUTOLOAD_PY_DEST)
++
++rpath-bins := $(subst $(build_sysroot)/,$(DESTDIR),$(bins-out))
++
++define rpath-cleanup
++$(1)-rpath-cleanup: $(1)
++	@$(CHRPATH) -d $(1)
++endef
++$(foreach bin,$(rpath-bins),$(eval $(call rpath-cleanup,$(bin))))
++
++pre-install: $(PRE_INSTALL)
++	$(Q)echo "     "INSTALLING SYSROOT TO: $(DESTDIR)
++	$(Q)$(CP) -R $(build_sysroot)/* $(DESTDIR)
++
++post-install: pre-install $(addsuffix -rpath-cleanup,$(rpath-bins))
++
++install: post-install
++
++PHONY += install post-install pre-install
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+new file mode 100644
+index 00000000..b346205c
+--- /dev/null
++++ b/tools/build/Makefile.vars
+@@ -0,0 +1,279 @@
++VERSION_MAJOR := 0
++VERSION_MINOR := 0
++VERSION_RELEASE := 1
++VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_RELEASE)
++
++obj-y :=
++obj-m :=
++bin-y :=
++test-y :=
++
++# builtin objects, deps and configs lookup variables
++builtins :=
++builtin-cflags :=
++builtin-flows :=
++builtin-linux-micro :=
++builtin-objs :=
++
++# module objects, deps and configs lookup variables
++modules :=
++modules-out :=
++mod-flows :=
++mod-linux-micro :=
++mod-ar :=
++mod-so :=
++
++# binary lookup variables
++bins :=
++bins-out :=
++
++# test suite lookup variables
++tests :=
++tests-out :=
++
++all-gens :=
++all-objs :=
++all-dest-hdr :=
++all-dest-bin :=
++all-mod-descs :=
++
++module-types := flow linux-micro pin-mux
++
++# vars to distinguish the modules types
++flow-dir := $(top_srcdir)src/modules/flow/
++linux-micro-dir := $(top_srcdir)src/modules/linux-micro/
++
++# build/debugging
++ifeq ($(V),1)
++Q :=
++else
++Q := @
++endif
++
++# toolchain setup
++TARGET_ARFLAGS ?= rcs
++TARGETAR ?= $(TOOLCHAIN_PREFIX)ar
++TARGETCC ?= $(TOOLCHAIN_PREFIX)gcc
++
++HOSTCC ?= $(HOST_PREFIX)gcc
++HOSTAR ?= $(HOST_PREFIX)ar
++
++INSTALL ?= install
++LN ?= ln
++SED ?= sed
++MKDIR ?= mkdir
++CAT ?= cat
++RM ?= rm
++CP ?= cp
++MV ?= mv
++CHRPATH ?= chrpath
++CHMOD ?= chmod
++
++HAVE_VALGRIND := $(if $(filter-out $(wildcard $(VALGRIND)),$(VALGRIND)),n,y)
++
++# installation
++DESTDIR ?= /
++SYSCONF ?= /etc/
++PREFIX := $(patsubst "%",%,$(PREFIX))
++LIBDIR ?= $(PREFIX)/lib/
++DATADIR ?= $(PREFIX)/share/
++BINDIR ?= $(PREFIX)/bin/
++INCLUDEDIR ?= $(PREFIX)/include/
++
++SOL_DATADIR ?= $(DATADIR)soletta/
++SOL_INCLUDEDIR ?= $(INCLUDEDIR)soletta/
++
++MODULESDIR ?= $(LIBDIR)soletta/modules/
++SOL_FLOW_DATADIR ?= $(SOL_DATADIR)flow/
++DESCDIR ?= $(SOL_FLOW_DATADIR)descriptions/
++SCHEMADIR ?= $(SOL_FLOW_DATADIR)schema/
++PCDIR ?= $(LIBDIR)pkgconfig/
++
++# build dirs
++## BUILDDIR is the user provided option
++BUILDDIR ?= $(top_srcdir)build/
++
++top_builddir := $(BUILDDIR)
++build_sysroot := $(top_builddir)soletta_sysroot
++build_stagedir := $(top_builddir)stage/
++build_libdir := $(build_sysroot)$(LIBDIR)
++build_modulesdir := $(build_sysroot)$(MODULESDIR)
++build_includedir := $(build_sysroot)$(SOL_INCLUDEDIR)
++build_pcdir := $(build_sysroot)$(PCDIR)
++build_bindir := $(build_sysroot)$(BINDIR)
++build_descdir := $(build_sysroot)$(DESCDIR)
++build_datadir := $(build_sysroot)$(SOL_DATADIR)
++build_flowdatadir := $(build_sysroot)$(SOL_FLOW_DATADIR)
++build_gdbautoload := $(build_sysroot)$(DATADIR)gdb/auto-load/
++
++SOLETTA_INSTALL_ROOT := $(build_sysroot)
++export SOLETTA_INSTALL_ROOT
++
++#src dirs
++coveragedir = $(top_srcdir)coverage/
++src_modulesdir := $(top_srcdir)src/modules/
++SCRIPTDIR := $(top_srcdir)data/scripts/
++
++# sub-modules and deps
++SUBDIRS := $(addprefix $(top_srcdir)src/lib/,common coap flow) $(top_srcdir)src/shared
++SUBDIRS := $(dir $(filter-out $(SUBDIRS),$(shell find $(top_srcdir)src/ -name 'Makefile')))
++
++DEPENDENCY_FILES := Makefile.gen Kconfig.gen
++DEPENDENCY_SCRIPT := $(SCRIPTDIR)dependency-resolver.py
++HAVE_DEPENDENCY_FILES := $(if $(filter-out $(wildcard $(DEPENDENCY_FILES)),$(DEPENDENCY_FILES)),n,y)
++BSDIR := $(top_srcdir)tools/build/
++
++BSDEPS := Makefile Kconfig
++BSDEPS += $(addprefix $(BSDIR),Makefile.kconfig Makefile.vars Makefile.rules)
++
++# flags and comp. helpers
++HEADERDIRS := $(addprefix $(top_srcdir),src/shared src/lib/common)
++HEADERDIRS += $(addprefix $(top_srcdir),src/lib/flow src/lib/coap/)
++HEADERDIRS += $(addprefix $(top_srcdir),$(KCONFIG_INCLUDE)generated/)
++HEADERDIRS += $(build_includedir)
++
++LIB_OUTPUTDIR := $(build_libdir)
++
++SOL_LIB_AR := $(LIB_OUTPUTDIR)libsoletta.a
++SOL_LIB_SO := $(LIB_OUTPUTDIR)libsoletta.so
++
++GDB_AUTOLOAD_PY_DEST := $(build_gdbautoload)$(LIBDIR)libsoletta.so.$(VERSION)-gdb.py
++GDB_AUTOLOAD_PY := $(top_srcdir)data/gdb/libsoletta.so-gdb.py
++
++INT_LIBDIR := $(build_stagedir)shared/
++INT_LIB_AR := $(INT_LIBDIR)libshared.a
++
++COMMON_CFLAGS ?= $(CFLAGS)
++
++ifeq (y,$(LOG))
++ifeq (y,$(DEFAULT_LOG_LEVEL_CRITICAL))
++DEFAULT_LOG_LEVEL := 0
++endif
++
++ifeq (y,$(DEFAULT_LOG_LEVEL_ERROR))
++DEFAULT_LOG_LEVEL := 1
++endif
++
++ifeq (y,$(DEFAULT_LOG_LEVEL_WARNING))
++DEFAULT_LOG_LEVEL := 2
++endif
++
++ifeq (y,$(DEFAULT_LOG_LEVEL_INFO))
++DEFAULT_LOG_LEVEL := 3
++endif
++
++ifeq (y,$(DEFAULT_LOG_LEVEL_DEBUG))
++DEFAULT_LOG_LEVEL := 4
++endif
++
++COMMON_CFLAGS += -DSOL_LOG_LEVEL_MAXIMUM=$(DEFAULT_LOG_LEVEL)
++
++endif #LOG
++
++COMMON_CFLAGS += -D_GNU_SOURCE=1 -DHAVE_DECL_STRNDUPA=1 -DHAVE_ACCEPT4=1
++
++## since we no other flow resolver, couldn't we remove this parametrization?
++COMMON_CFLAGS += -Dsol_flow_default_resolver=sol_flow_resolver_conffile
++
++COMMON_CFLAGS += -DPKGSYSCONFDIR=\"$(SYSCONF)\"
++COMMON_CFLAGS += -DFLOWMODULESDIR=\"$(MODULESDIR)/flow/\"
++COMMON_CFLAGS += -DPINMUXDIR=\"$(MODULESDIR)/pin-mux/\"
++COMMON_CFLAGS += -DLINUXMICROMODULESDIR=\"$(MODULESDIR)/linux-micro/\"
++COMMON_CFLAGS += -DDATADIR=\"$(SOL_DATADIR)\"
++COMMON_CFLAGS += $(addprefix -I,$(HEADERDIRS))
++
++TEST_CFLAGS := $(CHECK_CFLAGS)
++
++LIB_CFLAGS := $(COMMON_CFLAGS)
++LIB_CFLAGS += $(addprefix -L,$(LIB_OUTPUTDIR))
++LIB_CFLAGS += -lshared -lsoletta -fPIC -std=gnu99
++
++BIN_CFLAGS := $(COMMON_CFLAGS)
++BIN_CFLAGS += $(addprefix -L,$(LIB_OUTPUTDIR))
++BIN_CFLAGS += -lsoletta -ldl
++BIN_CFLAGS += -Wl,-R$(abspath $(build_libdir))
++BIN_CFLAGS += -lm
++
++TARGET_LINKFLAGS := $(addprefix -L,$(INT_LIBDIR))
++TARGET_LINKFLAGS += -Wl,--whole-archive -lshared -Wl,-no-whole-archive
++
++# generators
++## headers
++FLOW_NODE_TYPES_H := $(top_srcdir)src/lib/flow/sol-flow-node-types.h
++LINUX_MICRO_BUILTINS_H := $(top_srcdir)src/lib/common/sol-platform-linux-micro-builtins-gen.h
++FLOW_BUILTINS_H := $(top_srcdir)src/lib/flow/sol-flow-builtins-gen.h
++
++FLOW_BUILDOPTS_H := $(top_srcdir)src/lib/flow/sol-flow-buildopts.h
++FLOW_BUILDOPTS_H_IN := $(addsuffix .in,$(FLOW_BUILDOPTS_H))
++
++COMMON_BUILDOPTS_H := $(top_srcdir)src/lib/common/sol-common-buildopts.h
++COMMON_BUILDOPTS_H_IN := $(addsuffix .in,$(COMMON_BUILDOPTS_H))
++
++NODE_TYPE_SCHEMA := $(top_srcdir)data/schemas/node-type-genspec.schema
++NODE_TYPE_SCHEMA_DEST := $(build_flowdatadir)schemas/node-type-genspec.schema
++
++PLATFORM_DETECT := $(top_srcdir)data/jsons/platform_detect.json
++PLATFORM_DETECT_DEST := $(build_datadir)platform_detect.json
++
++FLOW_NODE_TYPE_FIND := $(SCRIPTDIR)sol-flow-node-type-find.py
++FLOW_NODE_TYPE_FIND_IN := $(addsuffix .in,$(FLOW_NODE_TYPE_FIND))
++
++FLOW_BUILTINS_DESC := $(build_descdir)builtins.json
++
++FLOW_MERGE_BUILTINS_SCRIPT := $(SCRIPTDIR)flow-merge-builtins.py
++
++JSON_FORMAT_SCRIPT := $(SCRIPTDIR)json-format.py
++
++HEADER_GEN :=
++
++ifeq (y,$(PLATFORM_LINUX_MICRO))
++HEADER_GEN += $(LINUX_MICRO_BUILTINS_H)
++endif
++
++HEADER_GEN += $(FLOW_BUILTINS_H)
++HEADER_GEN += $(FLOW_BUILDOPTS_H)
++HEADER_GEN += $(COMMON_BUILDOPTS_H)
++
++## scripts
++NODE_TYPE_H_GEN_SCRIPT := $(SCRIPTDIR)sol-flow-node-types-h-gen.py
++BUILTINS_SCRIPT := $(SCRIPTDIR)sol-builtins-gen.py
++
++NODE_TYPE_GEN_SCRIPT := $(SCRIPTDIR)sol-flow-node-type-gen.py
++NODE_TYPE_GEN_SCRIPT_IN := $(addsuffix .in,$(SCRIPTDIR)sol-flow-node-type-gen.py)
++
++FLOW_OIC_GEN_SCRIPT := $(top_srcdir)data/oic/oicgen.py
++TEST_SUITE_RUN_SCRIPT := $(SCRIPTDIR)suite.py
++TEST_VALGRIND_SUPP := $(top_srcdir)src/test/test.supp
++
++TEST_FBP_SCRIPT := $(top_srcdir)src/test-fbp/run
++SOL_FBP_RUNNER_BIN := $(build_bindir)sol-fbp-runner
++
++## oic flow
++FLOW_OIC_GEN := $(flow-dir)oic/oic.json $(flow-dir)oic/oic.c
++FLOW_OIC_SPEC_DIR := $(top_srcdir)data/oic
++
++PC_GEN := $(build_pcdir)soletta.pc
++PC_GEN_IN := $(top_srcdir)pc/soletta.pc.in
++
++PRE_GEN := $(FLOW_NODE_TYPES_H) $(FLOW_OIC_GEN) $(HEADER_GEN) $(KCONFIG_AUTOHEADER) $(KCONFIG_CONFIG) $(BSDEPS)
++PRE_GEN += $(NODE_TYPE_GEN_SCRIPT)
++
++CLEANUP_GEN := $(FLOW_NODE_TYPES_H) $(FLOW_OIC_GEN) $(HEADER_GEN)
++
++LIB_COMMON_HEADERS := sol-blob.h sol-log.h sol-macros.h sol-mainloop.h sol-missing.h sol-platform.h sol-types.h
++EXTRA_HEADERS := $(addprefix $(top_srcdir)src/lib/common/, $(LIB_COMMON_HEADERS))
++
++LIB_FLOW_HEADERS := sol-flow-builder.h sol-flow.h sol-flow-inspector.h sol-flow-node-types.h sol-flow-packet.h
++LIB_FLOW_HEADERS += sol-flow-parser.h sol-flow-resolver.h
++EXTRA_HEADERS += $(addprefix $(top_srcdir)src/lib/flow/,$(LIB_FLOW_HEADERS))
++
++EXTRA_BINS := $(FLOW_NODE_TYPE_FIND)
++EXTRA_BINS += $(addprefix $(SCRIPTDIR),sol-flow-node-type-gen.py sol-flow-node-type-validate.py)
++
++ifneq (,$(filter %coverage,$(MAKECMDGOALS)))
++LIB_COVERAGE_FLAGS := -fprofile-arcs -ftest-coverage
++BIN_COVERAGE_FLAGS := --coverage
++endif
++
++warning-targets = all check check-fbp check-valgrind check-fbp-valgrind coverage run-coverage pre-install post-install install: warning
++

@@ -1,0 +1,796 @@
+"2015-07-06 17:48:29 -0300"
+diff --git a/Kconfig b/Kconfig
+index f231b478..83e9fd25 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -57,7 +57,7 @@ source "src/lib/flow/Kconfig"
+ endmenu
+ 
+ menu "Networking"
+-source "src/lib/coap/Kconfig"
++source "src/lib/comms/Kconfig"
+ endmenu
+ 
+ menu "Tools"
+diff --git a/data/oic/oicgen.py b/data/oic/oicgen.py
+index b5896304..b8827714 100755
+--- a/data/oic/oicgen.py
++++ b/data/oic/oicgen.py
+@@ -1358,6 +1358,7 @@ server_resource_init(struct server_resource *resource, struct sol_flow_node *nod
+     resource->funcs = funcs;
+ 
+     resource->oic = (struct sol_oic_resource_type) {
++        .api_version = SOL_OIC_RESOURCE_TYPE_API_VERSION,
+         .endpoint = sol_str_slice_from_str(resource->endpoint),
+         .resource_type = resource_type,
+         .iface = SOL_STR_SLICE_LITERAL("oc.mi.def"),
+diff --git a/src/lib/coap/Makefile b/src/lib/coap/Makefile
+deleted file mode 100644
+index 6c13baff..00000000
+--- a/src/lib/coap/Makefile
++++ /dev/null
+@@ -1,7 +0,0 @@
+-obj-$(COAP) += coap.mod
+-
+-obj-coap-$(COAP) := \
+-    coap.o \
+-    sol-coap.o \
+-    sol-oic-client.o \
+-    sol-oic-server.o
+diff --git a/src/lib/common/include/sol-mainloop.h b/src/lib/common/include/sol-mainloop.h
+index f06759f1..2ea6da1a 100644
+--- a/src/lib/common/include/sol-mainloop.h
++++ b/src/lib/common/include/sol-mainloop.h
+@@ -57,6 +57,7 @@ extern "C" {
+  * targets.
+  *
+  * For a better reference, check the following groups:
++ * @li @ref Comms
+  * @li @ref Datatypes
+  * @li @ref Flow
+  * @li @ref IO
+diff --git a/src/lib/coap/Kconfig b/src/lib/comms/Kconfig
+similarity index 56%
+rename from src/lib/coap/Kconfig
+rename to src/lib/comms/Kconfig
+index 18e2ebf1..25e536dd 100644
+--- a/src/lib/coap/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -1,6 +1,24 @@
++config COMMS
++	bool "Comms"
++	default y
++	help
++            Comms consists on a few communication modules.
++            It provides ways to deal with network, CoAP protocol and
++            OIC protocol (server and client sides).
++
++config NETWORK
++	bool "Network"
++	default y
++	depends on COMMS
++	help
++            Network library provides a way to handle network link interfaces,
++            making it possible to observe events, to inquire available links
++            and to set their states.
++
+ config COAP
+ 	bool "CoAP"
+ 	default y
++	depends on NETWORK
+ 	help
+             The Constrained Application Protocol (CoAP) is a
+             specialized web transfer protocol for use with constrained
+@@ -26,3 +44,18 @@ config COAP
+             http://openinterconnect.org/)
+ 
+             See https://tools.ietf.org/html/rfc7252
++
++config OIC
++	bool "OIC"
++	default y
++	depends on COAP
++	help
++            Implementation of protocol defined by Open Inter Connect (OIC -
++            http://openinterconnect.org/)
++
++            It's a common communication framework based on industry standard
++            technologies to wirelessly connect and intelligently manage
++            the flow of information among devices, regardless of form factor,
++            operating system or service provider.
++
++            Both client and server sides are covered by this library.
+diff --git a/src/lib/comms/Makefile b/src/lib/comms/Makefile
+new file mode 100644
+index 00000000..b7d5300d
+--- /dev/null
++++ b/src/lib/comms/Makefile
+@@ -0,0 +1,27 @@
++obj-$(COMMS) += comms.mod
++
++obj-comms-$(COMMS) :=
++
++ifeq (y,$(NETWORK))
++    ifeq (y,$(PLATFORM_RIOTOS))
++    obj-comms-$(COMMS) += \
++        sol-network-riot.o
++    endif
++
++    ifeq (y,$(SOL_PLATFORM_LINUX))
++    obj-comms-$(COMMS) += \
++        sol-network-linux.o
++    endif
++endif
++
++ifeq (y,$(COAP))
++obj-comms-$(COMMS) += \
++    coap.o \
++    sol-coap.o
++endif
++
++ifeq (y,$(OIC))
++obj-comms-$(COMMS) += \
++    sol-oic-client.o \
++    sol-oic-server.o
++endif
+diff --git a/src/lib/coap/coap.c b/src/lib/comms/coap.c
+similarity index 100%
+rename from src/lib/coap/coap.c
+rename to src/lib/comms/coap.c
+diff --git a/src/lib/coap/coap.h b/src/lib/comms/coap.h
+similarity index 100%
+rename from src/lib/coap/coap.h
+rename to src/lib/comms/coap.h
+diff --git a/src/lib/coap/sol-coap.h b/src/lib/comms/include/sol-coap.h
+similarity index 92%
+rename from src/lib/coap/sol-coap.h
+rename to src/lib/comms/include/sol-coap.h
+index e5b803f1..10d79689 100644
+--- a/src/lib/coap/sol-coap.h
++++ b/src/lib/comms/include/sol-coap.h
+@@ -32,8 +32,26 @@
+ 
+ #pragma once
+ 
+-#include "sol-network.h"
+-#include "sol-str-slice.h"
++#include <sol-network.h>
++#include <sol-str-slice.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief Routines to handle CoAP protocol.
++ * The Constrained Application Protocol (CoAP) is a
++ * specialized web transfer protocol for use with constrained
++ * nodes and constrained (e.g., low-power, lossy) networks.
++ */
++
++/**
++ * @ingroup Comms
++ *
++ * @{
++ */
+ 
+ typedef enum {
+     SOL_COAP_OPTION_IF_MATCH = 1,
+@@ -116,6 +134,9 @@ struct sol_coap_packet;
+ struct sol_coap_server;
+ 
+ struct sol_coap_resource {
++#define SOL_COAP_RESOURCE_API_VERSION (1)
++    uint16_t api_version;
++    uint16_t reserved; /* save this hole for a future field */
+     /*
+      * handlers for the CoAP defined methods.
+      */
+@@ -165,6 +186,9 @@ struct sol_coap_packet *sol_coap_packet_notification_new(struct sol_coap_server
+ struct sol_coap_packet *sol_coap_packet_ref(struct sol_coap_packet *pkt);
+ void sol_coap_packet_unref(struct sol_coap_packet *pkt);
+ 
++/* FIXME - remove this function.
++ * Some refactory will be needed before removing it, so it's exposed this
++ * way by now - DO NOT add other users for this function. */
+ int sol_coap_packet_get_buf(struct sol_coap_packet *pkt, uint8_t **buf, uint16_t *len);
+ 
+ int sol_coap_packet_get_payload(struct sol_coap_packet *pkt, uint8_t **buf, uint16_t *len);
+@@ -193,3 +217,11 @@ bool sol_coap_server_register_resource(struct sol_coap_server *server,
+ 
+ int sol_coap_uri_path_to_buf(const struct sol_str_slice path[],
+     uint8_t *buf, size_t buflen);
++
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-network.h b/src/lib/comms/include/sol-network.h
+similarity index 81%
+rename from src/shared/sol-network.h
+rename to src/lib/comms/include/sol-network.h
+index 9f051b34..d80278c6 100644
+--- a/src/shared/sol-network.h
++++ b/src/lib/comms/include/sol-network.h
+@@ -35,7 +35,24 @@
+ #include <stdbool.h>
+ #include <sys/socket.h>
+ 
+-#include "sol-vector.h"
++#include <sol-vector.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief These are routines that Solleta provides for handling network
++ * link interfaces, making it possible to observe events,
++ * to inquire available links and to set their states.
++ */
++
++/**
++ * @defgroup Comms Communication Libraries
++ *
++ * @{
++ */
+ 
+ #define SOL_INET_ADDR_STRLEN 48
+ 
+@@ -47,10 +64,10 @@ enum sol_network_event {
+ 
+ enum sol_network_link_flags {
+     SOL_NETWORK_LINK_UP            = 1 << 0,
+-        SOL_NETWORK_LINK_BROADCAST     = 1 << 1,
+-        SOL_NETWORK_LINK_LOOPBACK      = 1 << 2,
+-        SOL_NETWORK_LINK_MULTICAST     = 1 << 3,
+-        SOL_NETWORK_LINK_RUNNING       = 1 << 4,
++    SOL_NETWORK_LINK_BROADCAST     = 1 << 1,
++    SOL_NETWORK_LINK_LOOPBACK      = 1 << 2,
++    SOL_NETWORK_LINK_MULTICAST     = 1 << 3,
++    SOL_NETWORK_LINK_RUNNING       = 1 << 4,
+ };
+ 
+ struct sol_network_link_addr {
+@@ -63,6 +80,9 @@ struct sol_network_link_addr {
+ };
+ 
+ struct sol_network_link {
++#define SOL_NETWORK_LINK_API_VERSION (1)
++    uint16_t api_version;
++    int : 0; /* save possible hole for a future field */
+     int index;
+     enum sol_network_link_flags flags;
+     struct sol_vector addrs;       /* struct sol_network_link_addr */
+@@ -86,3 +106,11 @@ const struct sol_vector *sol_network_get_available_links(void);
+ char *sol_network_link_get_name(const struct sol_network_link *link);
+ 
+ bool sol_network_link_up(unsigned int link_index);
++
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/coap/sol-oic-client.h b/src/lib/comms/include/sol-oic-client.h
+similarity index 85%
+rename from src/lib/coap/sol-oic-client.h
+rename to src/lib/comms/include/sol-oic-client.h
+index 4fee879f..1384daef 100644
+--- a/src/lib/coap/sol-oic-client.h
++++ b/src/lib/comms/include/sol-oic-client.h
+@@ -34,16 +34,37 @@
+ 
+ #include <stdbool.h>
+ #include <stdint.h>
+-#include "sol-coap.h"
+-#include "sol-network.h"
+-#include "sol-str-slice.h"
+-#include "sol-vector.h"
++#include <sol-coap.h>
++#include <sol-network.h>
++#include <sol-str-slice.h>
++#include <sol-vector.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief Routines to create clients talking OIC protocol.
++ */
++
++/**
++ * @ingroup Comms
++ *
++ * @{
++ */
+ 
+ struct sol_oic_client {
++#define SOL_OIC_CLIENT_API_VERSION (1)
++    uint16_t api_version;
++    int : 0; /* save possible hole for a future field */
+     struct sol_coap_server *server;
+ };
+ 
+ struct sol_oic_resource {
++#define SOL_OIC_RESOURCE_API_VERSION (1)
++    uint16_t api_version;
++    int : 0; /* save possible hole for a future field */
+     struct sol_network_link_addr addr;
+     struct sol_str_slice href;
+     struct sol_vector types;
+@@ -76,3 +97,11 @@ bool sol_oic_client_resource_set_observable(struct sol_oic_client *client, struc
+ 
+ struct sol_oic_resource *sol_oic_resource_ref(struct sol_oic_resource *r);
+ void sol_oic_resource_unref(struct sol_oic_resource *r);
++
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/coap/sol-oic-server.h b/src/lib/comms/include/sol-oic-server.h
+similarity index 90%
+rename from src/lib/coap/sol-oic-server.h
+rename to src/lib/comms/include/sol-oic-server.h
+index 84194a21..0310a93a 100644
+--- a/src/lib/coap/sol-oic-server.h
++++ b/src/lib/comms/include/sol-oic-server.h
+@@ -32,9 +32,23 @@
+ 
+ #pragma once
+ 
+-#include "sol-str-slice.h"
+-#include "sol-coap.h"
++#include <sol-str-slice.h>
++#include <sol-coap.h>
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/**
++ * @file
++ * @brief Routines to create servers talking OIC protocol.
++ */
++
++/**
++ * @ingroup Comms
++ *
++ * @{
++ */
+ 
+ #ifndef OIC_DEVICE_NAME
+ #define OIC_DEVICE_NAME "Soletta OIC Device"
+@@ -76,6 +90,9 @@
+ struct sol_oic_device_definition;
+ 
+ struct sol_oic_resource_type {
++#define SOL_OIC_RESOURCE_TYPE_API_VERSION (1)
++    uint16_t api_version;
++    int : 0; /* save possible hole for a future field */
+     struct sol_str_slice endpoint;
+     struct sol_str_slice resource_type;
+     struct sol_str_slice iface;
+@@ -100,3 +117,11 @@ struct sol_coap_resource *sol_oic_device_definition_register_resource_type(
+     const struct sol_oic_resource_type *resource_type,
+     void *handler_data, enum sol_coap_flags flags);
+ bool sol_oic_notify_observers(struct sol_coap_resource *resource, uint8_t *msg, uint16_t msg_len);
++
++/**
++ * @}
++ */
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/coap/sol-coap.c b/src/lib/comms/sol-coap.c
+similarity index 98%
+rename from src/lib/coap/sol-coap.c
+rename to src/lib/comms/sol-coap.c
+index d5358972..c84759dd 100644
+--- a/src/lib/coap/sol-coap.c
++++ b/src/lib/comms/sol-coap.c
+@@ -75,6 +75,17 @@ SOL_LOG_INTERNAL_DECLARE(_sol_coap_log_domain, "coap");
+ #define ACK_TIMEOUT_MS 2345
+ #define MAX_RETRANSMIT 4
+ 
++#define COAP_RESOURCE_CHECK_API(...) \
++    do { \
++        if (unlikely(resource->api_version != \
++                SOL_COAP_RESOURCE_API_VERSION)) { \
++            SOL_WRN("Couldn't handle resource that has unsupported version " \
++                    "'%u', expected version is '%u'", \
++                    resource->api_version, SOL_COAP_RESOURCE_API_VERSION); \
++            return __VA_ARGS__; \
++        } \
++    } while (0)
++
+ struct sol_coap_server {
+     struct sol_vector contexts;
+     struct sol_ptr_vector pending; /* waiting pending replies */
+@@ -644,6 +655,8 @@ sol_coap_packet_send_notification(struct sol_coap_server *server,
+     SOL_NULL_CHECK(resource, -EINVAL);
+     SOL_NULL_CHECK(pkt, -EINVAL);
+ 
++    COAP_RESOURCE_CHECK_API(-EINVAL);
++
+     c = find_context(server, resource);
+     SOL_NULL_CHECK(c, -ENOENT);
+ 
+@@ -696,6 +709,9 @@ sol_coap_packet_notification_new(struct sol_coap_server *server, struct sol_coap
+     struct sol_coap_packet *pkt;
+     uint16_t id;
+ 
++    SOL_NULL_CHECK(resource, NULL);
++    COAP_RESOURCE_CHECK_API(NULL);
++
+     c = find_context(server, resource);
+     SOL_NULL_CHECK(c, NULL);
+ 
+@@ -1502,6 +1518,8 @@ sol_coap_server_register_resource(struct sol_coap_server *server,
+     SOL_NULL_CHECK(server, false);
+     SOL_NULL_CHECK(resource, false);
+ 
++    COAP_RESOURCE_CHECK_API(false);
++
+     c = sol_vector_append(&server->contexts);
+     SOL_NULL_CHECK(c, false);
+ 
+diff --git a/src/shared/sol-network-linux.c b/src/lib/comms/sol-network-linux.c
+similarity index 97%
+rename from src/shared/sol-network-linux.c
+rename to src/lib/comms/sol-network-linux.c
+index dff3ebb0..95d62dc6 100644
+--- a/src/shared/sol-network-linux.c
++++ b/src/lib/comms/sol-network-linux.c
+@@ -99,6 +99,7 @@ _get_link(int index)
+     link = sol_vector_append(&network->links);
+     SOL_NULL_CHECK(link, NULL);
+ 
++    link->api_version = SOL_NETWORK_LINK_API_VERSION;
+     link->flags = 0;
+     sol_vector_init(&link->addrs, sizeof(struct sol_network_link_addr));
+     link->index = index;
+@@ -309,7 +310,7 @@ _netlink_request(int event)
+     }
+ }
+ 
+-bool
++SOL_API bool
+ sol_network_init(void)
+ {
+     SOL_LOG_INTERNAL_INIT_ONCE;
+@@ -364,7 +365,7 @@ err:
+     return false;
+ }
+ 
+-void
++SOL_API void
+ sol_network_shutdown(void)
+ {
+     struct callback *callback;
+@@ -405,7 +406,7 @@ sol_network_shutdown(void)
+     (void)callback;
+ }
+ 
+-bool
++SOL_API bool
+ sol_network_subscribe_events(void (*cb)(void *data, const struct sol_network_link *link,
+     enum sol_network_event event),
+     const void *data)
+@@ -424,7 +425,7 @@ sol_network_subscribe_events(void (*cb)(void *data, const struct sol_network_lin
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_network_unsubscribe_events(void (*cb)(void *data, const struct sol_network_link *link,
+     enum sol_network_event event),
+     const void *data)
+@@ -454,20 +455,27 @@ sol_network_get_available_links(void)
+     return &network->links;
+ }
+ 
+-char *
++SOL_API char *
+ sol_network_link_get_name(const struct sol_network_link *link)
+ {
+     char name[IFNAMSIZ];
+ 
+     SOL_NULL_CHECK(link, NULL);
+ 
++    if (unlikely(link->api_version != SOL_NETWORK_LINK_API_VERSION)) {
++        SOL_WRN("Couldn't link that has unsupported version '%u', "
++                "expected version is '%u'",
++                link->api_version, SOL_NETWORK_LINK_API_VERSION);
++        return NULL;
++    }
++
+     if (if_indextoname(link->index, name))
+         return strdup(name);
+ 
+     return NULL;
+ }
+ 
+-bool
++SOL_API bool
+ sol_network_link_up(unsigned int link_index)
+ {
+     char buf[sizeof(struct nlmsghdr) + sizeof(struct ifinfomsg) + 512] = { 0 };
+diff --git a/src/shared/sol-network-riot.c b/src/lib/comms/sol-network-riot.c
+similarity index 98%
+rename from src/shared/sol-network-riot.c
+rename to src/lib/comms/sol-network-riot.c
+index ccafc04b..5e33f692 100644
+--- a/src/shared/sol-network-riot.c
++++ b/src/lib/comms/sol-network-riot.c
+@@ -72,6 +72,7 @@ sol_network_init(void)
+ 
+         /* FIXME: set the flags */
+ 
++        link->api_version = SOL_NETWORK_LINK_API_VERSION;
+         link->index = net_if;
+ 
+         do {
+diff --git a/src/lib/coap/sol-oic-client.c b/src/lib/comms/sol-oic-client.c
+similarity index 93%
+rename from src/lib/coap/sol-oic-client.c
+rename to src/lib/comms/sol-oic-client.c
+index 4ff6d7a2..cba9c9f3 100644
+--- a/src/lib/coap/sol-oic-client.c
++++ b/src/lib/comms/sol-oic-client.c
+@@ -56,6 +56,27 @@
+ #define IOTIVITY_CON_REQ_OBS_MID 0x7d44
+ #define IOTIVITY_NONCON_REQ_MID 0x7d40
+ 
++#define OIC_RESOURCE_CHECK_API(ptr, ...) \
++    do {                                        \
++        if (unlikely(ptr->api_version != \
++                SOL_OIC_RESOURCE_API_VERSION)) { \
++            SOL_WRN("Couldn't handle oic client resource that has unsupported "\
++                    "version '%u', expected version is '%u'", \
++                    ptr->api_version, SOL_OIC_RESOURCE_API_VERSION); \
++            return __VA_ARGS__; \
++        } \
++    } while (0)
++
++#define OIC_CLIENT_CHECK_API(ptr, ...) \
++    do {                                        \
++        if (unlikely(ptr->api_version != SOL_OIC_CLIENT_API_VERSION)) { \
++            SOL_WRN("Couldn't handle oic client that has unsupported "\
++                    "version '%u', expected version is '%u'", \
++                    ptr->api_version, SOL_OIC_CLIENT_API_VERSION); \
++            return __VA_ARGS__; \
++        } \
++    } while (0)
++
+ struct find_resource_ctx {
+     struct sol_oic_client *client;
+     void (*cb)(struct sol_oic_client *cli, struct sol_oic_resource *res, void *data);
+@@ -189,6 +210,7 @@ SOL_API struct sol_oic_resource *
+ sol_oic_resource_ref(struct sol_oic_resource *r)
+ {
+     SOL_NULL_CHECK(r, NULL);
++    OIC_RESOURCE_CHECK_API(r, NULL);
+ 
+     r->refcnt++;
+     return r;
+@@ -198,6 +220,7 @@ SOL_API void
+ sol_oic_resource_unref(struct sol_oic_resource *r)
+ {
+     SOL_NULL_CHECK(r);
++    OIC_RESOURCE_CHECK_API(r);
+ 
+     r->refcnt--;
+     if (!r->refcnt) {
+@@ -288,6 +311,7 @@ sol_oic_client_find_resource(struct sol_oic_client *client,
+     SOL_LOG_INTERNAL_INIT_ONCE;
+ 
+     SOL_NULL_CHECK(client, false);
++    OIC_CLIENT_CHECK_API(client, false);
+ 
+     ctx = sol_util_memdup(&(struct find_resource_ctx) {
+             .client = client,
+@@ -476,7 +500,9 @@ sol_oic_client_resource_request(struct sol_oic_client *client, struct sol_oic_re
+     void *data)
+ {
+     SOL_NULL_CHECK(client, false);
++    OIC_CLIENT_CHECK_API(client, false);
+     SOL_NULL_CHECK(res, false);
++    OIC_RESOURCE_CHECK_API(res, false);
+ 
+     return _resource_request(client, res, method, payload, payload_len, callback, data, false);
+ }
+@@ -548,7 +574,9 @@ sol_oic_client_resource_set_observable(struct sol_oic_client *client, struct sol
+     void *data, bool observe)
+ {
+     SOL_NULL_CHECK(client, false);
++    OIC_CLIENT_CHECK_API(client, false);
+     SOL_NULL_CHECK(res, false);
++    OIC_RESOURCE_CHECK_API(res, false);
+ 
+     if (observe) {
+         if (!res->observable)
+diff --git a/src/lib/coap/sol-oic-server.c b/src/lib/comms/sol-oic-server.c
+similarity index 98%
+rename from src/lib/coap/sol-oic-server.c
+rename to src/lib/comms/sol-oic-server.c
+index 46aa15aa..912b21aa 100644
+--- a/src/lib/coap/sol-oic-server.c
++++ b/src/lib/comms/sol-oic-server.c
+@@ -319,6 +319,7 @@ no_memory:
+ }
+ 
+ static const struct sol_coap_resource d_coap_resorce = {
++    .api_version = SOL_COAP_RESOURCE_API_VERSION,
+     .path = {
+         SOL_STR_SLICE_LITERAL("d"),
+         SOL_STR_SLICE_EMPTY
+@@ -327,6 +328,7 @@ static const struct sol_coap_resource d_coap_resorce = {
+     .flags = SOL_COAP_FLAGS_NONE
+ };
+ static const struct sol_coap_resource res_coap_resorce = {
++    .api_version = SOL_COAP_RESOURCE_API_VERSION,
+     .path = {
+         SOL_STR_SLICE_LITERAL("res"),
+         SOL_STR_SLICE_EMPTY
+@@ -335,6 +337,7 @@ static const struct sol_coap_resource res_coap_resorce = {
+     .flags = SOL_COAP_FLAGS_NONE
+ };
+ static const struct sol_coap_resource rts_coap_resorce = {
++    .api_version = SOL_COAP_RESOURCE_API_VERSION,
+     .path = {
+         SOL_STR_SLICE_LITERAL("rts"),
+         SOL_STR_SLICE_EMPTY
+@@ -557,6 +560,8 @@ create_coap_resource(struct sol_str_slice endpoint)
+     res = calloc(1, sizeof(struct sol_coap_resource) + (count + 1) * sizeof(struct sol_str_slice));
+     SOL_NULL_CHECK(res, NULL);
+ 
++    res->api_version = SOL_COAP_RESOURCE_API_VERSION;
++
+     res->path[0].data = &endpoint.data[1];
+     for (i = 1, current = 0; i < endpoint.len; i++) {
+         if (endpoint.data[i] == '/')
+@@ -797,6 +802,14 @@ sol_oic_device_definition_register_resource_type(struct sol_oic_device_definitio
+     SOL_NULL_CHECK(definition, NULL);
+     SOL_NULL_CHECK(resource_type, NULL);
+ 
++    if (unlikely(resource_type->api_version !=
++            SOL_OIC_RESOURCE_TYPE_API_VERSION)) {
++        SOL_WRN("Couldn't register resource_type that has unsupported "
++                "version '%u', expected version is '%u'",
++                resource_type->api_version, SOL_OIC_RESOURCE_TYPE_API_VERSION);
++        return NULL;
++    }
++
+     res_type_copy = sol_util_memdup(resource_type, sizeof(*resource_type));
+     SOL_NULL_CHECK(res_type_copy, NULL);
+ 
+diff --git a/src/modules/flow/network/Kconfig b/src/modules/flow/network/Kconfig
+index 6aad08db..dd446b55 100644
+--- a/src/modules/flow/network/Kconfig
++++ b/src/modules/flow/network/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_NETWORK
+ 	tristate "Node type: network"
+-	depends on FLOW
++	depends on FLOW && NETWORK
+ 	default m
+diff --git a/src/modules/flow/oic/Kconfig b/src/modules/flow/oic/Kconfig
+index d5659c77..a13cf911 100644
+--- a/src/modules/flow/oic/Kconfig
++++ b/src/modules/flow/oic/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_OIC
+ 	tristate "Node type: oic"
+-	depends on FLOW && COAP && SOL_PLATFORM_LINUX
++	depends on FLOW && OIC && SOL_PLATFORM_LINUX
+ 	default m
+diff --git a/src/samples/coap/oic-server.c b/src/samples/coap/oic-server.c
+index 5574b10f..e583f91d 100644
+--- a/src/samples/coap/oic-server.c
++++ b/src/samples/coap/oic-server.c
+@@ -128,6 +128,7 @@ register_light_resource_type(
+     /* This function will be auto-generated from the RAML definitions. */
+ 
+     struct sol_oic_resource_type resource_type = {
++        .api_version = SOL_OIC_RESOURCE_TYPE_API_VERSION,
+         .endpoint = SOL_STR_SLICE_LITERAL("/a/light"),
+         .resource_type = SOL_STR_SLICE_LITERAL("core.light"),
+         .iface = SOL_STR_SLICE_LITERAL("oc.mi.def"),
+diff --git a/src/samples/coap/simple-server.c b/src/samples/coap/simple-server.c
+index b4c7bfae..c41b4525 100644
+--- a/src/samples/coap/simple-server.c
++++ b/src/samples/coap/simple-server.c
+@@ -210,6 +210,7 @@ light_method_get(const struct sol_coap_resource *resource, struct sol_coap_packe
+ }
+ 
+ static struct sol_coap_resource light = {
++    .api_version = SOL_COAP_RESOURCE_API_VERSION,
+     .get = light_method_get,
+     .put = light_method_put,
+     .iface = SOL_STR_SLICE_LITERAL("oc.mi.def"),
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+index b4b2a3ee..65830eae 100644
+--- a/src/shared/Makefile
++++ b/src/shared/Makefile
+@@ -13,16 +13,10 @@ obj-libshared-m += \
+     sol-fbp-parser.o
+ endif
+ 
+-ifeq (y,$(PLATFORM_RIOTOS))
+-obj-libshared-m += \
+-    sol-network-riot.o
+-endif
+-
+ ifeq (y,$(SOL_PLATFORM_LINUX))
+ obj-libshared-m += \
+     sol-conffile.o \
+-    sol-file-reader.o \
+-    sol-network-linux.o
++    sol-file-reader.o
+ obj-libshared-m-extra-cflags += $(GLIB_CFLAGS)
+ obj-libshared-m-extra-ldflags += $(GLIB_LDFLAGS)
+ endif
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index b93d6f2c..05ac818e 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -120,7 +120,7 @@ src_modulesdir := $(top_srcdir)src/modules/
+ SCRIPTDIR := $(top_srcdir)data/scripts/
+ 
+ # sub-modules and deps
+-SUBDIRS := $(addprefix $(top_srcdir)src/lib/,common coap datatypes flow) $(top_srcdir)src/shared
++SUBDIRS := $(addprefix $(top_srcdir)src/lib/,common comms datatypes flow) $(top_srcdir)src/shared
+ SUBDIRS := $(dir $(filter-out $(SUBDIRS),$(shell find $(top_srcdir)src/ -name 'Makefile')))
+ 
+ DEPENDENCY_FILES := Makefile.gen Kconfig.gen
+@@ -133,7 +133,7 @@ BSDEPS += $(addprefix $(BSDIR),Makefile.kconfig Makefile.vars Makefile.rules)
+ 
+ # flags and comp. helpers
+ HEADERDIRS := $(addprefix $(top_srcdir),src/shared src/lib/common)
+-HEADERDIRS += $(addprefix $(top_srcdir),src/lib/flow src/lib/coap/)
++HEADERDIRS += $(addprefix $(top_srcdir),src/lib/flow src/lib/comms/)
+ HEADERDIRS += $(addprefix $(top_srcdir),$(KCONFIG_INCLUDE)generated/)
+ HEADERDIRS += $(build_includedir)
+ 
+@@ -308,6 +308,27 @@ CLEANUP_GEN := $(FLOW_OIC_GEN) $(HEADER_GEN)
+ 
+ EXTRA_HEADERS :=
+ 
++LIB_COMMS_HEADERS :=
++
++ifeq (y,$(NETWORK))
++LIB_COMMS_HEADERS += \
++    sol-network.h
++endif
++
++ifeq (y,$(COAP))
++LIB_COMMS_HEADERS += \
++    sol-coap.h
++endif
++
++ifeq (y,$(OIC))
++LIB_COMMS_HEADERS += \
++    sol-oic-client.h \
++    sol-oic-server.h
++endif
++
++
++EXTRA_HEADERS += $(addprefix $(top_srcdir)src/lib/comms/include/, $(LIB_COMMS_HEADERS))
++
+ LIB_DATATYPES_HEADERS := \
+     sol-arena.h \
+     sol-list.h \

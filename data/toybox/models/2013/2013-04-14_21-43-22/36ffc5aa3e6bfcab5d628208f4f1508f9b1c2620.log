@@ -1,0 +1,168 @@
+"2013-04-14 21:43:22 -0500"
+diff --git a/Config.in b/Config.in
+index 0a964d41..a9443dd1 100644
+--- a/Config.in
++++ b/Config.in
+@@ -35,6 +35,12 @@ config TOYBOX_FLOAT
+ 	  Include floating point support infrastructure and commands that
+ 	  require it.
+ 
++config TOYBOX_HELP
++	bool "Help messages:
++	default y
++	help
++	  Include help text for each command.
++
+ config TOYBOX_I18N
+ 	bool "Internationalization support"
+ 	default y
+diff --git a/lib/args.c b/lib/args.c
+index fa1d4e6f..748008f3 100644
+--- a/lib/args.c
++++ b/lib/args.c
+@@ -341,7 +341,7 @@ void get_optflags(void)
+   // Option parsing is a two stage process: parse the option string into
+   // a struct opts list, then use that list to process argv[];
+ 
+-  if (CFG_HELP) toys.exithelp++;
++  toys.exithelp++;
+   // Allocate memory for optargs
+   saveflags = 0;
+   while (toys.argv[saveflags++]);
+@@ -437,7 +437,7 @@ notflag:
+       gof.minargs, letters[!(gof.minargs-1)]);
+   if (toys.optc>gof.maxargs)
+     error_exit("Max %d argument%s", gof.maxargs, letters[!(gof.maxargs-1)]);
+-  if (CFG_HELP) toys.exithelp = 0;
++  toys.exithelp = 0;
+ 
+   if (CFG_TOYBOX_FREE) {
+     llist_traverse(gof.opts, free);
+diff --git a/lib/help.c b/lib/help.c
+new file mode 100644
+index 00000000..f7a326a8
+--- /dev/null
++++ b/lib/help.c
+@@ -0,0 +1,33 @@
++// Function to display help text
++
++#include "toys.h"
++
++#if !CFG_TOYBOX_HELP
++void show_help(char *command) {;}
++#else
++#include "generated/help.h"
++
++#undef NEWTOY
++#undef OLDTOY
++#define NEWTOY(name,opt,flags) help_##name "\0"
++#define OLDTOY(name,oldname,opts,flags) "\xff" #oldname "\0"
++static char *help_data =
++#include "generated/newtoys.h"
++;
++
++void show_help(void)
++{
++  int i = toys.which-toy_list;
++  char *s;
++
++  for (;;) {
++    s = help_data;
++    while (i--) s += strlen(s) + 1;
++    // If it's an alias, restart search for real name
++    if (*s != 255) break;
++    i = toy_find(++s)-toy_list;
++  }
++
++  fprintf(toys.exithelp ? stderr : stdout, "%s", s);
++}
++#endif
+diff --git a/lib/lib.c b/lib/lib.c
+index 955f2426..66cecbc2 100644
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -52,11 +52,7 @@ void error_exit(char *msg, ...)
+ {
+   va_list va;
+ 
+-  if (CFG_HELP && toys.exithelp) {
+-    *toys.optargs=*toys.argv;
+-    USE_HELP(help_main();)  // dear gcc: shut up.
+-    fprintf(stderr,"\n");
+-  }
++  if (CFG_TOYBOX_HELP && toys.exithelp) show_help();
+ 
+   va_start(va, msg);
+   verror_msg(msg, 0, va);
+diff --git a/lib/lib.h b/lib/lib.h
+index 1b1899b0..8b28bd32 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -81,6 +81,10 @@ void dirtree_recurse(struct dirtree *node,
+   int (*callback)(struct dirtree *node), int symfollow);
+ struct dirtree *dirtree_read(char *path, int (*callback)(struct dirtree *node));
+ 
++// help.c
++
++void show_help(void);
++
+ // lib.c
+ void xstrcpy(char *dest, char *src, size_t size);
+ void verror_msg(char *msg, int err, va_list va);
+diff --git a/toys/other/help.c b/toys/other/help.c
+index 68bc3aab..e16abaab 100644
+--- a/toys/other/help.c
++++ b/toys/other/help.c
+@@ -9,6 +9,7 @@ USE_HELP(NEWTOY(help, "<1", TOYFLAG_BIN))
+ config HELP
+   bool "help"
+   default y
++  depends on TOYBOX_HELP
+   help
+     usage: help [command]
+ 
+@@ -18,29 +19,12 @@ config HELP
+ 
+ 
+ #include "toys.h"
+-#include "generated/help.h"
+-
+-#undef NEWTOY
+-#undef OLDTOY
+-#define NEWTOY(name,opt,flags) help_##name "\0"
+-#define OLDTOY(name,oldname,opts,flags) "\xff" #oldname "\0"
+-static char *help_data =
+-#include "generated/newtoys.h"
+-;
+ 
+ void help_main(void)
+ {
+   struct toy_list *t = toy_find(*toys.optargs);
+-  int i = t-toy_list;
+-  char *s = help_data;
+ 
+   if (!t) error_exit("Unknown command '%s'", *toys.optargs);
+-  for (;;) {
+-    while (i--) s += strlen(s) + 1;
+-    if (*s != 255) break;
+-    i = toy_find(++s)-toy_list;
+-    s = help_data;
+-  }
+-
+-  fprintf(toys.exithelp ? stderr : stdout, "%s", s);
++  toys.which = t;
++  show_help();
+ }
+diff --git a/toys/other/losetup.c b/toys/other/losetup.c
+index c21e840b..618016e1 100644
+--- a/toys/other/losetup.c
++++ b/toys/other/losetup.c
+@@ -180,7 +180,7 @@ void losetup_main(void)
+     char *file = (toys.optflags & (FLAG_d|FLAG_c)) ? NULL : toys.optargs[1];
+ 
+     if (!toys.optc || (file && toys.optc>1)) {
+-      if (CFG_HELP) toys.exithelp++;
++      toys.exithelp++;
+       perror_exit("needs 1 arg");
+     }
+     for (s = toys.optargs; *s; s++) loopback_setup(*s, file);

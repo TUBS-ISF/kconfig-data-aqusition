@@ -1,0 +1,5279 @@
+"2017-02-01 17:48:38 +0100"
+diff --git a/Rules.mak b/Rules.mak
+index 8bd286354..f53c5817a 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -300,6 +300,7 @@ ifneq ($(TARGET_ARCH),sh)
+ ifneq ($(TARGET_ARCH),c6x)
+ ifneq ($(TARGET_ARCH),h8300)
+ ifneq ($(TARGET_ARCH),arc)
++ifneq ($(TARGET_ARCH),aarch64)
+ CPU_CFLAGS-y += -msoft-float
+ endif
+ endif
+@@ -310,6 +311,11 @@ endif
+ endif
+ endif
+ endif
++endif
++
++ifeq ($(TARGET_ARCH),aarch64)
++CPU_CFLAGS-y += -ftls-model=initial-exec
++endif
+ 
+ $(eval $(call check-gcc-var,-std=gnu99))
+ CPU_CFLAGS-y += $(CFLAG_-std=gnu99)
+diff --git a/extra/Configs/Config.aarch64 b/extra/Configs/Config.aarch64
+new file mode 100644
+index 000000000..cf1ce3b79
+--- /dev/null
++++ b/extra/Configs/Config.aarch64
+@@ -0,0 +1,32 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++
++config TARGET_ARCH
++	string
++	default "aarch64"
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_ANY_ENDIAN
++	select ARCH_HAS_MMU
++	select UCLIBC_HAS_FPU
++
++choice
++	prompt "MMU Page Size"
++	default CONFIG_AARCH64_PAGE_SIZE_4K
++
++config CONFIG_AARCH64_PAGE_SIZE_4K
++	bool "4KB"
++	help
++	  Choose between 4k(default), 16k or 64k
++
++config CONFIG_AARCH64_PAGE_SIZE_16K
++	bool "16KB"
++
++config CONFIG_AARCH64_PAGE_SIZE_64K
++	bool "64KB"
++
++endchoice
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index b2cf977b7..850bd7d13 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -15,6 +15,7 @@ config VERSION
+ 
+ choice
+ 	prompt "Target Architecture"
++	default TARGET_aarch64 if DESIRED_TARGET_ARCH = "aarch64"
+ 	default TARGET_alpha if DESIRED_TARGET_ARCH = "alpha"
+ 	default TARGET_arc if DESIRED_TARGET_ARCH = "arc"
+ 	default TARGET_arm if DESIRED_TARGET_ARCH = "arm"
+@@ -42,6 +43,9 @@ choice
+ 	help
+ 	  The architecture of your target.
+ 
++config TARGET_aarch64
++	bool "aarch64"
++
+ config TARGET_alpha
+ 	bool "alpha"
+ 
+@@ -124,6 +128,10 @@ endchoice
+ 
+ menu "Target Architecture Features and Options"
+ 
++if TARGET_aarch64
++source "extra/Configs/Config.aarch64"
++endif
++
+ if TARGET_alpha
+ source "extra/Configs/Config.alpha"
+ endif
+@@ -500,7 +508,8 @@ config UCLIBC_HAS_LINUXTHREADS
+ 	bool "Linuxthreads"
+ 	# linuxthreads need nanosleep()
+ 	select UCLIBC_HAS_REALTIME
+-	depends on !TARGET_metag
++	depends on !TARGET_aarch64 && \
++		   !TARGET_metag
+ 	help
+ 	  If you want to compile uClibc with Linuxthreads support, then answer Y.
+ 
+diff --git a/extra/Configs/Config.in.arch b/extra/Configs/Config.in.arch
+index 37dd8bd74..a1a2a5f99 100644
+--- a/extra/Configs/Config.in.arch
++++ b/extra/Configs/Config.in.arch
+@@ -191,7 +191,7 @@ config UCLIBC_HAS_FENV
+ config UCLIBC_HAS_LONG_DOUBLE_MATH
+ 	bool "Enable long double support"
+ 	depends on DO_C99_MATH
+-	depends on TARGET_aarch64 || TARGET_alpha || TARGET_i386 || TARGET_ia64 || TARGET_m68k || TARGET_powerpc || TARGET_s390 || TARGET_sparc || TARGET_tile || TARGET_x86_64
++	depends on TARGET_alpha || TARGET_i386 || TARGET_ia64 || TARGET_m68k || TARGET_powerpc || TARGET_s390 || TARGET_sparc || TARGET_tile || TARGET_x86_64
+ 	default y
+ 	help
+ 	  If you want the uClibc math library to contain the full set of C99
+diff --git a/include/atomic.h b/include/atomic.h
+index 3680d8714..267aff5d5 100644
+--- a/include/atomic.h
++++ b/include/atomic.h
+@@ -542,24 +542,18 @@
+   ({ __typeof (x) __x; __asm__ ("" : "=r" (__x) : "0" (x)); __x; })
+ #endif
+ 
+-/* This is equal to 1 iff the architecture supports 64b atomic operations.  */
+-#define __HAVE_64B_ATOMICS 0 /* TODO: not yet used - Add these to arch bits! */
+-#ifndef __HAVE_64B_ATOMICS
+-#error Unable to determine if 64-bit atomics are present.
+-#endif
+-
+ /* The following functions are a subset of the atomic operations provided by
+    C11.  Usually, a function named atomic_OP_MO(args) is equivalent to C11's
+    atomic_OP_explicit(args, memory_order_MO); exceptions noted below.  */
+ 
+ /* Each arch can request to use compiler built-ins for C11 atomics.  If it
+    does, all atomics will be based on these.  */
+-#if 0 /* not yet used USE_ATOMIC_COMPILER_BUILTINS */
++#if defined USE_ATOMIC_COMPILER_BUILTINS
+ 
+ /* We require 32b atomic operations; some archs also support 64b atomic
+    operations.  */
+ void __atomic_link_error (void);
+-# if __HAVE_64B_ATOMICS == 1
++# if defined(__HAVE_64B_ATOMICS) && __HAVE_64B_ATOMICS
+ #  define __atomic_check_size(mem) \
+    if ((sizeof (*mem) != 4) && (sizeof (*mem) != 8))			      \
+      __atomic_link_error ();
+diff --git a/include/elf.h b/include/elf.h
+index 0f188e792..5312be97c 100644
+--- a/include/elf.h
++++ b/include/elf.h
+@@ -269,6 +269,7 @@ typedef struct
+ #define EM_TI_C6000	140
+ #define EM_NDS32	167		/* Andes Tech NDS32 */
+ #define EM_METAG	174		/* Imagination Technologies Meta */
++#define EM_AARCH64	183		/* ARM AARCH64 */
+ #define EM_MICROBLAZE	189		/* Xilinx Microblaze */
+ #define EM_ARCV2	195		/* ARCv2 Cores */
+ 
+@@ -725,6 +726,31 @@ typedef struct
+ #define NT_LWPSTATUS	16		/* Contains copy of lwpstatus struct */
+ #define NT_LWPSINFO	17		/* Contains copy of lwpinfo struct */
+ #define NT_PRFPXREG	20		/* Contains copy of fprxregset struct*/
++#define NT_SIGINFO	0x53494749	/* Contains copy of siginfo_t,
++					   size might increase */
++#define NT_FILE		0x46494c45	/* Contains information about mapped
++					   files */
++#define NT_PRXFPREG	0x46e62b7f	/* Contains copy of user_fxsr_struct */
++#define NT_PPC_VMX	0x100		/* PowerPC Altivec/VMX registers */
++#define NT_PPC_SPE	0x101		/* PowerPC SPE/EVR registers */
++#define NT_PPC_VSX	0x102		/* PowerPC VSX registers */
++#define NT_386_TLS	0x200		/* i386 TLS slots (struct user_desc) */
++#define NT_386_IOPERM	0x201		/* x86 io permission bitmap (1=deny) */
++#define NT_X86_XSTATE	0x202		/* x86 extended state using xsave */
++#define NT_S390_HIGH_GPRS	0x300	/* s390 upper register halves */
++#define NT_S390_TIMER	0x301		/* s390 timer register */
++#define NT_S390_TODCMP	0x302		/* s390 TOD clock comparator register */
++#define NT_S390_TODPREG	0x303		/* s390 TOD programmable register */
++#define NT_S390_CTRS	0x304		/* s390 control registers */
++#define NT_S390_PREFIX	0x305		/* s390 prefix register */
++#define NT_S390_LAST_BREAK	0x306	/* s390 breaking event address */
++#define NT_S390_SYSTEM_CALL	0x307	/* s390 system call restart data */
++#define NT_S390_TDB	0x308		/* s390 transaction diagnostic block */
++#define NT_ARM_VFP	0x400		/* ARM VFP/NEON registers */
++#define NT_ARM_TLS	0x401		/* ARM TLS register */
++#define NT_ARM_HW_BREAK	0x402		/* ARM hardware breakpoint registers */
++#define NT_ARM_HW_WATCH	0x403		/* ARM hardware watchpoint registers */
++#define NT_ARM_SYSTEM_CALL	0x404	/* ARM system call number */
+ 
+ /* Legal values for the note segment descriptor types for object files.  */
+ 
+@@ -2358,6 +2384,146 @@ typedef Elf32_Addr Elf32_Conflict;
+ /* Processor specific values for the Phdr p_type field.  */
+ #define PT_ARM_EXIDX	0x70000001	/* .ARM.exidx segment */
+ 
++/* AArch64 relocs.  */
++
++#define R_AARCH64_NONE            0	/* No relocation.  */
++
++/* ILP32 AArch64 relocs.  */
++#define R_AARCH64_P32_ABS32		  1	/* Direct 32 bit.  */
++#define R_AARCH64_P32_COPY		180	/* Copy symbol at runtime.  */
++#define R_AARCH64_P32_GLOB_DAT		181	/* Create GOT entry.  */
++#define R_AARCH64_P32_JUMP_SLOT		182	/* Create PLT entry.  */
++#define R_AARCH64_P32_RELATIVE		183	/* Adjust by program base.  */
++#define R_AARCH64_P32_TLS_DTPMOD	184	/* Module number, 32 bit.  */
++#define R_AARCH64_P32_TLS_DTPREL	185	/* Module-relative offset, 32 bit.  */
++#define R_AARCH64_P32_TLS_TPREL		186	/* TP-relative offset, 32 bit.  */
++#define R_AARCH64_P32_TLSDESC		187	/* TLS Descriptor.  */
++#define R_AARCH64_P32_IRELATIVE		188	/* STT_GNU_IFUNC relocation. */
++
++/* LP64 AArch64 relocs.  */
++#define R_AARCH64_ABS64         257	/* Direct 64 bit. */
++#define R_AARCH64_ABS32         258	/* Direct 32 bit.  */
++#define R_AARCH64_ABS16		259	/* Direct 16-bit.  */
++#define R_AARCH64_PREL64	260	/* PC-relative 64-bit.	*/
++#define R_AARCH64_PREL32	261	/* PC-relative 32-bit.	*/
++#define R_AARCH64_PREL16	262	/* PC-relative 16-bit.	*/
++#define R_AARCH64_MOVW_UABS_G0	263	/* Dir. MOVZ imm. from bits 15:0.  */
++#define R_AARCH64_MOVW_UABS_G0_NC 264	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_UABS_G1	265	/* Dir. MOVZ imm. from bits 31:16.  */
++#define R_AARCH64_MOVW_UABS_G1_NC 266	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_UABS_G2	267	/* Dir. MOVZ imm. from bits 47:32.  */
++#define R_AARCH64_MOVW_UABS_G2_NC 268	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_UABS_G3	269	/* Dir. MOV{K,Z} imm. from 63:48.  */
++#define R_AARCH64_MOVW_SABS_G0	270	/* Dir. MOV{N,Z} imm. from 15:0.  */
++#define R_AARCH64_MOVW_SABS_G1	271	/* Dir. MOV{N,Z} imm. from 31:16.  */
++#define R_AARCH64_MOVW_SABS_G2	272	/* Dir. MOV{N,Z} imm. from 47:32.  */
++#define R_AARCH64_LD_PREL_LO19	273	/* PC-rel. LD imm. from bits 20:2.  */
++#define R_AARCH64_ADR_PREL_LO21	274	/* PC-rel. ADR imm. from bits 20:0.  */
++#define R_AARCH64_ADR_PREL_PG_HI21 275	/* Page-rel. ADRP imm. from 32:12.  */
++#define R_AARCH64_ADR_PREL_PG_HI21_NC 276 /* Likewise; no overflow check.  */
++#define R_AARCH64_ADD_ABS_LO12_NC 277	/* Dir. ADD imm. from bits 11:0.  */
++#define R_AARCH64_LDST8_ABS_LO12_NC 278	/* Likewise for LD/ST; no check. */
++#define R_AARCH64_TSTBR14	279	/* PC-rel. TBZ/TBNZ imm. from 15:2.  */
++#define R_AARCH64_CONDBR19	280	/* PC-rel. cond. br. imm. from 20:2. */
++#define R_AARCH64_JUMP26	282	/* PC-rel. B imm. from bits 27:2.  */
++#define R_AARCH64_CALL26	283	/* Likewise for CALL.  */
++#define R_AARCH64_LDST16_ABS_LO12_NC 284 /* Dir. ADD imm. from bits 11:1.  */
++#define R_AARCH64_LDST32_ABS_LO12_NC 285 /* Likewise for bits 11:2.  */
++#define R_AARCH64_LDST64_ABS_LO12_NC 286 /* Likewise for bits 11:3.  */
++#define R_AARCH64_MOVW_PREL_G0	287	/* PC-rel. MOV{N,Z} imm. from 15:0.  */
++#define R_AARCH64_MOVW_PREL_G0_NC 288	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_PREL_G1	289	/* PC-rel. MOV{N,Z} imm. from 31:16. */
++#define R_AARCH64_MOVW_PREL_G1_NC 290	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_PREL_G2	291	/* PC-rel. MOV{N,Z} imm. from 47:32. */
++#define R_AARCH64_MOVW_PREL_G2_NC 292	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_PREL_G3	293	/* PC-rel. MOV{N,Z} imm. from 63:48. */
++#define R_AARCH64_LDST128_ABS_LO12_NC 299 /* Dir. ADD imm. from bits 11:4.  */
++#define R_AARCH64_MOVW_GOTOFF_G0 300	/* GOT-rel. off. MOV{N,Z} imm. 15:0. */
++#define R_AARCH64_MOVW_GOTOFF_G0_NC 301	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_GOTOFF_G1 302	/* GOT-rel. o. MOV{N,Z} imm. 31:16.  */
++#define R_AARCH64_MOVW_GOTOFF_G1_NC 303	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_GOTOFF_G2 304	/* GOT-rel. o. MOV{N,Z} imm. 47:32.  */
++#define R_AARCH64_MOVW_GOTOFF_G2_NC 305	/* Likewise for MOVK; no check.  */
++#define R_AARCH64_MOVW_GOTOFF_G3 306	/* GOT-rel. o. MOV{N,Z} imm. 63:48.  */
++#define R_AARCH64_GOTREL64	307	/* GOT-relative 64-bit.  */
++#define R_AARCH64_GOTREL32	308	/* GOT-relative 32-bit.  */
++#define R_AARCH64_GOT_LD_PREL19	309	/* PC-rel. GOT off. load imm. 20:2.  */
++#define R_AARCH64_LD64_GOTOFF_LO15 310	/* GOT-rel. off. LD/ST imm. 14:3.  */
++#define R_AARCH64_ADR_GOT_PAGE	311	/* P-page-rel. GOT off. ADRP 32:12.  */
++#define R_AARCH64_LD64_GOT_LO12_NC 312	/* Dir. GOT off. LD/ST imm. 11:3.  */
++#define R_AARCH64_LD64_GOTPAGE_LO15 313	/* GOT-page-rel. GOT off. LD/ST 14:3 */
++#define R_AARCH64_TLSGD_ADR_PREL21 512	/* PC-relative ADR imm. 20:0.  */
++#define R_AARCH64_TLSGD_ADR_PAGE21 513	/* page-rel. ADRP imm. 32:12.  */
++#define R_AARCH64_TLSGD_ADD_LO12_NC 514	/* direct ADD imm. from 11:0.  */
++#define R_AARCH64_TLSGD_MOVW_G1	515	/* GOT-rel. MOV{N,Z} 31:16.  */
++#define R_AARCH64_TLSGD_MOVW_G0_NC 516	/* GOT-rel. MOVK imm. 15:0.  */
++#define R_AARCH64_TLSLD_ADR_PREL21 517	/* Like 512; local dynamic model.  */
++#define R_AARCH64_TLSLD_ADR_PAGE21 518	/* Like 513; local dynamic model.  */
++#define R_AARCH64_TLSLD_ADD_LO12_NC 519	/* Like 514; local dynamic model.  */
++#define R_AARCH64_TLSLD_MOVW_G1	520	/* Like 515; local dynamic model.  */
++#define R_AARCH64_TLSLD_MOVW_G0_NC 521	/* Like 516; local dynamic model.  */
++#define R_AARCH64_TLSLD_LD_PREL19 522	/* TLS PC-rel. load imm. 20:2.  */
++#define R_AARCH64_TLSLD_MOVW_DTPREL_G2 523 /* TLS DTP-rel. MOV{N,Z} 47:32.  */
++#define R_AARCH64_TLSLD_MOVW_DTPREL_G1 524 /* TLS DTP-rel. MOV{N,Z} 31:16.  */
++#define R_AARCH64_TLSLD_MOVW_DTPREL_G1_NC 525 /* Likewise; MOVK; no check.  */
++#define R_AARCH64_TLSLD_MOVW_DTPREL_G0 526 /* TLS DTP-rel. MOV{N,Z} 15:0.  */
++#define R_AARCH64_TLSLD_MOVW_DTPREL_G0_NC 527 /* Likewise; MOVK; no check.  */
++#define R_AARCH64_TLSLD_ADD_DTPREL_HI12 528 /* DTP-rel. ADD imm. from 23:12. */
++#define R_AARCH64_TLSLD_ADD_DTPREL_LO12 529 /* DTP-rel. ADD imm. from 11:0.  */
++#define R_AARCH64_TLSLD_ADD_DTPREL_LO12_NC 530 /* Likewise; no ovfl. check.  */
++#define R_AARCH64_TLSLD_LDST8_DTPREL_LO12 531 /* DTP-rel. LD/ST imm. 11:0.  */
++#define R_AARCH64_TLSLD_LDST8_DTPREL_LO12_NC 532 /* Likewise; no check.  */
++#define R_AARCH64_TLSLD_LDST16_DTPREL_LO12 533 /* DTP-rel. LD/ST imm. 11:1.  */
++#define R_AARCH64_TLSLD_LDST16_DTPREL_LO12_NC 534 /* Likewise; no check.  */
++#define R_AARCH64_TLSLD_LDST32_DTPREL_LO12 535 /* DTP-rel. LD/ST imm. 11:2.  */
++#define R_AARCH64_TLSLD_LDST32_DTPREL_LO12_NC 536 /* Likewise; no check.  */
++#define R_AARCH64_TLSLD_LDST64_DTPREL_LO12 537 /* DTP-rel. LD/ST imm. 11:3.  */
++#define R_AARCH64_TLSLD_LDST64_DTPREL_LO12_NC 538 /* Likewise; no check.  */
++#define R_AARCH64_TLSIE_MOVW_GOTTPREL_G1 539 /* GOT-rel. MOV{N,Z} 31:16.  */
++#define R_AARCH64_TLSIE_MOVW_GOTTPREL_G0_NC 540 /* GOT-rel. MOVK 15:0.  */
++#define R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 541 /* Page-rel. ADRP 32:12.  */
++#define R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC 542 /* Direct LD off. 11:3.  */
++#define R_AARCH64_TLSIE_LD_GOTTPREL_PREL19 543 /* PC-rel. load imm. 20:2.  */
++#define R_AARCH64_TLSLE_MOVW_TPREL_G2 544 /* TLS TP-rel. MOV{N,Z} 47:32.  */
++#define R_AARCH64_TLSLE_MOVW_TPREL_G1 545 /* TLS TP-rel. MOV{N,Z} 31:16.  */
++#define R_AARCH64_TLSLE_MOVW_TPREL_G1_NC 546 /* Likewise; MOVK; no check.  */
++#define R_AARCH64_TLSLE_MOVW_TPREL_G0 547 /* TLS TP-rel. MOV{N,Z} 15:0.  */
++#define R_AARCH64_TLSLE_MOVW_TPREL_G0_NC 548 /* Likewise; MOVK; no check.  */
++#define R_AARCH64_TLSLE_ADD_TPREL_HI12 549 /* TP-rel. ADD imm. 23:12.  */
++#define R_AARCH64_TLSLE_ADD_TPREL_LO12 550 /* TP-rel. ADD imm. 11:0.  */
++#define R_AARCH64_TLSLE_ADD_TPREL_LO12_NC 551 /* Likewise; no ovfl. check.  */
++#define R_AARCH64_TLSLE_LDST8_TPREL_LO12 552 /* TP-rel. LD/ST off. 11:0.  */
++#define R_AARCH64_TLSLE_LDST8_TPREL_LO12_NC 553 /* Likewise; no ovfl. check. */
++#define R_AARCH64_TLSLE_LDST16_TPREL_LO12 554 /* TP-rel. LD/ST off. 11:1.  */
++#define R_AARCH64_TLSLE_LDST16_TPREL_LO12_NC 555 /* Likewise; no check.  */
++#define R_AARCH64_TLSLE_LDST32_TPREL_LO12 556 /* TP-rel. LD/ST off. 11:2.  */
++#define R_AARCH64_TLSLE_LDST32_TPREL_LO12_NC 557 /* Likewise; no check.  */
++#define R_AARCH64_TLSLE_LDST64_TPREL_LO12 558 /* TP-rel. LD/ST off. 11:3.  */
++#define R_AARCH64_TLSLE_LDST64_TPREL_LO12_NC 559 /* Likewise; no check.  */
++#define R_AARCH64_TLSDESC_LD_PREL19 560	/* PC-rel. load immediate 20:2.  */
++#define R_AARCH64_TLSDESC_ADR_PREL21 561 /* PC-rel. ADR immediate 20:0.  */
++#define R_AARCH64_TLSDESC_ADR_PAGE21 562 /* Page-rel. ADRP imm. 32:12.  */
++#define R_AARCH64_TLSDESC_LD64_LO12 563	/* Direct LD off. from 11:3.  */
++#define R_AARCH64_TLSDESC_ADD_LO12 564	/* Direct ADD imm. from 11:0.  */
++#define R_AARCH64_TLSDESC_OFF_G1 565	/* GOT-rel. MOV{N,Z} imm. 31:16.  */
++#define R_AARCH64_TLSDESC_OFF_G0_NC 566	/* GOT-rel. MOVK imm. 15:0; no ck.  */
++#define R_AARCH64_TLSDESC_LDR	567	/* Relax LDR.  */
++#define R_AARCH64_TLSDESC_ADD	568	/* Relax ADD.  */
++#define R_AARCH64_TLSDESC_CALL	569	/* Relax BLR.  */
++#define R_AARCH64_TLSLE_LDST128_TPREL_LO12 570 /* TP-rel. LD/ST off. 11:4.  */
++#define R_AARCH64_TLSLE_LDST128_TPREL_LO12_NC 571 /* Likewise; no check.  */
++#define R_AARCH64_TLSLD_LDST128_DTPREL_LO12 572 /* DTP-rel. LD/ST imm. 11:4. */
++#define R_AARCH64_TLSLD_LDST128_DTPREL_LO12_NC 573 /* Likewise; no check.  */
++#define R_AARCH64_COPY         1024	/* Copy symbol at runtime.  */
++#define R_AARCH64_GLOB_DAT     1025	/* Create GOT entry.  */
++#define R_AARCH64_JUMP_SLOT    1026	/* Create PLT entry.  */
++#define R_AARCH64_RELATIVE     1027	/* Adjust by program base.  */
++#define R_AARCH64_TLS_DTPMOD   1028	/* Module number, 64 bit.  */
++#define R_AARCH64_TLS_DTPREL   1029	/* Module-relative offset, 64 bit.  */
++#define R_AARCH64_TLS_TPREL    1030	/* TP-relative offset, 64 bit.  */
++#define R_AARCH64_TLSDESC      1031	/* TLS Descriptor.  */
++#define R_AARCH64_IRELATIVE	1032	/* STT_GNU_IFUNC relocation.  */
++
+ /* ARM relocs.  */
+ 
+ #define R_ARM_NONE		0	/* No reloc */
+diff --git a/ldso/include/dl-syscall.h b/ldso/include/dl-syscall.h
+index 5528ba6a0..3baddd323 100644
+--- a/ldso/include/dl-syscall.h
++++ b/ldso/include/dl-syscall.h
+@@ -96,6 +96,16 @@ static __always_inline int _dl_stat(const char *file_name,
+ {
+ 	return _dl_fstatat64(AT_FDCWD, file_name, buf, 0);
+ }
++#elif defined __NR_newfstatat && !defined __NR_stat
++# define __NR__dl_newfstatat __NR_newfstatat
++static __always_inline _syscall4(int, _dl_newfstatat, int, fd, const char *,
++				 fn, struct stat *, stat, int, flags)
++
++static __always_inline int _dl_stat(const char *file_name,
++                        struct stat *buf)
++{
++	return _dl_newfstatat(AT_FDCWD, file_name, buf, 0);
++}
+ #elif defined __NR_stat
+ # define __NR__dl_stat __NR_stat
+ static __always_inline _syscall2(int, _dl_stat, const char *, file_name,
+diff --git a/ldso/ldso/aarch64/dl-startup.h b/ldso/ldso/aarch64/dl-startup.h
+new file mode 100644
+index 000000000..1fac5ec35
+--- /dev/null
++++ b/ldso/ldso/aarch64/dl-startup.h
+@@ -0,0 +1,98 @@
++/*
++ * Architecture specific code used by dl-startup.c
++ * Copyright (C) 2016 Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Ported from GNU libc
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++/* Copyright (C) 1995-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <features.h>
++
++__asm__("\
++.text									\n\
++.globl _start								\n\
++.type _start, %function							\n\
++.globl _dl_start_user							\n\
++.type _dl_start_user, %function						\n\
++_start:									\n\
++	mov	x0, sp							\n\
++	bl	_dl_start						\n\
++	// returns user entry point in x0				\n\
++	mov	x21, x0							\n\
++_dl_start_user:								\n\
++	// get the original arg count					\n\
++	ldr	x1, [sp]						\n\
++	// get the argv address						\n\
++	add	x2, sp, #(1<<3)						\n\
++	// get _dl_skip_args to see if we were				\n\
++	// invoked as an executable					\n\
++	adrp	x4, _dl_skip_args					\n\
++        ldr	w4, [x4, #:lo12:_dl_skip_args]				\n\
++	// do we need to adjust argc/argv				\n\
++        cmp	w4, 0							\n\
++	beq	.L_done_stack_adjust					\n\
++	// subtract _dl_skip_args from original arg count		\n\
++	sub	x1, x1, x4						\n\
++	// store adjusted argc back to stack				\n\
++	str	x1, [sp]						\n\
++	// find the first unskipped argument				\n\
++	mov	x3, x2							\n\
++	add	x4, x2, x4, lsl #3					\n\
++	// shuffle envp down						\n\
++1:	ldr	x5, [x4], #(1<<3)					\n\
++	str	x5, [x3], #(1<<3)					\n\
++	cmp	x5, #0							\n\
++	bne	1b							\n\
++	// shuffle auxv down						\n\
++1:	ldp	x0, x5, [x4, #(2<<3)]!					\n\
++	stp	x0, x5, [x3], #(2<<3)					\n\
++	cmp	x0, #0							\n\
++	bne	1b							\n\
++.L_done_stack_adjust:							\n\
++	// compute envp							\n\
++	add	x3, x2, x1, lsl #3					\n\
++	add	x3, x3, #(1<<3)						\n\
++	// load the finalizer function					\n\
++	adrp	x0, _dl_fini						\n\
++	add	x0, x0, #:lo12:_dl_fini					\n\
++	// jump to the user_s entry point				\n\
++	br      x21							\n\
++");
++
++/* Get a pointer to the argv array.  On many platforms this can be just
++ * the address of the first argument, on other platforms we need to
++ * do something a little more subtle here.  */
++#define GET_ARGV(ARGVP, ARGS) ARGVP = (((unsigned long*)ARGS)+1)
++
++/* Handle relocation of the symbols in the dynamic loader. */
++static __always_inline
++void PERFORM_BOOTSTRAP_RELOC(ELF_RELOC *rpnt, ElfW(Addr) *reloc_addr,
++	ElfW(Addr) symbol_addr, ElfW(Addr) load_addr, ElfW(Addr) *sym)
++{
++	switch (ELF_R_TYPE(rpnt->r_info)) {
++		case R_AARCH64_NONE:
++			break;
++		case R_AARCH64_ABS64:
++		case R_AARCH64_GLOB_DAT:
++		case R_AARCH64_JUMP_SLOT:
++			*reloc_addr = symbol_addr + rpnt->r_addend;
++			break;
++		default:
++			_dl_exit(1);
++	}
++}
+diff --git a/ldso/ldso/aarch64/dl-syscalls.h b/ldso/ldso/aarch64/dl-syscalls.h
+new file mode 100644
+index 000000000..f40c4fd31
+--- /dev/null
++++ b/ldso/ldso/aarch64/dl-syscalls.h
+@@ -0,0 +1 @@
++/* stub for arch-specific syscall issues */
+diff --git a/ldso/ldso/aarch64/dl-sysdep.h b/ldso/ldso/aarch64/dl-sysdep.h
+new file mode 100644
+index 000000000..4e8cdd906
+--- /dev/null
++++ b/ldso/ldso/aarch64/dl-sysdep.h
+@@ -0,0 +1,107 @@
++/*
++ * Various assembly language/system dependent hacks that are required
++ * so that we can minimize the amount of platform specific code.
++ * Copyright (C) 2000-2004 by Erik Andersen <andersen@codepoet.org>
++ * Copyright (C) 2017 by Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Ported from GNU C Library
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++/* Copyright (C) 1995-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* Define this if the system uses RELOCA.  */
++#define ELF_USES_RELOCA
++
++#include <elf.h>
++#include <link.h>
++
++/* Initialization sequence for the GOT.  */
++#define INIT_GOT(GOT_BASE,MODULE) \
++{				\
++  GOT_BASE[2] = (unsigned long) _dl_linux_resolve; \
++  GOT_BASE[1] = (unsigned long) MODULE; \
++}
++
++/* Here we define the magic numbers that this dynamic loader should accept */
++#define MAGIC1 EM_AARCH64
++#undef  MAGIC2
++
++/* Used for error messages */
++#define ELF_TARGET "aarch64"
++
++struct elf_resolve;
++unsigned long _dl_linux_resolver(struct elf_resolve * tpnt, int reloc_entry);
++
++#define elf_machine_type_class(type)					\
++  ((((type) == R_AARCH64_JUMP_SLOT 					\
++     || (type) == R_AARCH64_TLS_DTPMOD					\
++     || (type) == R_AARCH64_TLS_DTPREL 					\
++     || (type) == R_AARCH64_TLS_TPREL					\
++     || (type) == R_AARCH64_TLSDESC) * ELF_RTYPE_CLASS_PLT)		\
++   | (((type) == R_AARCH64_COPY) * ELF_RTYPE_CLASS_COPY))
++
++/* Return the link-time address of _DYNAMIC.  Conveniently, this is the
++   first element of the GOT. */
++extern const ElfW(Addr) _GLOBAL_OFFSET_TABLE_[] attribute_hidden;
++static __always_inline ElfW(Addr) __attribute__ ((unused))
++elf_machine_dynamic (void)
++{
++  return _GLOBAL_OFFSET_TABLE_[0];
++}
++
++/* Return the run-time load address of the shared object.  */
++
++static __always_inline ElfW(Addr) __attribute__ ((unused))
++elf_machine_load_address (void)
++{
++  /* To figure out the load address we use the definition that for any symbol:
++     dynamic_addr(symbol) = static_addr(symbol) + load_addr
++
++     The choice of symbol is arbitrary. The static address we obtain
++     by constructing a non GOT reference to the symbol, the dynamic
++     address of the symbol we compute using adrp/add to compute the
++     symbol's address relative to the PC.
++     This depends on 32/16bit relocations being resolved at link time
++     and that the static address fits in the 32/16 bits.  */
++
++  ElfW(Addr) static_addr;
++  ElfW(Addr) dynamic_addr;
++
++  __asm__("					\n"
++"	adrp	%1, _dl_start;			\n"
++"	add	%1, %1, #:lo12:_dl_start	\n"
++"	ldr	%w0, 1f				\n"
++"	b	2f				\n"
++"1:						\n"
++"	.word	_dl_start			\n"
++"2:						\n"
++    : "=r" (static_addr),  "=r" (dynamic_addr));
++  return dynamic_addr - static_addr;
++}
++
++static __always_inline void
++elf_machine_relative(Elf64_Addr load_off, const Elf64_Addr rel_addr,
++                     Elf64_Word relative_count)
++{
++	Elf64_Rela *rpnt = (Elf64_Rela*)rel_addr;
++	--rpnt;
++	do {
++		Elf64_Addr *const reloc_addr = (Elf64_Addr*)(load_off + (++rpnt)->r_offset);
++
++		*reloc_addr = load_off + rpnt->r_addend;
++	} while (--relative_count);
++}
+diff --git a/ldso/ldso/aarch64/dl-tlsdesc.S b/ldso/ldso/aarch64/dl-tlsdesc.S
+new file mode 100644
+index 000000000..4520da69b
+--- /dev/null
++++ b/ldso/ldso/aarch64/dl-tlsdesc.S
+@@ -0,0 +1,207 @@
++/*
++ * Copyright (C) 2017 Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Ported from GNU C Library
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++/* Thread-local storage handling in the ELF dynamic linker.
++   AArch64 version.
++   Copyright (C) 2011-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++
++#if defined __UCLIBC_HAS_TLS__
++
++#include <tls.h>
++#include "tlsdesc.h"
++
++#define PTR_REG(n)              x##n
++#define PTR_LOG_SIZE            3
++#define PTR_SIZE        (1<<PTR_LOG_SIZE)
++
++#define NSAVEDQREGPAIRS	16
++#define SAVE_Q_REGISTERS				\
++	stp	q0, q1,	[sp, #-32*NSAVEDQREGPAIRS]!;	\
++	cfi_adjust_cfa_offset (32*NSAVEDQREGPAIRS);	\
++	stp	 q2,  q3, [sp, #32*1];			\
++	stp	 q4,  q5, [sp, #32*2];			\
++	stp	 q6,  q7, [sp, #32*3];			\
++	stp	 q8,  q9, [sp, #32*4];			\
++	stp	q10, q11, [sp, #32*5];			\
++	stp	q12, q13, [sp, #32*6];			\
++	stp	q14, q15, [sp, #32*7];			\
++	stp	q16, q17, [sp, #32*8];			\
++	stp	q18, q19, [sp, #32*9];			\
++	stp	q20, q21, [sp, #32*10];			\
++	stp	q22, q23, [sp, #32*11];			\
++	stp	q24, q25, [sp, #32*12];			\
++	stp	q26, q27, [sp, #32*13];			\
++	stp	q28, q29, [sp, #32*14];			\
++	stp	q30, q31, [sp, #32*15];
++
++#define RESTORE_Q_REGISTERS				\
++	ldp	 q2,  q3, [sp, #32*1];			\
++	ldp	 q4,  q5, [sp, #32*2];			\
++	ldp	 q6,  q7, [sp, #32*3];			\
++	ldp	 q8,  q9, [sp, #32*4];			\
++	ldp	q10, q11, [sp, #32*5];			\
++	ldp	q12, q13, [sp, #32*6];			\
++	ldp	q14, q15, [sp, #32*7];			\
++	ldp	q16, q17, [sp, #32*8];			\
++	ldp	q18, q19, [sp, #32*9];			\
++	ldp	q20, q21, [sp, #32*10];			\
++	ldp	q22, q23, [sp, #32*11];			\
++	ldp	q24, q25, [sp, #32*12];			\
++	ldp	q26, q27, [sp, #32*13];			\
++	ldp	q28, q29, [sp, #32*14];			\
++	ldp	q30, q31, [sp, #32*15];			\
++	ldp	 q0,  q1, [sp], #32*NSAVEDQREGPAIRS;	\
++	cfi_adjust_cfa_offset (-32*NSAVEDQREGPAIRS);
++
++	.text
++
++	/* Compute the thread pointer offset for symbols in the static
++	   TLS block. The offset is the same for all threads.
++	   Prototype:
++	   _dl_tlsdesc_return (tlsdesc *) ;
++	 */
++	.hidden _dl_tlsdesc_return
++	.global	_dl_tlsdesc_return
++	.type	_dl_tlsdesc_return,%function
++	.align 2
++_dl_tlsdesc_return:
++	ldr x0,[x0,#8]
++	ret
++	.size	_dl_tlsdesc_return, .-_dl_tlsdesc_return
++
++#ifdef SHARED
++	/* Handler for dynamic TLS symbols.
++	   Prototype:
++	   _dl_tlsdesc_dynamic (tlsdesc *) ;
++
++	   The second word of the descriptor points to a
++	   tlsdesc_dynamic_arg structure.
++
++	   Returns the offset between the thread pointer and the
++	   object referenced by the argument.
++
++	   ptrdiff_t
++	   __attribute__ ((__regparm__ (1)))
++	   _dl_tlsdesc_dynamic (struct tlsdesc *tdp)
++	   {
++	     struct tlsdesc_dynamic_arg *td = tdp->arg;
++	     dtv_t *dtv = *(dtv_t **)((char *)__thread_pointer + TCBHEAD_DTV);
++	     if (__builtin_expect (td->gen_count <= dtv[0].counter
++		&& (dtv[td->tlsinfo.ti_module].pointer.val
++		    != TLS_DTV_UNALLOCATED),
++		1))
++	       return dtv[td->tlsinfo.ti_module].pointer.val
++		+ td->tlsinfo.ti_offset
++		- __thread_pointer;
++
++	     return ___tls_get_addr (&td->tlsinfo) - __thread_pointer;
++	   }
++	 */
++
++	.hidden _dl_tlsdesc_dynamic
++	.global	_dl_tlsdesc_dynamic
++	.type	_dl_tlsdesc_dynamic,%function
++	cfi_startproc
++	.align 2
++_dl_tlsdesc_dynamic:
++# define NSAVEXREGPAIRS 2
++	stp	x29, x30, [sp,#-(32+16*NSAVEXREGPAIRS)]!
++	cfi_adjust_cfa_offset (32+16*NSAVEXREGPAIRS)
++	mov	x29, sp
++
++	/* Save just enough registers to support fast path, if we fall
++	   into slow path we will save additional registers.  */
++
++	stp	x1,  x2, [sp, #32+16*0]
++	stp	x3,  x4, [sp, #32+16*1]
++
++	mrs	x4, tpidr_el0
++	/* The ldar here happens after the load from [x0] at the call site
++	   (that is generated by the compiler as part of the TLS access ABI),
++	   so it reads the same value (this function is the final value of
++	   td->entry) and thus it synchronizes with the release store to
++	   td->entry in _dl_tlsdesc_resolve_rela_fixup ensuring that the load
++	   from [x0,#PTR_SIZE] here happens after the initialization of td->arg.  */
++	ldar	PTR_REG (zr), [x0]
++	ldr	PTR_REG (1), [x0,#TLSDESC_ARG]
++	ldr	PTR_REG (0), [x4,#TCBHEAD_DTV]
++	ldr	PTR_REG (3), [x1,#TLSDESC_GEN_COUNT]
++	ldr	PTR_REG (2), [x0,#DTV_COUNTER]
++	cmp	PTR_REG (3), PTR_REG (2)
++	b.hi	2f
++	ldr	PTR_REG (2), [x1,#TLSDESC_MODID]
++	add	PTR_REG (0), PTR_REG (0), PTR_REG (2), lsl #(PTR_LOG_SIZE + 1)
++	ldr	PTR_REG (0), [x0] /* Load val member of DTV entry.  */
++	cmp	x0, #TLS_DTV_UNALLOCATED
++	b.eq	2f
++	ldr	PTR_REG (1), [x1,#TLSDESC_MODOFF]
++	add	PTR_REG (0), PTR_REG (0), PTR_REG (1)
++	sub	PTR_REG (0), PTR_REG (0), PTR_REG (4)
++1:
++	ldp	 x1,  x2, [sp, #32+16*0]
++	ldp	 x3,  x4, [sp, #32+16*1]
++
++	ldp	x29, x30, [sp], #(32+16*NSAVEXREGPAIRS)
++	cfi_adjust_cfa_offset (-32-16*NSAVEXREGPAIRS)
++# undef NSAVEXREGPAIRS
++	ret
++2:
++	/* This is the slow path. We need to call __tls_get_addr() which
++	   means we need to save and restore all the register that the
++	   callee will trash.  */
++
++	/* Save the remaining registers that we must treat as caller save.  */
++# define NSAVEXREGPAIRS 7
++	stp	 x5,  x6, [sp, #-16*NSAVEXREGPAIRS]!
++	cfi_adjust_cfa_offset (16*NSAVEXREGPAIRS)
++	stp	 x7,  x8, [sp, #16*1]
++	stp	 x9, x10, [sp, #16*2]
++	stp	x11, x12, [sp, #16*3]
++	stp	x13, x14, [sp, #16*4]
++	stp	x15, x16, [sp, #16*5]
++	stp	x17, x18, [sp, #16*6]
++
++	SAVE_Q_REGISTERS
++
++	mov	x0, x1
++	bl	__tls_get_addr
++
++	mrs	x1, tpidr_el0
++	sub	PTR_REG (0), PTR_REG (0), PTR_REG (1)
++
++	RESTORE_Q_REGISTERS
++
++	ldp	 x7,  x8, [sp, #16*1]
++	ldp	 x9, x10, [sp, #16*2]
++	ldp	x11, x12, [sp, #16*3]
++	ldp	x13, x14, [sp, #16*4]
++	ldp	x15, x16, [sp, #16*5]
++	ldp	x17, x18, [sp, #16*6]
++	ldp	 x5,  x6, [sp], #16*NSAVEXREGPAIRS
++	cfi_adjust_cfa_offset (-16*NSAVEXREGPAIRS)
++	b	1b
++	cfi_endproc
++	.size	_dl_tlsdesc_dynamic, .-_dl_tlsdesc_dynamic
++# undef NSAVEXREGPAIRS
++
++#endif // SHARED
++#endif // __UCLIBC_HAS_TLS__
+diff --git a/ldso/ldso/aarch64/elfinterp.c b/ldso/ldso/aarch64/elfinterp.c
+new file mode 100644
+index 000000000..879484e16
+--- /dev/null
++++ b/ldso/ldso/aarch64/elfinterp.c
+@@ -0,0 +1,306 @@
++/* AARCH64 ELF shared library loader suppport
++ *
++ * Copyright (C) 2001-2004 Erik Andersen
++ * Copyright (C) 2016-2017 Waldemar Brodkorb <wbx@uclibc-ng.org>
++ *
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. The name of the above contributors may not be
++ *    used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++/* Program to load an ELF binary on a linux system, and run it.
++   References to symbols in sharable libraries can be resolved by either
++   an ELF sharable library or a linux style of shared library. */
++
++#include "ldso.h"
++
++#if defined(USE_TLS) && USE_TLS
++#include "dl-tls.h"
++#include "tlsdeschtab.h"
++#endif
++
++extern int _dl_linux_resolve(void);
++
++unsigned long _dl_linux_resolver(struct elf_resolve *tpnt, int reloc_entry)
++{
++	ELF_RELOC *this_reloc;
++	char *strtab;
++	ElfW(Sym) *symtab;
++	int symtab_index;
++	char *rel_addr;
++	char *new_addr;
++	char **got_addr;
++	ElfW(Addr) instr_addr;
++	char *symname;
++
++	rel_addr = (char *)tpnt->dynamic_info[DT_JMPREL];
++	this_reloc = (ELF_RELOC *)(rel_addr + reloc_entry);
++	symtab_index = ELF_R_SYM(this_reloc->r_info);
++
++	symtab = (ElfW(Sym) *)tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++	symname = strtab + symtab[symtab_index].st_name;
++
++	/* Address of jump instruction to fix up */
++	instr_addr = (this_reloc->r_offset + tpnt->loadaddr);
++	got_addr = (char **)instr_addr;
++
++	/* Get the address of the GOT entry */
++	new_addr = _dl_find_hash(symname, &_dl_loaded_modules->symbol_scope, tpnt, ELF_RTYPE_CLASS_PLT, NULL);
++	if (unlikely(!new_addr)) {
++		_dl_dprintf(2, "%s: can't resolve symbol '%s'\n", _dl_progname, symname);
++		_dl_exit(1);
++	}
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_bindings) {
++		_dl_dprintf(_dl_debug_file, "\nresolve function: %s", symname);
++		if (_dl_debug_detail) _dl_dprintf(_dl_debug_file,
++				"\tpatched %x ==> %x @ %x", *got_addr, new_addr, got_addr);
++	}
++	if (!_dl_debug_nofixups) {
++		*got_addr = new_addr;
++	}
++#else
++	*got_addr = new_addr;
++#endif
++	return (unsigned long)new_addr;
++}
++
++static int
++_dl_parse(struct elf_resolve *tpnt, struct r_scope_elem *scope,
++	  unsigned long rel_addr, unsigned long rel_size,
++	  int (*reloc_fnc) (struct elf_resolve *tpnt, struct r_scope_elem *scope,
++			    ELF_RELOC *rpnt, ElfW(Sym) *symtab, char *strtab))
++{
++	unsigned int i;
++	char *strtab;
++	ElfW(Sym) *symtab;
++	ELF_RELOC *rpnt;
++	int symtab_index;
++
++	/* Parse the relocation information */
++	rpnt = (ELF_RELOC *)rel_addr;
++	rel_size = rel_size / sizeof(ELF_RELOC);
++
++	symtab = (ElfW(Sym) *)tpnt->dynamic_info[DT_SYMTAB];
++	strtab = (char *)tpnt->dynamic_info[DT_STRTAB];
++
++	for (i = 0; i < rel_size; i++, rpnt++) {
++		int res;
++
++		symtab_index = ELF_R_SYM(rpnt->r_info);
++
++		debug_sym(symtab, strtab, symtab_index);
++		debug_reloc(symtab, strtab, rpnt);
++
++		res = reloc_fnc(tpnt, scope, rpnt, symtab, strtab);
++
++		if (res==0) 
++			continue;
++
++		_dl_dprintf(2, "\n%s: ", _dl_progname);
++
++		if (symtab_index)
++			_dl_dprintf(2, "symbol '%s': ", 
++				strtab + symtab[symtab_index].st_name);
++
++		if (unlikely(res < 0)) {
++		        int reloc_type = ELF_R_TYPE(rpnt->r_info);
++			_dl_dprintf(2, "can't handle reloc type %x\n", reloc_type);
++			_dl_exit(-res);
++		} else if (unlikely(res > 0)) {
++			_dl_dprintf(2, "can't resolve symbol\n");
++			return res;
++		}
++	  }
++
++	  return 0;
++}
++
++static int
++_dl_do_reloc (struct elf_resolve *tpnt, struct r_scope_elem *scope,
++	      ELF_RELOC *rpnt, ElfW(Sym) *symtab, char *strtab)
++{
++	int reloc_type;
++	int symtab_index;
++	char *symname;
++#if defined USE_TLS && USE_TLS
++	struct elf_resolve *tls_tpnt = NULL;
++#endif
++	struct symbol_ref sym_ref;
++	ElfW(Addr) *reloc_addr;
++	ElfW(Addr) symbol_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	ElfW(Addr) old_val;
++#endif
++
++	reloc_addr = (ElfW(Addr)*)(tpnt->loadaddr + (unsigned long)rpnt->r_offset);
++	reloc_type = ELF_R_TYPE(rpnt->r_info);
++	symtab_index = ELF_R_SYM(rpnt->r_info);
++	sym_ref.sym = &symtab[symtab_index];
++	sym_ref.tpnt = NULL;
++	symbol_addr = 0;
++	symname = strtab + sym_ref.sym->st_name;
++
++	if (symtab_index) {
++		symbol_addr = (ElfW(Addr))_dl_find_hash(symname, scope, tpnt,
++				elf_machine_type_class(reloc_type), &sym_ref);
++
++		/*
++		 * We want to allow undefined references to weak symbols - this might
++		 * have been intentional.  We should not be linking local symbols
++		 * here, so all bases should be covered.
++		 */
++		if (unlikely (!symbol_addr && 
++			(ELF_ST_TYPE(symtab[symtab_index].st_info) != STT_TLS) &&
++			(ELF_ST_BIND(symtab[symtab_index].st_info) != STB_WEAK))) {
++			return 1;
++		}
++		if (_dl_trace_prelink) {
++			_dl_debug_lookup (symname, tpnt, &symtab[symtab_index],
++						&sym_ref, elf_machine_type_class(reloc_type));
++		}
++#if defined USE_TLS && USE_TLS
++		tls_tpnt = sym_ref.tpnt;
++#endif
++	} else {
++		/*
++		 * Relocs against STN_UNDEF are usually treated as using a
++		 * symbol value of zero, and using the module containing the
++		 * reloc itself.
++		 */
++		symbol_addr = sym_ref.sym->st_value;
++#if defined USE_TLS && USE_TLS
++		tls_tpnt = tpnt;
++#endif
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++		case R_AARCH64_NONE:
++			break;
++		case R_AARCH64_ABS64: 		/* REL_SYMBOLIC */
++		case R_AARCH64_GLOB_DAT:	/* REL_GOT */
++		case R_AARCH64_JUMP_SLOT:	/* REL_PLT */
++			*reloc_addr = symbol_addr + rpnt->r_addend;
++			break;
++		case R_AARCH64_RELATIVE:
++			*reloc_addr += tpnt->loadaddr + rpnt->r_addend;
++			break;
++		case R_AARCH64_COPY:
++			_dl_memcpy((void *) reloc_addr,
++				   (void *) symbol_addr, sym_ref.sym->st_size);
++			break;
++#if defined USE_TLS && USE_TLS
++		case R_AARCH64_TLS_TPREL:
++			CHECK_STATIC_TLS ((struct link_map *) tls_tpnt);
++			*reloc_addr = (symbol_addr + tls_tpnt->l_tls_offset);
++			break;
++		case R_AARCH64_TLSDESC:
++				{
++					struct tlsdesc volatile *td =
++							(struct tlsdesc volatile *)reloc_addr;
++#ifndef SHARED
++					CHECK_STATIC_TLS((struct link_map *) tls_tpnt);
++#else
++					if (!TRY_STATIC_TLS ((struct link_map *) tls_tpnt))
++					{
++					        td->arg = _dl_make_tlsdesc_dynamic((struct link_map *) tls_tpnt, symbol_addr);
++					        td->entry = _dl_tlsdesc_dynamic;
++					}
++					else
++#endif
++					{
++					        td->arg = symbol_addr + tls_tpnt->l_tls_offset;
++					        td->entry = _dl_tlsdesc_return;
++					}
++				}
++			break;
++#endif
++		default:
++			return -1; /*call _dl_exit(1) */
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail) {
++		_dl_dprintf(_dl_debug_file, "\tpatched: %x ==> %x @ %x\n", 
++				old_val, *reloc_addr, reloc_addr);
++	}
++#endif
++
++	return 0;
++}
++
++static int
++_dl_do_lazy_reloc (struct elf_resolve *tpnt, struct r_scope_elem *scope,
++		   ELF_RELOC *rpnt, ElfW(Sym) *symtab, char *strtab)
++{
++	int reloc_type;
++	ElfW(Addr) *reloc_addr;
++#if defined (__SUPPORT_LD_DEBUG__)
++	ElfW(Addr) old_val;
++#endif
++
++	(void)scope;
++	(void)strtab;
++
++	reloc_addr = (ElfW(Addr)*)(tpnt->loadaddr + rpnt->r_offset);
++	reloc_type = ELF_R_TYPE(rpnt->r_info);
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	old_val = *reloc_addr;
++#endif
++
++	switch (reloc_type) {
++		case R_AARCH64_NONE:
++			break;
++		case R_AARCH64_JUMP_SLOT:
++			*reloc_addr += tpnt->loadaddr;
++			break;
++		default:
++			return -1; /*call _dl_exit(1) */
++	}
++
++#if defined (__SUPPORT_LD_DEBUG__)
++	if (_dl_debug_reloc && _dl_debug_detail) {
++		_dl_dprintf(_dl_debug_file, "\tpatched_lazy: %x ==> %x @ %x\n",
++			    old_val, *reloc_addr, reloc_addr);
++	}
++#endif
++
++	return 0;
++}
++
++void _dl_parse_lazy_relocation_information(struct dyn_elf *rpnt,
++	unsigned long rel_addr, unsigned long rel_size)
++{
++	(void)_dl_parse(rpnt->dyn, NULL, rel_addr, rel_size, _dl_do_lazy_reloc);
++}
++
++int _dl_parse_relocation_information(struct dyn_elf *rpnt,
++	struct r_scope_elem *scope, unsigned long rel_addr, unsigned long rel_size)
++{
++	return _dl_parse(rpnt->dyn, scope, rel_addr, rel_size, _dl_do_reloc);
++}
+diff --git a/ldso/ldso/aarch64/resolve.S b/ldso/ldso/aarch64/resolve.S
+new file mode 100644
+index 000000000..3b907c46c
+--- /dev/null
++++ b/ldso/ldso/aarch64/resolve.S
+@@ -0,0 +1,97 @@
++/*
++ * Copyright (C) 2016 by Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ * ported from GNU libc
++ */
++
++/* Copyright (C) 2005-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <features.h>
++
++#define PTR_REG(n)		x##n
++#define PTR_LOG_SIZE		3
++#define PTR_SIZE	(1<<PTR_LOG_SIZE)
++
++#define ip0 x16
++#define ip0l PTR_REG (16)
++#define ip1 x17
++#define lr  x30
++
++/* RELA relocatons are 3 pointers */
++#define RELA_SIZE (PTR_SIZE * 3)
++
++ .text
++ .globl _dl_linux_resolve
++ .type _dl_linux_resolve, %function
++ .align 2
++
++_dl_linux_resolve:
++	/* AArch64 we get called with:
++	   ip0		&PLTGOT[2]
++	   ip1		temp(dl resolver entry point)
++	   [sp, #8]	lr
++	   [sp, #0]	&PLTGOT[n]
++	 */
++
++	/* Save arguments.  */
++	stp	x8, x9, [sp, #-(80+8*16)]!
++	stp	x6, x7, [sp,  #16]
++	stp	x4, x5, [sp,  #32]
++	stp	x2, x3, [sp,  #48]
++	stp	x0, x1, [sp,  #64]
++	stp	q0, q1, [sp, #(80+0*16)]
++	stp	q2, q3, [sp, #(80+2*16)]
++	stp	q4, q5, [sp, #(80+4*16)]
++	stp	q6, q7, [sp, #(80+6*16)]
++
++	/* Get pointer to linker struct.  */
++	ldr	PTR_REG (0), [ip0, #-PTR_SIZE]
++
++	/* Prepare to call _dl_linux_resolver().  */
++	ldr	x1, [sp, 80+8*16]	/* Recover &PLTGOT[n] */
++
++	sub     x1, x1, ip0
++	add     x1, x1, x1, lsl #1
++	lsl     x1, x1, #3
++	sub     x1, x1, #(RELA_SIZE<<3)
++	lsr     x1, x1, #3
++
++	/* Call resolver routine.  */
++	bl	_dl_linux_resolver
++
++	/* Save the return.  */
++	mov	ip0, x0
++
++	/* Get arguments and return address back.  */
++	ldp	q0, q1, [sp, #(80+0*16)]
++	ldp	q2, q3, [sp, #(80+2*16)]
++	ldp	q4, q5, [sp, #(80+4*16)]
++	ldp	q6, q7, [sp, #(80+6*16)]
++	ldp	x0, x1, [sp, #64]
++	ldp	x2, x3, [sp, #48]
++	ldp	x4, x5, [sp, #32]
++	ldp	x6, x7, [sp, #16]
++	ldp	x8, x9, [sp], #(80+8*16)
++
++	ldp	ip1, lr, [sp], #16
++
++	/* Jump to the newly found address.  */
++	br	ip0
++
++.size _dl_linux_resolve, .-_dl_linux_resolve
+diff --git a/libc/string/aarch64/Makefile b/libc/string/aarch64/Makefile
+new file mode 100644
+index 000000000..0a95346fd
+--- /dev/null
++++ b/libc/string/aarch64/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir:=../../../
++top_builddir:=../../../
++all: objs
++include $(top_builddir)Rules.mak
++include ../Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libc/string/aarch64/memcpy.S b/libc/string/aarch64/memcpy.S
+new file mode 100644
+index 000000000..87b2552a2
+--- /dev/null
++++ b/libc/string/aarch64/memcpy.S
+@@ -0,0 +1,230 @@
++/* Copyright (C) 2012-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++
++/* Assumptions:
++ *
++ * ARMv8-a, AArch64, unaligned accesses.
++ *
++ */
++
++#define dstin	x0
++#define src	x1
++#define count	x2
++#define dst	x3
++#define srcend	x4
++#define dstend	x5
++#define A_l	x6
++#define A_lw	w6
++#define A_h	x7
++#define A_hw	w7
++#define B_l	x8
++#define B_lw	w8
++#define B_h	x9
++#define C_l	x10
++#define C_h	x11
++#define D_l	x12
++#define D_h	x13
++#define E_l	src
++#define E_h	count
++#define F_l	srcend
++#define F_h	dst
++#define G_l	count
++#define G_h	dst
++#define tmp1	x14
++
++ENTRY (memcpy)
++
++	prfm	PLDL1KEEP, [src]
++	add	srcend, src, count
++	add	dstend, dstin, count
++	cmp	count, 16
++	b.ls	L(copy16)
++	cmp	count, 96
++	b.hi	L(copy_long)
++
++	/* Medium copies: 17..96 bytes.  */
++	sub	tmp1, count, 1
++	ldp	A_l, A_h, [src]
++	tbnz	tmp1, 6, L(copy96)
++	ldp	D_l, D_h, [srcend, -16]
++	tbz	tmp1, 5, 1f
++	ldp	B_l, B_h, [src, 16]
++	ldp	C_l, C_h, [srcend, -32]
++	stp	B_l, B_h, [dstin, 16]
++	stp	C_l, C_h, [dstend, -32]
++1:
++	stp	A_l, A_h, [dstin]
++	stp	D_l, D_h, [dstend, -16]
++	ret
++
++	.p2align 4
++	/* Small copies: 0..16 bytes.  */
++L(copy16):
++	cmp	count, 8
++	b.lo	1f
++	ldr	A_l, [src]
++	ldr	A_h, [srcend, -8]
++	str	A_l, [dstin]
++	str	A_h, [dstend, -8]
++	ret
++	.p2align 4
++1:
++	tbz	count, 2, 1f
++	ldr	A_lw, [src]
++	ldr	A_hw, [srcend, -4]
++	str	A_lw, [dstin]
++	str	A_hw, [dstend, -4]
++	ret
++
++	/* Copy 0..3 bytes.  Use a branchless sequence that copies the same
++	   byte 3 times if count==1, or the 2nd byte twice if count==2.  */
++1:
++	cbz	count, 2f
++	lsr	tmp1, count, 1
++	ldrb	A_lw, [src]
++	ldrb	A_hw, [srcend, -1]
++	ldrb	B_lw, [src, tmp1]
++	strb	A_lw, [dstin]
++	strb	B_lw, [dstin, tmp1]
++	strb	A_hw, [dstend, -1]
++2:	ret
++
++	.p2align 4
++	/* Copy 64..96 bytes.  Copy 64 bytes from the start and
++	   32 bytes from the end.  */
++L(copy96):
++	ldp	B_l, B_h, [src, 16]
++	ldp	C_l, C_h, [src, 32]
++	ldp	D_l, D_h, [src, 48]
++	ldp	E_l, E_h, [srcend, -32]
++	ldp	F_l, F_h, [srcend, -16]
++	stp	A_l, A_h, [dstin]
++	stp	B_l, B_h, [dstin, 16]
++	stp	C_l, C_h, [dstin, 32]
++	stp	D_l, D_h, [dstin, 48]
++	stp	E_l, E_h, [dstend, -32]
++	stp	F_l, F_h, [dstend, -16]
++	ret
++
++	/* Align DST to 16 byte alignment so that we don't cross cache line
++	   boundaries on both loads and stores.  There are at least 96 bytes
++	   to copy, so copy 16 bytes unaligned and then align.  The loop
++	   copies 64 bytes per iteration and prefetches one iteration ahead.  */
++
++	.p2align 4
++L(copy_long):
++	and	tmp1, dstin, 15
++	bic	dst, dstin, 15
++	ldp	D_l, D_h, [src]
++	sub	src, src, tmp1
++	add	count, count, tmp1	/* Count is now 16 too large.  */
++	ldp	A_l, A_h, [src, 16]
++	stp	D_l, D_h, [dstin]
++	ldp	B_l, B_h, [src, 32]
++	ldp	C_l, C_h, [src, 48]
++	ldp	D_l, D_h, [src, 64]!
++	subs	count, count, 128 + 16	/* Test and readjust count.  */
++	b.ls	2f
++1:
++	stp	A_l, A_h, [dst, 16]
++	ldp	A_l, A_h, [src, 16]
++	stp	B_l, B_h, [dst, 32]
++	ldp	B_l, B_h, [src, 32]
++	stp	C_l, C_h, [dst, 48]
++	ldp	C_l, C_h, [src, 48]
++	stp	D_l, D_h, [dst, 64]!
++	ldp	D_l, D_h, [src, 64]!
++	subs	count, count, 64
++	b.hi	1b
++
++	/* Write the last full set of 64 bytes.  The remainder is at most 64
++	   bytes, so it is safe to always copy 64 bytes from the end even if
++	   there is just 1 byte left.  */
++2:
++	ldp	E_l, E_h, [srcend, -64]
++	stp	A_l, A_h, [dst, 16]
++	ldp	A_l, A_h, [srcend, -48]
++	stp	B_l, B_h, [dst, 32]
++	ldp	B_l, B_h, [srcend, -32]
++	stp	C_l, C_h, [dst, 48]
++	ldp	C_l, C_h, [srcend, -16]
++	stp	D_l, D_h, [dst, 64]
++	stp	E_l, E_h, [dstend, -64]
++	stp	A_l, A_h, [dstend, -48]
++	stp	B_l, B_h, [dstend, -32]
++	stp	C_l, C_h, [dstend, -16]
++	ret
++
++	.p2align 4
++L(move_long):
++	cbz	tmp1, 3f
++
++	add	srcend, src, count
++	add	dstend, dstin, count
++
++	/* Align dstend to 16 byte alignment so that we don't cross cache line
++	   boundaries on both loads and stores.  There are at least 96 bytes
++	   to copy, so copy 16 bytes unaligned and then align.  The loop
++	   copies 64 bytes per iteration and prefetches one iteration ahead.  */
++
++	and	tmp1, dstend, 15
++	ldp	D_l, D_h, [srcend, -16]
++	sub	srcend, srcend, tmp1
++	sub	count, count, tmp1
++	ldp	A_l, A_h, [srcend, -16]
++	stp	D_l, D_h, [dstend, -16]
++	ldp	B_l, B_h, [srcend, -32]
++	ldp	C_l, C_h, [srcend, -48]
++	ldp	D_l, D_h, [srcend, -64]!
++	sub	dstend, dstend, tmp1
++	subs	count, count, 128
++	b.ls	2f
++
++	nop
++1:
++	stp	A_l, A_h, [dstend, -16]
++	ldp	A_l, A_h, [srcend, -16]
++	stp	B_l, B_h, [dstend, -32]
++	ldp	B_l, B_h, [srcend, -32]
++	stp	C_l, C_h, [dstend, -48]
++	ldp	C_l, C_h, [srcend, -48]
++	stp	D_l, D_h, [dstend, -64]!
++	ldp	D_l, D_h, [srcend, -64]!
++	subs	count, count, 64
++	b.hi	1b
++
++	/* Write the last full set of 64 bytes.  The remainder is at most 64
++	   bytes, so it is safe to always copy 64 bytes from the start even if
++	   there is just 1 byte left.  */
++2:
++	ldp	G_l, G_h, [src, 48]
++	stp	A_l, A_h, [dstend, -16]
++	ldp	A_l, A_h, [src, 32]
++	stp	B_l, B_h, [dstend, -32]
++	ldp	B_l, B_h, [src, 16]
++	stp	C_l, C_h, [dstend, -48]
++	ldp	C_l, C_h, [src]
++	stp	D_l, D_h, [dstend, -64]
++	stp	G_l, G_h, [dstin, 48]
++	stp	A_l, A_h, [dstin, 32]
++	stp	B_l, B_h, [dstin, 16]
++	stp	C_l, C_h, [dstin]
++3:	ret
++
++END (memcpy)
++libc_hidden_def (memcpy)
+diff --git a/libc/string/aarch64/memset.S b/libc/string/aarch64/memset.S
+new file mode 100644
+index 000000000..d6686bedc
+--- /dev/null
++++ b/libc/string/aarch64/memset.S
+@@ -0,0 +1,189 @@
++/* Copyright (C) 2012-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++
++/* Assumptions:
++ *
++ * ARMv8-a, AArch64, unaligned accesses
++ *
++ */
++
++#define dstin	x0
++#define val	x1
++#define valw	w1
++#define count	x2
++#define dst	x3
++#define dstend	x4
++#define tmp1	x5
++#define tmp1w	w5
++#define tmp2	x6
++#define tmp2w	w6
++#define zva_len x7
++#define zva_lenw w7
++
++ENTRY_ALIGN (memset, 6)
++
++	dup	v0.16B, valw
++	add	dstend, dstin, count
++
++	cmp	count, 96
++	b.hi	L(set_long)
++	cmp	count, 16
++	b.hs	L(set_medium)
++	mov	val, v0.D[0]
++
++	/* Set 0..15 bytes.  */
++	tbz	count, 3, 1f
++	str	val, [dstin]
++	str	val, [dstend, -8]
++	ret
++	nop
++1:	tbz	count, 2, 2f
++	str	valw, [dstin]
++	str	valw, [dstend, -4]
++	ret
++2:	cbz	count, 3f
++	strb	valw, [dstin]
++	tbz	count, 1, 3f
++	strh	valw, [dstend, -2]
++3:	ret
++
++	/* Set 17..96 bytes.  */
++L(set_medium):
++	str	q0, [dstin]
++	tbnz	count, 6, L(set96)
++	str	q0, [dstend, -16]
++	tbz	count, 5, 1f
++	str	q0, [dstin, 16]
++	str	q0, [dstend, -32]
++1:	ret
++
++	.p2align 4
++	/* Set 64..96 bytes.  Write 64 bytes from the start and
++	   32 bytes from the end.  */
++L(set96):
++	str	q0, [dstin, 16]
++	stp	q0, q0, [dstin, 32]
++	stp	q0, q0, [dstend, -32]
++	ret
++
++	.p2align 3
++	nop
++L(set_long):
++	and	valw, valw, 255
++	bic	dst, dstin, 15
++	str	q0, [dstin]
++	cmp	count, 256
++	ccmp	valw, 0, 0, cs
++	b.eq	L(try_zva)
++L(no_zva):
++	sub	count, dstend, dst	/* Count is 16 too large.  */
++	add	dst, dst, 16
++	sub	count, count, 64 + 16	/* Adjust count and bias for loop.  */
++1:	stp	q0, q0, [dst], 64
++	stp	q0, q0, [dst, -32]
++L(tail64):
++	subs	count, count, 64
++	b.hi	1b
++2:	stp	q0, q0, [dstend, -64]
++	stp	q0, q0, [dstend, -32]
++	ret
++
++	.p2align 3
++L(try_zva):
++	mrs	tmp1, dczid_el0
++	tbnz	tmp1w, 4, L(no_zva)
++	and	tmp1w, tmp1w, 15
++	cmp	tmp1w, 4	/* ZVA size is 64 bytes.  */
++	b.ne	 L(zva_128)
++
++	/* Write the first and last 64 byte aligned block using stp rather
++	   than using DC ZVA.  This is faster on some cores.
++	 */
++L(zva_64):
++	str	q0, [dst, 16]
++	stp	q0, q0, [dst, 32]
++	bic	dst, dst, 63
++	stp	q0, q0, [dst, 64]
++	stp	q0, q0, [dst, 96]
++	sub	count, dstend, dst	/* Count is now 128 too large.	*/
++	sub	count, count, 128+64+64	/* Adjust count and bias for loop.  */
++	add	dst, dst, 128
++	nop
++1:	dc	zva, dst
++	add	dst, dst, 64
++	subs	count, count, 64
++	b.hi	1b
++	stp	q0, q0, [dst, 0]
++	stp	q0, q0, [dst, 32]
++	stp	q0, q0, [dstend, -64]
++	stp	q0, q0, [dstend, -32]
++	ret
++
++	.p2align 3
++L(zva_128):
++	cmp	tmp1w, 5	/* ZVA size is 128 bytes.  */
++	b.ne	L(zva_other)
++
++	str	q0, [dst, 16]
++	stp	q0, q0, [dst, 32]
++	stp	q0, q0, [dst, 64]
++	stp	q0, q0, [dst, 96]
++	bic	dst, dst, 127
++	sub	count, dstend, dst	/* Count is now 128 too large.	*/
++	sub	count, count, 128+128	/* Adjust count and bias for loop.  */
++	add	dst, dst, 128
++1:	dc	zva, dst
++	add	dst, dst, 128
++	subs	count, count, 128
++	b.hi	1b
++	stp	q0, q0, [dstend, -128]
++	stp	q0, q0, [dstend, -96]
++	stp	q0, q0, [dstend, -64]
++	stp	q0, q0, [dstend, -32]
++	ret
++
++L(zva_other):
++	mov	tmp2w, 4
++	lsl	zva_lenw, tmp2w, tmp1w
++	add	tmp1, zva_len, 64	/* Max alignment bytes written.	 */
++	cmp	count, tmp1
++	blo	L(no_zva)
++
++	sub	tmp2, zva_len, 1
++	add	tmp1, dst, zva_len
++	add	dst, dst, 16
++	subs	count, tmp1, dst	/* Actual alignment bytes to write.  */
++	bic	tmp1, tmp1, tmp2	/* Aligned dc zva start address.  */
++	beq	2f
++1:	stp	q0, q0, [dst], 64
++	stp	q0, q0, [dst, -32]
++	subs	count, count, 64
++	b.hi	1b
++2:	mov	dst, tmp1
++	sub	count, dstend, tmp1	/* Remaining bytes to write.  */
++	subs	count, count, zva_len
++	b.lo	4f
++3:	dc	zva, dst
++	add	dst, dst, zva_len
++	subs	count, count, zva_len
++	b.hs	3b
++4:	add	count, count, zva_len
++	b	L(tail64)
++
++END (memset)
++libc_hidden_def (memset)
+diff --git a/libc/sysdeps/linux/aarch64/Makefile b/libc/sysdeps/linux/aarch64/Makefile
+new file mode 100644
+index 000000000..86a32a613
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/Makefile
+@@ -0,0 +1,9 @@
++# Makefile for uClibc-ng
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++
++top_srcdir=../../../../
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/aarch64/Makefile.arch b/libc/sysdeps/linux/aarch64/Makefile.arch
+new file mode 100644
+index 000000000..b38f760a8
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/Makefile.arch
+@@ -0,0 +1,5 @@
++# Makefile for uClibc-ng
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++
++CSRC-y := __syscall_error.c
++SSRC-y := clone.S setjmp.S syscall.S __longjmp.S bsd-setjmp.S bsd-_setjmp.S vfork.S
+diff --git a/libc/sysdeps/linux/aarch64/__longjmp.S b/libc/sysdeps/linux/aarch64/__longjmp.S
+new file mode 100644
+index 000000000..e4d11b165
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/__longjmp.S
+@@ -0,0 +1,107 @@
++/* Copyright (C) 1997-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++#include <jmpbuf-offsets.h>
++
++/* __longjmp(jmpbuf, val) */
++
++ENTRY (__longjmp)
++	cfi_def_cfa(x0, 0)
++	cfi_offset(x19, JB_X19<<3)
++	cfi_offset(x20, JB_X20<<3)
++	cfi_offset(x21, JB_X21<<3)
++	cfi_offset(x22, JB_X22<<3)
++	cfi_offset(x23, JB_X23<<3)
++	cfi_offset(x24, JB_X24<<3)
++	cfi_offset(x25, JB_X25<<3)
++	cfi_offset(x26, JB_X26<<3)
++	cfi_offset(x27, JB_X27<<3)
++	cfi_offset(x28, JB_X28<<3)
++	cfi_offset(x29, JB_X29<<3)
++	cfi_offset(x30, JB_LR<<3)
++
++	cfi_offset( d8, JB_D8<<3)
++	cfi_offset( d9, JB_D9<<3)
++	cfi_offset(d10, JB_D10<<3)
++	cfi_offset(d11, JB_D11<<3)
++	cfi_offset(d12, JB_D12<<3)
++	cfi_offset(d13, JB_D13<<3)
++	cfi_offset(d14, JB_D14<<3)
++	cfi_offset(d15, JB_D15<<3)
++
++	ldp	x19, x20, [x0, #JB_X19<<3]
++	ldp	x21, x22, [x0, #JB_X21<<3]
++	ldp	x23, x24, [x0, #JB_X23<<3]
++	ldp	x25, x26, [x0, #JB_X25<<3]
++	ldp	x27, x28, [x0, #JB_X27<<3]
++	ldp	x29, x30, [x0, #JB_X29<<3]
++
++	/* longjmp probe takes 3 arguments, address of jump buffer as
++	   first argument (8@x0), return value as second argument (-4@x1),
++	   and target address (8@x30), respectively.  */
++	//LIBC_PROBE (longjmp, 3, 8@x0, -4@x1, 8@x30)
++	ldp	 d8,  d9, [x0, #JB_D8<<3]
++	ldp	d10, d11, [x0, #JB_D10<<3]
++	ldp	d12, d13, [x0, #JB_D12<<3]
++	ldp	d14, d15, [x0, #JB_D14<<3]
++
++        /* Originally this was implemented with a series of
++	   .cfi_restore() directives.
++
++           The theory was that cfi_restore should revert to previous
++           frame value is the same as the current value.  In practice
++           this doesn't work, even after cfi_restore() gdb continues
++           to try to recover a previous frame value offset from x0,
++           which gets stuffed after a few more instructions.  The
++           cfi_same_value() mechanism appears to work fine.  */
++
++	cfi_same_value(x19)
++	cfi_same_value(x20)
++	cfi_same_value(x21)
++	cfi_same_value(x22)
++	cfi_same_value(x23)
++	cfi_same_value(x24)
++	cfi_same_value(x25)
++	cfi_same_value(x26)
++	cfi_same_value(x27)
++	cfi_same_value(x28)
++	cfi_same_value(x29)
++	cfi_same_value(x30)
++	cfi_same_value(d8)
++	cfi_same_value(d9)
++	cfi_same_value(d10)
++	cfi_same_value(d11)
++	cfi_same_value(d12)
++	cfi_same_value(d13)
++	cfi_same_value(d14)
++	cfi_same_value(d15)
++	ldr	x5, [x0, #JB_SP<<3]
++	mov	sp, x5
++
++	/* longjmp_target probe takes 3 arguments, address of jump buffer
++	   as first argument (8@x0), return value as second argument (-4@x1),
++	   and target address (8@x30), respectively.  */
++	//LIBC_PROBE (longjmp_target, 3, 8@x0, -4@x1, 8@x30)
++	cmp	x1, #0
++	mov	x0, #1
++	csel	x0, x1, x0, ne
++	/* Use br instead of ret because ret is guaranteed to mispredict */
++	br	x30
++END (__longjmp)
++libc_hidden_def(__longjmp)
+diff --git a/libc/sysdeps/linux/aarch64/__syscall_error.c b/libc/sysdeps/linux/aarch64/__syscall_error.c
+new file mode 100644
+index 000000000..2b642e816
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/__syscall_error.c
+@@ -0,0 +1,18 @@
++/* Wrapper for setting errno.
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++int __syscall_error(int err_no) attribute_hidden;
++int __syscall_error(int err_no)
++{
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/aarch64/bits/atomic.h b/libc/sysdeps/linux/aarch64/bits/atomic.h
+new file mode 100644
+index 000000000..66e2f57d6
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/atomic.h
+@@ -0,0 +1,172 @@
++/* Copyright (C) 2003-2017 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _AARCH64_ATOMIC_MACHINE_H
++#define _AARCH64_ATOMIC_MACHINE_H	1
++
++#define typeof __typeof__
++
++#include <stdint.h>
++#include <sysdep.h>
++
++typedef int8_t  atomic8_t;
++typedef int16_t atomic16_t;
++typedef int32_t atomic32_t;
++typedef int64_t atomic64_t;
++
++typedef uint8_t  uatomic8_t;
++typedef uint16_t uatomic16_t;
++typedef uint32_t uatomic32_t;
++typedef uint64_t uatomic64_t;
++
++typedef intptr_t atomicptr_t;
++typedef uintptr_t uatomicptr_t;
++typedef intmax_t atomic_max_t;
++typedef uintmax_t uatomic_max_t;
++
++#define __HAVE_64B_ATOMICS 1
++#define USE_ATOMIC_COMPILER_BUILTINS 1
++
++/* Compare and exchange.
++   For all "bool" routines, we return FALSE if exchange succesful.  */
++
++# define __arch_compare_and_exchange_bool_8_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    !__atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				  model, __ATOMIC_RELAXED);		\
++  })
++
++# define __arch_compare_and_exchange_bool_16_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    !__atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				  model, __ATOMIC_RELAXED);		\
++  })
++
++# define __arch_compare_and_exchange_bool_32_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    !__atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				  model, __ATOMIC_RELAXED);		\
++  })
++
++#  define __arch_compare_and_exchange_bool_64_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    !__atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				  model, __ATOMIC_RELAXED);		\
++  })
++
++# define __arch_compare_and_exchange_val_8_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    __atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				 model, __ATOMIC_RELAXED);		\
++    __oldval;								\
++  })
++
++# define __arch_compare_and_exchange_val_16_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    __atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				 model, __ATOMIC_RELAXED);		\
++    __oldval;								\
++  })
++
++# define __arch_compare_and_exchange_val_32_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    __atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				 model, __ATOMIC_RELAXED);		\
++    __oldval;								\
++  })
++
++#  define __arch_compare_and_exchange_val_64_int(mem, newval, oldval, model) \
++  ({									\
++    typeof (*mem) __oldval = (oldval);					\
++    __atomic_compare_exchange_n (mem, (void *) &__oldval, newval, 0,	\
++				 model, __ATOMIC_RELAXED);		\
++    __oldval;								\
++  })
++
++
++/* Compare and exchange with "acquire" semantics, ie barrier after.  */
++
++# define atomic_compare_and_exchange_bool_acq(mem, new, old)	\
++  __atomic_bool_bysize (__arch_compare_and_exchange_bool, int,	\
++			mem, new, old, __ATOMIC_ACQUIRE)
++
++# define atomic_compare_and_exchange_val_acq(mem, new, old)	\
++  __atomic_val_bysize (__arch_compare_and_exchange_val, int,	\
++		       mem, new, old, __ATOMIC_ACQUIRE)
++
++/* Compare and exchange with "release" semantics, ie barrier before.  */
++
++# define atomic_compare_and_exchange_val_rel(mem, new, old)	 \
++  __atomic_val_bysize (__arch_compare_and_exchange_val, int,    \
++                       mem, new, old, __ATOMIC_RELEASE)
++
++
++/* Atomic exchange (without compare).  */
++
++# define __arch_exchange_8_int(mem, newval, model)	\
++  __atomic_exchange_n (mem, newval, model)
++
++# define __arch_exchange_16_int(mem, newval, model)	\
++  __atomic_exchange_n (mem, newval, model)
++
++# define __arch_exchange_32_int(mem, newval, model)	\
++  __atomic_exchange_n (mem, newval, model)
++
++#  define __arch_exchange_64_int(mem, newval, model)	\
++  __atomic_exchange_n (mem, newval, model)
++
++# define atomic_exchange_acq(mem, value)				\
++  __atomic_val_bysize (__arch_exchange, int, mem, value, __ATOMIC_ACQUIRE)
++
++# define atomic_exchange_rel(mem, value)				\
++  __atomic_val_bysize (__arch_exchange, int, mem, value, __ATOMIC_RELEASE)
++
++
++/* Atomically add value and return the previous (unincremented) value.  */
++
++# define __arch_exchange_and_add_8_int(mem, value, model)	\
++  __atomic_fetch_add (mem, value, model)
++
++# define __arch_exchange_and_add_16_int(mem, value, model)	\
++  __atomic_fetch_add (mem, value, model)
++
++# define __arch_exchange_and_add_32_int(mem, value, model)	\
++  __atomic_fetch_add (mem, value, model)
++
++#  define __arch_exchange_and_add_64_int(mem, value, model)	\
++  __atomic_fetch_add (mem, value, model)
++
++# define atomic_exchange_and_add_acq(mem, value)			\
++  __atomic_val_bysize (__arch_exchange_and_add, int, mem, value,	\
++		       __ATOMIC_ACQUIRE)
++
++# define atomic_exchange_and_add_rel(mem, value)			\
++  __atomic_val_bysize (__arch_exchange_and_add, int, mem, value,	\
++		       __ATOMIC_RELEASE)
++
++/* Barrier macro. */
++#define atomic_full_barrier() __sync_synchronize()
++
++#endif
+diff --git a/libc/sysdeps/linux/aarch64/bits/endian.h b/libc/sysdeps/linux/aarch64/bits/endian.h
+new file mode 100644
+index 000000000..a32ebc0d8
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/endian.h
+@@ -0,0 +1,30 @@
++/* Copyright (C) 1997-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++/* AArch64 can be either big or little endian.  */
++#ifdef __AARCH64EB__
++# define __BYTE_ORDER __BIG_ENDIAN
++#else
++# define __BYTE_ORDER __LITTLE_ENDIAN
++#endif
++
++#define __FLOAT_WORD_ORDER __BYTE_ORDER
+diff --git a/libc/sysdeps/linux/aarch64/bits/fcntl.h b/libc/sysdeps/linux/aarch64/bits/fcntl.h
+new file mode 100644
+index 000000000..d05798f31
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/fcntl.h
+@@ -0,0 +1,329 @@
++/* O_*, F_*, FD_* bit values for the AArch64 Linux ABI.
++   Copyright (C) 2011-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++#include <sys/types.h>
++#ifdef __USE_GNU
++# include <bits/uio.h>
++#endif
++
++/* open/fcntl.  */
++#define O_ACCMODE	   0003
++#define O_RDONLY	     00
++#define O_WRONLY	     01
++#define O_RDWR		     02
++#define O_CREAT		   0100	/* Not fcntl.  */
++#define O_EXCL		   0200	/* Not fcntl.  */
++#define O_NOCTTY	   0400	/* Not fcntl.  */
++#define O_TRUNC		  01000	/* Not fcntl.  */
++#define O_APPEND	  02000
++#define O_NONBLOCK	  04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC	       04010000
++#define O_FSYNC		 O_SYNC
++#define O_ASYNC		 020000
++
++#ifdef __USE_GNU
++# define O_DIRECTORY	 040000
++# define O_NOFOLLOW	0100000
++# define O_DIRECT	0200000
++# define O_NOATIME     01000000
++# define O_CLOEXEC     02000000
++# define O_PATH       010000000
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++#ifdef __USE_LARGEFILE64
++# define O_LARGEFILE	0
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#ifndef __USE_FILE_OFFSET64
++# define F_GETLK	5	/* Get record locking info.  */
++# define F_SETLK	6	/* Set record locking info (non-blocking).  */
++# define F_SETLKW	7	/* Set record locking info (blocking).	*/
++#else
++# define F_GETLK	F_GETLK64  /* Get record locking info.	*/
++# define F_SETLK	F_SETLK64  /* Set record locking info (non-blocking).*/
++# define F_SETLKW	F_SETLKW64 /* Set record locking info (blocking).  */
++#endif
++#define F_GETLK64	5	/* Get record locking info.  */
++#define F_SETLK64	6	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	7	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_UNIX98
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++# define F_SETOWN_EX	15	/* Get owner (thread receiving SIGIO).  */
++# define F_GETOWN_EX	16	/* Set owner (thread receiving SIGIO).  */
++#endif
++
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notifications on a directory.  */
++# define F_SETPIPE_SZ	1031	/* Set pipe page size array.  */
++# define F_GETPIPE_SZ	1032	/* Set pipe page size array.  */
++#endif
++#ifdef __USE_XOPEN2K8
++# define F_DUPFD_CLOEXEC 1030	/* Duplicate file descriptor with
++				   close-on-exit set.  */
++#endif
++
++/* For F_[GET|SET]FD.  */
++#define FD_CLOEXEC	1	/* Actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++# define F_RDLCK		0	/* Read lock.  */
++# define F_WRLCK		1	/* Write lock.	*/
++# define F_UNLCK		2	/* Remove lock.	 */
++
++/* For old implementation of BSD flock.  */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for BSD flock, also used by the kernel implementation.  */
++# define LOCK_SH	1	/* Shared lock.  */
++# define LOCK_EX	2	/* Exclusive lock.  */
++# define LOCK_NB	4	/* Or'd with one of the above to prevent
++				   blocking.  */
++# define LOCK_UN	8	/* Remove lock.  */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attributes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++
++#ifdef __USE_GNU
++/* Owner types.  */
++enum __pid_type
++  {
++    F_OWNER_TID = 0,		/* Kernel thread.  */
++    F_OWNER_PID,		/* Process.  */
++    F_OWNER_PGRP,		/* Process group.  */
++    F_OWNER_GID = F_OWNER_PGRP	/* Alternative, obsolete name.  */
++  };
++
++/* Structure to use with F_GETOWN_EX and F_SETOWN_EX.  */
++struct f_owner_ex
++  {
++    enum __pid_type type;	/* Owner type of ID.  */
++    __pid_t pid;		/* ID of owner.  */
++  };
++#endif
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++/* Flags for SYNC_FILE_RANGE.  */
++# define SYNC_FILE_RANGE_WAIT_BEFORE	1 /* Wait upon writeout of all pages
++					     in the range before performing the
++					     write.  */
++# define SYNC_FILE_RANGE_WRITE		2 /* Initiate writeout of all those
++					     dirty pages in the range which are
++					     not presently under writeback.  */
++# define SYNC_FILE_RANGE_WAIT_AFTER	4 /* Wait upon writeout of all pages in
++					     the range after performing the
++					     write.  */
++
++/* Flags for SPLICE and VMSPLICE.  */
++# define SPLICE_F_MOVE		1	/* Move pages instead of copying.  */
++# define SPLICE_F_NONBLOCK	2	/* Don't block on the pipe splicing
++					   (but we may still block on the fd
++					   we splice from/to).  */
++# define SPLICE_F_MORE		4	/* Expect more data.  */
++# define SPLICE_F_GIFT		8	/* Pages passed in are a gift.  */
++
++
++/* Flags for fallocate.  */
++# define FALLOC_FL_KEEP_SIZE		1 /* Don't extend size of file
++					     even if offset + len is
++					     greater than file size.  */
++# define FALLOC_FL_PUNCH_HOLE		2 /* Create a hole in the file.  */
++# define FALLOC_FL_COLLAPSE_RANGE	8 /* Remove a range of a file
++					     without leaving a
++					     hole.  */
++# define FALLOC_FL_ZERO_RANGE		16 /* Convert a range of a
++					      file to zeros.  */
++
++
++/* File handle structure.  */
++struct file_handle
++{
++  unsigned int handle_bytes;
++  int handle_type;
++  /* File identifier.  */
++  unsigned char f_handle[0];
++};
++
++/* Maximum handle size (for now).  */
++# define MAX_HANDLE_SZ	128
++#endif
++
++__BEGIN_DECLS
++
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++
++/* Selective file content synch'ing.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern int sync_file_range (int __fd, __off64_t __offset, __off64_t __count,
++			    unsigned int __flags);
++
++
++/* Splice address range into a pipe.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern ssize_t vmsplice (int __fdout, const struct iovec *__iov,
++			 size_t __count, unsigned int __flags);
++
++/* Splice two files together.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern ssize_t splice (int __fdin, __off64_t *__offin, int __fdout,
++		       __off64_t *__offout, size_t __len,
++		       unsigned int __flags);
++
++/* In-kernel implementation of tee for pipe buffers.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern ssize_t tee (int __fdin, int __fdout, size_t __len,
++		    unsigned int __flags);
++
++/* Reserve storage for the data of the file associated with FD.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++# ifndef __USE_FILE_OFFSET64
++extern int fallocate (int __fd, int __mode, __off_t __offset, __off_t __len);
++# else
++#  ifdef __REDIRECT
++extern int __REDIRECT (fallocate, (int __fd, int __mode, __off64_t __offset,
++				   __off64_t __len),
++		       fallocate64);
++#  else
++#   define fallocate fallocate64
++#  endif
++# endif
++# ifdef __USE_LARGEFILE64
++extern int fallocate64 (int __fd, int __mode, __off64_t __offset,
++			__off64_t __len);
++# endif
++
++
++/* Map file name to file handle.  */
++extern int name_to_handle_at (int __dfd, const char *__name,
++			      struct file_handle *__handle, int *__mnt_id,
++			      int __flags) __THROW;
++
++/* Open file using the file handle.
++
++   This function is a possible cancellation point and therefore not
++   marked with __THROW.  */
++extern int open_by_handle_at (int __mountdirfd, struct file_handle *__handle,
++			      int __flags);
++
++#endif	/* use GNU */
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/aarch64/bits/kernel_types.h b/libc/sysdeps/linux/aarch64/bits/kernel_types.h
+new file mode 100644
+index 000000000..832b17674
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/kernel_types.h
+@@ -0,0 +1,42 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts
++ * with the posix_types.h kernel header, and will ensure that
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#ifndef __ASM_GENERIC_POSIX_TYPES_H
++#define __ASM_GENERIC_POSIX_TYPES_H
++
++typedef unsigned long		__kernel_dev_t;
++typedef unsigned long		__kernel_ino_t;
++typedef unsigned int		__kernel_mode_t;
++typedef unsigned int		__kernel_nlink_t;
++typedef long			__kernel_off_t;
++typedef int			__kernel_pid_t;
++typedef int 			__kernel_ipc_pid_t;
++typedef unsigned int		__kernel_uid_t;
++typedef unsigned int		__kernel_gid_t;
++typedef unsigned long		__kernel_size_t;
++typedef long			__kernel_ssize_t;
++typedef long			__kernel_ptrdiff_t;
++typedef long			__kernel_time_t;
++typedef long			__kernel_suseconds_t;
++typedef long			__kernel_clock_t;
++typedef int			__kernel_daddr_t;
++typedef char *			__kernel_caddr_t;
++typedef unsigned short		__kernel_uid16_t;
++typedef unsigned short		__kernel_gid16_t;
++typedef unsigned int		__kernel_uid32_t;
++typedef unsigned int		__kernel_gid32_t;
++typedef unsigned short 		__kernel_old_uid_t;
++typedef unsigned short 		__kernel_old_gid_t;
++typedef long long		__kernel_loff_t;
++typedef unsigned int		__kernel_old_dev_t;
++typedef long			__kernel_long_t;
++typedef unsigned long		__kernel_ulong_t;
++
++typedef struct {
++	int	val[2];
++} __kernel_fsid_t;
++
++#endif /* __ASM_GENERIC_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/aarch64/bits/setjmp.h b/libc/sysdeps/linux/aarch64/bits/setjmp.h
+new file mode 100644
+index 000000000..fff8616c6
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/setjmp.h
+@@ -0,0 +1,33 @@
++/* Copyright (C) 1997-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H 1
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++#ifndef _ASM
++/* Jump buffer contains:
++   x19-x28, x29(fp), x30(lr), (x31)sp, d8-d15.  Other registers are not
++   saved.  */
++__extension__ typedef unsigned long long __jmp_buf [22];
++
++#endif
++#endif
+diff --git a/libc/sysdeps/linux/aarch64/bits/stackinfo.h b/libc/sysdeps/linux/aarch64/bits/stackinfo.h
+new file mode 100644
+index 000000000..78f326203
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/stackinfo.h
+@@ -0,0 +1,33 @@
++/* Copyright (C) 2001-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++#include <elf.h>
++
++/* On AArch64 the stack grows down.  */
++#define _STACK_GROWS_DOWN	1
++
++/* Default to a non-executable stack. */
++#define DEFAULT_STACK_PERMS (PF_R|PF_W)
++
++#endif	/* stackinfo.h */
+diff --git a/libc/sysdeps/linux/aarch64/bits/syscalls.h b/libc/sysdeps/linux/aarch64/bits/syscalls.h
+new file mode 100644
+index 000000000..3c0d840ea
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/syscalls.h
+@@ -0,0 +1,106 @@
++/*
++ * Copyright (C) 2016 by Waldemar Brodkorb <wbx@uclibc-ng.org>
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ * ported from GNU libc
++ */
++
++/* Copyright (C) 2005-2016 Free Software Foundation, Inc.
++
++This file is part of the GNU C Library.
++
++The GNU C Library is free software; you can redistribute it and/or
++modify it under the terms of the GNU Lesser General Public License as
++published by the Free Software Foundation; either version 2.1 of the
++License, or (at your option) any later version.
++
++The GNU C Library is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++Lesser General Public License for more details.
++
++You should have received a copy of the GNU Lesser General Public
++License along with the GNU C Library; if not, see
++<http://www.gnu.org/licenses/>.  */
++
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++#ifndef __ASSEMBLER__
++#include <errno.h>
++
++#define INTERNAL_SYSCALL_NCS(name, err, nr, args...)	\
++  ({ long _sys_result;					\
++     {							\
++	register long _x8 __asm__ ("x8");		\
++	LOAD_ARGS_##nr (args)				\
++	_x8 = (name);					\
++							\
++        __asm__ volatile (				\
++		"svc       0       // syscall " # name  \
++		: "=r" (_x0) : "r"(_x8) ASM_ARGS_##nr  	\
++		: "memory"); 				\
++							\
++	_sys_result = _x0;				\
++     } 							\
++     _sys_result; })
++
++/* Macros for setting up inline __asm__ input regs */
++# define ASM_ARGS_0
++# define ASM_ARGS_1	, "r" (_x0)
++# define ASM_ARGS_2	ASM_ARGS_1, "r" (_x1)
++# define ASM_ARGS_3	ASM_ARGS_2, "r" (_x2)
++# define ASM_ARGS_4	ASM_ARGS_3, "r" (_x3)
++# define ASM_ARGS_5	ASM_ARGS_4, "r" (_x4)
++# define ASM_ARGS_6	ASM_ARGS_5, "r" (_x5)
++# define ASM_ARGS_7	ASM_ARGS_6, "r" (_x6)
++
++/* Macros for converting sys-call wrapper args into sys call args */
++# define LOAD_ARGS_0()				\
++  register long _x0 __asm__ ("x0");
++# define LOAD_ARGS_1(x0)			\
++  long _x0tmp;					\
++  LOAD_ARGS_0 ()				\
++  _x0tmp = (long) (x0);				\
++  _x0 = _x0tmp;
++# define LOAD_ARGS_2(x0, x1)			\
++  register long _x1 __asm__ ("x1");		\
++  long _x1tmp;					\
++  LOAD_ARGS_1 (x0)				\
++  _x1tmp = (long) (x1);				\
++  _x1 = _x1tmp;
++# define LOAD_ARGS_3(x0, x1, x2)		\
++  register long _x2 __asm__ ("x2");		\
++  long _x2tmp;					\
++  LOAD_ARGS_2 (x0, x1)				\
++  _x2tmp = (long) (x2);				\
++  _x2 = _x2tmp;
++# define LOAD_ARGS_4(x0, x1, x2, x3)		\
++  register long _x3 __asm__ ("x3");		\
++  long _x3tmp;					\
++  LOAD_ARGS_3 (x0, x1, x2)			\
++  _x3tmp = (long) (x3);				\
++  _x3 = _x3tmp;
++# define LOAD_ARGS_5(x0, x1, x2, x3, x4)	\
++  register long _x4 __asm__ ("x4");		\
++  long _x4tmp;					\
++  LOAD_ARGS_4 (x0, x1, x2, x3)			\
++  _x4tmp = (long) (x4);				\
++  _x4 = _x4tmp;
++# define LOAD_ARGS_6(x0, x1, x2, x3, x4, x5)	\
++  register long _x5 __asm__ ("x5");		\
++  long _x5tmp;					\
++  LOAD_ARGS_5 (x0, x1, x2, x3, x4)		\
++  _x5tmp = (long) (x5);				\
++  _x5 = _x5tmp;
++# define LOAD_ARGS_7(x0, x1, x2, x3, x4, x5, x6)\
++  register long _x6 __asm__ ("x6");		\
++  long _x6tmp;					\
++  LOAD_ARGS_6 (x0, x1, x2, x3, x4, x5)		\
++  _x6tmp = (long) (x6);				\
++  _x6 = _x6tmp;
++
++#endif /* ! __ASSEMBLER__  */
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/aarch64/bits/uClibc_arch_features.h b/libc/sysdeps/linux/aarch64/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..7cae090ec
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/uClibc_arch_features.h
+@@ -0,0 +1,38 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++/* instruction used when calling abort() to kill yourself */
++#define __UCLIBC_ABORT_INSTRUCTION__ "bl abort"
++
++/* can your target use syscall6() for mmap ? */
++#define __UCLIBC_MMAP_HAS_6_ARGS__
++
++/* does your target have a broken create_module() ? */
++#define __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target have to worry about older [gs]etrlimit() ? */
++#undef __UCLIBC_HANDLE_OLDER_RLIMIT__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* define if target supports CFI pseudo ops */
++#define __UCLIBC_HAVE_ASM_CFI_DIRECTIVES__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++/* only weird assemblers generally need this */
++#undef __UCLIBC_ASM_LINE_SEP__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/aarch64/bits/uClibc_page.h b/libc/sysdeps/linux/aarch64/bits/uClibc_page.h
+new file mode 100755
+index 000000000..4f92abcf8
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/uClibc_page.h
+@@ -0,0 +1,25 @@
++/*
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _UCLIBC_PAGE_H
++#define _UCLIBC_PAGE_H
++
++/*
++ * AARCH64 supports 4k, 16k, 64k pages (build time).
++ */
++
++#include <features.h>
++
++#if defined(__CONFIG_AARCH64_PAGE_SIZE_64K__)
++#define PAGE_SHIFT		16
++#elif defined(__CONFIG_AARCH64_PAGE_SIZE_16K__)
++#define PAGE_SHIFT		14
++#else
++#define PAGE_SHIFT		12
++#endif
++
++#define PAGE_SIZE	(1UL << PAGE_SHIFT)
++#define PAGE_MASK	(~(PAGE_SIZE-1))
++
++#endif /* _UCLIBC_PAGE_H */
+diff --git a/libc/sysdeps/linux/aarch64/bits/wordsize.h b/libc/sysdeps/linux/aarch64/bits/wordsize.h
+new file mode 100644
+index 000000000..0944f9e26
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bits/wordsize.h
+@@ -0,0 +1,18 @@
++/* Copyright (C) 1999-2016 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#define __WORDSIZE	64
+diff --git a/libc/sysdeps/linux/aarch64/bsd-_setjmp.S b/libc/sysdeps/linux/aarch64/bsd-_setjmp.S
+new file mode 100644
+index 000000000..4e6a2da56
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bsd-_setjmp.S
+@@ -0,0 +1 @@
++/* _setjmp is in setjmp.S  */
+diff --git a/libc/sysdeps/linux/aarch64/bsd-setjmp.S b/libc/sysdeps/linux/aarch64/bsd-setjmp.S
+new file mode 100644
+index 000000000..1da848d2f
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/bsd-setjmp.S
+@@ -0,0 +1 @@
++/* setjmp is in setjmp.S  */
+diff --git a/libc/sysdeps/linux/aarch64/clone.S b/libc/sysdeps/linux/aarch64/clone.S
+new file mode 100644
+index 000000000..7437eec8d
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/clone.S
+@@ -0,0 +1,85 @@
++/* Copyright (C) 1996-2017 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* clone() is even more special than fork() as it mucks with stacks
++   and invokes a function in the right context after its all over.  */
++
++#include <sysdep.h>
++#define _ERRNO_H	1
++#include <bits/errno.h>
++
++#define CLONE_VM_BIT      8
++#define CLONE_VM          (1 << CLONE_VM_BIT)
++
++#define CLONE_THREAD_BIT  16
++#define CLONE_THREAD      (1 << CLONE_THREAD_BIT)
++
++/* int clone(int (*fn)(void *arg),            x0
++	     void *child_stack,               x1
++	     int flags,                       x2
++	     void *arg,                       x3
++	     pid_t *ptid,                     x4
++	     struct user_desc *tls,           x5
++             pid_t *ctid);                    x6
++ */
++        .text
++ENTRY(__clone)
++	/* Save args for the child.  */
++	mov	x10, x0
++	mov	x11, x2
++	mov	x12, x3
++
++	/* Sanity check args.  */
++	mov	x0, #-EINVAL
++	cbz	x10, .Lsyscall_error
++	cbz	x1, .Lsyscall_error
++
++	/* Do the system call.  */
++	/* X0:flags, x1:newsp, x2:parenttidptr, x3:newtls, x4:childtid.  */
++	mov	x0, x2                  /* flags  */
++	/* New sp is already in x1.  */
++	mov	x2, x4			/* ptid  */
++	mov	x3, x5			/* tls  */
++	mov	x4, x6			/* ctid  */
++	mov	x8, #SYS_ify(clone)
++	svc	0x0
++
++	cmp	x0, #0
++	beq	thread_start
++	blt	.Lsyscall_error
++	RET
++PSEUDO_END (__clone)
++
++	.align 4
++	.type thread_start, %function
++thread_start:
++	cfi_startproc
++	cfi_undefined (x30)
++	mov	x29, 0
++
++	/* Pick the function arg and execute.  */
++	mov	x0, x12
++	blr	x10
++
++	/* We are done, pass the return value through x0.  */
++	b	HIDDEN_JUMPTARGET(_exit)
++	cfi_endproc
++	.size thread_start, .-thread_start
++
++libc_hidden_def (__clone)
++weak_alias (__clone, clone)
+diff --git a/libc/sysdeps/linux/aarch64/crt1.S b/libc/sysdeps/linux/aarch64/crt1.S
+new file mode 100644
+index 000000000..09d0327ac
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/crt1.S
+@@ -0,0 +1,89 @@
++/* Copyright (C) 1995-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* This is the canonical entry point, usually the first thing in the text
++   segment.
++
++   Note that the code in the .init section has already been run.
++   This includes _init and _libc_init
++
++
++   At this entry point, most registers' values are unspecified, except:
++
++   x0		Contains a function pointer to be registered with `atexit'.
++		This is how the dynamic linker arranges to have DT_FINI
++		functions called for shared libraries that have been loaded
++		before this code runs.
++
++   sp		The stack contains the arguments and environment:
++		0(sp)			argc
++		8(sp)			argv[0]
++		...
++		(8*argc)(sp)		NULL
++		(8*(argc+1))(sp)	envp[0]
++		...
++					NULL
++ */
++
++	.text
++	.globl _start
++	.type _start,#function
++_start:
++	/* Create an initial frame with 0 LR and FP */
++	mov	x29, #0
++	mov	x30, #0
++
++	/* Setup _fini in argument register */
++	mov	x5, x0
++
++	/* Load argc and a pointer to argv */
++	ldr	x1, [sp, #0]
++	add	x2, sp, #8
++
++	/* Setup stack limit in argument register */
++	mov	x6, sp
++
++#ifdef __PIC__
++        adrp    x0, :got:main
++	ldr     x0, [x0, #:got_lo12:main]
++
++        adrp    x3, :got:_init
++	ldr     x3, [x3, #:got_lo12:_init]
++
++        adrp    x4, :got:_fini
++	ldr     x4, [x4, #:got_lo12:_fini]
++#else
++	/* Set up the other arguments in registers */
++	ldr	x0, =main
++	ldr	x3, =_init
++	ldr	x4, =_fini
++#endif
++
++	/* Let the libc call main and exit with its return code.  */
++	bl	__uClibc_main
++
++	/* should never get here....*/
++	bl	abort
++
++	/* Define a symbol for the first piece of initialized data.  */
++	.data
++	.globl __data_start
++__data_start:
++	.long 0
++	.weak data_start
++	data_start = __data_start
+diff --git a/libc/sysdeps/linux/aarch64/crti.S b/libc/sysdeps/linux/aarch64/crti.S
+new file mode 100644
+index 000000000..49c57e4c4
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/crti.S
+@@ -0,0 +1,59 @@
++/* Special .init and .fini section support for AArch64.
++   Copyright (C) 1995-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   In addition to the permissions in the GNU Lesser General Public
++   License, the Free Software Foundation gives you unlimited
++   permission to link the compiled version of this file with other
++   programs, and to distribute those programs without any restriction
++   coming from the use of this file. (The GNU Lesser General Public
++   License restrictions do apply in other respects; for example, they
++   cover modification of the file, and distribution when not linked
++   into another program.)
++
++   Note that people who make modified versions of this file are not
++   obligated to grant this special exception for their modified
++   versions; it is their choice whether to do so. The GNU Lesser
++   General Public License gives permission to release a modified
++   version without this exception; this exception also makes it
++   possible to release a modified version which carries forward this
++   exception.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* crti.S puts a function prologue at the beginning of the .init and
++   .fini sections and defines global symbols for those addresses, so
++   they can be called as functions.  The symbols _init and _fini are
++   magic and cause the linker to emit DT_INIT and DT_FINI.  */
++
++#include <libc-symbols.h>
++
++
++	.section .init,"ax",%progbits
++	.align	2
++	.global	_init
++	.type	_init, %function
++_init:
++	stp	x29, x30, [sp, -16]!
++	mov	x29, sp
++
++	.section	.fini,"ax",%progbits
++	.align	2
++	.global	_fini
++	.type	_fini, %function
++_fini:
++	stp	x29, x30, [sp, -16]!
++	mov	x29, sp
+diff --git a/libc/sysdeps/linux/aarch64/crtn.S b/libc/sysdeps/linux/aarch64/crtn.S
+new file mode 100644
+index 000000000..33d5f3d82
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/crtn.S
+@@ -0,0 +1,46 @@
++/* Special .init and .fini section support for AArch64.
++   Copyright (C) 1995-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   In addition to the permissions in the GNU Lesser General Public
++   License, the Free Software Foundation gives you unlimited
++   permission to link the compiled version of this file with other
++   programs, and to distribute those programs without any restriction
++   coming from the use of this file. (The GNU Lesser General Public
++   License restrictions do apply in other respects; for example, they
++   cover modification of the file, and distribution when not linked
++   into another program.)
++
++   Note that people who make modified versions of this file are not
++   obligated to grant this special exception for their modified
++   versions; it is their choice whether to do so. The GNU Lesser
++   General Public License gives permission to release a modified
++   version without this exception; this exception also makes it
++   possible to release a modified version which carries forward this
++   exception.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* crtn.S puts function epilogues in the .init and .fini sections
++   corresponding to the prologues in crti.S. */
++
++	.section .init,"ax",%progbits
++	ldp	x29, x30, [sp], 16
++	RET
++
++	.section .fini,"ax",%progbits
++	ldp	x29, x30, [sp], 16
++	RET
+diff --git a/libc/sysdeps/linux/aarch64/jmpbuf-offsets.h b/libc/sysdeps/linux/aarch64/jmpbuf-offsets.h
+new file mode 100644
+index 000000000..ab00cef26
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/jmpbuf-offsets.h
+@@ -0,0 +1,57 @@
++/* Copyright (C) 2006-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#define JB_X19            0
++#define JB_X20            1
++#define JB_X21            2
++#define JB_X22            3
++#define JB_X23            4
++#define JB_X24            5
++#define JB_X25            6
++#define JB_X26            7
++#define JB_X27            8
++#define JB_X28            9
++#define JB_X29           10
++#define JB_LR            11
++#define JB_SP		 13
++
++#define JB_D8		 14
++#define JB_D9		 15
++#define JB_D10		 16
++#define JB_D11		 17
++#define JB_D12		 18
++#define JB_D13		 19
++#define JB_D14		 20
++#define JB_D15		 21
++
++#ifndef  __ASSEMBLER__
++#include <setjmp.h>
++#include <stdint.h>
++#include <sysdep.h>
++
++static inline uintptr_t __attribute__ ((unused))
++_jmpbuf_sp (__jmp_buf jmpbuf)
++{
++  uintptr_t sp = jmpbuf[JB_SP];
++  return sp;
++}
++#endif
++
++/* Helper for generic ____longjmp_chk(). */
++#define JB_FRAME_ADDRESS(buf) \
++  ((void *) _jmpbuf_sp (buf))
+diff --git a/libc/sysdeps/linux/aarch64/jmpbuf-unwind.h b/libc/sysdeps/linux/aarch64/jmpbuf-unwind.h
+new file mode 100644
+index 000000000..77bad1d41
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/jmpbuf-unwind.h
+@@ -0,0 +1,34 @@
++/* Copyright (C) 2005-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <setjmp.h>
++#include <jmpbuf-offsets.h>
++#include <stdint.h>
++#include <unwind.h>
++
++/* Test if longjmp to JMPBUF would unwind the frame
++   containing a local variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(jmpbuf, address, demangle) \
++  ((void *) (address) < (void *) demangle (jmpbuf[JB_SP]))
++
++#define _JMPBUF_CFA_UNWINDS_ADJ(jmpbuf, context, adj) \
++  _JMPBUF_UNWINDS_ADJ (jmpbuf, (void *) _Unwind_GetCFA (context), adj)
++
++#define _JMPBUF_UNWINDS_ADJ(_jmpbuf, _address, _adj) \
++  ((uintptr_t) (_address) - (_adj) < _jmpbuf_sp (_jmpbuf) - (_adj))
++
+diff --git a/libc/sysdeps/linux/aarch64/setjmp.S b/libc/sysdeps/linux/aarch64/setjmp.S
+new file mode 100644
+index 000000000..b3d616222
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/setjmp.S
+@@ -0,0 +1,59 @@
++/* Copyright (C) 1997-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++#include <jmpbuf-offsets.h>
++
++        /* Keep traditional entry points in with sigsetjmp(). */
++ENTRY (setjmp)
++	mov	x1, #1
++	b	1f
++END (setjmp)
++
++ENTRY (_setjmp)
++	mov	x1, #0
++	b	1f
++END (_setjmp)
++libc_hidden_def (_setjmp)
++
++ENTRY (__sigsetjmp)
++
++1:
++	stp	x19, x20, [x0, #JB_X19<<3]
++	stp	x21, x22, [x0, #JB_X21<<3]
++	stp	x23, x24, [x0, #JB_X23<<3]
++	stp	x25, x26, [x0, #JB_X25<<3]
++	stp	x27, x28, [x0, #JB_X27<<3]
++
++	stp	x29, x30, [x0, #JB_X29<<3]
++
++	/* setjmp probe takes 3 arguments, address of jump buffer
++	   first argument (8@x0), return value second argument (-4@x1),
++	   and target address (8@x30), respectively.  */
++	//LIBC_PROBE (setjmp, 3, 8@x0, -4@x1, 8@x30)
++	stp	 d8,  d9, [x0, #JB_D8<<3]
++	stp	d10, d11, [x0, #JB_D10<<3]
++	stp	d12, d13, [x0, #JB_D12<<3]
++	stp	d14, d15, [x0, #JB_D14<<3]
++	mov	x2,  sp
++	str	x2,  [x0, #JB_SP<<3]
++
++	b	C_SYMBOL_NAME(__sigjmp_save)
++
++END (__sigsetjmp)
++hidden_def (__sigsetjmp)
+diff --git a/libc/sysdeps/linux/aarch64/sys/procfs.h b/libc/sysdeps/linux/aarch64/sys/procfs.h
+new file mode 100644
+index 000000000..7e408c3f8
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/sys/procfs.h
+@@ -0,0 +1,123 @@
++/* Copyright (C) 1996-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somewhat modelled after the file of the same name on SVR4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  It doesn't have anything to do with the /proc file
++   system, even though Linux has one.
++
++   Anyway, the whole purpose of this file is for GDB and GDB only.
++   Don't read too much into it.  Don't use it for anything other than
++   GDB unless you know what you are doing.  */
++
++#include <features.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++/* Type for a general-purpose register.  */
++typedef unsigned long elf_greg_t;
++
++/* And the whole bunch of them.  We could have used `struct
++   pt_regs' directly in the typedef, but tradition says that
++   the register set is an array, which does have some peculiar
++   semantics, so leave it that way.  */
++#define ELF_NGREG (sizeof (struct user_regs_struct) / sizeof(elf_greg_t))
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++/* Register set for the floating-point registers.  */
++typedef struct user_fpsimd_struct elf_fpregset_t;
++
++/* Signal info.  */
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with Linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   GDB doesn't really use excluded.  */
++
++struct elf_prstatus
++  {
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args.  */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned int pr_uid;
++    unsigned int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* The rest of this file provides the types for emulation of the
++   Solaris <proc_service.h> interfaces that should be implemented by
++   users of libthread_db.  */
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef elf_gregset_t prgregset_t;
++typedef elf_fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore have only one PID type.  */
++typedef __pid_t lwpid_t;
++
++/* Process status and info.  In the end we do provide typedefs for them.  */
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/aarch64/sys/ucontext.h b/libc/sysdeps/linux/aarch64/sys/ucontext.h
+new file mode 100644
+index 000000000..d17458896
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/sys/ucontext.h
+@@ -0,0 +1,53 @@
++/* Copyright (C) 1998-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* System V/AArch64 ABI compliant context switching support.  */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++
++#include <sys/procfs.h>
++
++typedef elf_greg_t greg_t;
++
++/* Container for all general registers.  */
++typedef elf_gregset_t gregset_t;
++
++/* Structure to describe FPU registers.  */
++typedef elf_fpregset_t	fpregset_t;
++
++/* Context to describe whole processor state.  This only describes
++   the core registers; coprocessor registers get saved elsewhere
++   (e.g. in uc_regspace, or somewhere unspecified on the stack
++   during non-RT signal handlers).  */
++typedef struct sigcontext mcontext_t;
++
++/* Userlevel context.  */
++typedef struct ucontext
++  {
++    unsigned long uc_flags;
++    struct ucontext *uc_link;
++    stack_t uc_stack;
++    __sigset_t uc_sigmask;
++    mcontext_t uc_mcontext;
++  } ucontext_t;
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/aarch64/sys/user.h b/libc/sysdeps/linux/aarch64/sys/user.h
+new file mode 100644
+index 000000000..f6fc361e8
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/sys/user.h
+@@ -0,0 +1,37 @@
++/* Copyright (C) 2009-2016 Free Software Foundation, Inc.
++
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SYS_USER_H
++#define _SYS_USER_H	1
++
++struct user_regs_struct
++{
++  unsigned long long regs[31];
++  unsigned long long sp;
++  unsigned long long pc;
++  unsigned long long pstate;
++};
++
++struct user_fpsimd_struct
++{
++  __uint128_t  vregs[32];
++  unsigned int fpsr;
++  unsigned int fpcr;
++};
++
++#endif
+diff --git a/libc/sysdeps/linux/aarch64/syscall.S b/libc/sysdeps/linux/aarch64/syscall.S
+new file mode 100644
+index 000000000..ac609a337
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/syscall.S
+@@ -0,0 +1,42 @@
++/* Copyright (C) 2005-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++
++/* syscall (int nr, ...)
++
++   AArch64 system calls take between 0 and 7 arguments. On entry here nr
++   is in w0 and any other system call arguments are in register x1..x7.
++
++   For kernel entry we need to move the system call nr to x8 then
++   load the remaining arguments to register. */
++
++ENTRY (syscall)
++	uxtw	x8, w0
++	mov	x0, x1
++	mov	x1, x2
++	mov	x2, x3
++	mov	x3, x4
++	mov	x4, x5
++	mov	x5, x6
++	mov	x6, x7
++	svc	0x0
++	cmn	x0, #4095
++	b.cs	1f
++	RET
++1:
++	b	SYSCALL_ERROR
++PSEUDO_END (syscall)
+diff --git a/libc/sysdeps/linux/aarch64/sysdep.h b/libc/sysdeps/linux/aarch64/sysdep.h
+new file mode 100644
+index 000000000..82790be6d
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/sysdep.h
+@@ -0,0 +1,150 @@
++/* Copyright (C) 2005-2016 Free Software Foundation, Inc.
++
++The GNU C Library is free software; you can redistribute it and/or
++modify it under the terms of the GNU Lesser General Public License as
++published by the Free Software Foundation; either version 2.1 of the
++License, or (at your option) any later version.
++
++The GNU C Library is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++Lesser General Public License for more details.
++
++You should have received a copy of the GNU Lesser General Public
++License along with the GNU C Library; if not, see
++<http://www.gnu.org/licenses/>.  */
++
++#ifndef _LINUX_AARCH64_SYSDEP_H
++#define _LINUX_AARCH64_SYSDEP_H 1
++
++#include <common/sysdep.h>
++#include <sys/syscall.h>
++
++/* In order to get __set_errno() definition in INLINE_SYSCALL.  */
++#ifndef __ASSEMBLER__
++#include <errno.h>
++#endif
++
++/* For Linux we can use the system call table in the header file
++/usr/include/asm/unistd.h
++of the kernel.  But these symbols do not follow the SYS_* syntax
++so we have to redefine the `SYS_ify' macro here.  */
++#undef SYS_ify
++#define SYS_ify(syscall_name)	(__NR_##syscall_name)
++
++#ifdef __ASSEMBLER__
++
++#define ASM_SIZE_DIRECTIVE(name) .size name,.-name
++
++/* Local label name for asm code.  */
++#ifndef L
++# define L(name)         .L##name
++#endif
++
++/* Define an entry point visible from C.  */
++#define ENTRY(name)						\
++  .globl C_SYMBOL_NAME(name);					\
++  .type C_SYMBOL_NAME(name),%function;				\
++  .align 4;							\
++  C_LABEL(name)							\
++  cfi_startproc;
++
++/* Define an entry point visible from C.  */
++#define ENTRY_ALIGN(name, align)				\
++  .globl C_SYMBOL_NAME(name);					\
++  .type C_SYMBOL_NAME(name),%function;				\
++  .p2align align;						\
++  C_LABEL(name)							\
++  cfi_startproc;
++
++#undef	END
++#define END(name)						\
++  cfi_endproc;							\
++  ASM_SIZE_DIRECTIVE(name)
++
++/* Linux uses a negative return value to indicate syscall errors,
++unlike most Unices, which use the condition codes' carry flag.
++
++Since version 2.1 the return value of a system call might be
++negative even if the call succeeded.  E.g., the `lseek' system call
++might return a large offset.  Therefore we must not anymore test
++for < 0, but test for a real error by making sure the value in R0
++is a real error number.  Linus said he will make sure the no syscall
++returns a value in -1 .. -4095 as a valid result so we can safely
++test with -4095.  */
++
++# undef	PSEUDO
++# define PSEUDO(name, syscall_name, args)			\
++.text;								\
++ENTRY (name);							\
++DO_CALL (syscall_name, args);					\
++cmn x0, #4095;							\
++b.cs .Lsyscall_error;
++
++# undef	PSEUDO_END
++# define PSEUDO_END(name)					\
++SYSCALL_ERROR_HANDLER						\
++END (name)
++
++# undef	PSEUDO_NOERRNO
++# define PSEUDO_NOERRNO(name, syscall_name, args)		\
++.text;								\
++ENTRY (name);							\
++DO_CALL (syscall_name, args);
++
++# undef	PSEUDO_END_NOERRNO
++# define PSEUDO_END_NOERRNO(name)				\
++END (name)
++
++# define ret_NOERRNO ret
++
++/* The function has to return the error code.  */
++# undef	PSEUDO_ERRVAL
++# define PSEUDO_ERRVAL(name, syscall_name, args)		\
++.text;								\
++ENTRY (name)							\
++DO_CALL (syscall_name, args);					\
++neg x0, x0
++
++# undef	PSEUDO_END_ERRVAL
++# define PSEUDO_END_ERRVAL(name) \
++END (name)
++
++# define ret_ERRVAL ret
++
++#if defined _LIBC_REENTRANT
++# if defined USE___THREAD
++#  ifndef NOT_IN_libc
++#   define SYSCALL_ERROR_ERRNO __libc_errno
++#  else
++#   define SYSCALL_ERROR_ERRNO errno
++#  endif
++# endif
++#endif
++
++#if defined USE___THREAD
++# define SYSCALL_ERROR  .Lsyscall_error
++# define SYSCALL_ERROR_HANDLER					\
++.Lsyscall_error:						\
++	adrp	x1, :gottprel:SYSCALL_ERROR_ERRNO;		\
++	neg	w2, w0;						\
++	ldr	x1, [x1, :gottprel_lo12:SYSCALL_ERROR_ERRNO];	\
++	mrs	x3, tpidr_el0;					\
++	mov	x0, -1;						\
++	str	w2, [x1, x3];					\
++	ret;
++#else
++# define SYSCALL_ERROR __syscall_error
++# define SYSCALL_ERROR_HANDLER                                  \
++.Lsyscall_error:                                                \
++	b	__syscall_error;
++#endif
++
++# undef	DO_CALL
++# define DO_CALL(syscall_name, args)				\
++mov x8, SYS_ify (syscall_name);					\
++svc 0
++
++#endif	/* __ASSEMBLER__ */
++
++#endif /* linux/aarch64/sysdep.h */
+diff --git a/libc/sysdeps/linux/aarch64/vfork.S b/libc/sysdeps/linux/aarch64/vfork.S
+new file mode 100644
+index 000000000..9a8fd469a
+--- /dev/null
++++ b/libc/sysdeps/linux/aarch64/vfork.S
+@@ -0,0 +1,37 @@
++/* Copyright (C) 1999-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++#define _ERRNO_H	1
++#include <bits/errno.h>
++
++/* Clone the calling process, but without copying the whole address space.
++   The calling process is suspended until the new process exits or is
++   replaced by a call to `execve'.  Return -1 for errors, 0 to the new process,
++   and the process ID of the new process to the old process.  */
++
++ENTRY (vfork)
++
++	mov	x0, #0x4111	/* CLONE_VM | CLONE_VFORK | SIGCHLD */
++	mov	x1, sp
++	DO_CALL (clone, 2)
++
++	cmn	x0, #4095
++	b.cs    .Lsyscall_error
++	RET
++
++PSEUDO_END (vfork)
++libc_hidden_def (vfork)
+diff --git a/libc/sysdeps/linux/common-generic/bits/stat.h b/libc/sysdeps/linux/common-generic/bits/stat.h
+index 945c408a0..0f66fc0e7 100644
+--- a/libc/sysdeps/linux/common-generic/bits/stat.h
++++ b/libc/sysdeps/linux/common-generic/bits/stat.h
+@@ -30,45 +30,6 @@
+  */
+ struct stat
+   {
+-#ifndef __USE_FILE_OFFSET64
+-# if __BYTE_ORDER == __LITTLE_ENDIAN
+-    unsigned long st_dev;			/* Device.  */
+-    unsigned long __pad1;
+-    unsigned long st_ino;			/* 32bit file serial number.	*/
+-    unsigned long __pad2;
+-    unsigned int st_mode;			/* File mode.  */
+-    unsigned int st_nlink;			/* Link count.  */
+-    unsigned int st_uid;			/* User ID of the file's owner.	*/
+-    unsigned int st_gid;			/* Group ID of the file's group.*/
+-    unsigned long st_rdev;			/* Device number, if device.  */
+-    unsigned long __pad3;
+-    unsigned long long __pad4;
+-    long st_size;				/* SIze of file, in bytes.  */
+-    long __pad5;
+-    int st_blksize;				/* Optimal block size for I/O. */
+-    int __pad6;
+-    long st_blocks;				/* Number 512-byte blocks allocated */
+-    long __pad7;
+-# else
+-    unsigned long __pad1;
+-    unsigned long st_dev;			/* Device. */
+-    unsigned long __pad2;
+-    unsigned long st_ino;			/* 32bit file serial number. */
+-    unsigned int st_mode;			/* File mode.  */
+-    unsigned int st_nlink;			/* Link count.  */
+-    unsigned int st_uid;			/* User ID of the file's owner.	*/
+-    unsigned int st_gid;			/* Group ID of the file's group.*/
+-    unsigned long __pad3;
+-    unsigned long st_rdev;			/* Device number, if device.  */
+-    unsigned long long __pad4;
+-    long __pad5;
+-    long st_size;				/* Size of file, in bytes. */
+-    int st_blksize;				/* Optimal block size for I/O. */
+-    int __pad6;
+-    long __pad7;
+-    long st_blocks;				/* Number 512-byte blocks allocated */
+-# endif /* __LITTLE_ENDIAN */
+-#else
+     unsigned long long st_dev;			/* Device. */
+     unsigned long long st_ino;			/* 32bit file serial number. */
+     unsigned int st_mode;			/* File mode.  */
+@@ -81,7 +42,6 @@ struct stat
+     int st_blksize;				/* Optimal block size for I/O. */
+     int __pad2;
+     long long st_blocks;			/* Number 512-byte blocks allocated */
+-#endif
+ #ifdef __USE_MISC
+     /* Nanosecond resolution timestamps are stored in a format
+        equivalent to 'struct timespec'.  This is the type used
+@@ -96,21 +56,12 @@ struct stat
+ # define st_mtime st_mtim.tv_sec
+ # define st_ctime st_ctim.tv_sec
+ #else
+-# ifndef __USE_FILE_OFFSET64
+-    long st_atime;				/* Time of last access. */
+-    unsigned long st_atime_nsec;
+-    long st_mtime;				/* Time of last modification. */
+-    unsigned long st_mtime_nsec;
+-    long st_ctime;				/* Time of last status change. */
+-    unsigned long st_ctime_nsec;
+-# else
+     int st_atime;				/* Time of last access. */
+     unsigned int st_atime_nsec;
+     int st_mtime;				/* Time of last modification. */
+     unsigned int st_mtime_nsec;
+     int st_ctime;				/* Time of last status change. */
+     unsigned int st_ctime_nsec;
+-# endif
+ #endif
+     unsigned int __unused4;
+     unsigned int __unused5;
+diff --git a/libc/sysdeps/linux/common/fstat.c b/libc/sysdeps/linux/common/fstat.c
+index eae3c8006..ac77eb295 100644
+--- a/libc/sysdeps/linux/common/fstat.c
++++ b/libc/sysdeps/linux/common/fstat.c
+@@ -7,25 +7,26 @@
+  * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+  */
+ 
+-#include <sys/syscall.h>
++#include <features.h>
+ #include <unistd.h>
+ #include <sys/stat.h>
++#include <sys/syscall.h>
++
+ #include "xstatconv.h"
+ 
+ #if defined __NR_fstat64 && !defined __NR_fstat
+ int fstat(int fd, struct stat *buf)
+ {
+-	int result = INLINE_SYSCALL(fstat64, 2, fd, buf);
+-	if (result == 0) {
+-		/* Did we overflow? */
+-		if (buf->__pad1 || buf->__pad2 || buf->__pad3
+-		    || buf->__pad4 || buf->__pad5
+-		    || buf->__pad6 || buf->__pad7) {
+-			__set_errno(EOVERFLOW);
+-			return -1;
+-		}
+-	}
+-	return result;
++	return INLINE_SYSCALL(fstat64, 2, fd, buf);
++}
++libc_hidden_def(fstat)
++
++#elif __WORDSIZE == 64 && defined __NR_newfstatat
++#include <fcntl.h>
++
++int fstat(int fd, struct stat *buf)
++{
++	return INLINE_SYSCALL(fstat, 2, fd, buf);
+ }
+ libc_hidden_def(fstat)
+ 
+@@ -55,10 +56,9 @@ int fstat(int fd, struct stat *buf)
+ 	return result;
+ }
+ libc_hidden_def(fstat)
++#endif
+ 
+ # if ! defined __NR_fstat64
+ strong_alias_untyped(fstat,fstat64)
+ libc_hidden_def(fstat64)
+-# endif
+-
+ #endif
+diff --git a/libc/sysdeps/linux/common/fstatat.c b/libc/sysdeps/linux/common/fstatat.c
+index 4006814f0..13673d76c 100644
+--- a/libc/sysdeps/linux/common/fstatat.c
++++ b/libc/sysdeps/linux/common/fstatat.c
+@@ -26,15 +26,6 @@ int fstatat(int fd, const char *file, struct stat *buf, int flag)
+ 		__xstat32_conv(&kbuf, buf);
+ # else
+ 	ret = INLINE_SYSCALL(fstatat64, 4, fd, file, buf, flag);
+-	if (ret == 0) {
+-		/* Did we overflow */
+-		if (buf->__pad1 || buf->__pad2 || buf->__pad3
+-		    || buf->__pad4 || buf->__pad5 || buf->__pad6
+-		    || buf->__pad7) {
+-			__set_errno(EOVERFLOW);
+-			return -1;
+-		}
+-	}
+ # endif /* __ARCH_HAS_DEPRECATED_SYSCALLS__ */
+ 	return ret;
+ }
+diff --git a/libc/sysdeps/linux/common/lstat.c b/libc/sysdeps/linux/common/lstat.c
+index 143cc1916..cef9b463d 100644
+--- a/libc/sysdeps/linux/common/lstat.c
++++ b/libc/sysdeps/linux/common/lstat.c
+@@ -20,6 +20,15 @@ int lstat(const char *file_name, struct stat *buf)
+ }
+ libc_hidden_def(lstat)
+ 
++#elif __WORDSIZE == 64 && defined __NR_newfstatat
++# include <fcntl.h>
++
++int lstat(const char *file_name, struct stat *buf)
++{
++	return fstatat(AT_FDCWD, file_name, buf, AT_SYMLINK_NOFOLLOW);
++}
++libc_hidden_def(lstat)
++
+ /* For systems which have both, prefer the old one */
+ #else
+ # include "xstatconv.h"
+diff --git a/libc/sysdeps/linux/common/lstat64.c b/libc/sysdeps/linux/common/lstat64.c
+index c43e53e1d..76637b556 100644
+--- a/libc/sysdeps/linux/common/lstat64.c
++++ b/libc/sysdeps/linux/common/lstat64.c
+@@ -9,11 +9,19 @@
+ 
+ #include <_lfs_64.h>
+ #include <sys/syscall.h>
++#include <unistd.h>
++#include <sys/stat.h>
+ 
+-# include <unistd.h>
+-# include <sys/stat.h>
++#if defined __NR_fstatat64 && !defined __NR_lstat
++# include <fcntl.h>
++
++int lstat64(const char *file_name, struct stat64 *buf)
++{
++	return fstatat64(AT_FDCWD, file_name, buf, AT_SYMLINK_NOFOLLOW);
++}
++libc_hidden_def(lstat64)
+ 
+-#if defined __NR_fstatat64 && !defined __NR_lstat64
++#elif __WORDSIZE == 64 && defined __NR_newfstatat
+ # include <fcntl.h>
+ 
+ int lstat64(const char *file_name, struct stat64 *buf)
+diff --git a/libc/sysdeps/linux/common/stat.c b/libc/sysdeps/linux/common/stat.c
+index b3c2a19ea..8e4542a74 100644
+--- a/libc/sysdeps/linux/common/stat.c
++++ b/libc/sysdeps/linux/common/stat.c
+@@ -21,6 +21,14 @@ int stat(const char *file_name, struct stat *buf)
+ 	return fstatat(AT_FDCWD, file_name, buf, 0);
+ }
+ 
++#elif __WORDSIZE == 64 && defined __NR_newfstatat
++# include <fcntl.h>
++
++int stat(const char *file_name, struct stat *buf)
++{
++	return fstatat64(AT_FDCWD, file_name, buf, 0);
++}
++
+ #else
+ # include "xstatconv.h"
+ 
+diff --git a/libpthread/nptl/sysdeps/aarch64/Makefile.arch b/libpthread/nptl/sysdeps/aarch64/Makefile.arch
+new file mode 100644
+index 000000000..d6d3cbf4a
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/Makefile.arch
+@@ -0,0 +1,32 @@
++# Copyright (C) 2012 Free Software Foundation, Inc.
++# This file is part of the GNU C Library.
++#
++# The GNU C Library is free software; you can redistribute it and/or
++# modify it under the terms of the GNU Lesser General Public
++# License as published by the Free Software Foundation; either
++# version 2.1 of the License, or (at your option) any later version.
++#
++# The GNU C Library is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# Lesser General Public License for more details.
++#
++# You should have received a copy of the GNU Lesser General Public
++# License along with the GNU C Library; see the file COPYING.LIB.  If
++# not, see <http://www.gnu.org/licenses/>.
++
++ASFLAGS-dl-tlsdesc.S = -DNOT_IN_libc=1
++
++libc_arch_a_CSRC = libc-tls.c
++libc_arch_a_SSRC = libc-dl-tlsdesc.S
++
++CFLAGS-gen_tlsdesc.c = -S
++$(libpthread_arch_OUT)/gen_tlsdesc.c: $(libpthread_arch_DIR)/tlsdesc.sym | $(libpthread_arch_OUT)
++	$(do_awk) $(top_srcdir)extra/scripts/gen-as-const.awk $< > $@
++$(libpthread_arch_OUT)/gen_tlsdesc.s: $(libpthread_arch_OUT)/gen_tlsdesc.c | headers
++	$(compile.c)
++libpthread-generated-y += $(libpthread_arch_OUT)/gen_tlsdesc.s
++$(libpthread_arch_OUT)/tlsdesc.h: $(libpthread_arch_OUT)/gen_tlsdesc.s
++	$(do_sed) $(PTHREAD_GENERATE_MANGLE) $< > $@
++	@if test ! -s $@ ; then rm -f $@ ; false ; fi
++pregen-headers-$(UCLIBC_HAS_THREADS_NATIVE) += $(libpthread_arch_OUT)/tlsdesc.h
+diff --git a/libpthread/nptl/sysdeps/aarch64/dl-tls.h b/libpthread/nptl/sysdeps/aarch64/dl-tls.h
+new file mode 100644
+index 000000000..e5cd8cca3
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/dl-tls.h
+@@ -0,0 +1,55 @@
++/* Copyright (C) 2005-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _AARCH64_DL_TLS_H
++#define _AARCH64_DL_TLS_H 1
++
++/* Type used to represent a TLS descriptor in the GOT.  */
++struct tlsdesc
++{
++  ptrdiff_t (*entry) (struct tlsdesc *);
++  void *arg;
++};
++
++typedef struct dl_tls_index
++{
++  unsigned long int ti_module;
++  unsigned long int ti_offset;
++} tls_index;
++
++/* Type used as the argument in a TLS descriptor for a symbol that
++   needs dynamic TLS offsets.  */
++struct tlsdesc_dynamic_arg
++{
++  tls_index tlsinfo;
++  size_t gen_count;
++};
++
++extern ptrdiff_t attribute_hidden
++_dl_tlsdesc_return (struct tlsdesc *);
++
++# ifdef SHARED
++extern void *_dl_make_tlsdesc_dynamic (struct link_map *, size_t);
++
++extern ptrdiff_t attribute_hidden
++_dl_tlsdesc_dynamic (struct tlsdesc *);
++# endif
++
++extern void *__tls_get_addr (tls_index *ti);
++
++#define TLS_DTV_UNALLOCATED ((void *) -1l)
++
++#endif
+diff --git a/libpthread/nptl/sysdeps/aarch64/libc-dl-tlsdesc.S b/libpthread/nptl/sysdeps/aarch64/libc-dl-tlsdesc.S
+new file mode 100644
+index 000000000..fd408d845
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/libc-dl-tlsdesc.S
+@@ -0,0 +1 @@
++#include <ldso/ldso/aarch64/dl-tlsdesc.S>
+diff --git a/libpthread/nptl/sysdeps/aarch64/libc-tls.c b/libpthread/nptl/sysdeps/aarch64/libc-tls.c
+new file mode 100644
+index 000000000..4e2bd3731
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/libc-tls.c
+@@ -0,0 +1,35 @@
++/* Thread-local storage handling in the ELF dynamic linker.  AARCH64 version.
++   Copyright (C) 2005 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdeps/generic/libc-tls.c>
++#include <dl-tls.h>
++
++#if defined(USE_TLS) && USE_TLS
++
++/* On AARCH64, linker optimizations are not required, so __tls_get_addr
++   can be called even in statically linked binaries.  In this case module
++   must be always 1 and PT_TLS segment exist in the binary, otherwise it
++   would not link.  */
++
++void *
++__tls_get_addr (tls_index *ti)
++{
++  dtv_t *dtv = THREAD_DTV ();
++  return (char *) dtv[1].pointer.val + ti->ti_offset;
++}
++
++#endif
+diff --git a/libpthread/nptl/sysdeps/aarch64/pthread_spin_lock.c b/libpthread/nptl/sysdeps/aarch64/pthread_spin_lock.c
+new file mode 100644
+index 000000000..cec3acbc6
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/pthread_spin_lock.c
+@@ -0,0 +1,65 @@
++/* pthread_spin_lock -- lock a spin lock.  Generic version.
++   Copyright (C) 2012-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <atomic.h>
++#include "pthreadP.h"
++
++/* A machine-specific version can define SPIN_LOCK_READS_BETWEEN_CMPXCHG
++  to the number of plain reads that it's optimal to spin on between uses
++  of atomic_compare_and_exchange_val_acq.  If spinning forever is optimal
++  then use -1.  If no plain reads here would ever be optimal, use 0.  */
++#define SPIN_LOCK_READS_BETWEEN_CMPXCHG 1000
++
++int
++pthread_spin_lock (pthread_spinlock_t *lock)
++{
++  /* atomic_exchange usually takes less instructions than
++     atomic_compare_and_exchange.  On the other hand,
++     atomic_compare_and_exchange potentially generates less bus traffic
++     when the lock is locked.
++     We assume that the first try mostly will be successful, and we use
++     atomic_exchange.  For the subsequent tries we use
++     atomic_compare_and_exchange.  */
++  if (atomic_exchange_acq (lock, 1) == 0)
++    return 0;
++
++  do
++    {
++      /* The lock is contended and we need to wait.  Going straight back
++	 to cmpxchg is not a good idea on many targets as that will force
++	 expensive memory synchronizations among processors and penalize other
++	 running threads.
++	 On the other hand, we do want to update memory state on the local core
++	 once in a while to avoid spinning indefinitely until some event that
++	 will happen to update local memory as a side-effect.  */
++      if (SPIN_LOCK_READS_BETWEEN_CMPXCHG >= 0)
++	{
++	  int wait = SPIN_LOCK_READS_BETWEEN_CMPXCHG;
++
++	  while (*lock != 0 && wait > 0)
++	    --wait;
++	}
++      else
++	{
++	  while (*lock != 0)
++	    ;
++	}
++    }
++  while (atomic_compare_and_exchange_val_acq (lock, 1, 0) != 0);
++
++  return 0;
++}
+diff --git a/libpthread/nptl/sysdeps/aarch64/pthread_spin_trylock.c b/libpthread/nptl/sysdeps/aarch64/pthread_spin_trylock.c
+new file mode 100644
+index 000000000..4e9aa64d3
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/pthread_spin_trylock.c
+@@ -0,0 +1,26 @@
++/* pthread_spin_trylock -- trylock a spin lock.  Generic version.
++   Copyright (C) 2012-2016 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <errno.h>
++#include <atomic.h>
++#include "pthreadP.h"
++
++int
++pthread_spin_trylock (pthread_spinlock_t *lock)
++{
++  return atomic_exchange_acq (lock, 1) ? EBUSY : 0;
++}
+diff --git a/libpthread/nptl/sysdeps/aarch64/pthreaddef.h b/libpthread/nptl/sysdeps/aarch64/pthreaddef.h
+new file mode 100644
+index 000000000..d9495f9cb
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/pthreaddef.h
+@@ -0,0 +1,34 @@
++/* Copyright (C) 2002-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* Default stack size.  */
++#define ARCH_STACK_DEFAULT_SIZE	(2 * 1024 * 1024)
++
++/* Required stack pointer alignment at beginning.  */
++#define STACK_ALIGN 16
++
++/* Minimal stack size after allocating thread descriptor and guard size.  */
++#define MINIMAL_REST_STACK 2048
++
++/* Alignment requirement for TCB.  */
++#define TCB_ALIGNMENT 16
++
++/* Location of current stack frame.  */
++#define CURRENT_STACK_FRAME	__builtin_frame_address (0)
++
++/* XXX Until we have a better place keep the definitions here.  */
++#define __exit_thread_inline(val) \
++  INLINE_SYSCALL (exit, 1, (val))
+diff --git a/libpthread/nptl/sysdeps/aarch64/tcb-offsets.sym b/libpthread/nptl/sysdeps/aarch64/tcb-offsets.sym
+new file mode 100644
+index 000000000..238647dd4
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/tcb-offsets.sym
+@@ -0,0 +1,6 @@
++#include <sysdep.h>
++#include <tls.h>
++
++PTHREAD_MULTIPLE_THREADS_OFFSET		offsetof (struct pthread, header.multiple_threads)
++PTHREAD_TID_OFFSET			offsetof (struct pthread, tid)
++PTHREAD_SIZEOF				sizeof (struct pthread)
+diff --git a/libpthread/nptl/sysdeps/aarch64/tls.h b/libpthread/nptl/sysdeps/aarch64/tls.h
+new file mode 100644
+index 000000000..5a88f6eff
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/tls.h
+@@ -0,0 +1,149 @@
++/* Copyright (C) 2005-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public License as
++   published by the Free Software Foundation; either version 2.1 of the
++   License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _TLS_H
++#define _TLS_H	1
++
++#ifndef __ASSEMBLER__
++# include <stdbool.h>
++# include <stddef.h>
++# include <stdint.h>
++
++/* Type for the dtv.  */
++typedef union dtv
++{
++  size_t counter;
++  struct
++  {
++    void *val;
++    bool is_static;
++  } pointer;
++} dtv_t;
++
++#else /* __ASSEMBLER__ */
++# include <tcb-offsets.h>
++#endif /* __ASSEMBLER__ */
++
++/* We require TLS support in the tools.  */
++#define HAVE_TLS_SUPPORT                1
++#define HAVE_TLS_MODEL_ATTRIBUTE        1
++#define HAVE___THREAD                   1
++
++/* Signal that TLS support is available.  */
++#define USE_TLS	1
++
++#ifndef __ASSEMBLER__
++
++/* Get system call information.  */
++# include <sysdep.h>
++
++/* The TP points to the start of the thread blocks.  */
++# define TLS_DTV_AT_TP	1
++
++/* Get the thread descriptor definition.  */
++# include <../../descr.h>
++
++typedef struct
++{
++  dtv_t *dtv;
++  void *private;
++} tcbhead_t;
++
++/* This is the size of the initial TCB.  */
++# define TLS_INIT_TCB_SIZE	sizeof (tcbhead_t)
++
++/* Alignment requirements for the initial TCB.  */
++# define TLS_INIT_TCB_ALIGN	__alignof__ (struct pthread)
++
++/* This is the size of the TCB.  */
++# define TLS_TCB_SIZE		sizeof (tcbhead_t)
++
++/* This is the size we need before TCB.  */
++# define TLS_PRE_TCB_SIZE	sizeof (struct pthread)
++
++/* Alignment requirements for the TCB.  */
++# define TLS_TCB_ALIGN		__alignof__ (struct pthread)
++
++/* Install the dtv pointer.  The pointer passed is to the element with
++   index -1 which contain the length.  */
++# define INSTALL_DTV(tcbp, dtvp) \
++  (((tcbhead_t *) (tcbp))->dtv = (dtvp) + 1)
++
++/* Install new dtv for current thread.  */
++# define INSTALL_NEW_DTV(dtv) \
++  (THREAD_DTV() = (dtv))
++
++/* Return dtv of given thread descriptor.  */
++# define GET_DTV(tcbp) \
++  (((tcbhead_t *) (tcbp))->dtv)
++
++/* Code to initially initialize the thread pointer.  This might need
++   special attention since 'errno' is not yet available and if the
++   operation can cause a failure 'errno' must not be touched.  */
++# define TLS_INIT_TP(tcbp, secondcall) \
++  ({ __asm __volatile ("msr tpidr_el0, %0" : : "r" (tcbp)); NULL; })
++
++/* Value passed to 'clone' for initialization of the thread register.  */
++# define TLS_DEFINE_INIT_TP(tp, pd) void *tp = (pd) + 1
++
++/* Return the address of the dtv for the current thread.  */
++# define THREAD_DTV() \
++  (((tcbhead_t *) __builtin_thread_pointer ())->dtv)
++
++/* Return the thread descriptor for the current thread.  */
++# define THREAD_SELF \
++ ((struct pthread *)__builtin_thread_pointer () - 1)
++
++/* Magic for libthread_db to know how to do THREAD_SELF.  */
++# define DB_THREAD_SELF \
++  CONST_THREAD_AREA (64, sizeof (struct pthread))
++
++/* Access to data in the thread descriptor is easy.  */
++# define THREAD_GETMEM(descr, member) \
++  descr->member
++# define THREAD_GETMEM_NC(descr, member, idx) \
++  descr->member[idx]
++# define THREAD_SETMEM(descr, member, value) \
++  descr->member = (value)
++# define THREAD_SETMEM_NC(descr, member, idx, value) \
++  descr->member[idx] = (value)
++
++/* Get and set the global scope generation counter in struct pthread.  */
++# define THREAD_GSCOPE_FLAG_UNUSED 0
++# define THREAD_GSCOPE_FLAG_USED   1
++# define THREAD_GSCOPE_FLAG_WAIT   2
++# define THREAD_GSCOPE_RESET_FLAG() \
++  do									     \
++    { int __res								     \
++	= atomic_exchange_rel (&THREAD_SELF->header.gscope_flag,	     \
++			       THREAD_GSCOPE_FLAG_UNUSED);		     \
++      if (__res == THREAD_GSCOPE_FLAG_WAIT)				     \
++	lll_futex_wake (&THREAD_SELF->header.gscope_flag, 1, LLL_PRIVATE);   \
++    }									     \
++  while (0)
++# define THREAD_GSCOPE_SET_FLAG() \
++  do									     \
++    {									     \
++      THREAD_SELF->header.gscope_flag = THREAD_GSCOPE_FLAG_USED;	     \
++      atomic_write_barrier ();						     \
++    }									     \
++  while (0)
++# define THREAD_GSCOPE_WAIT() \
++  GL(dl_wait_lookup_done) ()
++
++# endif /* __ASSEMBLER__ */
++
++#endif	/* tls.h */
+diff --git a/libpthread/nptl/sysdeps/aarch64/tlsdesc.sym b/libpthread/nptl/sysdeps/aarch64/tlsdesc.sym
+new file mode 100644
+index 000000000..4d2d13761
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/aarch64/tlsdesc.sym
+@@ -0,0 +1,17 @@
++#include <stddef.h>
++#include <sysdep.h>
++#include <tls.h>
++#include <link.h>
++#include <dl-tls.h>
++
++--
++
++-- Abuse tls.h macros to derive offsets relative to the thread register.
++
++TLSDESC_ARG		offsetof(struct tlsdesc, arg)
++TLSDESC_GEN_COUNT	offsetof(struct tlsdesc_dynamic_arg, gen_count)
++TLSDESC_MODID		offsetof(struct tlsdesc_dynamic_arg, tlsinfo.ti_module)
++TLSDESC_MODOFF		offsetof(struct tlsdesc_dynamic_arg, tlsinfo.ti_offset)
++TCBHEAD_DTV		offsetof(tcbhead_t, dtv)
++DTV_COUNTER		offsetof(dtv_t, counter)
++TLS_DTV_UNALLOCATED     TLS_DTV_UNALLOCATED
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/Makefile b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/Makefile
+new file mode 100644
+index 000000000..729adf6f9
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc NPTL
++#
++# Copyright (C) 2005 Steven J. Hill <sjhill@uclibc.org>
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../../../../../../../
++top_builddir=../../../../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/Makefile.arch b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/Makefile.arch
+new file mode 100644
+index 000000000..7d31efb21
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/Makefile.arch
+@@ -0,0 +1,14 @@
++# Makefile for uClibc NPTL
++#
++# Copyright (C) 2006 Steven J. Hill <sjhill@uclibc.org>
++#
++# Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++#
++
++libpthread_linux_arch_SSRC =
++libpthread_linux_arch_CSRC = pthread_once.c
++
++libc_linux_arch_CSRC = fork.c
++
++CFLAGS += $(SSP_ALL_CFLAGS)
++
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/bits/pthreadtypes.h b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/bits/pthreadtypes.h
+new file mode 100644
+index 000000000..47293a1a8
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/bits/pthreadtypes.h
+@@ -0,0 +1,174 @@
++/* Copyright (C) 2002-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _BITS_PTHREADTYPES_H
++#define _BITS_PTHREADTYPES_H	1
++
++#include <endian.h>
++
++#define __SIZEOF_PTHREAD_ATTR_T        64
++#define __SIZEOF_PTHREAD_MUTEX_T       48
++#define __SIZEOF_PTHREAD_MUTEXATTR_T    8
++#define __SIZEOF_PTHREAD_COND_T        48
++#define __SIZEOF_PTHREAD_COND_COMPAT_T 48
++#define __SIZEOF_PTHREAD_CONDATTR_T     8
++#define __SIZEOF_PTHREAD_RWLOCK_T      56
++#define __SIZEOF_PTHREAD_RWLOCKATTR_T   8
++#define __SIZEOF_PTHREAD_BARRIER_T     32
++#define __SIZEOF_PTHREAD_BARRIERATTR_T  8
++
++#define __PTHREAD_RWLOCK_INT_FLAGS_SHARED 1
++
++/* Thread identifiers.  The structure of the attribute type is not
++   exposed on purpose.  */
++typedef unsigned long int pthread_t;
++
++
++union pthread_attr_t
++{
++  char __size[__SIZEOF_PTHREAD_ATTR_T];
++  long int __align;
++};
++#ifndef __have_pthread_attr_t
++typedef union pthread_attr_t pthread_attr_t;
++# define __have_pthread_attr_t1
++#endif
++
++typedef struct __pthread_internal_list
++{
++  struct __pthread_internal_list *__prev;
++  struct __pthread_internal_list *__next;
++} __pthread_list_t;
++
++
++/* Data structures for mutex handling.  The structure of the attribute
++   type is not exposed on purpose.  */
++typedef union
++{
++  struct __pthread_mutex_s
++  {
++    int __lock;
++    unsigned int __count;
++    int __owner;
++    unsigned int __nusers;
++    /* KIND must stay at this position in the structure to maintain
++       binary compatibility with static initializers.  */
++    int __kind;
++    int __spins;
++    __pthread_list_t __list;
++#define __PTHREAD_MUTEX_HAVE_PREV	1
++  } __data;
++  char __size[__SIZEOF_PTHREAD_MUTEX_T];
++  long int __align;
++} pthread_mutex_t;
++
++/* Mutex __spins initializer used by PTHREAD_MUTEX_INITIALIZER.  */
++#define __PTHREAD_SPINS 0
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_MUTEXATTR_T];
++  long int __align;
++} pthread_mutexattr_t;
++
++/* Data structure for conditional variable handling.  The structure of
++   the attribute type is not exposed on purpose.  */
++typedef union
++{
++  struct
++  {
++    int __lock;
++    unsigned int __futex;
++    __extension__ unsigned long long int __total_seq;
++    __extension__ unsigned long long int __wakeup_seq;
++    __extension__ unsigned long long int __woken_seq;
++    void *__mutex;
++    unsigned int __nwaiters;
++    unsigned int __broadcast_seq;
++  } __data;
++  char __size[__SIZEOF_PTHREAD_COND_T];
++  __extension__ long long int __align;
++} pthread_cond_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_CONDATTR_T];
++  int __align;
++} pthread_condattr_t;
++
++
++/* Keys for thread-specific data */
++typedef unsigned int pthread_key_t;
++
++
++/* Once-only execution */
++typedef int pthread_once_t;
++
++
++#if defined __USE_UNIX98 || defined __USE_XOPEN2K
++/* Data structure for read-write lock variable handling.  The
++   structure of the attribute type is not exposed on purpose.  */
++typedef union
++{
++  struct
++  {
++    int __lock;
++    unsigned int __nr_readers;
++    unsigned int __readers_wakeup;
++    unsigned int __writer_wakeup;
++    unsigned int __nr_readers_queued;
++    unsigned int __nr_writers_queued;
++    int __writer;
++    int __shared;
++    unsigned long int __pad1;
++    unsigned long int __pad2;
++    unsigned int __flags;
++  } __data;
++  char __size[__SIZEOF_PTHREAD_RWLOCK_T];
++  long int __align;
++} pthread_rwlock_t;
++
++#define __PTHREAD_RWLOCK_ELISION_EXTRA 0
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_RWLOCKATTR_T];
++  long int __align;
++} pthread_rwlockattr_t;
++#endif
++
++
++#ifdef __USE_XOPEN2K
++/* POSIX spinlock data type.  */
++typedef volatile int pthread_spinlock_t;
++
++
++/* POSIX barriers data type.  The structure of the type is
++   deliberately not exposed.  */
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_BARRIER_T];
++  long int __align;
++} pthread_barrier_t;
++
++typedef union
++{
++  char __size[__SIZEOF_PTHREAD_BARRIERATTR_T];
++  int __align;
++} pthread_barrierattr_t;
++#endif
++
++#endif	/* bits/pthreadtypes.h */
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/bits/semaphore.h b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/bits/semaphore.h
+new file mode 100644
+index 000000000..15a01beb1
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/bits/semaphore.h
+@@ -0,0 +1,30 @@
++/* Copyright (C) 2002-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _SEMAPHORE_H
++# error "Never use <bits/semaphore.h> directly; include <semaphore.h> instead."
++#endif
++
++#define __SIZEOF_SEM_T	32
++
++/* Value returned if `sem_open' failed.  */
++#define SEM_FAILED      ((sem_t *) 0)
++
++typedef union
++{
++  char __size[__SIZEOF_SEM_T];
++  long long int __align;
++} sem_t;
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/createthread.c b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/createthread.c
+new file mode 100644
+index 000000000..8157435db
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/createthread.c
+@@ -0,0 +1,21 @@
++/* Copyright (C) 2005 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++/* Value passed to 'clone' for initialization of the thread register.  */
++#define TLS_VALUE (pd + 1)
++
++/* Get the real implementation.	 */
++#include <sysdeps/pthread/createthread.c>
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/fork.c b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/fork.c
+new file mode 100644
+index 000000000..c5d963aad
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/fork.c
+@@ -0,0 +1,11 @@
++#include <sched.h>
++#include <signal.h>
++#include <sysdep.h>
++#include <tls.h>
++
++#define ARCH_FORK() \
++  INLINE_SYSCALL (clone, 5,                                                  \
++                 CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | SIGCHLD, 0,     \
++                 NULL, NULL, &THREAD_SELF->tid)
++
++#include "../fork.c"
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/lowlevellock.h b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/lowlevellock.h
+new file mode 100644
+index 000000000..6b0e51e99
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/lowlevellock.h
+@@ -0,0 +1,323 @@
++/* Copyright (C) 2005-2013 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library.  If not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#ifndef _LOWLEVELLOCK_H
++#define _LOWLEVELLOCK_H	1
++
++#include <time.h>
++#include <sys/param.h>
++#include <bits/pthreadtypes.h>
++#include <atomic.h>
++#include <sysdep.h>
++#include <bits/kernel-features.h>
++
++
++#define FUTEX_WAIT		0
++#define FUTEX_WAKE		1
++#define FUTEX_REQUEUE		3
++#define FUTEX_CMP_REQUEUE	4
++#define FUTEX_WAKE_OP		5
++#define FUTEX_OP_CLEAR_WAKE_IF_GT_ONE	((4 << 24) | 1)
++#define FUTEX_LOCK_PI		6
++#define FUTEX_UNLOCK_PI		7
++#define FUTEX_TRYLOCK_PI	8
++#define FUTEX_WAIT_BITSET	9
++#define FUTEX_WAKE_BITSET	10
++#define FUTEX_WAIT_REQUEUE_PI   11
++#define FUTEX_CMP_REQUEUE_PI    12
++#define FUTEX_PRIVATE_FLAG	128
++#define FUTEX_CLOCK_REALTIME	256
++
++#define FUTEX_BITSET_MATCH_ANY	0xffffffff
++
++/* Values for 'private' parameter of locking macros.  Yes, the
++   definition seems to be backwards.  But it is not.  The bit will be
++   reversed before passing to the system call.  */
++#define LLL_PRIVATE	0
++#define LLL_SHARED	FUTEX_PRIVATE_FLAG
++
++
++#if !defined NOT_IN_libc || defined IS_IN_rtld
++/* In libc.so or ld.so all futexes are private.  */
++# ifdef __ASSUME_PRIVATE_FUTEX
++#  define __lll_private_flag(fl, private) \
++  ((fl) | FUTEX_PRIVATE_FLAG)
++# else
++#  define __lll_private_flag(fl, private) \
++  ((fl) | THREAD_GETMEM (THREAD_SELF, header.private_futex))
++# endif
++#else
++# ifdef __ASSUME_PRIVATE_FUTEX
++#  define __lll_private_flag(fl, private) \
++  (((fl) | FUTEX_PRIVATE_FLAG) ^ (private))
++# else
++#  define __lll_private_flag(fl, private) \
++  (__builtin_constant_p (private)					      \
++   ? ((private) == 0							      \
++      ? ((fl) | THREAD_GETMEM (THREAD_SELF, header.private_futex))	      \
++      : (fl))								      \
++   : ((fl) | (((private) ^ FUTEX_PRIVATE_FLAG)				      \
++	      & THREAD_GETMEM (THREAD_SELF, header.private_futex))))
++# endif
++#endif
++
++
++#define lll_futex_wait(futexp, val, private) \
++  lll_futex_timed_wait(futexp, val, NULL, private)
++
++#define lll_futex_timed_wait(futexp, val, timespec, private) \
++  ({									      \
++    long int __ret;							      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 4, (futexp),		      \
++			      __lll_private_flag (FUTEX_WAIT, private),	      \
++			      (val), (timespec));			      \
++    __ret;								      \
++  })
++
++#define lll_futex_timed_wait_bitset(futexp, val, timespec, clockbit, private) \
++  ({									\
++    long int __ret;							\
++    INTERNAL_SYSCALL_DECL (__err);					\
++    int __op = FUTEX_WAIT_BITSET | clockbit;				\
++    __ret = INTERNAL_SYSCALL (futex, __err, 6, (futexp),		\
++			      __lll_private_flag (__op, private),	\
++			      (val), (timespec), NULL /* Unused.  */,	\
++			      FUTEX_BITSET_MATCH_ANY);			\
++    __ret;								\
++  })
++
++#define lll_futex_wake(futexp, nr, private) \
++  ({									      \
++    long int __ret;							      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 4, (futexp),		      \
++			      __lll_private_flag (FUTEX_WAKE, private),	      \
++			      (nr), 0);					      \
++    __ret;								      \
++  })
++
++#define lll_robust_dead(futexv, private) \
++  do									      \
++    {									      \
++      int *__futexp = &(futexv);					      \
++      atomic_or (__futexp, FUTEX_OWNER_DIED);				      \
++      lll_futex_wake (__futexp, 1, private);				      \
++    }									      \
++  while (0)
++
++/* Returns non-zero if error happened, zero if success.  */
++#define lll_futex_requeue(futexp, nr_wake, nr_move, mutex, val, private) \
++  ({									      \
++    long int __ret;							      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 6, (futexp),		      \
++			      __lll_private_flag (FUTEX_CMP_REQUEUE, private),\
++			      (nr_wake), (nr_move), (mutex), (val));	      \
++    INTERNAL_SYSCALL_ERROR_P (__ret, __err);				      \
++  })
++
++
++/* Returns non-zero if error happened, zero if success.  */
++#define lll_futex_wake_unlock(futexp, nr_wake, nr_wake2, futexp2, private) \
++  ({									      \
++    long int __ret;							      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 6, (futexp),		      \
++			      __lll_private_flag (FUTEX_WAKE_OP, private),    \
++			      (nr_wake), (nr_wake2), (futexp2),		      \
++			      FUTEX_OP_CLEAR_WAKE_IF_GT_ONE);		      \
++    INTERNAL_SYSCALL_ERROR_P (__ret, __err);				      \
++  })
++
++/* Priority Inheritance support.  */
++#define lll_futex_wait_requeue_pi(futexp, val, mutex, private) \
++  lll_futex_timed_wait_requeue_pi (futexp, val, NULL, 0, mutex, private)
++
++#define lll_futex_timed_wait_requeue_pi(futexp, val, timespec, clockbit,      \
++					mutex, private)			      \
++  ({									      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    int __op = FUTEX_WAIT_REQUEUE_PI | clockbit;			      \
++									      \
++    INTERNAL_SYSCALL (futex, __err, 5, (futexp),			      \
++		      __lll_private_flag (__op, private),		      \
++		      (val), (timespec), mutex); 			      \
++  })
++
++#define lll_futex_cmp_requeue_pi(futexp, nr_wake, nr_move, mutex, val, priv)  \
++  ({									      \
++    INTERNAL_SYSCALL_DECL (__err);					      \
++    long int __ret;							      \
++									      \
++    __ret = INTERNAL_SYSCALL (futex, __err, 6, (futexp),		      \
++			      __lll_private_flag (FUTEX_CMP_REQUEUE_PI, priv),\
++			      (nr_wake), (nr_move), (mutex), (val));	      \
++    INTERNAL_SYSCALL_ERROR_P (__ret, __err);				      \
++  })
++
++
++#define lll_trylock(lock)	\
++  atomic_compare_and_exchange_val_acq(&(lock), 1, 0)
++
++#define lll_cond_trylock(lock)	\
++  atomic_compare_and_exchange_val_acq(&(lock), 2, 0)
++
++#define __lll_robust_trylock(futex, id) \
++  (atomic_compare_and_exchange_val_acq (futex, id, 0) != 0)
++#define lll_robust_trylock(lock, id) \
++  __lll_robust_trylock (&(lock), id)
++
++extern void __lll_lock_wait_private (int *futex) attribute_hidden;
++extern void __lll_lock_wait (int *futex, int private) attribute_hidden;
++extern int __lll_robust_lock_wait (int *futex, int private) attribute_hidden;
++
++#define __lll_lock(futex, private)					      \
++  ((void) ({								      \
++    int *__futex = (futex);						      \
++    if (__builtin_expect (atomic_compare_and_exchange_val_acq (__futex,       \
++								1, 0), 0))    \
++      {									      \
++	if (__builtin_constant_p (private) && (private) == LLL_PRIVATE)	      \
++	  __lll_lock_wait_private (__futex);				      \
++	else								      \
++	  __lll_lock_wait (__futex, private);				      \
++      }									      \
++  }))
++#define lll_lock(futex, private) __lll_lock (&(futex), private)
++
++
++#define __lll_robust_lock(futex, id, private)				      \
++  ({									      \
++    int *__futex = (futex);						      \
++    int __val = 0;							      \
++									      \
++    if (__builtin_expect (atomic_compare_and_exchange_bool_acq (__futex, id,  \
++								0), 0))	      \
++      __val = __lll_robust_lock_wait (__futex, private);		      \
++    __val;								      \
++  })
++#define lll_robust_lock(futex, id, private) \
++  __lll_robust_lock (&(futex), id, private)
++
++
++#define __lll_cond_lock(futex, private)					      \
++  ((void) ({								      \
++    int *__futex = (futex);						      \
++    if (__builtin_expect (atomic_exchange_acq (__futex, 2), 0))		      \
++      __lll_lock_wait (__futex, private);				      \
++  }))
++#define lll_cond_lock(futex, private) __lll_cond_lock (&(futex), private)
++
++
++#define lll_robust_cond_lock(futex, id, private) \
++  __lll_robust_lock (&(futex), (id) | FUTEX_WAITERS, private)
++
++
++extern int __lll_timedlock_wait (int *futex, const struct timespec *,
++				 int private) attribute_hidden;
++extern int __lll_robust_timedlock_wait (int *futex, const struct timespec *,
++					int private) attribute_hidden;
++
++#define __lll_timedlock(futex, abstime, private)			      \
++  ({									      \
++     int *__futex = (futex);						      \
++     int __val = 0;							      \
++									      \
++     if (__builtin_expect (atomic_exchange_acq (__futex, 1), 0))	      \
++       __val = __lll_timedlock_wait (__futex, abstime, private);	      \
++     __val;								      \
++  })
++#define lll_timedlock(futex, abstime, private) \
++  __lll_timedlock (&(futex), abstime, private)
++
++
++#define __lll_robust_timedlock(futex, abstime, id, private)		      \
++  ({									      \
++    int *__futex = (futex);						      \
++    int __val = 0;							      \
++									      \
++    if (__builtin_expect (atomic_compare_and_exchange_bool_acq (__futex, id,  \
++								0), 0))	      \
++      __val = __lll_robust_timedlock_wait (__futex, abstime, private);	      \
++    __val;								      \
++  })
++#define lll_robust_timedlock(futex, abstime, id, private) \
++  __lll_robust_timedlock (&(futex), abstime, id, private)
++
++
++#define __lll_unlock(futex, private) \
++  (void)							\
++    ({ int *__futex = (futex);					\
++       int __oldval = atomic_exchange_rel (__futex, 0);		\
++       if (__builtin_expect (__oldval > 1, 0))			\
++	 lll_futex_wake (__futex, 1, private);			\
++       lll_futex_wake (__futex, 1, private);			\
++    })
++#define lll_unlock(futex, private) __lll_unlock(&(futex), private)
++
++
++#define __lll_robust_unlock(futex, private) \
++  (void)							\
++    ({ int *__futex = (futex);					\
++       int __oldval = atomic_exchange_rel (__futex, 0);		\
++       if (__builtin_expect (__oldval & FUTEX_WAITERS, 0))	\
++	 lll_futex_wake (__futex, 1, private);			\
++       lll_futex_wake (__futex, 1, private);			\
++    })
++#define lll_robust_unlock(futex, private) \
++  __lll_robust_unlock(&(futex), private)
++
++
++#define lll_islocked(futex) \
++  (futex != 0)
++
++
++/* Our internal lock implementation is identical to the binary-compatible
++   mutex implementation. */
++
++/* Initializers for lock.  */
++#define LLL_LOCK_INITIALIZER		(0)
++#define LLL_LOCK_INITIALIZER_LOCKED	(1)
++
++/* The states of a lock are:
++    0  -  untaken
++    1  -  taken by one user
++   >1  -  taken by more users */
++
++/* The kernel notifies a process which uses CLONE_CHILD_CLEARTID via futex
++   wakeup when the clone terminates.  The memory location contains the
++   thread ID while the clone is running and is reset to zero
++   afterwards.	*/
++#define lll_wait_tid(tid) \
++  do {					\
++    __typeof (tid) __tid;		\
++    while ((__tid = (tid)) != 0)	\
++      lll_futex_wait (&(tid), __tid, LLL_SHARED);\
++  } while (0)
++
++extern int __lll_timedwait_tid (int *, const struct timespec *)
++     attribute_hidden;
++
++#define lll_timedwait_tid(tid, abstime) \
++  ({							\
++    int __res = 0;					\
++    if ((tid) != 0)					\
++      __res = __lll_timedwait_tid (&(tid), (abstime));	\
++    __res;						\
++  })
++
++#endif	/* lowlevellock.h */
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/pt-raise.c b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/pt-raise.c
+new file mode 100644
+index 000000000..6c0d4b5d3
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/pt-raise.c
+@@ -0,0 +1,18 @@
++/* Copyright (C) 2002-2013 Free Software Foundation, Inc.
++   Contributed by Ulrich Drepper <drepper@redhat.com>, 2002.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <nptl/sysdeps/unix/sysv/linux/raise.c>
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/pthread_once.c b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/pthread_once.c
+new file mode 100644
+index 000000000..b77939d26
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/pthread_once.c
+@@ -0,0 +1,90 @@
++/* Copyright (C) 2003-2013 Free Software Foundation, Inc.
++   Contributed by Jakub Jelinek <jakub@redhat.com>, 2003.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include "pthreadP.h"
++#include <lowlevellock.h>
++
++unsigned long int __fork_generation attribute_hidden;
++
++static void
++clear_once_control (void *arg)
++{
++  pthread_once_t *once_control = (pthread_once_t *) arg;
++
++  *once_control = 0;
++  lll_futex_wake (once_control, INT_MAX, LLL_PRIVATE);
++}
++
++
++int
++__pthread_once (once_control, init_routine)
++     pthread_once_t *once_control;
++     void (*init_routine) (void);
++{
++  while (1)
++    {
++      int oldval, val, newval;
++
++      val = *once_control;
++      do
++	{
++	  /* Check if the initialized has already been done.  */
++	  if ((val & 2) != 0)
++	    return 0;
++
++	  oldval = val;
++	  newval = (oldval & 3) | __fork_generation | 1;
++	  val = atomic_compare_and_exchange_val_acq (once_control, newval,
++						     oldval);
++	}
++      while (__builtin_expect (val != oldval, 0));
++
++      /* Check if another thread already runs the initializer.	*/
++      if ((oldval & 1) != 0)
++	{
++	  /* Check whether the initializer execution was interrupted
++	     by a fork.	 */
++	  if (((oldval ^ newval) & -4) == 0)
++	    {
++	      /* Same generation, some other thread was faster. Wait.  */
++	      lll_futex_wait (once_control, newval, LLL_PRIVATE);
++	      continue;
++	    }
++	}
++
++      /* This thread is the first here.  Do the initialization.
++	 Register a cleanup handler so that in case the thread gets
++	 interrupted the initialization can be restarted.  */
++      pthread_cleanup_push (clear_once_control, once_control);
++
++      init_routine ();
++
++      pthread_cleanup_pop (0);
++
++
++      /* Add one to *once_control.  */
++      atomic_increment (once_control);
++
++      /* Wake up all other threads.  */
++      lll_futex_wake (once_control, INT_MAX, LLL_PRIVATE);
++      break;
++    }
++
++  return 0;
++}
++weak_alias (__pthread_once, pthread_once)
++strong_alias (__pthread_once, __pthread_once_internal)
+diff --git a/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/sysdep-cancel.h b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/sysdep-cancel.h
+new file mode 100644
+index 000000000..0942e819e
+--- /dev/null
++++ b/libpthread/nptl/sysdeps/unix/sysv/linux/aarch64/sysdep-cancel.h
+@@ -0,0 +1,132 @@
++/* Copyright (C) 2003-2017 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, see
++   <http://www.gnu.org/licenses/>.  */
++
++#include <sysdep.h>
++#include <tls.h>
++#ifndef __ASSEMBLER__
++# include <pthreadP.h>
++#endif
++
++#if !defined NOT_IN_libc || defined IS_IN_libpthread || defined IS_IN_librt
++
++# undef PSEUDO
++# define PSEUDO(name, syscall_name, args)				\
++	.section ".text";						\
++ENTRY (__##syscall_name##_nocancel);					\
++.Lpseudo_nocancel:							\
++	DO_CALL (syscall_name, args);					\
++.Lpseudo_finish:							\
++	cmn	x0, 4095;						\
++	b.cs	.Lsyscall_error;					\
++	.subsection 2;							\
++	.size __##syscall_name##_nocancel,.-__##syscall_name##_nocancel; \
++ENTRY (name);								\
++	SINGLE_THREAD_P(16);						\
++	cbz	w16, .Lpseudo_nocancel;					\
++	/* Setup common stack frame no matter the number of args.	\
++	   Also save the first arg, since it's basically free.  */	\
++	stp	x30, x0, [sp, -64]!;					\
++	cfi_adjust_cfa_offset (64);					\
++	cfi_rel_offset (x30, 0);					\
++	DOCARGS_##args;		/* save syscall args around CENABLE.  */ \
++	CENABLE;							\
++	mov	x16, x0;	/* save mask around syscall.  */	\
++	UNDOCARGS_##args;	/* restore syscall args.  */		\
++	DO_CALL (syscall_name, args);					\
++	str	x0, [sp, 8];	/* save result around CDISABLE.  */	\
++	mov	x0, x16;	/* restore mask for CDISABLE.  */	\
++	CDISABLE;							\
++	/* Break down the stack frame, restoring result at once.  */	\
++	ldp	x30, x0, [sp], 64;					\
++	cfi_adjust_cfa_offset (-64);					\
++	cfi_restore (x30);						\
++	b	.Lpseudo_finish;					\
++	cfi_endproc;							\
++	.size	name, .-name;						\
++	.previous
++
++# undef PSEUDO_END
++# define PSEUDO_END(name)						\
++	SYSCALL_ERROR_HANDLER;						\
++	cfi_endproc
++
++# define DOCARGS_0
++# define DOCARGS_1
++# define DOCARGS_2	str x1, [sp, 16]
++# define DOCARGS_3	stp x1, x2, [sp, 16]
++# define DOCARGS_4	DOCARGS_3; str x3, [sp, 32]
++# define DOCARGS_5	DOCARGS_3; stp x3, x4, [sp, 32]
++# define DOCARGS_6	DOCARGS_5; str x5, [sp, 48]
++
++# define UNDOCARGS_0
++# define UNDOCARGS_1	ldr x0, [sp, 8]
++# define UNDOCARGS_2	ldp x0, x1, [sp, 8]
++# define UNDOCARGS_3	UNDOCARGS_1; ldp x1, x2, [sp, 16]
++# define UNDOCARGS_4	UNDOCARGS_2; ldp x2, x3, [sp, 24]
++# define UNDOCARGS_5	UNDOCARGS_3; ldp x3, x4, [sp, 32]
++# define UNDOCARGS_6	UNDOCARGS_4; ldp x4, x5, [sp, 40]
++
++# if defined IS_IN_libpthread
++#  define CENABLE	bl __pthread_enable_asynccancel
++#  define CDISABLE	bl __pthread_disable_asynccancel
++#  define __local_multiple_threads __pthread_multiple_threads
++# elif !defined NOT_IN_libc
++#  define CENABLE	bl __libc_enable_asynccancel
++#  define CDISABLE	bl __libc_disable_asynccancel
++#  define __local_multiple_threads __libc_multiple_threads
++# elif defined IS_IN_librt
++#  define CENABLE	bl __librt_enable_asynccancel
++#  define CDISABLE	bl __librt_disable_asynccancel
++# else
++#  error Unsupported library
++# endif
++
++# if defined IS_IN_libpthread || !defined NOT_IN_libc
++#  ifndef __ASSEMBLER__
++extern int __local_multiple_threads attribute_hidden;
++#   define SINGLE_THREAD_P __builtin_expect (__local_multiple_threads == 0, 1)
++#  else
++#   define SINGLE_THREAD_P(R)						\
++	adrp	x##R, __local_multiple_threads;				\
++	ldr	w##R, [x##R, :lo12:__local_multiple_threads]
++#  endif
++# else
++/*  There is no __local_multiple_threads for librt, so use the TCB.  */
++#  ifndef __ASSEMBLER__
++#   define SINGLE_THREAD_P						\
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF,				\
++				   header.multiple_threads) == 0, 1)
++#  else
++#   define SINGLE_THREAD_P(R)						\
++	mrs     x##R, tpidr_el0;					\
++	sub	x##R, x##R, PTHREAD_SIZEOF;				\
++	ldr	w##R, [x##R, PTHREAD_MULTIPLE_THREADS_OFFSET]
++#  endif
++# endif
++
++#elif !defined __ASSEMBLER__
++
++/* For rtld, et cetera.  */
++# define SINGLE_THREAD_P 1
++# define NO_CANCELLATION 1
++
++#endif
++
++#ifndef __ASSEMBLER__
++# define RTLD_SINGLE_THREAD_P \
++  __builtin_expect (THREAD_GETMEM (THREAD_SELF, \
++				   header.multiple_threads) == 0, 1)
++#endif
+diff --git a/utils/ldd.c b/utils/ldd.c
+index e7430fca5..37a069b4f 100644
+--- a/utils/ldd.c
++++ b/utils/ldd.c
+@@ -15,6 +15,11 @@
+ 
+ #include "porting.h"
+ 
++#if defined(__aarch64__)
++#define MATCH_MACHINE(x) (x == EM_AARCH64)
++#define ELFCLASSM	ELFCLASS64
++#endif
++
+ #if defined(__alpha__)
+ #define MATCH_MACHINE(x) (x == EM_ALPHA)
+ #define ELFCLASSM	ELFCLASS64

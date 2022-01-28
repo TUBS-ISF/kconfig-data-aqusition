@@ -1,0 +1,294 @@
+"2003-08-08 22:26:06 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 2ee816465..cd5065103 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -169,9 +169,6 @@
+ #ifdef CONFIG_DUMPLEASES
+         APPLET(dumpleases, dumpleases_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+-#ifdef CONFIG_DUTMP
+-	APPLET(dutmp, dutmp_main, _BB_DIR_USR_SBIN, _BB_SUID_NEVER)
+-#endif
+ #ifdef CONFIG_ECHO
+ 	APPLET(echo, echo_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+@@ -316,6 +313,9 @@
+ #ifdef CONFIG_LASH
+ 	APPLET(lash, lash_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_LAST
++	APPLET(last, last_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_LENGTH
+ 	APPLET(length, length_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 7bf9c8952..35a3d5033 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -461,21 +461,6 @@
+ 	"\t-r,\t--remaining\tInterepret lease times as time remaing\n" \
+ 	"\t-a,\t--absolute\tInterepret lease times as expire time\n"
+ 
+-#define dutmp_trivial_usage \
+-	"[FILE]"
+-#define dutmp_full_usage \
+-	"Dump utmp file format (pipe delimited) from FILE\n" \
+-	"or stdin to stdout.  (i.e., 'dutmp /var/run/utmp')"
+-#define dutmp_example_usage \
+-	"$ dutmp /var/run/utmp\n" \
+-	"8|7||si|||0|0|0|955637625|760097|0\n" \
+-	"2|0|~|~~|reboot||0|0|0|955637625|782235|0\n" \
+-	"1|20020|~|~~|runlevel||0|0|0|955637625|800089|0\n" \
+-	"8|125||l4|||0|0|0|955637629|998367|0\n" \
+-	"6|245|tty1|1|LOGIN||0|0|0|955637630|998974|0\n" \
+-	"6|246|tty2|2|LOGIN||0|0|0|955637630|999498|0\n" \
+-	"7|336|pts/0|vt00|andersen|:0.0|0|0|0|955637763|0|0\n"
+-
+ #ifdef CONFIG_FEATURE_FANCY_ECHO
+   #define USAGE_FANCY_ECHO(a) a
+ #else
+@@ -2068,7 +2053,7 @@
+ 	"[FILE]...\n" \
+ 	"or: sh -c command [args]..."
+ #define lash_full_usage \
+-	"lash: The BusyBox LAme SHell (command interpreter)"
++	"The BusyBox LAme SHell (command interpreter)"
+ #define lash_notes_usage \
+ "This command does not yet have proper documentation.\n" \
+ "\n" \
+@@ -2079,6 +2064,11 @@
+ "use ash or bash.  If you just need a very simple and extremely small shell,\n" \
+ "this will do the job."
+ 
++#define last_trivial_usage \
++	""
++#define last_full_usage \
++	"Shows listing of the last users that logged into the system"
++
+ #define sha1sum_trivial_usage \
+ 	"[OPTION] [FILE]"
+ #define sha1sum_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index a994c5096..701af9c2d 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -40,15 +40,11 @@ config CONFIG_DC
+ 	  Dc is a reverse-polish desk calculator which supports unlimited
+ 	  precision arithmetic.
+ 
+-config CONFIG_DUTMP
+-	bool "dutmp"
++config CONFIG_LAST
++	bool "last"
+ 	default n
+ 	help
+-	  'dutmp' is a utility used by the Linux Router Project (as far as I
+-	  know nobody else uses it).  It dumps the contents of the utmp file to
+-	  STDOUT with each field seperated by a colon.  IP addresses are are
+-	  given in hex in native byte order.  It is intended that this format
+-	  can then be parsed by shell scripts.
++	  'last' displays a list of the last users that logged into the system.
+ 
+ config CONFIG_HDPARM
+ 	bool "hdparm"
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index 0f200f4fb..66370f015 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -28,8 +28,8 @@ MISCUTILS-$(CONFIG_ADJTIMEX)		+= adjtimex.o
+ MISCUTILS-$(CONFIG_CROND)               += crond.o
+ MISCUTILS-$(CONFIG_CRONTAB)             += crontab.o
+ MISCUTILS-$(CONFIG_DC)			+= dc.o
+-MISCUTILS-$(CONFIG_DUTMP)		+= dutmp.o
+ MISCUTILS-$(CONFIG_HDPARM)		+= hdparm.o
++MISCUTILS-$(CONFIG_LAST)		+= last.o
+ MISCUTILS-$(CONFIG_MAKEDEVS)		+= makedevs.o
+ MISCUTILS-$(CONFIG_MT)			+= mt.o
+ MISCUTILS-$(CONFIG_STRINGS)		+= strings.o
+diff --git a/miscutils/dutmp.c b/miscutils/dutmp.c
+deleted file mode 100644
+index 86d7ce4b3..000000000
+--- a/miscutils/dutmp.c
++++ /dev/null
+@@ -1,66 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * public domain -- Dave 'Kill a Cop' Cinege <dcinege@psychosis.com>
+- * 
+- * dutmp
+- * Takes utmp formated file on stdin and dumps it's contents 
+- * out in colon delimited fields. Easy to 'cut' for shell based 
+- * versions of 'who', 'last', etc. IP Addr is output in hex, 
+- * little endian on x86.
+- * 
+- */
+-
+-/* Mar 13, 2003       Manuel Novoa III
+- *
+- * 1) Added proper error checking.
+- * 2) Allow '-' arg for stdin.
+- * 3) For modern libcs, take into account that utmp char[] members
+- *    need not be nul-terminated.
+- */
+-
+-#include <stdlib.h>
+-#include <unistd.h>
+-#include <fcntl.h>
+-#include <utmp.h>
+-#include "busybox.h"
+-
+-/* Grr... utmp char[] members  do not have to be nul-terminated.
+- * Do what we can while still keeping this reasonably small.
+- * Note: We are assuming the ut_id[] size is fixed at 4. */
+-
+-#if (UT_LINESIZE != 32) || (UT_NAMESIZE != 32) || (UT_HOSTSIZE != 256)
+-#error struct utmp member char[] size(s) have changed!
+-#endif
+-
+-extern int dutmp_main(int argc, char **argv)
+-{
+-	int file = STDIN_FILENO;
+-	ssize_t n;
+-	struct utmp ut;
+-
+-	if (argc > 2) {
+-		bb_show_usage();
+-	}
+-	++argv;
+-	if ((argc == 2) && ((argv[0][0] != '-') || argv[0][1])) {
+-		file = bb_xopen(*argv, O_RDONLY);
+-	}
+-
+-
+-	while ((n = safe_read(file, (void*)&ut, sizeof(struct utmp))) != 0) {
+-
+-		if (n != sizeof(struct utmp)) {
+-			bb_perror_msg_and_die("short read");
+-		}
+-
+-		bb_printf("%d|%d|%.32s|%.4s|%.32s|%.256s|%d|%d|%ld|%ld|%ld|%x\n",
+-				  ut.ut_type, ut.ut_pid, ut.ut_line,
+-				  ut.ut_id, ut.ut_user,	ut.ut_host,
+-				  ut.ut_exit.e_termination, ut.ut_exit.e_exit,
+-				  ut.ut_session,
+-				  ut.ut_tv.tv_sec, ut.ut_tv.tv_usec,
+-				  ut.ut_addr);
+-	}
+-
+-	bb_fflush_stdout_and_exit(EXIT_SUCCESS);
+-}
+diff --git a/miscutils/last.c b/miscutils/last.c
+new file mode 100644
+index 000000000..e7f9eb57a
+--- /dev/null
++++ b/miscutils/last.c
+@@ -0,0 +1,107 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * last implementation for busybox
++ *
++ * Copyright (C) 2003  Erik Andersen <andersen@codepoet.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ *
++ */
++
++#include <sys/types.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <stdlib.h>
++#include <utmp.h>
++#include <sys/stat.h>
++#include <errno.h>
++#include <string.h>
++#include <time.h>
++#include "busybox.h"
++
++#ifndef SHUTDOWN_TIME
++#  define SHUTDOWN_TIME 254
++#endif
++
++/* Grr... utmp char[] members  do not have to be nul-terminated.
++ * Do what we can while still keeping this reasonably small.
++ * Note: We are assuming the ut_id[] size is fixed at 4. */
++
++#if (UT_LINESIZE != 32) || (UT_NAMESIZE != 32) || (UT_HOSTSIZE != 256)
++#error struct utmp member char[] size(s) have changed!
++#endif
++
++extern int last_main(int argc, char **argv)
++{
++	struct utmp ut;
++	int n, file = STDIN_FILENO;
++
++	if (argc > 1) {
++		bb_show_usage();
++	}
++	file = bb_xopen(_PATH_WTMP, O_RDONLY);
++
++	printf("%-10s %-14s %-18s %-12.12s %s\n", "USER", "TTY", "HOST", "LOGIN", "TIME");
++	while ((n = safe_read(file, (void*)&ut, sizeof(struct utmp))) != 0) {
++
++		if (n != sizeof(struct utmp)) {
++			bb_perror_msg_and_die("short read");
++		}
++
++		if (strncmp(ut.ut_line, "~", 1) == 0) {
++			if (strncmp(ut.ut_user, "shutdown", 8) == 0)
++				ut.ut_type = SHUTDOWN_TIME;
++			else if (strncmp(ut.ut_user, "reboot", 6) == 0)
++				ut.ut_type = BOOT_TIME;
++			else if (strncmp(ut.ut_user, "runlevel", 7) == 0)
++				ut.ut_type = RUN_LVL;
++		} else {
++			if (!ut.ut_name[0] || strcmp(ut.ut_name, "LOGIN") == 0 || 
++					ut.ut_name[0] == 0)
++			{
++				/* Don't bother.  This means we can't find how long 
++				 * someone was logged in for.  Oh well. */
++				continue;
++			}
++			if (ut.ut_type != DEAD_PROCESS &&
++					ut.ut_name[0] && ut.ut_line[0])
++			{
++				ut.ut_type = USER_PROCESS;
++			}
++			if (strcmp(ut.ut_name, "date") == 0) {
++				if (ut.ut_line[0] == '|') ut.ut_type = OLD_TIME;
++				if (ut.ut_line[0] == '{') ut.ut_type = NEW_TIME;
++			}
++		}
++
++		if (ut.ut_type!=USER_PROCESS) {
++			switch (ut.ut_type) {
++				case OLD_TIME:
++				case NEW_TIME:
++				case RUN_LVL:
++				case SHUTDOWN_TIME:
++					continue;
++				case BOOT_TIME:
++					strcpy(ut.ut_line, "system boot");
++					break;
++			}
++		}
++
++		printf("%-10s %-14s %-18s %-12.12s\n", ut.ut_user, ut.ut_line, ut.ut_host,
++				ctime(&(ut.ut_tv.tv_sec)) + 4);
++	}
++
++	bb_fflush_stdout_and_exit(EXIT_SUCCESS);
++}

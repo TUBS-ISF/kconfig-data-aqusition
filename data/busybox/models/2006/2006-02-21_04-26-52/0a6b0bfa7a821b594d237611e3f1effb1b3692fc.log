@@ -1,0 +1,136 @@
+"2006-02-21 04:26:52 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 6eb5cfd5f..e952ac44f 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -378,6 +378,10 @@
+ #ifdef CONFIG_FEATURE_INITRD
+ 	APPLET_NOUSAGE("linuxrc", init_main, _BB_DIR_ROOT, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_SETARCH
++	APPLET_NOUSAGE("linux32", setarch_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++	APPLET_NOUSAGE("linux64", setarch_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_LN
+ 	APPLET(ln, ln_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+@@ -586,6 +590,9 @@
+ #ifdef CONFIG_SEQ
+ 	APPLET(seq, seq_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_SETARCH
++	APPLET(setarch, setarch_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_SETCONSOLE
+ 	APPLET(setconsole, setconsole_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 22beeadf3..63cd79f0e 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1626,6 +1626,13 @@
+ 	"\t\treached.\n" \
+ 	"\t-h, -?\tDisplay this help message\n"
+ 
++#define setarch_trivial_usage \
++	"<personality> <program> [args ...]"
++#define setarch_full_usage \
++	"Personality may be:\n" \
++	"\tlinux32\tSet 32bit uname emulation\n" \
++	"\tlinux64\tSet 64bit uname emulation"
++
+ #define ln_trivial_usage \
+ 	"[OPTION] TARGET... LINK_NAME|DIRECTORY"
+ #define ln_full_usage \
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index fbcf62476..28292bd40 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -354,6 +354,15 @@ config CONFIG_READPROFILE
+ 	help
+ 	  This allows you to parse /proc/profile for basic profiling.
+ 
++config CONFIG_SETARCH
++	bool "setarch"
++	default n
++	help
++	  The linux32 utility is used to create a 32bit environment for the
++	  specified program (usually a shell).  It only makes sense to have
++	  this util on a system that supports both 64bit and 32bit userland
++	  (like amd64/x86, ppc64/ppc, sparc64/sparc, etc...).
++
+ config CONFIG_SWAPONOFF
+ 	bool "swaponoff"
+ 	default n
+diff --git a/util-linux/Makefile.in b/util-linux/Makefile.in
+index 90100aceb..423d4b6c0 100644
+--- a/util-linux/Makefile.in
++++ b/util-linux/Makefile.in
+@@ -33,6 +33,7 @@ UTILLINUX-$(CONFIG_FEATURE_MOUNT_NFS)	+=nfsmount.o
+ UTILLINUX-$(CONFIG_PIVOT_ROOT)    +=pivot_root.o
+ UTILLINUX-$(CONFIG_RDATE)         +=rdate.o
+ UTILLINUX-$(CONFIG_READPROFILE)   +=readprofile.o
++UTILLINUX-$(CONFIG_SETARCH)       +=setarch.o
+ UTILLINUX-$(CONFIG_SWAPONOFF)     +=swaponoff.o
+ UTILLINUX-$(CONFIG_SWITCH_ROOT)   +=switch_root.o
+ UTILLINUX-$(CONFIG_UMOUNT)        +=umount.o
+diff --git a/util-linux/setarch.c b/util-linux/setarch.c
+new file mode 100644
+index 000000000..3543eb6a2
+--- /dev/null
++++ b/util-linux/setarch.c
+@@ -0,0 +1,54 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * Linux32/linux64 allows for changing uname emulation.
++ *
++ * Copyright 2002 Andi Kleen, SuSE Labs.
++ * This file is subject to the GNU General Public License v2 
++ *
++ * Licensed under GPL v2 or later, see file License for details.
++*/
++
++#include <stdlib.h>
++#include <unistd.h>
++#include <string.h>
++#include <errno.h>
++#include <stdio.h>
++#include <sys/personality.h>
++
++#include "busybox.h"
++
++int setarch_main(int argc, char **argv)
++{
++	int pers = -1;
++
++	/* Figure out what personality we are supposed to switch to ...
++	 * we can be invoked as either:
++	 * argv[0],argv[1] -> "setarch","personality"
++	 * argv[0]         -> "personality"
++	 */
++retry:
++	if (!strcmp(argv[0], "linux64"))
++		pers = PER_LINUX;
++	else if (!strcmp(argv[0], "linux32"))
++		pers = PER_LINUX32;
++	else if (pers == -1 && argv[1] != NULL) {
++		pers = PER_LINUX32;
++		++argv;
++		goto retry;
++	}
++
++	/* make user actually gave us something to do */
++	++argv;
++	if (argv[0] == NULL)
++		bb_show_usage();
++
++	/* Try to set personality */
++	if (personality(pers) < 0)
++		goto failure;
++
++	/* Try to execute the program */
++	execvp(argv[0], argv);
++
++failure:
++	bb_perror_msg_and_die(argv[0]);
++}

@@ -1,0 +1,1313 @@
+"2015-07-02 11:02:35 -0300"
+diff --git a/Kconfig b/Kconfig
+index d3648e99..12d3cd95 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -24,6 +24,7 @@ source "src/lib/common/Kconfig"
+ source "src/lib/coap/Kconfig"
+ source "src/lib/datatypes/Kconfig"
+ source "src/lib/flow/Kconfig"
++source "src/lib/io/Kconfig"
+ source "src/lib/parsers/Kconfig"
+ source "src/shared/Kconfig"
+ endmenu
+diff --git a/src/lib/io/Kconfig b/src/lib/io/Kconfig
+new file mode 100644
+index 00000000..ccd574e5
+--- /dev/null
++++ b/src/lib/io/Kconfig
+@@ -0,0 +1,3 @@
++config IO
++	bool
++	default y
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+new file mode 100644
+index 00000000..f0d0e744
+--- /dev/null
++++ b/src/lib/io/Makefile
+@@ -0,0 +1,24 @@
++obj-$(IO) += io.mod
++
++obj-io-$(IO) := \
++    sol-gpio-common.o \
++    sol-i2c-common.o \
++    sol-pwm-common.o \
++
++ifeq (y,$(PLATFORM_RIOTOS))
++obj-io-$(IO) += \
++    sol-gpio-riot.o \
++    sol-i2c-riot.o \
++    sol-pwm-riot.o \
++    sol-spi-riot.o \
++    sol-uart-riot.o
++endif
++
++ifeq (y,$(SOL_PLATFORM_LINUX))
++obj-io-$(IO) += \
++    sol-gpio-linux.o \
++    sol-i2c-linux.o \
++    sol-pwm-linux.o \
++    sol-spi-linux.o \
++    sol-uart-linux.o
++endif
+diff --git a/src/shared/sol-gpio.h b/src/lib/io/include/sol-gpio.h
+similarity index 94%
+rename from src/shared/sol-gpio.h
+rename to src/lib/io/include/sol-gpio.h
+index f7228a43..4a9e2c4b 100644
+--- a/src/shared/sol-gpio.h
++++ b/src/lib/io/include/sol-gpio.h
+@@ -33,7 +33,11 @@
+ #pragma once
+ 
+ #include <stdbool.h>
+-#include "sol-macros.h"
++#include <sol-macros.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ struct sol_gpio;
+ 
+@@ -57,6 +61,8 @@ enum sol_gpio_drive {
+ };
+ 
+ struct sol_gpio_config {
++#define SOL_GPIO_CONFIG_API_VERSION (1)
++    uint16_t api_version;
+     enum sol_gpio_direction dir;
+     bool active_low;
+     enum sol_gpio_drive drive_mode;
+@@ -79,3 +85,7 @@ void sol_gpio_close(struct sol_gpio *gpio);
+ 
+ bool sol_gpio_write(struct sol_gpio *gpio, bool value);
+ int sol_gpio_read(struct sol_gpio *gpio);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-i2c.h b/src/lib/io/include/sol-i2c.h
+similarity index 98%
+rename from src/shared/sol-i2c.h
+rename to src/lib/io/include/sol-i2c.h
+index 2ba9a541..c73846b4 100644
+--- a/src/shared/sol-i2c.h
++++ b/src/lib/io/include/sol-i2c.h
+@@ -36,7 +36,11 @@
+ #include <stdint.h>
+ #include <sys/types.h>
+ 
+-#include "sol-macros.h"
++#include <sol-macros.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ struct sol_i2c;
+ 
+@@ -240,3 +244,7 @@ bool sol_i2c_write_register(const struct sol_i2c *i2c, uint8_t reg, const uint8_
+  * @return @c true on succes, @c false otherwise
+  */
+ bool sol_i2c_read_register_multiple(const struct sol_i2c *i2c, uint8_t reg, uint8_t *values, uint8_t len, uint8_t times);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-pwm.h b/src/lib/io/include/sol-pwm.h
+similarity index 95%
+rename from src/shared/sol-pwm.h
+rename to src/lib/io/include/sol-pwm.h
+index 9f9d76e5..0250b352 100644
+--- a/src/shared/sol-pwm.h
++++ b/src/lib/io/include/sol-pwm.h
+@@ -35,6 +35,10 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ struct sol_pwm;
+ 
+ /* No API for this on Linux, so we simply ignore it there */
+@@ -51,6 +55,8 @@ enum sol_pwm_polarity {
+ };
+ 
+ struct sol_pwm_config {
++#define SOL_PWM_CONFIG_API_VERSION (1)
++    uint16_t api_version;
+     int32_t period_ns; /* if == -1, won't set */
+     int32_t duty_cycle_ns; /* if == -1, won't set, but if period is set, duty cycle is zeroed */
+     enum sol_pwm_alignment alignment;
+@@ -69,3 +75,7 @@ bool sol_pwm_set_period(struct sol_pwm *pwm, uint32_t period_ns);
+ int32_t sol_pwm_get_period(const struct sol_pwm *pwm);
+ bool sol_pwm_set_duty_cycle(struct sol_pwm *pwm, uint32_t duty_cycle_ns);
+ int32_t sol_pwm_get_duty_cycle(const struct sol_pwm *pwm);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-spi.h b/src/lib/io/include/sol-spi.h
+similarity index 97%
+rename from src/shared/sol-spi.h
+rename to src/lib/io/include/sol-spi.h
+index f31d8b7b..b941413c 100644
+--- a/src/shared/sol-spi.h
++++ b/src/lib/io/include/sol-spi.h
+@@ -35,6 +35,9 @@
+ #include <stdint.h>
+ #include <stdbool.h>
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
+ 
+ struct sol_spi;
+ 
+@@ -55,3 +58,7 @@ bool sol_spi_raw_transfer(const struct sol_spi *spi, void *tr, size_t count);
+ 
+ void sol_spi_close(struct sol_spi *spi);
+ struct sol_spi *sol_spi_open(unsigned int bus, unsigned int chip_select);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-uart.h b/src/lib/io/include/sol-uart.h
+similarity index 97%
+rename from src/shared/sol-uart.h
+rename to src/lib/io/include/sol-uart.h
+index 07193ef7..1dd7bd6c 100644
+--- a/src/shared/sol-uart.h
++++ b/src/lib/io/include/sol-uart.h
+@@ -35,6 +35,10 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ struct sol_uart;
+ 
+ struct sol_uart *sol_uart_open(const char *port_name);
+@@ -67,3 +71,7 @@ bool sol_uart_write(struct sol_uart *uart, const char *tx, unsigned int length,
+  */
+ bool sol_uart_set_rx_callback(struct sol_uart *uart, void (*rx_cb)(struct sol_uart *uart, char read_char, void *data), const void *data);
+ void sol_uart_del_rx_callback(struct sol_uart *uart);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/shared/sol-gpio-common.c b/src/lib/io/sol-gpio-common.c
+similarity index 98%
+rename from src/shared/sol-gpio-common.c
+rename to src/lib/io/sol-gpio-common.c
+index 9bb14f8a..bb4bc100 100644
+--- a/src/shared/sol-gpio-common.c
++++ b/src/lib/io/sol-gpio-common.c
+@@ -39,7 +39,7 @@ SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "gpio");
+ #include "sol-gpio.h"
+ #include "sol-pin-mux.h"
+ 
+-struct sol_gpio *
++SOL_API struct sol_gpio *
+ sol_gpio_open(int pin, const struct sol_gpio_config *config)
+ {
+     struct sol_gpio *gpio;
+diff --git a/src/shared/sol-gpio-linux.c b/src/lib/io/sol-gpio-linux.c
+similarity index 96%
+rename from src/shared/sol-gpio-linux.c
+rename to src/lib/io/sol-gpio-linux.c
+index 3456d1a5..eb410dc7 100644
+--- a/src/shared/sol-gpio-linux.c
++++ b/src/lib/io/sol-gpio-linux.c
+@@ -282,7 +282,7 @@ _gpio_config(struct sol_gpio *gpio, const struct sol_gpio_config *config)
+     return 0;
+ }
+ 
+-struct sol_gpio *
++SOL_API struct sol_gpio *
+ sol_gpio_open_raw(int pin, const struct sol_gpio_config *config)
+ {
+     struct sol_gpio *gpio;
+@@ -291,6 +291,13 @@ sol_gpio_open_raw(int pin, const struct sol_gpio_config *config)
+ 
+     SOL_LOG_INTERNAL_INIT_ONCE;
+ 
++    if (unlikely(config->api_version != SOL_GPIO_CONFIG_API_VERSION)) {
++        SOL_WRN("Couldn't open gpio that has unsupported version '%u', "
++                "expected version is '%u'",
++                config->api_version, SOL_GPIO_CONFIG_API_VERSION);
++        return NULL;
++    }
++
+     gpio = calloc(1, sizeof(*gpio));
+     if (!gpio) {
+         SOL_WRN("gpio #%d: could not allocate gpio context", pin);
+@@ -320,7 +327,7 @@ export_error:
+     return NULL;
+ }
+ 
+-void
++SOL_API void
+ sol_gpio_close(struct sol_gpio *gpio)
+ {
+     SOL_NULL_CHECK(gpio);
+@@ -338,7 +345,7 @@ sol_gpio_close(struct sol_gpio *gpio)
+     free(gpio);
+ }
+ 
+-bool
++SOL_API bool
+ sol_gpio_write(struct sol_gpio *gpio, bool val)
+ {
+     SOL_NULL_CHECK(gpio, false);
+@@ -346,7 +353,7 @@ sol_gpio_write(struct sol_gpio *gpio, bool val)
+     return fprintf(gpio->fp, "%d", val) > 0;
+ }
+ 
+-int
++SOL_API int
+ sol_gpio_read(struct sol_gpio *gpio)
+ {
+     int val;
+diff --git a/src/shared/sol-gpio-riot.c b/src/lib/io/sol-gpio-riot.c
+similarity index 92%
+rename from src/shared/sol-gpio-riot.c
+rename to src/lib/io/sol-gpio-riot.c
+index 1ed7ba67..59da0779 100644
+--- a/src/shared/sol-gpio-riot.c
++++ b/src/lib/io/sol-gpio-riot.c
+@@ -63,7 +63,7 @@ gpio_process_cb(void *data)
+     gpio->irq.cb((void *)gpio->irq.data, gpio);
+ }
+ 
+-struct sol_gpio *
++SOL_API struct sol_gpio *
+ sol_gpio_open_raw(int pin, const struct sol_gpio_config *config)
+ {
+     struct sol_gpio *gpio;
+@@ -76,6 +76,13 @@ sol_gpio_open_raw(int pin, const struct sol_gpio_config *config)
+ 
+     SOL_LOG_INTERNAL_INIT_ONCE;
+ 
++    if (unlikely(config->api_version != SOL_GPIO_CONFIG_API_VERSION)) {
++        SOL_WRN("Couldn't open gpio that has unsupported version '%u', "
++                "expected version is '%u'",
++                config->api_version, SOL_GPIO_CONFIG_API_VERSION);
++        return NULL;
++    }
++
+     gpio = malloc(sizeof(struct sol_gpio));
+     SOL_NULL_CHECK(gpio, NULL);
+ 
+@@ -118,7 +125,7 @@ error:
+     return NULL;
+ }
+ 
+-void
++SOL_API void
+ sol_gpio_close(struct sol_gpio *gpio)
+ {
+     SOL_NULL_CHECK(gpio);
+@@ -128,7 +135,7 @@ sol_gpio_close(struct sol_gpio *gpio)
+     free(gpio);
+ }
+ 
+-bool
++SOL_API bool
+ sol_gpio_write(struct sol_gpio *gpio, bool value)
+ {
+     SOL_NULL_CHECK(gpio, false);
+@@ -136,7 +143,7 @@ sol_gpio_write(struct sol_gpio *gpio, bool value)
+     return true;
+ }
+ 
+-int
++SOL_API int
+ sol_gpio_read(struct sol_gpio *gpio)
+ {
+     SOL_NULL_CHECK(gpio, -EINVAL);
+diff --git a/src/shared/sol-i2c-common.c b/src/lib/io/sol-i2c-common.c
+similarity index 98%
+rename from src/shared/sol-i2c-common.c
+rename to src/lib/io/sol-i2c-common.c
+index 3ce1e5e6..fea7968b 100644
+--- a/src/shared/sol-i2c-common.c
++++ b/src/lib/io/sol-i2c-common.c
+@@ -39,7 +39,7 @@ SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "i2c");
+ #include "sol-i2c.h"
+ #include "sol-pin-mux.h"
+ 
+-struct sol_i2c *
++SOL_API struct sol_i2c *
+ sol_i2c_open(uint8_t bus, enum sol_i2c_speed speed)
+ {
+     struct sol_i2c *i2c;
+diff --git a/src/shared/sol-i2c-linux.c b/src/lib/io/sol-i2c-linux.c
+similarity index 98%
+rename from src/shared/sol-i2c-linux.c
+rename to src/lib/io/sol-i2c-linux.c
+index dcc615d6..e35caa03 100644
+--- a/src/shared/sol-i2c-linux.c
++++ b/src/lib/io/sol-i2c-linux.c
+@@ -59,7 +59,7 @@ struct sol_i2c {
+     bool plain_i2c;
+ };
+ 
+-struct sol_i2c *
++SOL_API struct sol_i2c *
+ sol_i2c_open_raw(uint8_t bus, enum sol_i2c_speed speed)
+ {
+     int len, dev;
+@@ -105,7 +105,7 @@ open_error:
+     return NULL;
+ }
+ 
+-void
++SOL_API void
+ sol_i2c_close(struct sol_i2c *i2c)
+ {
+     SOL_NULL_CHECK(i2c);
+@@ -142,7 +142,7 @@ _i2c_smbus_ioctl(int dev, uint8_t rw, uint8_t command, size_t size, union i2c_sm
+     return 0;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_write_quick(const struct sol_i2c *i2c, bool rw)
+ {
+     struct i2c_smbus_ioctl_data ioctldata = {
+@@ -206,7 +206,7 @@ read_byte(const struct sol_i2c *i2c, uint8_t *byte)
+     return true;
+ }
+ 
+-ssize_t
++SOL_API ssize_t
+ sol_i2c_read(const struct sol_i2c *i2c, uint8_t *values, size_t count)
+ {
+     size_t i;
+@@ -225,7 +225,7 @@ sol_i2c_read(const struct sol_i2c *i2c, uint8_t *values, size_t count)
+     return i;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_write(const struct sol_i2c *i2c, uint8_t *values, size_t count)
+ {
+     size_t i;
+@@ -285,7 +285,7 @@ sol_i2c_plain_read_register(const struct sol_i2c *i2c,
+     return count;
+ }
+ 
+-ssize_t
++SOL_API ssize_t
+ sol_i2c_read_register(const struct sol_i2c *i2c, uint8_t command, uint8_t *values, size_t count)
+ {
+     union i2c_smbus_data data;
+@@ -322,7 +322,7 @@ sol_i2c_read_register(const struct sol_i2c *i2c, uint8_t command, uint8_t *value
+     return length;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_read_register_multiple(const struct sol_i2c *i2c,
+     uint8_t command,
+     uint8_t *values,
+@@ -413,7 +413,7 @@ sol_i2c_plain_write_register(const struct sol_i2c *i2c, uint8_t command, const u
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_write_register(const struct sol_i2c *i2c, uint8_t command, const uint8_t *values, size_t count)
+ {
+     int32_t error;
+@@ -449,7 +449,7 @@ sol_i2c_write_register(const struct sol_i2c *i2c, uint8_t command, const uint8_t
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_set_slave_address(struct sol_i2c *i2c, uint8_t slave_address)
+ {
+     SOL_NULL_CHECK(i2c, false);
+@@ -464,7 +464,7 @@ sol_i2c_set_slave_address(struct sol_i2c *i2c, uint8_t slave_address)
+     return true;
+ }
+ 
+-uint8_t
++SOL_API uint8_t
+ sol_i2c_get_slave_address(struct sol_i2c *i2c)
+ {
+     SOL_NULL_CHECK(i2c, 0);
+diff --git a/src/shared/sol-i2c-riot.c b/src/lib/io/sol-i2c-riot.c
+similarity index 96%
+rename from src/shared/sol-i2c-riot.c
+rename to src/lib/io/sol-i2c-riot.c
+index 732964b3..86de0b67 100644
+--- a/src/shared/sol-i2c-riot.c
++++ b/src/lib/io/sol-i2c-riot.c
+@@ -64,7 +64,7 @@ sol_speed_to_riot_speed(enum sol_i2c_speed speed)
+     return table[speed];
+ }
+ 
+-struct sol_i2c *
++SOL_API struct sol_i2c *
+ sol_i2c_open_raw(uint8_t bus, enum sol_i2c_speed speed)
+ {
+     struct sol_i2c *i2c;
+@@ -86,7 +86,7 @@ sol_i2c_open_raw(uint8_t bus, enum sol_i2c_speed speed)
+     return i2c;
+ }
+ 
+-void
++SOL_API void
+ sol_i2c_close(struct sol_i2c *i2c)
+ {
+     SOL_NULL_CHECK(i2c);
+@@ -96,14 +96,14 @@ sol_i2c_close(struct sol_i2c *i2c)
+     free(i2c);
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_write_quick(const struct sol_i2c *i2c, bool rw)
+ {
+     SOL_CRI("Unsupported");
+     return false;
+ }
+ 
+-ssize_t
++SOL_API ssize_t
+ sol_i2c_read(const struct sol_i2c *i2c, uint8_t *data, size_t count)
+ {
+     ssize_t ret;
+@@ -116,7 +116,7 @@ sol_i2c_read(const struct sol_i2c *i2c, uint8_t *data, size_t count)
+     return ret;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_write(const struct sol_i2c *i2c, uint8_t *data, size_t count)
+ {
+     int write;
+@@ -131,7 +131,7 @@ sol_i2c_write(const struct sol_i2c *i2c, uint8_t *data, size_t count)
+     return false;
+ }
+ 
+-ssize_t
++SOL_API ssize_t
+ sol_i2c_read_register(const struct sol_i2c *i2c, uint8_t reg, uint8_t *data, size_t count)
+ {
+     ssize_t ret;
+@@ -144,7 +144,7 @@ sol_i2c_read_register(const struct sol_i2c *i2c, uint8_t reg, uint8_t *data, siz
+     return ret;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_read_register_multiple(const struct sol_i2c *i2c,
+     uint8_t command,
+     uint8_t *values,
+@@ -155,7 +155,7 @@ sol_i2c_read_register_multiple(const struct sol_i2c *i2c,
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_write_register(const struct sol_i2c *i2c, uint8_t reg, const uint8_t *data, size_t count)
+ {
+     int write;
+@@ -170,7 +170,7 @@ sol_i2c_write_register(const struct sol_i2c *i2c, uint8_t reg, const uint8_t *da
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_i2c_set_slave_address(struct sol_i2c *i2c, uint8_t slave_address)
+ {
+     SOL_NULL_CHECK(i2c, false);
+@@ -178,7 +178,7 @@ sol_i2c_set_slave_address(struct sol_i2c *i2c, uint8_t slave_address)
+     return true;
+ }
+ 
+-uint8_t
++SOL_API uint8_t
+ sol_i2c_get_slave_address(struct sol_i2c *i2c)
+ {
+     SOL_NULL_CHECK(i2c, false);
+diff --git a/src/shared/sol-pwm-common.c b/src/lib/io/sol-pwm-common.c
+similarity index 98%
+rename from src/shared/sol-pwm-common.c
+rename to src/lib/io/sol-pwm-common.c
+index c867dd7f..a15fecbf 100644
+--- a/src/shared/sol-pwm-common.c
++++ b/src/lib/io/sol-pwm-common.c
+@@ -39,7 +39,7 @@ SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "pwm");
+ #include "sol-pwm.h"
+ #include "sol-pin-mux.h"
+ 
+-struct sol_pwm *
++SOL_API struct sol_pwm *
+ sol_pwm_open(int device, int channel, const struct sol_pwm_config *config)
+ {
+     struct sol_pwm *pwm;
+diff --git a/src/shared/sol-pwm-linux.c b/src/lib/io/sol-pwm-linux.c
+similarity index 96%
+rename from src/shared/sol-pwm-linux.c
+rename to src/lib/io/sol-pwm-linux.c
+index 5f0a0323..43381e2b 100644
+--- a/src/shared/sol-pwm-linux.c
++++ b/src/lib/io/sol-pwm-linux.c
+@@ -248,7 +248,7 @@ _pwm_config(struct sol_pwm *pwm, const struct sol_pwm_config *config)
+     return 0;
+ }
+ 
+-struct sol_pwm *
++SOL_API struct sol_pwm *
+ sol_pwm_open_raw(int device, int channel, const struct sol_pwm_config *config)
+ {
+     char path[PATH_MAX];
+@@ -257,6 +257,13 @@ sol_pwm_open_raw(int device, int channel, const struct sol_pwm_config *config)
+ 
+     SOL_LOG_INTERNAL_INIT_ONCE;
+ 
++    if (unlikely(config->api_version != SOL_PWM_CONFIG_API_VERSION)) {
++        SOL_WRN("Couldn't open pwm that has unsupported version '%u', "
++                "expected version is '%u'",
++                config->api_version, SOL_PWM_CONFIG_API_VERSION);
++        return NULL;
++    }
++
+     pwm = calloc(1, sizeof(*pwm));
+     if (!pwm) {
+         SOL_WRN("pwm #%d,%d: could not allocate pwm context", device, channel);
+@@ -295,7 +302,7 @@ open_error:
+     return NULL;
+ }
+ 
+-void
++SOL_API void
+ sol_pwm_close(struct sol_pwm *pwm)
+ {
+     SOL_NULL_CHECK(pwm);
+@@ -315,7 +322,7 @@ sol_pwm_close(struct sol_pwm *pwm)
+     free(pwm);
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_set_enabled(struct sol_pwm *pwm, bool enable)
+ {
+     SOL_NULL_CHECK(pwm, false);
+@@ -328,7 +335,7 @@ sol_pwm_set_enabled(struct sol_pwm *pwm, bool enable)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_get_enabled(const struct sol_pwm *pwm)
+ {
+     int value;
+@@ -343,7 +350,7 @@ sol_pwm_get_enabled(const struct sol_pwm *pwm)
+     return value;
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_set_period(struct sol_pwm *pwm, uint32_t period_ns)
+ {
+     SOL_NULL_CHECK(pwm, false);
+@@ -360,7 +367,7 @@ sol_pwm_set_period(struct sol_pwm *pwm, uint32_t period_ns)
+     return true;
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_pwm_get_period(const struct sol_pwm *pwm)
+ {
+     int value, r;
+@@ -382,7 +389,7 @@ sol_pwm_get_period(const struct sol_pwm *pwm)
+     return value;
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_set_duty_cycle(struct sol_pwm *pwm, uint32_t duty_cycle_ns)
+ {
+     SOL_NULL_CHECK(pwm, false);
+@@ -395,7 +402,7 @@ sol_pwm_set_duty_cycle(struct sol_pwm *pwm, uint32_t duty_cycle_ns)
+     return true;
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_pwm_get_duty_cycle(const struct sol_pwm *pwm)
+ {
+     int value;
+diff --git a/src/shared/sol-pwm-riot.c b/src/lib/io/sol-pwm-riot.c
+similarity index 90%
+rename from src/shared/sol-pwm-riot.c
+rename to src/lib/io/sol-pwm-riot.c
+index 0a702016..5be81659 100644
+--- a/src/shared/sol-pwm-riot.c
++++ b/src/lib/io/sol-pwm-riot.c
+@@ -55,13 +55,20 @@ struct sol_pwm {
+     bool enable;
+ };
+ 
+-struct sol_pwm *
++SOL_API struct sol_pwm *
+ sol_pwm_open_raw(int device, int channel, const struct sol_pwm_config *config)
+ {
+     struct sol_pwm *pwm;
+ 
+     SOL_LOG_INTERNAL_INIT_ONCE;
+ 
++    if (unlikely(config->api_version != SOL_PWM_CONFIG_API_VERSION)) {
++        SOL_WRN("Couldn't open pwm that has unsupported version '%u', "
++                "expected version is '%u'",
++                config->api_version, SOL_PWM_CONFIG_API_VERSION);
++        return NULL;
++    }
++
+     pwm = calloc(1, sizeof(struct sol_pwm));
+     SOL_NULL_CHECK(pwm, NULL);
+ 
+@@ -79,7 +86,7 @@ sol_pwm_open_raw(int device, int channel, const struct sol_pwm_config *config)
+     return pwm;
+ }
+ 
+-void
++SOL_API void
+ sol_pwm_close(struct sol_pwm *pwm)
+ {
+     sol_pwm_set_duty_cycle(pwm, 0);
+@@ -89,7 +96,7 @@ sol_pwm_close(struct sol_pwm *pwm)
+     free(pwm);
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_set_enabled(struct sol_pwm *pwm, bool enable)
+ {
+     SOL_NULL_CHECK(pwm, false);
+@@ -103,14 +110,14 @@ sol_pwm_set_enabled(struct sol_pwm *pwm, bool enable)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_get_enabled(const struct sol_pwm *pwm)
+ {
+     SOL_NULL_CHECK(pwm, false);
+     return pwm->enable;
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_set_period(struct sol_pwm *pwm, uint32_t period_ns)
+ {
+     SOL_NULL_CHECK(pwm, false);
+@@ -119,14 +126,14 @@ sol_pwm_set_period(struct sol_pwm *pwm, uint32_t period_ns)
+     return pwm_init(pwm->dev, pwm->phase, NSEC_PER_SEC / pwm->period, RESOLUTION) == 0;
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_pwm_get_period(const struct sol_pwm *pwm)
+ {
+     SOL_NULL_CHECK(pwm, -EINVAL);
+     return (int32_t)pwm->period;
+ }
+ 
+-bool
++SOL_API bool
+ sol_pwm_set_duty_cycle(struct sol_pwm *pwm, uint32_t duty_cycle_ns)
+ {
+     double value;
+@@ -140,7 +147,7 @@ sol_pwm_set_duty_cycle(struct sol_pwm *pwm, uint32_t duty_cycle_ns)
+     return pwm_set(pwm->dev, pwm->channel, value) == 0;
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_pwm_get_duty_cycle(const struct sol_pwm *pwm)
+ {
+     SOL_NULL_CHECK(pwm, -EINVAL);
+diff --git a/src/shared/sol-spi-linux.c b/src/lib/io/sol-spi-linux.c
+similarity index 97%
+rename from src/shared/sol-spi-linux.c
+rename to src/lib/io/sol-spi-linux.c
+index c07feaf4..c13c9453 100644
+--- a/src/shared/sol-spi-linux.c
++++ b/src/lib/io/sol-spi-linux.c
+@@ -56,7 +56,7 @@ struct sol_spi {
+     unsigned int chip_select;
+ };
+ 
+-int32_t
++SOL_API int32_t
+ sol_spi_get_transfer_mode(const struct sol_spi *spi)
+ {
+     uint32_t mode;
+@@ -71,7 +71,7 @@ sol_spi_get_transfer_mode(const struct sol_spi *spi)
+     return mode;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_transfer_mode(struct sol_spi *spi, uint32_t mode)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -84,7 +84,7 @@ sol_spi_set_transfer_mode(struct sol_spi *spi, uint32_t mode)
+     return true;
+ }
+ 
+-int8_t
++SOL_API int8_t
+ sol_spi_get_bit_justification(const struct sol_spi *spi)
+ {
+     uint8_t justification;
+@@ -99,7 +99,7 @@ sol_spi_get_bit_justification(const struct sol_spi *spi)
+     return justification;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_bit_justification(struct sol_spi *spi, uint8_t justification)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -112,7 +112,7 @@ sol_spi_set_bit_justification(struct sol_spi *spi, uint8_t justification)
+     return true;
+ }
+ 
+-int8_t
++SOL_API int8_t
+ sol_spi_get_bits_per_word(const struct sol_spi *spi)
+ {
+     uint8_t bits_per_word;
+@@ -127,7 +127,7 @@ sol_spi_get_bits_per_word(const struct sol_spi *spi)
+     return bits_per_word;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_bits_per_word(struct sol_spi *spi, uint8_t bits_per_word)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -140,7 +140,7 @@ sol_spi_set_bits_per_word(struct sol_spi *spi, uint8_t bits_per_word)
+     return true;
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_spi_get_max_speed(const struct sol_spi *spi)
+ {
+     uint32_t speed;
+@@ -155,7 +155,7 @@ sol_spi_get_max_speed(const struct sol_spi *spi)
+     return speed;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_max_speed(struct sol_spi *spi, uint32_t speed)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -168,7 +168,7 @@ sol_spi_set_max_speed(struct sol_spi *spi, uint32_t speed)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_transfer(const struct sol_spi *spi, uint8_t *tx, uint8_t *rx, size_t size)
+ {
+     struct spi_ioc_transfer tr = { (uintptr_t)tx, (uintptr_t)rx, size };
+@@ -184,7 +184,7 @@ sol_spi_transfer(const struct sol_spi *spi, uint8_t *tx, uint8_t *rx, size_t siz
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_raw_transfer(const struct sol_spi *spi, void *tr, size_t count)
+ {
+     struct spi_ioc_transfer *_tr = (struct spi_ioc_transfer *)tr;
+@@ -201,7 +201,7 @@ sol_spi_raw_transfer(const struct sol_spi *spi, void *tr, size_t count)
+     return true;
+ }
+ 
+-void
++SOL_API void
+ sol_spi_close(struct sol_spi *spi)
+ {
+     SOL_NULL_CHECK(spi);
+@@ -211,7 +211,7 @@ sol_spi_close(struct sol_spi *spi)
+     free(spi);
+ }
+ 
+-struct sol_spi *
++SOL_API struct sol_spi *
+ sol_spi_open(unsigned int bus, unsigned int chip_select)
+ {
+     struct sol_spi *spi;
+diff --git a/src/shared/sol-spi-riot.c b/src/lib/io/sol-spi-riot.c
+similarity index 96%
+rename from src/shared/sol-spi-riot.c
+rename to src/lib/io/sol-spi-riot.c
+index 2a1416fa..c653b722 100644
+--- a/src/shared/sol-spi-riot.c
++++ b/src/lib/io/sol-spi-riot.c
+@@ -63,7 +63,7 @@ spi_init(struct sol_spi *spi)
+     return retval == 0;
+ }
+ 
+-struct sol_spi *
++SOL_API struct sol_spi *
+ sol_spi_open(unsigned int bus, unsigned int chip_select)
+ {
+     struct sol_spi *spi;
+@@ -84,7 +84,7 @@ sol_spi_open(unsigned int bus, unsigned int chip_select)
+     return spi;
+ }
+ 
+-void
++SOL_API void
+ sol_spi_close(struct sol_spi *spi)
+ {
+     SOL_NULL_CHECK(spi);
+@@ -92,14 +92,14 @@ sol_spi_close(struct sol_spi *spi)
+     free(spi);
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_spi_get_transfer_mode(const struct sol_spi *spi)
+ {
+     SOL_NULL_CHECK(spi, -EINVAL);
+     return spi->mode;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_transfer_mode(struct sol_spi *spi, uint32_t mode)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -108,25 +108,25 @@ sol_spi_set_transfer_mode(struct sol_spi *spi, uint32_t mode)
+     return spi_init(spi);
+ }
+ 
+-int8_t
++SOL_API int8_t
+ sol_spi_get_bit_justification(const struct sol_spi *spi)
+ {
+     return 0;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_bit_justification(struct sol_spi *spi, uint8_t justification)
+ {
+     return false;
+ }
+ 
+-int8_t
++SOL_API int8_t
+ sol_spi_get_bits_per_word(const struct sol_spi *spi)
+ {
+     return 8;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_bits_per_word(struct sol_spi *spi, uint8_t bits_per_word)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -151,7 +151,7 @@ riot_speed_to_hz(spi_speed_t speed)
+     return table[speed];
+ }
+ 
+-int32_t
++SOL_API int32_t
+ sol_spi_get_max_speed(const struct sol_spi *spi)
+ {
+     SOL_NULL_CHECK(spi, 0);
+@@ -172,7 +172,7 @@ hz_to_riot_speed(uint32_t speed)
+     return SPI_SPEED_100KHZ;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_set_max_speed(struct sol_spi *spi, uint32_t speed)
+ {
+     SOL_NULL_CHECK(spi, false);
+@@ -180,7 +180,7 @@ sol_spi_set_max_speed(struct sol_spi *spi, uint32_t speed)
+     return spi_init(spi);
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_transfer(const struct sol_spi *spi, uint8_t *tx, uint8_t *rx, size_t count)
+ {
+     int ret;
+@@ -196,7 +196,7 @@ sol_spi_transfer(const struct sol_spi *spi, uint8_t *tx, uint8_t *rx, size_t cou
+     return ret > 0 && ((unsigned int)ret) == count;
+ }
+ 
+-bool
++SOL_API bool
+ sol_spi_raw_transfer(const struct sol_spi *spi, void *tr, size_t count)
+ {
+     SOL_CRI("Unsupported");
+diff --git a/src/shared/sol-uart-linux.c b/src/lib/io/sol-uart-linux.c
+similarity index 98%
+rename from src/shared/sol-uart-linux.c
+rename to src/lib/io/sol-uart-linux.c
+index 62af5157..eb40a484 100644
+--- a/src/shared/sol-uart-linux.c
++++ b/src/lib/io/sol-uart-linux.c
+@@ -72,7 +72,7 @@ struct uart_write_data {
+     void *user_data;
+ };
+ 
+-struct sol_uart *
++SOL_API struct sol_uart *
+ sol_uart_open(const char *port_name)
+ {
+     struct sol_uart *uart;
+@@ -127,7 +127,7 @@ clean_tx_queue(struct sol_uart *uart, int error_code)
+     sol_vector_clear(&uart->async.tx_queue);
+ }
+ 
+-void
++SOL_API void
+ sol_uart_close(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart);
+@@ -168,7 +168,7 @@ uint_to_speed(uint32_t baud_rate)
+     }
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_baud_rate(struct sol_uart *uart, uint32_t baud_rate)
+ {
+     struct termios tty;
+@@ -224,7 +224,7 @@ speed_to_uint(speed_t baud_rate)
+     }
+ }
+ 
+-uint32_t
++SOL_API uint32_t
+ sol_uart_get_baud_rate(const struct sol_uart *uart)
+ {
+     struct termios tty;
+@@ -239,7 +239,7 @@ sol_uart_get_baud_rate(const struct sol_uart *uart)
+     return speed_to_uint(cfgetospeed(&tty));
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_parity_bit(struct sol_uart *uart, bool enable, bool odd_paraty)
+ {
+     struct termios tty;
+@@ -276,21 +276,21 @@ uart_get_control_flags(struct sol_uart *uart)
+     return tty.c_cflag;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_get_parity_bit_enable(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return uart_get_control_flags(uart) & PARENB;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_get_parity_bit_odd(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return uart_get_control_flags(uart) & PARODD;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_data_bits_length(struct sol_uart *uart, uint8_t length)
+ {
+     struct termios tty;
+@@ -329,7 +329,7 @@ sol_uart_set_data_bits_length(struct sol_uart *uart, uint8_t length)
+     return true;
+ }
+ 
+-uint8_t
++SOL_API uint8_t
+ sol_uart_get_data_bits_length(struct sol_uart *uart)
+ {
+     uint32_t reg_length_value;
+@@ -351,7 +351,7 @@ sol_uart_get_data_bits_length(struct sol_uart *uart)
+     }
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_stop_bits_length(struct sol_uart *uart, bool two_bits)
+ {
+     struct termios tty;
+@@ -373,14 +373,14 @@ sol_uart_set_stop_bits_length(struct sol_uart *uart, bool two_bits)
+     return true;
+ }
+ 
+-uint8_t
++SOL_API uint8_t
+ sol_uart_get_stop_bits_length(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return uart_get_control_flags(uart) & CSTOPB ? 2 : 1;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_flow_control(struct sol_uart *uart, bool enable)
+ {
+     struct termios tty;
+@@ -404,7 +404,7 @@ sol_uart_set_flow_control(struct sol_uart *uart, bool enable)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_get_flow_control(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+@@ -455,7 +455,7 @@ error:
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_write(struct sol_uart *uart, const char *tx, unsigned int length, void (*tx_cb)(struct sol_uart *uart, int status, void *data), const void *data)
+ {
+     struct uart_write_data *write_data;
+@@ -509,7 +509,7 @@ uart_rx_callback(void *data, int fd, unsigned int active_flags)
+     return true;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_rx_callback(struct sol_uart *uart, void (*rx_cb)(struct sol_uart *uart, char read_char, void *data), const void *data)
+ {
+     SOL_NULL_CHECK(uart, false);
+@@ -524,7 +524,7 @@ sol_uart_set_rx_callback(struct sol_uart *uart, void (*rx_cb)(struct sol_uart *u
+     return true;
+ }
+ 
+-void
++SOL_API void
+ sol_uart_del_rx_callback(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart);
+diff --git a/src/shared/sol-uart-riot.c b/src/lib/io/sol-uart-riot.c
+similarity index 97%
+rename from src/shared/sol-uart-riot.c
+rename to src/lib/io/sol-uart-riot.c
+index 51a8b249..2441c171 100644
+--- a/src/shared/sol-uart-riot.c
++++ b/src/lib/io/sol-uart-riot.c
+@@ -131,7 +131,7 @@ uart_setup(struct sol_uart *uart)
+         uart, &uart->async.handler) == 0;
+ }
+ 
+-struct sol_uart *
++SOL_API struct sol_uart *
+ sol_uart_open(const char *port_name)
+ {
+     struct sol_uart *uart;
+@@ -150,7 +150,7 @@ sol_uart_open(const char *port_name)
+     return uart;
+ }
+ 
+-void
++SOL_API void
+ sol_uart_close(struct sol_uart *uart)
+ {
+     struct uart_write_data *write_data;
+@@ -170,7 +170,7 @@ sol_uart_close(struct sol_uart *uart)
+     free(uart);
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_baud_rate(struct sol_uart *uart, uint32_t baud_rate)
+ {
+     SOL_NULL_CHECK(uart, false);
+@@ -178,21 +178,21 @@ sol_uart_set_baud_rate(struct sol_uart *uart, uint32_t baud_rate)
+     return uart_setup(uart);
+ }
+ 
+-uint32_t
++SOL_API uint32_t
+ sol_uart_get_baud_rate(const struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, 0);
+     return uart->baud_rate;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_parity_bit(struct sol_uart *uart, bool enable, bool odd_paraty)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return !enable;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_get_parity_bit_enable(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+@@ -200,56 +200,56 @@ sol_uart_get_parity_bit_enable(struct sol_uart *uart)
+ }
+ 
+ 
+-bool
++SOL_API bool
+ sol_uart_get_parity_bit_odd(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_data_bits_length(struct sol_uart *uart, uint8_t length)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return length == 8;
+ }
+ 
+-uint8_t
++SOL_API uint8_t
+ sol_uart_get_data_bits_length(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, 0);
+     return 8;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_stop_bits_length(struct sol_uart *uart, bool two_bits)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return !two_bits;
+ }
+ 
+-uint8_t
++SOL_API uint8_t
+ sol_uart_get_stop_bits_length(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, 0);
+     return 1;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_flow_control(struct sol_uart *uart, bool enable)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return !enable;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_get_flow_control(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart, false);
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_write(struct sol_uart *uart, const char *tx, unsigned int length, void (*tx_cb)(struct sol_uart *uart, int status, void *data), const void *data)
+ {
+     struct uart_write_data *write_data;
+@@ -279,7 +279,7 @@ malloc_buffer_fail:
+     return false;
+ }
+ 
+-bool
++SOL_API bool
+ sol_uart_set_rx_callback(struct sol_uart *uart, void (*rx_cb)(struct sol_uart *uart, char read_char, void *data), const void *data)
+ {
+     SOL_NULL_CHECK(uart, false);
+@@ -290,7 +290,7 @@ sol_uart_set_rx_callback(struct sol_uart *uart, void (*rx_cb)(struct sol_uart *u
+     return true;
+ }
+ 
+-void
++SOL_API void
+ sol_uart_del_rx_callback(struct sol_uart *uart)
+ {
+     SOL_NULL_CHECK(uart);
+diff --git a/src/shared/Makefile b/src/shared/Makefile
+index 002555cf..00f0279e 100644
+--- a/src/shared/Makefile
++++ b/src/shared/Makefile
+@@ -5,10 +5,7 @@ obj-libshared-$(INTERNAL_SHARED) := \
+     sol-fbp-graph.o \
+     sol-fbp-internal-log.o \
+     sol-fbp-internal-scanner.o \
+-    sol-gpio-common.o \
+-    sol-i2c-common.o \
+     sol-monitors.o \
+-    sol-pwm-common.o \
+     sol-util.o
+ 
+ ifeq (y,$(RESOLVER_CONFFILE))
+@@ -25,21 +22,11 @@ endif
+ 
+ ifeq (y,$(PLATFORM_RIOTOS))
+ obj-libshared-m += \
+-    sol-gpio-riot.o \
+-    sol-i2c-riot.o \
+-    sol-network-riot.o \
+-    sol-pwm-riot.o \
+-    sol-spi-riot.o \
+-    sol-uart-riot.o
++    sol-network-riot.o
+ endif
+ 
+ ifeq (y,$(SOL_PLATFORM_LINUX))
+ obj-libshared-m += \
+     sol-file-reader.o \
+-    sol-gpio-linux.o \
+-    sol-i2c-linux.o \
+-    sol-network-linux.o \
+-    sol-pwm-linux.o \
+-    sol-spi-linux.o \
+-    sol-uart-linux.o
++    sol-network-linux.o
+ endif
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 3c7b5c44..772fa0a9 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -279,6 +279,15 @@ LIB_DATATYPES_HEADERS := \
+ 
+ EXTRA_HEADERS += $(addprefix $(top_srcdir)src/lib/datatypes/include/, $(LIB_DATATYPES_HEADERS))
+ 
++LIB_IO_HEADERS := \
++    sol-gpio.h \
++    sol-i2c.h \
++    sol-pwm.h \
++    sol-spi.h \
++    sol-uart.h
++
++EXTRA_HEADERS += $(addprefix $(top_srcdir)src/lib/io/include/, $(LIB_IO_HEADERS))
++
+ LIB_PARSERS_HEADERS := \
+     sol-json.h
+ 

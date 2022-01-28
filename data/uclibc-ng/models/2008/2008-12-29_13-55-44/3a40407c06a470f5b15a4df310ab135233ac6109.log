@@ -1,0 +1,305 @@
+"2008-12-29 13:55:44 +0000"
+diff --git a/Makefile.in b/Makefile.in
+index e80b149b4..e56f5c724 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -306,6 +306,7 @@ endif
+ ifneq ($(UCLIBC_SUSV3_LEGACY),y)
+ 	# Remove timeb.h since the LEGACY ftime() was disabled upon request
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/timeb.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/ucontext.h
+ endif
+ ifneq ($(UCLIBC_HAS_EPOLL),y)
+ 	# Remove epoll.h since epoll_*() were disabled upon request
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index c163d57ed..ca716e106 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -511,10 +511,22 @@ config COMPAT_ATEXIT
+ config UCLIBC_SUSV3_LEGACY
+ 	bool "Enable SuSv3 LEGACY functions"
+ 	default n
++	#vfork,
++	# h_errno
++	# gethostbyaddr
++	# gethostbyname
+ 	help
+ 	  Enable this option if you want to have SuSv3 LEGACY functions
+ 	  in the library, else they are replaced by SuSv3 proposed macros.
+-	  Currently applies to bcopy/bzero/bcmp/index/rindex/ftime.
++	  Currently applies to:
++
++	  bcmp, bcopy, bzero, index, rindex, ftime,
++	  bsd_signal, (ecvt), (fcvt), gcvt, (getcontext),
++	  (getwd), (makecontext),
++	  mktemp, (pthread_attr_getstackaddr), (pthread_attr_setstackaddr),
++	  scalb, (setcontext), (swapcontext), ualarm, usleep,
++	  wcswcs.
++
+ 	  WARNING! ABI incompatibility.
+ 
+ config UCLIBC_SUSV3_LEGACY_MACROS
+@@ -525,6 +537,27 @@ config UCLIBC_SUSV3_LEGACY_MACROS
+ 	  Currently applies to bcopy/bzero/bcmp/index/rindex et al.
+ 	  WARNING! ABI incompatibility.
+ 
++config UCLIBC_SUSV4_LEGACY
++	bool "Enable SuSv4 LEGACY or obsolescent functions"
++	default n
++	help
++	  Enable this option if you want to have SuSv4 LEGACY functions
++	  and macros in the library.
++	  Currently applies to:
++
++	  - XSI functions:
++	    _longjmp, _setjmp, _tolower, _toupper, ftw, getitimer,
++	    gettimeofday, isascii, pthread_getconcurrency,
++	    pthread_setconcurrency, setitimer, setpgrp, sighold,
++	    sigignore, sigpause, sigrelse, sigset, siginterrupt,
++	    tempnam, toascii, ulimit.
++
++	  - Base functions:
++	    asctime, asctime_r, ctime, ctime_r, gets, rand_r,
++	    tmpnam, utime.
++
++	  WARNING! ABI incompatibility.
++
+ config UCLIBC_HAS_STUBS
+ 	bool "Provide stubs for unavailable functionality"
+ 	default n
+diff --git a/include/signal.h b/include/signal.h
+index b42800f51..d10463068 100644
+--- a/include/signal.h
++++ b/include/signal.h
+@@ -128,7 +128,7 @@ extern __sighandler_t __REDIRECT_NTH (signal,
+ #endif
+ __END_NAMESPACE_STD
+ 
+-#ifdef __USE_XOPEN
++#if defined __USE_XOPEN && defined __UCLIBC_SUSV3_LEGACY__
+ /* The X/Open definition of `signal' conflicts with the BSD version.
+    So they defined another function `bsd_signal'.  */
+ extern __sighandler_t bsd_signal (int __sig, __sighandler_t __handler)
+diff --git a/include/stdlib.h b/include/stdlib.h
+index 87b284639..124dc7329 100644
+--- a/include/stdlib.h
++++ b/include/stdlib.h
+@@ -598,11 +598,13 @@ extern int clearenv (void) __THROW;
+ 
+ 
+ #if defined __USE_MISC || defined __USE_XOPEN_EXTENDED
++# if defined __UCLIBC_SUSV3_LEGACY__
+ /* Generate a unique temporary file name from TEMPLATE.
+    The last six characters of TEMPLATE must be "XXXXXX";
+    they are replaced with a string that makes the file name unique.
+    Returns TEMPLATE, or a null pointer if it cannot get a unique file name.  */
+ extern char *mktemp (char *__template) __THROW __nonnull ((1)) __wur;
++# endif
+ 
+ /* Generate a unique temporary file name from TEMPLATE.
+    The last six characters of TEMPLATE must be "XXXXXX";
+diff --git a/include/tgmath.h b/include/tgmath.h
+index 685a34588..b3a546d17 100644
+--- a/include/tgmath.h
++++ b/include/tgmath.h
+@@ -376,6 +376,7 @@
+ /* Return the remainder of integer divison X / Y with infinite precision.  */
+ #define remainder(Val1, Val2) __TGMATH_BINARY_REAL_ONLY (Val1, Val2, remainder)
+ 
++#if defined __UCLIBC_SUSV3_LEGACY__
+ /* Return X times (2 to the Nth power).  */
+ #if defined __USE_MISC || defined __USE_XOPEN_EXTENDED
+ # define scalb(Val1, Val2) __TGMATH_BINARY_REAL_ONLY (Val1, Val2, scalb)
+@@ -387,6 +388,7 @@
+ /* Return X times (2 to the Nth power).  */
+ #define scalbln(Val1, Val2) \
+      __TGMATH_BINARY_FIRST_REAL_ONLY (Val1, Val2, scalbln)
++#endif /* UCLIBC_SUSV3_LEGACY */
+ 
+ /* Return the binary exponent of X, which must be nonzero.  */
+ #define ilogb(Val) __TGMATH_UNARY_REAL_ONLY (Val, ilogb)
+diff --git a/include/unistd.h b/include/unistd.h
+index d028fbd5c..613fc9d8f 100644
+--- a/include/unistd.h
++++ b/include/unistd.h
+@@ -410,7 +410,8 @@ libc_hidden_proto(alarm)
+ extern unsigned int sleep (unsigned int __seconds);
+ libc_hidden_proto(sleep)
+ 
+-#if defined __USE_BSD || defined __USE_XOPEN_EXTENDED
++#if (defined __USE_BSD || defined __USE_XOPEN_EXTENDED) \
++	&& defined __UCLIBC_SUSV3_LEGACY__
+ /* Set an alarm to go off (generating a SIGALRM signal) in VALUE
+    microseconds.  If INTERVAL is nonzero, when the alarm goes off, the
+    timer is reset to go off every INTERVAL microseconds thereafter.
+diff --git a/include/wchar.h b/include/wchar.h
+index 5bf49b662..3795998a5 100644
+--- a/include/wchar.h
++++ b/include/wchar.h
+@@ -275,7 +275,7 @@ extern size_t wcslen (__const wchar_t *__s) __THROW __attribute_pure__;
+ libc_hidden_proto(wcslen)
+ __END_NAMESPACE_C99
+ 
+-#ifdef __USE_XOPEN
++#if defined __USE_XOPEN && defined __UCLIBC_SUSV3_LEGACY__
+ /* Another name for `wcsstr' from XPG4.  */
+ extern wchar_t *wcswcs (__const wchar_t *__haystack, __const wchar_t *__needle)
+      __THROW __attribute_pure__;
+diff --git a/libc/misc/ctype/Makefile.in b/libc/misc/ctype/Makefile.in
+index 29b63f3d1..3f307f093 100644
+--- a/libc/misc/ctype/Makefile.in
++++ b/libc/misc/ctype/Makefile.in
+@@ -7,11 +7,13 @@
+ 
+ # multi source ctype.c
+ COM_SRC := \
+-	isalnum.c isalpha.c isascii.c iscntrl.c isdigit.c \
++	isalnum.c isalpha.c iscntrl.c isdigit.c \
+ 	isgraph.c islower.c isprint.c ispunct.c isspace.c \
+-	isupper.c isxdigit.c toascii.c tolower.c toupper.c \
++	isupper.c isxdigit.c tolower.c toupper.c \
+ 	isblank.c
+-
++ifeq ($(UCLIBC_SUSV4_LEGACY),y)
++COM_SRC += isascii.c toascii.c
++endif
+ CSRC := $(COM_SRC)
+ 
+ ifeq ($(UCLIBC_HAS_CTYPE_TABLES),y)
+diff --git a/libc/signal/Makefile.in b/libc/signal/Makefile.in
+index e930d7ef6..8e904535a 100644
+--- a/libc/signal/Makefile.in
++++ b/libc/signal/Makefile.in
+@@ -7,7 +7,7 @@
+ 
+ CSRC :=	allocrtsig.c killpg.c raise.c sigaction.c sigaddset.c sigandset.c \
+ 	sigblock.c sigdelset.c sigempty.c sigfillset.c siggetmask.c \
+-	sigintr.c sigisempty.c sigismem.c sigjmp.c signal.c \
++	sigisempty.c sigismem.c sigjmp.c signal.c \
+ 	sigorset.c sigpause.c sigsetmask.c sigsetops.c sigwait.c
+ ifeq ($(UCLIBC_HAS_OBSOLETE_BSD_SIGNAL),y)
+ CSRC += sighold.c sigignore.c sigrelse.c sigset.c
+@@ -15,6 +15,9 @@ endif
+ ifeq ($(UCLIBC_HAS_OBSOLETE_SYSV_SIGNAL),y)
+ CSRC += sysv_signal.c
+ endif
++ifeq ($(UCLIBC_SUSV4_LEGACY),y)
++CSRC += sigintr.c
++endif
+ 
+ ifneq ($(strip $(ARCH_OBJS)),)
+ CSRC := $(filter-out $(notdir $(ARCH_OBJS:.o=.c)),$(CSRC))
+diff --git a/libc/signal/signal.c b/libc/signal/signal.c
+index f3dfa33fc..644617c15 100644
+--- a/libc/signal/signal.c
++++ b/libc/signal/signal.c
+@@ -22,15 +22,12 @@
+ #include <signal.h>
+ #include <string.h>	/* For the real memset prototype.  */
+ 
+-/* libc_hidden_proto(sigaction) */
+-
+ sigset_t _sigintr attribute_hidden;		/* Set by siginterrupt.  */
+ 
+ /* Set the handler for the signal SIG to HANDLER,
+    returning the old handler, or SIG_ERR on error.  */
+-extern __typeof(bsd_signal) __bsd_signal;
+-attribute_hidden __sighandler_t
+-__bsd_signal (int sig, __sighandler_t handler)
++__sighandler_t
++signal (int sig, __sighandler_t handler)
+ {
+   struct sigaction act, oact;
+ 
+@@ -51,7 +48,7 @@ __bsd_signal (int sig, __sighandler_t handler)
+ 
+   return oact.sa_handler;
+ }
+-strong_alias(__bsd_signal,bsd_signal)
+-/* libc_hidden_proto(signal) */
+-strong_alias(__bsd_signal,signal)
+ libc_hidden_def(signal)
++#ifdef __UCLIBC_SUSV3_LEGACY__
++strong_alias(signal,bsd_signal)
++#endif
+diff --git a/libc/stdlib/Makefile.in b/libc/stdlib/Makefile.in
+index 75c613c79..d12156876 100644
+--- a/libc/stdlib/Makefile.in
++++ b/libc/stdlib/Makefile.in
+@@ -10,7 +10,7 @@ include $(top_srcdir)libc/stdlib/malloc-simple/Makefile.in
+ include $(top_srcdir)libc/stdlib/malloc-standard/Makefile.in
+ 
+ CSRC := \
+-	abort.c getenv.c mkdtemp.c mktemp.c realpath.c mkstemp.c \
++	abort.c getenv.c mkdtemp.c realpath.c mkstemp.c \
+ 	rand.c random.c random_r.c setenv.c system.c div.c ldiv.c lldiv.c \
+ 	getpt.c drand48-iter.c jrand48.c \
+ 	jrand48_r.c lrand48.c lrand48_r.c mrand48.c mrand48_r.c nrand48.c \
+@@ -31,7 +31,7 @@ endif
+ ifeq ($(UCLIBC_HAS_FLOATS),y)
+ CSRC += drand48.c drand48_r.c erand48.c erand48_r.c
+ ifeq ($(UCLIBC_SUSV3_LEGACY),y)
+-CSRC += gcvt.c
++CSRC += gcvt.c mktemp.c
+ endif
+ endif
+ 
+diff --git a/libc/string/strstr.c b/libc/string/strstr.c
+index 05712e62b..11417fb78 100644
+--- a/libc/string/strstr.c
++++ b/libc/string/strstr.c
+@@ -39,6 +39,6 @@ Wchar *Wstrstr(const Wchar *s1, const Wchar *s2)
+ }
+ #ifndef WANT_WIDE
+ libc_hidden_def(strstr)
+-#else
++#elif defined __UCLIBC_SUSV3_LEGACY__
+ strong_alias(wcsstr,wcswcs)
+ #endif
+diff --git a/libc/sysdeps/linux/common/bits/mathcalls.h b/libc/sysdeps/linux/common/bits/mathcalls.h
+index 9241dd26d..1f2894fa5 100644
+--- a/libc/sysdeps/linux/common/bits/mathcalls.h
++++ b/libc/sysdeps/linux/common/bits/mathcalls.h
+@@ -358,7 +358,8 @@ __MATHCALLI (fma,, (_Mdouble_ __x, _Mdouble_ __y, _Mdouble_ __z));
+ __END_NAMESPACE_C99
+ #endif
+ 
+-#if defined __USE_MISC || defined __USE_XOPEN_EXTENDED
++#if (defined __USE_MISC || defined __USE_XOPEN_EXTENDED) \
++	&& defined __UCLIBC_SUSV3_LEGACY__
+ /* Return X times (2 to the Nth power).  */
+ __MATHCALL (scalb,, (_Mdouble_ __x, _Mdouble_ __n));
+ #endif
+diff --git a/libc/unistd/Makefile.in b/libc/unistd/Makefile.in
+index b447a85e1..f6ef98cf0 100644
+--- a/libc/unistd/Makefile.in
++++ b/libc/unistd/Makefile.in
+@@ -33,6 +33,10 @@ else
+ CSRC := $(filter-out getsubopt.c,$(CSRC))
+ endif
+ 
++ifneq ($(UCLIBC_SUSV3_LEGACY),y)
++CSRC := $(filter-out ualarm.c usleep.c,$(CSRC))
++endif
++
+ ifeq ($(UCLIBC_HAS_THREADS_NATIVE),y)
+ CSRC := $(filter-out sleep.c,$(CSRC))
+ endif
+diff --git a/libm/e_scalb.c b/libm/e_scalb.c
+index db3639683..ff0c77523 100644
+--- a/libm/e_scalb.c
++++ b/libm/e_scalb.c
+@@ -41,6 +41,7 @@ double attribute_hidden __ieee754_scalb(double x, double fn)
+ #endif
+ }
+ 
++#if defined __UCLIBC_SUSV3_LEGACY__
+ /*
+  * wrapper scalb(double x, double fn) is provide for
+  * passing various standard test suite. One
+@@ -69,3 +70,5 @@ double scalb(double x, double fn)
+ #else
+ strong_alias(__ieee754_scalb, scalb)
+ #endif
++
++#endif /* UCLIBC_SUSV3_LEGACY */

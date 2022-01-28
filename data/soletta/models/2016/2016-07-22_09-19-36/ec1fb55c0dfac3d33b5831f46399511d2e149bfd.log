@@ -1,0 +1,815 @@
+"2016-07-22 09:19:36 +0800"
+diff --git a/Kconfig b/Kconfig
+index 1e551384..40376fe1 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -223,6 +223,7 @@ source "src/samples/flow/mqtt/Kconfig"
+ source "src/samples/flow/oic-and-http-light/Kconfig"
+ source "src/samples/flow/oic/Kconfig"
+ source "src/samples/flow/oic/light-scan/Kconfig"
++source "src/samples/flow/netctl/Kconfig"
+ source "src/samples/flow/power-supply/Kconfig"
+ source "src/samples/flow/semaphore-monitor/Kconfig"
+ source "src/samples/flow/trash-disposer/Kconfig"
+diff --git a/src/lib/comms/include/sol-netctl.h b/src/lib/comms/include/sol-netctl.h
+index b0c66b9b..9d722bb6 100644
+--- a/src/lib/comms/include/sol-netctl.h
++++ b/src/lib/comms/include/sol-netctl.h
+@@ -522,8 +522,35 @@ const char *sol_netctl_service_state_to_str(enum sol_netctl_service_state state)
+     ;
+ 
+ /**
+- * @}
++ * @brief get so_netctl_service structure from serivce name.
++ *
++ * This function return sol_netctl_service structure by a string service name.
++ *
++ * @see sol_netctl_find_service_by_name.
++ *
++ * @param service_name Pointer to service name
++ *
++ * @return data structure of the sol_netctl_service.
+  */
++static inline struct sol_netctl_service *
++sol_netctl_find_service_by_name(const char *service_name)
++{
++    const struct sol_ptr_vector *service_list;
++    struct sol_netctl_service *service;
++    const char *name;
++    uint16_t i;
++
++    service_list = sol_netctl_get_services();
++    if (!service_list)
++        return NULL;
++
++    SOL_PTR_VECTOR_FOREACH_IDX (service_list, service, i) {
++        name = sol_netctl_service_get_name(service);
++        if (name && strcmp(name, service_name) == 0)
++            return service;
++    }
++    return NULL;
++}
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index 4799e59b..4f7c6c7c 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -81,6 +81,7 @@ source "src/modules/flow/magnetometer/Kconfig"
+ source "src/modules/flow/max31855/Kconfig"
+ source "src/modules/flow/mqtt/Kconfig"
+ source "src/modules/flow/network/Kconfig"
++source "src/modules/flow/netctl/Kconfig"
+ source "src/modules/flow/oauth/Kconfig"
+ source "src/modules/flow/oic/Kconfig"
+ source "src/modules/flow/persistence/Kconfig"
+diff --git a/src/modules/flow/netctl/Kconfig b/src/modules/flow/netctl/Kconfig
+new file mode 100644
+index 00000000..5763f49a
+--- /dev/null
++++ b/src/modules/flow/netctl/Kconfig
+@@ -0,0 +1,6 @@
++config FLOW_NODE_TYPE_NETCTL
++	tristate "Node type: netctl"
++	depends on NETCTL
++	default m
++	help
++		Network control is used to control the system network status. On Linux it will communicate with ConnMan via DBus
+diff --git a/src/modules/flow/netctl/Makefile b/src/modules/flow/netctl/Makefile
+new file mode 100644
+index 00000000..9904e12f
+--- /dev/null
++++ b/src/modules/flow/netctl/Makefile
+@@ -0,0 +1,9 @@
++obj-$(FLOW_NODE_TYPE_NETCTL) += \
++        netctl.mod
++
++obj-netctl-$(FLOW_NODE_TYPE_NETCTL) := \
++	netctl.json \
++	netctl.o
++
++obj-netctl-$(FLOW_NODE_TYPE_NETCTL)-type := flow
++
+diff --git a/src/modules/flow/netctl/netctl.c b/src/modules/flow/netctl/netctl.c
+new file mode 100644
+index 00000000..e9adb9fb
+--- /dev/null
++++ b/src/modules/flow/netctl/netctl.c
+@@ -0,0 +1,376 @@
++/*
++ * This file is part of the Soletta (TM) Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include "sol-flow/netctl.h"
++#include "sol-flow-internal.h"
++
++#include <sol-netctl.h>
++#include <sol-str-table.h>
++#include <sol-util-internal.h>
++#include <errno.h>
++
++struct network_service_data {
++    char *service_name;
++    enum sol_netctl_service_state state;
++    enum pending_service_operation {
++        NONE, CONNECT, DISCONNECT,
++    } pending;
++};
++
++void
++service_list_cb(void *data, const struct sol_netctl_service *service)
++{
++    struct sol_flow_node *node = data;
++    const char *name;
++    int r;
++
++    name = sol_netctl_service_get_name(service);
++
++    if (sol_netctl_service_get_state(service) ==
++        SOL_NETCTL_SERVICE_STATE_REMOVE) {
++        r = sol_flow_send_string_packet(node,
++            SOL_FLOW_NODE_TYPE_NETCTL_LIST_SERVICES__OUT__REMOVED,
++            name);
++        if (r < 0)
++            SOL_WRN("Failed to send removed service name: %s", name);
++        return;
++    }
++
++    r = sol_flow_send_string_packet(node,
++        SOL_FLOW_NODE_TYPE_NETCTL_LIST_SERVICES__OUT__ADDED,
++        name);
++    if (r < 0)
++        SOL_WRN("Failed to send added service name: %s", name);
++}
++
++static int
++open_list_services(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    const struct sol_ptr_vector *service_list;
++    struct sol_netctl_service *service;
++    int r;
++    uint16_t i;
++
++    r = sol_netctl_add_service_monitor(service_list_cb, node);
++    SOL_INT_CHECK(r, < 0, r);
++
++    service_list = sol_netctl_get_services();
++    if (!service_list)
++        return NULL;
++
++    SOL_PTR_VECTOR_FOREACH_IDX (service_list, service, i) {
++        enum sol_netctl_service_state state = sol_netctl_service_get_state(service);
++        const char *name;
++
++        if (state == SOL_NETCTL_SERVICE_STATE_UNKNOWN ||
++            state == SOL_NETCTL_SERVICE_STATE_REMOVE)
++            continue;
++
++        name = sol_netctl_service_get_name(service);
++        r = sol_flow_send_string_packet(node,
++            SOL_FLOW_NODE_TYPE_NETCTL_LIST_SERVICES__OUT__ADDED,
++            name);
++        if (r < 0)
++            SOL_WRN("Failed to send added service name: %s", name);
++    }
++
++    return 0;
++}
++
++static void
++close_list_services(struct sol_flow_node *node, void *data)
++{
++    if (sol_netctl_del_service_monitor(service_list_cb, node))
++        SOL_WRN("Could not delete service monitor !");
++}
++
++void
++service_status_cb(void *data, const struct sol_netctl_service *service)
++{
++    struct sol_flow_node *node = data;
++    struct network_service_data *mdata = sol_flow_node_get_private_data(node);
++    enum sol_netctl_service_state current_state;
++    const char *name;
++    int r;
++
++    name = sol_netctl_service_get_name(service);
++
++    if (!name || strcmp(name, mdata->service_name))
++        return;
++
++    current_state = sol_netctl_service_get_state(service);
++    if (current_state == mdata->state)
++        return;
++
++    r = sol_flow_send_string_packet(node,
++        SOL_FLOW_NODE_TYPE_NETCTL_SERVICE__OUT__OUT,
++        sol_netctl_service_state_to_str(current_state));
++    SOL_INT_CHECK_GOTO(r, < 0, error);
++
++    if (mdata->state == SOL_NETCTL_SERVICE_STATE_ONLINE) {
++        r = sol_flow_send_bool_packet(node,
++            SOL_FLOW_NODE_TYPE_NETCTL_SERVICE__OUT__ONLINE,
++            false);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++    }
++
++    if (current_state == SOL_NETCTL_SERVICE_STATE_ONLINE) {
++        r = sol_flow_send_bool_packet(node,
++            SOL_FLOW_NODE_TYPE_NETCTL_SERVICE__OUT__ONLINE,
++            true);
++        SOL_INT_CHECK_GOTO(r, < 0, error);
++    }
++
++    mdata->state = current_state;
++
++    return;
++
++error:
++    mdata->state = current_state;
++
++    SOL_WRN("service %s failed to send online state", name);
++}
++
++void
++error_cb(void *data, const struct sol_netctl_service *service,
++    unsigned int error)
++{
++    struct sol_flow_node *node = data;
++    struct network_service_data *mdata = sol_flow_node_get_private_data(node);
++    const char *name;
++
++    name = sol_netctl_service_get_name(service);
++
++    if (!name || strcmp(name, mdata->service_name))
++        return;
++
++    sol_flow_send_error_packet(node, error, "Service %s error is: %s",
++        name, sol_util_strerrora(error));
++}
++
++static int
++connect_service_name(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct network_service_data *mdata = data;
++    struct sol_netctl_service *service;
++    int r;
++
++    service = sol_netctl_find_service_by_name(mdata->service_name);
++
++    if (!service)
++        mdata->pending = CONNECT;
++    else {
++        r = sol_netctl_service_connect(service);
++        if (r < 0)
++            sol_flow_send_error_packet(node, -r, "Could not connect to service: %s: %s",
++                mdata->service_name, sol_util_strerrora(-r));
++
++        mdata->pending = NONE;
++    }
++
++    return 0;
++}
++
++static int
++disconnect_service_name(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct network_service_data *mdata = data;
++    struct sol_netctl_service *service;
++    int r;
++
++    service = sol_netctl_find_service_by_name(mdata->service_name);
++
++    if (!service)
++        mdata->pending = DISCONNECT;
++    else {
++        r = sol_netctl_service_disconnect(service);
++        if (r < 0)
++            sol_flow_send_error_packet(node, -r, "Could not disconnect to service: %s: %s",
++                mdata->service_name, sol_util_strerrora(-r));
++
++        mdata->pending = NONE;
++    }
++
++    return 0;
++}
++
++static int
++state_dispatch(struct sol_flow_node *node, struct network_service_data *mdata)
++{
++    struct sol_netctl_service *service;
++    int r;
++
++    service = sol_netctl_find_service_by_name(mdata->service_name);
++    if (!service) {
++        sol_flow_send_error_packet(node, ENOENT, "Did not found service name %s", mdata->service_name);
++        return 0;
++    }
++    r = sol_flow_send_string_packet(node,
++        SOL_FLOW_NODE_TYPE_NETCTL_SERVICE__OUT__OUT,
++        sol_netctl_service_state_to_str(mdata->state));
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_flow_send_bool_packet(node,
++        SOL_FLOW_NODE_TYPE_NETCTL_SERVICE__OUT__ONLINE,
++        mdata->state == SOL_NETCTL_SERVICE_STATE_ONLINE ? true : false);
++
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++static int
++get_service_state(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct network_service_data *mdata = data;
++
++    return state_dispatch(node, mdata);
++}
++
++static int
++set_service_name(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct network_service_data *mdata = data;
++    struct sol_netctl_service *service;
++    const char *in_value;
++    int r;
++
++    r = sol_flow_packet_get_string(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_util_replace_str_if_changed(&mdata->service_name, in_value);
++    SOL_NULL_CHECK(mdata->service_name, r);
++
++    if (mdata->pending == NONE)
++        goto done;
++
++    service = sol_netctl_find_service_by_name(mdata->service_name);
++    if (!service)
++        goto done;
++
++    if (mdata->pending == CONNECT)
++        r = sol_netctl_service_connect(service);
++    else
++        r = sol_netctl_service_disconnect(service);
++
++    if (r < 0)
++        sol_flow_send_error_packet(node, -r, "Could not handle pending connection to service: %s: %s",
++            mdata->service_name, sol_util_strerrora(-r));
++
++    mdata->pending == NONE;
++
++done:
++    return state_dispatch(node, mdata);
++}
++
++static int
++open_network_service(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    struct network_service_data *mdata = data;
++    const struct sol_flow_node_type_netctl_service_options *opts;
++    int r;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
++        SOL_FLOW_NODE_TYPE_NETCTL_SERVICE_OPTIONS_API_VERSION,
++        -EINVAL);
++    opts = (const struct sol_flow_node_type_netctl_service_options *)
++        options;
++
++    if (opts->name) {
++        mdata->service_name = strdup(opts->name);
++        SOL_NULL_CHECK(mdata->service_name, -ENOMEM);
++    }
++
++    mdata->state = SOL_NETCTL_SERVICE_STATE_UNKNOWN;
++    mdata->pending = NONE;
++
++    r = sol_netctl_add_service_monitor(service_status_cb, node);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_netctl_add_error_monitor(error_cb, node);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return state_dispatch(node, mdata);
++}
++
++static void
++close_network_service(struct sol_flow_node *node, void *data)
++{
++    struct network_service_data *mdata = data;
++
++    free(mdata->service_name);
++
++    if (sol_netctl_del_service_monitor(service_status_cb, node))
++        SOL_WRN("Could not delete service monitor !");
++
++    if (sol_netctl_del_error_monitor(error_cb, node))
++        SOL_WRN("Could not delete error monitor !");
++}
++
++void
++manager_cb(void *data)
++{
++    struct sol_flow_node *node = data;
++    bool offline;
++    int r;
++
++    offline = sol_netctl_get_radios_offline();
++
++    r = sol_flow_send_bool_packet(node,
++        SOL_FLOW_NODE_TYPE_NETCTL_RADIO_OFFLINE__OUT__OUT,
++        offline);
++    if (r < 0)
++        SOL_WRN("Failed to send radio offline status !");
++}
++
++static int
++enable_process(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    bool value;
++    int r;
++
++    r = sol_flow_packet_get_bool(packet, &value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = sol_netctl_set_radios_offline(value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++static int
++open_network_radio(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    int r;
++
++    r = sol_netctl_add_manager_monitor(manager_cb, node);
++    SOL_INT_CHECK(r, < 0, r);
++
++    manager_cb(node);
++
++    return 0;
++}
++
++static void
++close_network_radio(struct sol_flow_node *node, void *data)
++{
++    if (sol_netctl_del_manager_monitor(manager_cb, node))
++        SOL_WRN("Could not delete manager monitor !");
++}
++
++#include "netctl-gen.c"
+diff --git a/src/modules/flow/netctl/netctl.json b/src/modules/flow/netctl/netctl.json
+new file mode 100644
+index 00000000..293f205d
+--- /dev/null
++++ b/src/modules/flow/netctl/netctl.json
+@@ -0,0 +1,125 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "netctl",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "Apache-2.0",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "netctl",
++      "description": "Send list of all network services attached to board.",
++      "methods": {
++        "open": "open_list_services",
++        "close": "close_list_services"
++      },
++      "name": "netctl/list-services",
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "Send service names that are new.",
++          "name": "ADDED"
++        },
++        {
++          "data_type": "string",
++          "description": "Send service names that are removed.",
++          "name": "REMOVED"
++        }
++      ]
++    },
++    {
++      "category": "netctl",
++      "description": "Connect or disconnect to one available network access point.",
++      "in_ports": [
++        {
++          "data_type": "any",
++          "description": "Trigger to emit an output packet with current state",
++          "methods": {
++            "process": "get_service_state"
++          },
++          "name": "TRIGGER"
++        },
++        {
++          "data_type": "any",
++          "description": "Trigger to connect to network service.",
++          "methods": {
++            "process": "connect_service_name"
++          },
++          "name": "CONNECT"
++        },
++        {
++          "data_type": "any",
++          "description": "Trigger to disconnect to network service.",
++          "methods": {
++            "process": "disconnect_service_name"
++          },
++          "name": "DISCONNECT"
++        },
++        {
++          "data_type": "string",
++          "description": "set network service name to use.",
++          "methods": {
++            "process": "set_service_name"
++          },
++          "name": "NAME"
++        }
++      ],
++      "methods": {
++        "open": "open_network_service",
++        "close": "close_network_service"
++      },
++      "name": "netctl/service",
++      "options": {
++        "members": [
++          {
++            "data_type": "string",
++            "default": null,
++            "description": "Refer to netctl/list-services on how to get the service name",
++            "name": "name"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "Output network services connection status.",
++          "name": "OUT"
++        },
++        {
++          "data_type": "boolean",
++          "description": "Emits true if the device has a verified connection to the internet, false otherwise.",
++          "name": "ONLINE"
++        }
++      ],
++      "private_data_type": "network_service_data"
++    },
++    {
++      "category": "netctl",
++      "description": "Sets the global connection state to offline",
++      "in_ports": [
++        {
++          "data_type": "boolean",
++          "description": "turn on or off the radios",
++          "methods": {
++            "process": "enable_process"
++          },
++          "name": "ENABLED"
++        }
++      ],
++      "methods": {
++        "open": "open_network_radio",
++        "close": "close_network_radio"
++      },
++      "name": "netctl/radio-offline",
++      "out_ports": [
++        {
++          "data_type": "boolean",
++          "description": "the actual state of the radios. If true, radios are online",
++          "name": "OUT"
++        }
++      ]
++    }
++  ]
++}
+diff --git a/src/samples/flow/netctl/Kconfig b/src/samples/flow/netctl/Kconfig
+new file mode 100644
+index 00000000..f0b843c1
+--- /dev/null
++++ b/src/samples/flow/netctl/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_NETCTL_SAMPLE
++	bool
++	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_NETCTL && FLOW_NODE_TYPE_CONSOLE && FLOW_NODE_TYPE_CONSTANT && FLOW_NODE_TYPE_APP && FLOW_NODE_TYPE_CONVERTER && FLOW_NODE_TYPE_TIMER
++	default y
+diff --git a/src/samples/flow/netctl/Makefile b/src/samples/flow/netctl/Makefile
+new file mode 100644
+index 00000000..74729db5
+--- /dev/null
++++ b/src/samples/flow/netctl/Makefile
+@@ -0,0 +1,25 @@
++sample-$(FLOW_NETCTL_SAMPLE) += \
++	list-network-services \
++	network-connect \
++	network-disconnect \
++	network-radios
++
++sample-$(FLOW_NETCTL_SAMPLE)-deps := \
++	flow/netctl.mod
++# list
++
++sample-list-network-services-$(FLOW_NETCTL_SAMPLE) := \
++	list-network-services.fbp
++
++#connection
++
++sample-network-connect-$(FLOW_NETCTL_SAMPLE) := \
++	network-connect.fbp
++
++sample-network-disconnect-$(FLOW_NETCTL_SAMPLE) := \
++	network-disconnect.fbp
++
++#radios
++
++sample-network-radios-$(FLOW_NETCTL_SAMPLE) := \
++	network-radios.fbp
+diff --git a/src/samples/flow/netctl/list-network-services.fbp b/src/samples/flow/netctl/list-network-services.fbp
+new file mode 100755
+index 00000000..d9b8b95c
+--- /dev/null
++++ b/src/samples/flow/netctl/list-network-services.fbp
+@@ -0,0 +1,29 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# This program will print to console a list of all network services
++#
++# Examples:
++#  * list all network services
++#    $ ./list_network_services.fbp
++
++list(netctl/list-services)
++list ADDED -> IN _(console:prefix="Added: ")
++list REMOVED -> IN _(console:prefix="Removed: ")
++
++
+diff --git a/src/samples/flow/netctl/network-connect.fbp b/src/samples/flow/netctl/network-connect.fbp
+new file mode 100755
+index 00000000..06e3c9d9
+--- /dev/null
++++ b/src/samples/flow/netctl/network-connect.fbp
+@@ -0,0 +1,40 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# This program will print to console a list of all network services
++#
++# Examples:
++#  * connect or disconnect network services
++#    $ ./network-connect.fbp Guest
++
++name(app/argv:index=1)
++error-msg(converter/empty-to-string:output_value="Network service name is mandatory")
++Error(console)
++quit(app/quit)
++service(netctl/service)
++tick(constant/empty)
++btoe(converter/boolean-to-empty)
++etoi(converter/empty-to-int:output_value=0)
++
++name ERROR -> IN error-msg OUT -> IN Error
++service ERROR -> ERROR quit
++
++name OUT -> NAME service
++tick OUT -> CONNECT service OUT -> IN _(console:prefix="state: ")
++tick OUT -> TRIGGER service ONLINE -> PULSE_IF_TRUE btoe OUT -> IN etoi OUT -> CODE quit
++
+diff --git a/src/samples/flow/netctl/network-disconnect.fbp b/src/samples/flow/netctl/network-disconnect.fbp
+new file mode 100755
+index 00000000..8205db10
+--- /dev/null
++++ b/src/samples/flow/netctl/network-disconnect.fbp
+@@ -0,0 +1,41 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# This program will print to console a list of all network services
++#
++# Examples:
++#  * connect or disconnect network services
++#    $ ./network-disconnect.fbp Guest
++
++name(app/argv:index=1)
++error-msg(converter/empty-to-string:output_value="Network service name is mandatory")
++Error(console)
++quit(app/quit)
++service(netctl/service)
++tick(constant/empty)
++btoe(converter/boolean-to-empty)
++etoi(converter/empty-to-int:output_value=0)
++
++name ERROR -> IN error-msg OUT -> IN Error
++service ERROR -> ERROR quit
++
++name OUT -> NAME service
++tick OUT -> DISCONNECT service OUT -> IN _(console:prefix="state: ")
++tick OUT -> TRIGGER service ONLINE -> PULSE_IF_FALSE btoe OUT -> IN etoi OUT -> CODE quit
++
++
+diff --git a/src/samples/flow/netctl/network-radios.fbp b/src/samples/flow/netctl/network-radios.fbp
+new file mode 100755
+index 00000000..68222f39
+--- /dev/null
++++ b/src/samples/flow/netctl/network-radios.fbp
+@@ -0,0 +1,34 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# This program will print to console a list of all network services
++#
++# Examples:
++#  * turn on or off network connection
++#    $ ./network-radios.fbp true
++
++enable(app/argv:index=1)
++error-msg(converter/empty-to-string:output_value="input true/false is mandatory")
++Error(console)
++quit(app/quit)
++radio(netctl/radio-offline)
++stob(converter/string-to-boolean)
++
++enable ERROR -> IN error-msg OUT -> IN Error
++radio ERROR -> ERROR quit
++enable OUT -> IN stob OUT -> ENABLED radio OUT -> IN _(console:prefix="state: ")

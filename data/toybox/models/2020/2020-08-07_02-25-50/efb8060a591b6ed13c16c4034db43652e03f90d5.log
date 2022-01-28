@@ -1,0 +1,134 @@
+"2020-08-07 02:25:50 -0500"
+diff --git a/Config.in b/Config.in
+index 362b22f3..aced2ab9 100644
+--- a/Config.in
++++ b/Config.in
+@@ -13,19 +13,16 @@ config TOYBOX
+ 	bool
+ 	default y
+ 	help
+-	  usage: toybox [--long | --help | --version | [command] [arguments...]]
++	  usage: toybox [--long | --help | --version | [COMMAND] [ARGUMENTS...]]
+ 
+-	  With no arguments, shows available commands. First argument is
+-	  name of a command to run, followed by any arguments to that command.
++	  Toybox multicall binary: https://landley.net/toybox/about.html
+ 
+-	  --long	Show path to each command
++	  With no arguments, "toybox" shows available COMMAND names. Add --long
++	  to include suggested install path for each command, see
++	  https://landley.net/toybox/faq.html#install for details.
+ 
+-	  To install command symlinks with paths, try:
+-	    for i in $(/bin/toybox --long); do ln -s /bin/toybox $i; done
+-	  or all in one directory:
+-	    for i in $(./toybox); do ln -s toybox $i; done; PATH=$PWD:$PATH
+-
+-	  Most toybox commands also understand the following arguments:
++	  First argument is name of a COMMAND to run, followed by any ARGUMENTS
++	  to that command. Most toybox commands also understand:
+ 
+ 	  --help		Show command help (only)
+ 	  --version	Show toybox version (only)
+diff --git a/Makefile b/Makefile
+index ede910cb..4da90ded 100644
+--- a/Makefile
++++ b/Makefile
+@@ -13,13 +13,11 @@ all: toybox
+ 
+ KCONFIG_CONFIG ?= .config
+ 
+-toybox_stuff: $(KCONFIG_CONFIG) *.[ch] lib/*.[ch] toys/*/*.c scripts/*.sh
+-
+-toybox generated/unstripped/toybox: toybox_stuff
++toybox generated/unstripped/toybox: $(KCONFIG_CONFIG) *.[ch] lib/*.[ch] toys/*/*.c scripts/*.sh Config.in
+ 	scripts/make.sh
+ 
+ .PHONY: clean distclean baseline bloatcheck install install_flat \
+-	uinstall uninstall_flat tests help toybox_stuff change \
++	uinstall uninstall_flat tests help change \
+ 	list list_working list_pending root run_root
+ 
+ include kconfig/Makefile
+diff --git a/main.c b/main.c
+index dbb84cf4..ffa735e3 100644
+--- a/main.c
++++ b/main.c
+@@ -64,7 +64,7 @@ static void unknown(char *name)
+ {
+   toys.exitval = 127;
+   toys.which = toy_list;
+-  error_exit("Unknown command %s", name);
++  help_exit("Unknown command %s", name);
+ }
+ 
+ // Setup toybox global state for this command.
+@@ -193,7 +193,7 @@ void toybox_main(void)
+   // For early error reporting
+   toys.which = toy_list;
+ 
+-  if (toys.argv[1] && toys.argv[1][0] != '-') unknown(toys.argv[1]);
++  if (toys.argv[1] && strcmp(toys.argv[1], "--long")) unknown(toys.argv[1]);
+ 
+   // Output list of command.
+   for (i = 1; i<ARRAY_LEN(toy_list); i++) {
+diff --git a/scripts/make.sh b/scripts/make.sh
+index e4333ba2..5b2d5d81 100755
+--- a/scripts/make.sh
++++ b/scripts/make.sh
+@@ -47,7 +47,7 @@ echo "Generate headers from toys/*/*.c..."
+ 
+ mkdir -p generated/unstripped
+ 
+-if isnewer generated/Config.in toys
++if isnewer generated/Config.in toys || isnewer generated/Config.in Config.in
+ then
+   echo "Extract configuration information from toys/*.c files..."
+   scripts/genconfig.sh
+diff --git a/www/faq.html b/www/faq.html
+index ffc90d86..3072b80e 100755
+--- a/www/faq.html
++++ b/www/faq.html
+@@ -17,6 +17,7 @@
+ 
+ <ul>
+ <!-- get binaries -->
++<li><h2><a href="#install">How do I install toybox?</h2></li>
+ <li><h2><a href="#cross">How do I cross compile toybox?</h2></li>
+ <li><h2><a href="#system">Where does toybox fit into the Linux/Android
+ ecosystem?<br />
+@@ -237,6 +238,34 @@ instead of the toybox version (in theory they should work the same),
+ and VERBOSE=1 to see diffs of the expected and actual output when a
+ test fails (VERBOSE=fail to stop at the first such failure)</p>
+ 
++<a name="install" />
++<h2>Q: How do I install toybox?</h2>
++
++<p>A:
++Multicall binaries like toybox behave differently based on the filename
++used to call them, so if you "mv toybox ls; ./ls" it acts like ls. Creating
++symlinks or hardlinks and adding them to the $PATH lets you run the
++commands normally by name.</p>
++
++<p>If you already have a <a href=https://landley.net/toybox/downloads/binaries/>toybox binary</a>
++you can install a tree of command symlinks living in
++<a href=http://git.musl-libc.org/cgit/musl/tree/include/paths.h>the
++standard path</a>
++locations (<b>export PATH=/bin:/usr/bin:/sbin:/usr/sbin</b>) by doing:</p>
++
++<blockquote><p><b>for i in $(/bin/toybox --long); do ln -s /bin/toybox $i; done</b></p></blockquote>
++
++<p>or you can install all the symlinks in the same directory as the toybox binary
++(<b>export PATH="$PWD:$PATH"</b>) via:</p>
++
++<blockquote><p><b>for i in $(./toybox); do ln -s toybox $i; done</b></p></blockquote></p>
++
++<p>When building from source, use the "<b>make install</b>" and
++"<b>make install_flat</b>"
++targets with an appropriate <b>PREFIX=/path/to/new/directory</b> either
++exported or on the make command line
++(as mentioned in "<b>make help</b>" output).</p>
++
+ <a name="cross" />
+ <h2>Q: How do I cross compile toybox?</h2>
+ 

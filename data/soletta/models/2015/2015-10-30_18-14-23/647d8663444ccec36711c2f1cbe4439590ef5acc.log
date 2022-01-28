@@ -1,0 +1,267 @@
+"2015-10-30 18:14:23 -0200"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 9d6173d2..b677a59a 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -240,11 +240,15 @@ config MAINLOOP_CONTIKI
+ endchoice
+ 
+ config PTHREAD
+-	bool "POSIX threads (pthread)"
+-	depends on HAVE_PTHREAD_H && LINUX
++	bool
++
++config THREADS
++	bool "Thread safety"
++	depends on (HAVE_PTHREAD_H && LINUX) || RIOT
++	select PTHREAD if LINUX
+ 	default y
+ 	help
+-            Allow usage of POSIX threads (pthreads) in Soletta applications.
++            Allow usage of threads in Soletta applications.
+ 
+             While Soletta doesn't use threads extensively, it needs to
+             be aware that threads would be used to make some
+@@ -273,7 +277,7 @@ config PTHREAD
+ 
+ config WORKER_THREAD
+     bool "Worker thread support"
+-    depends on FEATURE_WORKER_THREADS && (!LINUX || (LINUX && PTHREAD))
++    depends on FEATURE_WORKER_THREADS && THREADS
+     default y
+     help
+             Enable support for worker threads.
+diff --git a/src/lib/common/sol-log-impl-riot.c b/src/lib/common/sol-log-impl-riot.c
+index 840f4886..a2ec7650 100644
+--- a/src/lib/common/sol-log-impl-riot.c
++++ b/src/lib/common/sol-log-impl-riot.c
+@@ -34,28 +34,51 @@
+ #include <stdio.h>
+ #include <string.h>
+ 
++#ifdef THREADS
++#include <mutex.h>
++#include <thread.h>
++#endif
++
+ #include "sol-log-impl.h"
+ 
++#ifdef THREADS
++static kernel_pid_t _main_thread;
++static mutex_t _mutex;
++#endif
++
+ int
+ sol_log_impl_init(void)
+ {
++#ifdef THREADS
++    _main_thread = thread_getpid();
++    mutex_init(&_mutex);
++#endif
+     return 0;
+ }
+ 
+ void
+ sol_log_impl_shutdown(void)
+ {
++#ifdef THREADS
++    _main_thread = KERNEL_PID_UNDEF;
++#endif
+ }
+ 
+ bool
+ sol_log_impl_lock(void)
+ {
++#ifdef THREADS
++    mutex_lock(&_mutex);
++#endif
+     return true;
+ }
+ 
+ void
+ sol_log_impl_unlock(void)
+ {
++#ifdef THREADS
++    mutex_unlock(&_mutex);
++#endif
+ }
+ 
+ void
+@@ -72,8 +95,18 @@ sol_log_impl_print_function_stderr(void *data, const struct sol_log_domain *doma
+     size_t len;
+     int errno_bkp = errno;
+ 
++#ifdef THREADS
++    kernel_pid_t thread;
++#endif
++
+     sol_log_level_to_str(message_level, level_str, sizeof(level_str));
+ 
++#ifdef THREADS
++    thread = thread_getpid();
++    if (thread != _main_thread)
++        fprintf(stderr, "T%" PRId16 " ", thread);
++#endif
++
+     if (_show_file && _show_function && _show_line) {
+         fprintf(stderr, "%s:%s %s:%d %s() ",
+             level_str, name, file, line, function);
+diff --git a/src/lib/common/sol-mainloop-common.c b/src/lib/common/sol-mainloop-common.c
+index 3b9e6f97..9c60a1ca 100644
+--- a/src/lib/common/sol-mainloop-common.c
++++ b/src/lib/common/sol-mainloop-common.c
+@@ -67,7 +67,7 @@ timeout_compare(const void *data1, const void *data2)
+     return sol_util_timespec_compare(&a->expire, &b->expire);
+ }
+ 
+-#ifdef PTHREAD
++#ifdef THREADS
+ 
+ static struct sol_ptr_vector source_v_process = SOL_PTR_VECTOR_INIT;
+ static struct sol_ptr_vector timeout_v_process = SOL_PTR_VECTOR_INIT;
+@@ -91,7 +91,7 @@ timeout_vector_update(struct sol_ptr_vector *to, struct sol_ptr_vector *from)
+     sol_ptr_vector_clear(from);
+ }
+ 
+-#else  /* !PTHREAD */
++#else  /* !THREADS */
+ 
+ #define SOURCE_PROCESS source_vector
+ #define SOURCE_ACUM source_vector
+@@ -107,7 +107,7 @@ timeout_vector_update(struct sol_ptr_vector *to, struct sol_ptr_vector *from)
+ bool
+ sol_mainloop_common_loop_check(void)
+ {
+-#ifdef PTHREAD
++#ifdef THREADS
+     return __atomic_load_n(&run_loop, __ATOMIC_SEQ_CST);
+ #else
+     return run_loop;
+@@ -117,7 +117,7 @@ sol_mainloop_common_loop_check(void)
+ void
+ sol_mainloop_common_loop_set(bool val)
+ {
+-#ifdef PTHREAD
++#ifdef THREADS
+     __atomic_store_n(&run_loop, (val), __ATOMIC_SEQ_CST);
+ #else
+     run_loop = val;
+diff --git a/src/lib/common/sol-mainloop-common.h b/src/lib/common/sol-mainloop-common.h
+index 9a3b55d0..28157112 100644
+--- a/src/lib/common/sol-mainloop-common.h
++++ b/src/lib/common/sol-mainloop-common.h
+@@ -55,7 +55,7 @@ struct sol_idler_common {
+ static inline void
+ sol_ptr_vector_steal(struct sol_ptr_vector *to, struct sol_ptr_vector *from)
+ {
+-#ifdef PTHREAD
++#ifdef THREADS
+     *to = *from;
+     sol_ptr_vector_init(from);
+ #endif
+@@ -65,7 +65,7 @@ sol_ptr_vector_steal(struct sol_ptr_vector *to, struct sol_ptr_vector *from)
+ static inline void
+ sol_ptr_vector_update(struct sol_ptr_vector *to, struct sol_ptr_vector *from)
+ {
+-#ifdef PTHREAD
++#ifdef THREADS
+     void *itr;
+     uint16_t i;
+ 
+@@ -102,7 +102,7 @@ void sol_mainloop_impl_iter(void);
+ static inline void
+ sol_mainloop_common_main_thread_check_notify(void)
+ {
+-#ifdef PTHREAD
++#ifdef THREADS
+     if (!sol_mainloop_impl_main_thread_check())
+         sol_mainloop_impl_main_thread_notify();
+ #endif
+diff --git a/src/lib/common/sol-mainloop-impl-riot.c b/src/lib/common/sol-mainloop-impl-riot.c
+index 9cc9da56..8e158aab 100644
+--- a/src/lib/common/sol-mainloop-impl-riot.c
++++ b/src/lib/common/sol-mainloop-impl-riot.c
+@@ -41,6 +41,11 @@
+ #include <sched.h>
+ #include <vtimer.h>
+ 
++#ifdef THREADS
++#include <mutex.h>
++#include <thread.h>
++#endif
++
+ #include "sol-mainloop-common.h"
+ #include "sol-interrupt_scheduler_riot.h"
+ #include "sol-mainloop-impl.h"
+@@ -51,20 +56,35 @@
+ #define MSG_BUFFER_SIZE 32
+ static msg_t msg_buffer[MSG_BUFFER_SIZE];
+ 
++#ifdef THREADS
++static mutex_t _lock;
++static kernel_pid_t _main_pid;
++#endif
++
+ void
+ sol_mainloop_impl_lock(void)
+ {
++#ifdef THREADS
++    mutex_lock(&_lock);
++#endif
+ }
+ 
+ void
+ sol_mainloop_impl_unlock(void)
+ {
++#ifdef THREADS
++    mutex_unlock(&_lock);
++#endif
+ }
+ 
+ bool
+ sol_mainloop_impl_main_thread_check(void)
+ {
++#ifdef THREADS
++    return thread_getpid() == _main_pid;
++#else
+     return true;
++#endif
+ }
+ 
+ void
+@@ -75,6 +95,10 @@ sol_mainloop_impl_main_thread_notify(void)
+ int
+ sol_mainloop_impl_platform_init(void)
+ {
++#ifdef THREADS
++    mutex_init(&_lock);
++    _main_pid = thread_getpid();
++#endif
+     sol_interrupt_scheduler_set_pid(sched_active_pid);
+     msg_init_queue(msg_buffer, MSG_BUFFER_SIZE);
+     return 0;
+@@ -83,6 +107,9 @@ sol_mainloop_impl_platform_init(void)
+ void
+ sol_mainloop_impl_platform_shutdown(void)
+ {
++#ifdef THREADS
++    _main_pid = KERNEL_PID_UNDEF;
++#endif
+     sol_mainloop_common_source_shutdown();
+ }
+ 
+@@ -90,8 +117,13 @@ static inline void
+ timex_set_until_next_timeout(timex_t *timex)
+ {
+     struct timespec ts;
++    bool ret;
++
++    sol_mainloop_impl_lock();
++    ret = sol_mainloop_common_timespec_first(&ts);
++    sol_mainloop_impl_unlock();
+ 
+-    if (!sol_mainloop_common_timespec_first(&ts)) {
++    if (!ret) {
+         *timex = timex_set(0, DEFAULT_USLEEP_TIME);
+         return;
+     }

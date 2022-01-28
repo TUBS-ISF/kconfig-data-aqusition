@@ -1,0 +1,73 @@
+"2013-07-05 22:00:57 +0200"
+diff --git a/Config.in b/Config.in
+index 03c2d032f..2c4be2e9f 100644
+--- a/Config.in
++++ b/Config.in
+@@ -161,12 +161,13 @@ config UNICODE_USING_LOCALE
+ 	  Internal implementation is smaller.
+ 
+ config FEATURE_CHECK_UNICODE_IN_ENV
+-	bool "Check $LANG environment variable"
++	bool "Check $LC_ALL, $LC_CTYPE and $LANG environment variables"
+ 	default n
+ 	depends on UNICODE_SUPPORT && !UNICODE_USING_LOCALE
+ 	help
+ 	  With this option on, Unicode support is activated
+-	  only if LANG variable has the value of the form "xxxx.utf8"
++	  only if locale-related variables have the value of the form
++	  "xxxx.utf8"
+ 
+ 	  Otherwise, Unicode support will be always enabled and active.
+ 
+diff --git a/libbb/unicode.c b/libbb/unicode.c
+index c1e3966fe..35e88d307 100644
+--- a/libbb/unicode.c
++++ b/libbb/unicode.c
+@@ -39,8 +39,15 @@ void FAST_FUNC reinit_unicode(const char *LANG)
+ 
+ void FAST_FUNC init_unicode(void)
+ {
++	/* Some people set only $LC_CTYPE, not $LC_ALL, because they want
++	 * only Unicode to be activated on their system, not the whole
++	 * shebang of wrong decimal points, strange date formats and so on.
++	 *
++	 * TODO? Maybe we should use LC_CTYPE instead of LC_ALL in setlocale()?
++	 */
+ 	if (unicode_status == UNICODE_UNKNOWN) {
+ 		char *s = getenv("LC_ALL");
++		if (!s) s = getenv("LC_CTYPE");
+ 		if (!s) s = getenv("LANG");
+ 		reinit_unicode(s);
+ 	}
+@@ -63,6 +70,7 @@ void FAST_FUNC init_unicode(void)
+ {
+ 	if (unicode_status == UNICODE_UNKNOWN) {
+ 		char *s = getenv("LC_ALL");
++		if (!s) s = getenv("LC_CTYPE");
+ 		if (!s) s = getenv("LANG");
+ 		reinit_unicode(s);
+ 	}
+diff --git a/shell/ash.c b/shell/ash.c
+index 90f222467..d696bbdac 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -9659,6 +9659,7 @@ preadfd(void)
+ 		 */
+ 		{
+ 			const char *s = lookupvar("LC_ALL");
++			if (!s) s = lookupvar("LC_CTYPE");
+ 			if (!s) s = lookupvar("LANG");
+ 			reinit_unicode(s);
+ 		}
+diff --git a/shell/hush.c b/shell/hush.c
+index 1fa84dc4f..fc9b89b55 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -2045,6 +2045,7 @@ static void get_user_input(struct in_str *i)
+ 		 * shell was started. Therefore, re-check LANG every time:
+ 		 */
+ 		const char *s = get_local_var_value("LC_ALL");
++		if (!s) s = get_local_var_value("LC_CTYPE");
+ 		if (!s) s = get_local_var_value("LANG");
+ 		reinit_unicode(s);
+ 

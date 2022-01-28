@@ -1,0 +1,94 @@
+"2012-06-15 14:00:36 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 8eae1f48a..cbf2c96b8 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -395,6 +395,13 @@ config LDSO_RUNPATH
+ 	  Usage of RUNPATH tags is not too common, so disabling this feature
+ 	  should be safe for most people.
+ 
++config LDSO_SAFE_RUNPATH
++	bool "Allow only RUNPATH beginning with /"
++	depends on LDSO_RUNPATH
++	default y
++	help
++	  Allow only absolute path in RPATH/RUNPATH.
++
+ config LDSO_SEARCH_INTERP_PATH
+ 	bool "Add ldso path to lib search path"
+ 	depends on HAVE_SHARED
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index 55ff31e4f..02e59a349 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -174,8 +174,11 @@ search_for_named_library(const char *name, unsigned rflags, const char *path_lis
+ 				_dl_strcpy(mylibname, "."); /* Assume current dir if empty path */
+ 			_dl_strcat(mylibname, "/");
+ 			_dl_strcat(mylibname, name);
+-			if ((tpnt = _dl_load_elf_shared_library(rflags, rpnt, mylibname)) != NULL)
+-				return tpnt;
++#ifdef __LDSO_SAFE_RUNPATH__
++			if (*mylibname == '/')
++#endif
++				if ((tpnt = _dl_load_elf_shared_library(rflags, rpnt, mylibname)) != NULL)
++					return tpnt;
+ 			path_n = path+1;
+ 		}
+ 		path++;
+diff --git a/test/Rules.mak b/test/Rules.mak
+index b5eb20b10..d5a9b1f79 100644
+--- a/test/Rules.mak
++++ b/test/Rules.mak
+@@ -8,18 +8,28 @@
+ .SUFFIXES:
+ 
+ top_builddir ?= ../
++abs_top_builddir ?= $(shell cd $(top_builddir); pwd)/
+ 
+ TESTDIR=$(top_builddir)test/
+ 
+ include $(top_builddir)/Rules.mak
+-ifndef TEST_INSTALLED_UCLIBC
+ ifdef UCLIBC_LDSO
+ ifeq (,$(findstring /,$(UCLIBC_LDSO)))
+-UCLIBC_LDSO := $(top_builddir)lib/$(UCLIBC_LDSO)
++UCLIBC_LDSO := $(UCLIBC_LDSO)
++else
++UCLIBC_LDSO := $(notdir $(UCLIBC_LDSO))
++endif
++else
++UCLIBC_LDSO := $(notdir $(firstword $(wildcard $(top_builddir)lib/ld*)))
+ endif
++ifndef TEST_INSTALLED_UCLIBC
++ifeq ($(LDSO_SAFE_RUNPATH),y)
++UCLIBC_PATH := $(abs_top_builddir)lib
+ else
+-UCLIBC_LDSO := $(firstword $(wildcard $(top_builddir)lib/ld*))
++UCLIBC_PATH := $(top_builddir)lib
+ endif
++else
++UCLIBC_PATH := $(RUNTIME_PREFIX)$(MULTILIB_DIR)
+ endif
+ #--------------------------------------------------------
+ # Ensure consistent sort order, 'gcc -print-search-dirs' behavior, etc.
+@@ -81,15 +91,14 @@ ifneq ($(HAVE_SHARED),y)
+ 	LDFLAGS       += -Wl,-static -static-libgcc
+ endif
+ 
+-LDFLAGS += -B$(top_builddir)lib -Wl,-rpath,$(top_builddir)lib -Wl,-rpath-link,$(top_builddir)lib
+-UCLIBC_LDSO_ABSPATH=$(shell pwd)
+-ifdef TEST_INSTALLED_UCLIBC
+-LDFLAGS += -Wl,-rpath,./
+-UCLIBC_LDSO_ABSPATH=$(RUNTIME_PREFIX)$(MULTILIB_DIR)
++ifndef TEST_INSTALLED_UCLIBC
++LDFLAGS += -B$(UCLIBC_PATH) -Wl,-rpath,$(UCLIBC_PATH):$(shell pwd) -Wl,-rpath-link,$(UCLIBC_PATH):$(shell pwd)
++else
++LDFLAGS += -Wl,-rpath,$(shell pwd)
+ endif
+ 
+ ifeq ($(findstring -static,$(LDFLAGS)),)
+-LDFLAGS += -Wl,--dynamic-linker,$(UCLIBC_LDSO_ABSPATH)/$(UCLIBC_LDSO)
++LDFLAGS += -Wl,--dynamic-linker,$(UCLIBC_PATH)/$(UCLIBC_LDSO)
+ endif
+ 
+ ifeq ($(LDSO_GNU_HASH_SUPPORT),y)

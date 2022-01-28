@@ -1,0 +1,3479 @@
+"2003-03-03 20:58:42 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index c02c28c8f..112369f7e 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -97,6 +97,43 @@ config UCLIBC_CTOR_DTOR
+ 	  or dtors and want your binaries to be as small as possible, then
+ 	  answer N.
+ 
++config UCLIBC_PROFILING
++	bool "Support gprof profiling"
++	default y
++	help
++	  If you wish to build uClibc with support for application profiling
++	  using the gprof tool, then you should enable this feature.  Then in
++	  addition to building uClibc with profiling support, you will also
++	  need to recompile all your shared libraries with the profiling
++	  enabled version of uClibc.  To add profiling support to your
++	  applications, you must compile things using the gcc options
++	  "-fprofile-arcs  -pg".  Then when you run your applications, a
++	  gmon.out file will be generated which can then be analyzed by
++	  'gprof'.  
++
++	  These exist a number of less invasive alternatives that do not
++	  require your to specially instrument your application, and recompile
++	  and relink everything.  
++	  
++	  Many people have had good results using the combination of Valgrind 
++	  to generate profiling information and KCachegrind for analysis:
++		  http://developer.kde.org/~sewardj/
++		  http://kcachegrind.sourceforge.net/
++
++	  The OProfile system-wide profiler is another alternative:
++		  http://oprofile.sourceforge.net/
++
++	  Prospect is another alternative based on OProfile:
++		  http://prospect.sourceforge.net/
++
++	  And the Linux Trace Toolkit (LTT) is also a fine tool:
++		http://www.opersys.com/LTT/
++
++	  If none of these tools do what you need, you can of course enable
++	  this option, rebuild everything, and use 'gprof'.  There is both a
++	  size and performance penelty to profiling your applications this way,
++	  so most people should answer N.
++
+ config UCLIBC_HAS_THREADS
+ 	bool "POSIX Threading Support"
+ 	default y
+diff --git a/extra/gcc-uClibc/Makefile b/extra/gcc-uClibc/Makefile
+index 523b10113..e312d1792 100644
+--- a/extra/gcc-uClibc/Makefile
++++ b/extra/gcc-uClibc/Makefile
+@@ -36,6 +36,11 @@ else
+ endif
+ ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
+ 	@echo "#define __UCLIBC_CTOR_DTOR__ 1" >> gcc-uClibc.h
++ifeq ($(strip $(UCLIBC_PROFILING)),y)
++	@echo "#define __UCLIBC_PROFILING__ 1" >> gcc-uClibc.h
++else
++	@echo "#undef __UCLIBC_PROFILING__" >> gcc-uClibc.h
++endif
+ else
+ 	@echo "#undef __UCLIBC_CTOR_DTOR__" >> gcc-uClibc.h
+ endif
+diff --git a/extra/gcc-uClibc/gcc-uClibc.c b/extra/gcc-uClibc/gcc-uClibc.c
+index 8cb8a8f3c..5b002b9d2 100644
+--- a/extra/gcc-uClibc/gcc-uClibc.c
++++ b/extra/gcc-uClibc/gcc-uClibc.c
+@@ -149,6 +149,10 @@ int main(int argc, char **argv)
+ 	int ctor_dtor = 1, cplusplus = 0, use_nostdinc_plus = 0;
+ 	char *GPLUSPLUS_BIN = NULL;
+ #endif
++#ifdef __UCLIBC_PROFILING__
++	int profile = 0;
++	char *gcrt1_path[2];
++#endif
+ 
+ 	application_name = basename(argv[0]);
+ 	if (application_name[0] == '-')
+@@ -208,6 +212,10 @@ int main(int argc, char **argv)
+ 	xstrcat(&(crt0_path[0]), devprefix, "/lib/crt0.o", NULL);
+ 	xstrcat(&(crt0_path[1]), builddir, "/lib/crt0.o", NULL);
+ #endif
++#ifdef __UCLIBC_PROFILING__
++	xstrcat(&(gcrt1_path[0]), devprefix, "/lib/gcrt1.o", NULL);
++	xstrcat(&(gcrt1_path[1]), builddir, "/lib/gcrt1.o", NULL);
++#endif
+ 
+ 	xstrcat(&(our_lib_path[0]), "-L", devprefix, "/lib", NULL);
+ 	xstrcat(&(our_lib_path[1]), "-L", builddir, "/lib", NULL);
+@@ -312,13 +320,25 @@ int main(int argc, char **argv)
+ 						}
+ 					}
+ 					break;
++#ifdef __UCLIBC_PROFILING__
++				case 'p':
++					if (strcmp("-pg",argv[i]) == 0) {
++					    profile = 1;
++					}
++					break;
++#endif
+ 				case 'f':
+ 					/* Check if we are doing PIC */
+ 					if (strcmp("-fPIC",argv[i]) == 0) {
+ 					    use_pic = 1;
+ 					} else if (strcmp("-fpic",argv[i]) == 0) {
+ 					    use_pic = 1;
++					} 
++#ifdef __UCLIBC_PROFILING__
++					else if (strcmp("-fprofile-arcs",argv[i]) == 0) {
++					    profile = 1;
+ 					}
++#endif
+ 					break;
+ 
+ 				case '-':
+@@ -420,6 +440,11 @@ int main(int argc, char **argv)
+ 
+ 	if (linking && source_count) {
+ 
++#ifdef __UCLIBC_PROFILING__
++	    if (profile) {
++		gcc_argv[i++] = gcrt1_path[use_build_dir];
++	    }
++#endif
+ #ifdef __UCLIBC_CTOR_DTOR__
+ 	    if (ctor_dtor) {
+ 	        gcc_argv[i++] = crti_path[use_build_dir];
+@@ -431,7 +456,12 @@ int main(int argc, char **argv)
+ 	    }
+ #endif
+ 	    if (use_start) {
+-		gcc_argv[i++] = crt0_path[use_build_dir];
++#ifdef __UCLIBC_PROFILING__
++		if (!profile)
++#endif
++		{
++		    gcc_argv[i++] = crt0_path[use_build_dir];
++		}
+ 	    }
+ 	    for ( l = 0 ; l < k ; l++ ) {
+ 		if (gcc_argument[l]) gcc_argv[i++] = gcc_argument[l];
+diff --git a/extra/scripts/get-needed-libgcc-objects.sh b/extra/scripts/get-needed-libgcc-objects.sh
+index 04e6737f9..6aac14b4c 100755
+--- a/extra/scripts/get-needed-libgcc-objects.sh
++++ b/extra/scripts/get-needed-libgcc-objects.sh
+@@ -20,7 +20,7 @@ echo "    partial linking..."
+ rm -f libc.ldr
+ $LD $LDFLAGS -r -o libc.ldr $CRTOBJS --whole-archive ../libc.a
+ 
+-if $NM --undefined-only libc.ldr 2>&1 | grep -v "^main$" | grep -v "^_GLOBAL_OFFSET_TABLE_$" | grep -v "_gp_disp" > sym.need ; then
++if $NM --undefined-only libc.ldr 2>&1 | grep -v "^main$" | grep -v "^_GLOBAL_OFFSET_TABLE_$" | grep -v "_gp_disp" | grep -v "^etext$" | grep -v "^__gmon_start__$" > sym.need ; then
+     EXIT_WITH_ERROR=0
+     rm -f obj.need
+     touch obj.need
+diff --git a/extra/scripts/initfini.awk b/extra/scripts/initfini.awk
+index 818cfa26f..ef183db6c 100755
+--- a/extra/scripts/initfini.awk
++++ b/extra/scripts/initfini.awk
+@@ -12,6 +12,7 @@ BEGIN \
+   system("/bin/rm -f crt[in].S");
+   omitcrti=0;
+   omitcrtn=0;
++  do_sh_specials = 0;
+   glb_idx = 0;
+   while(getline < "initfini.S")
+   { if(/\.endp/) {endp=1}
+@@ -30,11 +31,11 @@ BEGIN \
+   close("initfini.S");
+ }
+ # special rules for the SuperH targets (They do nothing on other targets)
+-/SH_GLB_BEGINS/ && glb_idx==0 {omitcrti +=1}
++/SH_GLB_BEGINS/ && glb_idx==0 {omitcrti +=1;do_sh_specials++}
+ /_init_SH_GLB/  && glb_idx>=1 {print glb_label[0] glb >> "crti.S"}
+ /_fini_SH_GLB/  && glb_idx>=2 {print glb_label[1] glb >> "crti.S"}
+ /SH_GLB_ENDS/   && glb_idx==0 {omitcrti -=1}
+-/SH_GLB/ || /_GLOBAL_OFFSET_TABLE_/{getline}
++/SH_GLB/ || /_GLOBAL_OFFSET_TABLE_/ && do_sh_specials>=1 {getline}
+ # special rules for H8/300 (sorry quick hack)
+ /.h8300h/ {end=0}
+ 
+@@ -49,6 +50,10 @@ BEGIN \
+ /EPILOG_BEGINS/{omitcrtn=0;getline}
+ /EPILOG_ENDS/{omitcrtn=1;getline}
+ /TRAILER_BEGINS/{omitcrti=0;omitcrtn=0;getline}
++/GMON_STUFF_BEGINS/{omitcrtn=1;getline}
++/GMON_STUFF_PAUSES/{omitcrtn=0;getline}
++/GMON_STUFF_UNPAUSES/{omitcrtn=1;getline}
++/GMON_STUFF_ENDS/{omitcrtn=0;getline}
+ 
+ /END_INIT/ \
+ { if(endp)
+diff --git a/include/sys/gmon.h b/include/sys/gmon.h
+new file mode 100644
+index 000000000..c02f8316d
+--- /dev/null
++++ b/include/sys/gmon.h
+@@ -0,0 +1,201 @@
++/*-
++ * Copyright (c) 1982, 1986, 1992, 1993
++ *	The Regents of the University of California.  All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 4. Neither the name of the University nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ *
++ *	@(#)gmon.h	8.2 (Berkeley) 1/4/94
++ */
++
++#ifndef	_SYS_GMON_H
++#define	_SYS_GMON_H	1
++
++#include <features.h>
++
++#include <sys/types.h>
++
++/*
++ * See gmon_out.h for gmon.out format.
++ */
++
++/* structure emitted by "gcc -a".  This must match struct bb in
++   gcc/libgcc2.c.  It is OK for gcc to declare a longer structure as
++   long as the members below are present.  */
++struct __bb
++{
++  long			zero_word;
++  const char		*filename;
++  long			*counts;
++  long			ncounts;
++  struct __bb		*next;
++  const unsigned long	*addresses;
++};
++
++extern struct __bb *__bb_head;
++
++/*
++ * histogram counters are unsigned shorts (according to the kernel).
++ */
++#define	HISTCOUNTER	unsigned short
++
++/*
++ * fraction of text space to allocate for histogram counters here, 1/2
++ */
++#define	HISTFRACTION	2
++
++/*
++ * Fraction of text space to allocate for from hash buckets.
++ * The value of HASHFRACTION is based on the minimum number of bytes
++ * of separation between two subroutine call points in the object code.
++ * Given MIN_SUBR_SEPARATION bytes of separation the value of
++ * HASHFRACTION is calculated as:
++ *
++ *	HASHFRACTION = MIN_SUBR_SEPARATION / (2 * sizeof(short) - 1);
++ *
++ * For example, on the VAX, the shortest two call sequence is:
++ *
++ *	calls	$0,(r0)
++ *	calls	$0,(r0)
++ *
++ * which is separated by only three bytes, thus HASHFRACTION is
++ * calculated as:
++ *
++ *	HASHFRACTION = 3 / (2 * 2 - 1) = 1
++ *
++ * Note that the division above rounds down, thus if MIN_SUBR_FRACTION
++ * is less than three, this algorithm will not work!
++ *
++ * In practice, however, call instructions are rarely at a minimal
++ * distance.  Hence, we will define HASHFRACTION to be 2 across all
++ * architectures.  This saves a reasonable amount of space for
++ * profiling data structures without (in practice) sacrificing
++ * any granularity.
++ */
++#define	HASHFRACTION	2
++
++/*
++ * Percent of text space to allocate for tostructs.
++ * This is a heuristic; we will fail with a warning when profiling programs
++ * with a very large number of very small functions, but that's
++ * normally OK.
++ * 2 is probably still a good value for normal programs.
++ * Profiling a test case with 64000 small functions will work if
++ * you raise this value to 3 and link statically (which bloats the
++ * text size, thus raising the number of arcs expected by the heuristic).
++ */
++#define ARCDENSITY	3
++
++/*
++ * Always allocate at least this many tostructs.  This
++ * hides the inadequacy of the ARCDENSITY heuristic, at least
++ * for small programs.
++ */
++#define MINARCS		50
++
++/*
++ * The type used to represent indices into gmonparam.tos[].
++ */
++#define	ARCINDEX	u_long
++
++/* 
++ * Maximum number of arcs we want to allow.
++ * Used to be max representable value of ARCINDEX minus 2, but now 
++ * that ARCINDEX is a long, that's too large; we don't really want 
++ * to allow a 48 gigabyte table.
++ * The old value of 1<<16 wasn't high enough in practice for large C++
++ * programs; will 1<<20 be adequate for long?  FIXME
++ */
++#define MAXARCS		(1 << 20)
++
++struct tostruct {
++	u_long		selfpc;
++	long		count;
++	ARCINDEX	link;
++};
++
++/*
++ * a raw arc, with pointers to the calling site and
++ * the called site and a count.
++ */
++struct rawarc {
++	u_long	raw_frompc;
++	u_long	raw_selfpc;
++	long	raw_count;
++};
++
++/*
++ * general rounding functions.
++ */
++#define ROUNDDOWN(x,y)	(((x)/(y))*(y))
++#define ROUNDUP(x,y)	((((x)+(y)-1)/(y))*(y))
++
++/*
++ * The profiling data structures are housed in this structure.
++ */
++struct gmonparam {
++	long int	state;
++	u_short		*kcount;
++	u_long		kcountsize;
++	ARCINDEX	*froms;
++	u_long		fromssize;
++	struct tostruct	*tos;
++	u_long		tossize;
++	long		tolimit;
++	u_long		lowpc;
++	u_long		highpc;
++	u_long		textsize;
++	u_long		hashfraction;
++	long		log_hashfraction;
++};
++
++/*
++ * Possible states of profiling.
++ */
++#define	GMON_PROF_ON	0
++#define	GMON_PROF_BUSY	1
++#define	GMON_PROF_ERROR	2
++#define	GMON_PROF_OFF	3
++
++/*
++ * Sysctl definitions for extracting profiling information from the kernel.
++ */
++#define	GPROF_STATE	0	/* int: profiling enabling variable */
++#define	GPROF_COUNT	1	/* struct: profile tick count buffer */
++#define	GPROF_FROMS	2	/* struct: from location hash bucket */
++#define	GPROF_TOS	3	/* struct: destination/count structure */
++#define	GPROF_GMONPARAM	4	/* struct: profiling parameters (see above) */
++
++__BEGIN_DECLS
++
++/* Set up data structures and start profiling.  */
++extern void __monstartup (u_long __lowpc, u_long __highpc) __THROW;
++extern void monstartup (u_long __lowpc, u_long __highpc) __THROW;
++
++/* Clean up profiling and write out gmon.out.  */
++extern void _mcleanup (void) __THROW;
++
++__END_DECLS
++
++#endif /* sys/gmon.h */
+diff --git a/include/sys/gmon_out.h b/include/sys/gmon_out.h
+new file mode 100644
+index 000000000..6fa09e864
+--- /dev/null
++++ b/include/sys/gmon_out.h
+@@ -0,0 +1,80 @@
++/* Copyright (C) 1996, 1997 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by David Mosberger <davidm@cs.arizona.edu>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This file specifies the format of gmon.out files.  It should have
++   as few external dependencies as possible as it is going to be included
++   in many different programs.  That is, minimize the number of #include's.
++
++   A gmon.out file consists of a header (defined by gmon_hdr) followed by
++   a sequence of records.  Each record starts with a one-byte tag
++   identifying the type of records, followed by records specific data. */
++
++#ifndef _SYS_GMON_OUT_H
++#define _SYS_GMON_OUT_H	1
++
++#include <features.h>
++
++#define	GMON_MAGIC	"gmon"	/* magic cookie */
++#define GMON_VERSION	1	/* version number */
++
++/* For profiling shared object we need a new format.  */
++#define GMON_SHOBJ_VERSION	0x1ffff
++
++__BEGIN_DECLS
++
++/*
++ * Raw header as it appears on file (without padding).  This header
++ * always comes first in gmon.out and is then followed by a series
++ * records defined below.
++ */
++struct gmon_hdr
++  {
++    char cookie[4];
++    char version[4];
++    char spare[3 * 4];
++  };
++
++/* types of records in this file: */
++typedef enum
++  {
++    GMON_TAG_TIME_HIST = 0,
++    GMON_TAG_CG_ARC = 1,
++    GMON_TAG_BB_COUNT = 2
++  } GMON_Record_Tag;
++
++struct gmon_hist_hdr
++  {
++    char low_pc[sizeof (char *)];	/* base pc address of sample buffer */
++    char high_pc[sizeof (char *)];	/* max pc address of sampled buffer */
++    char hist_size[4];			/* size of sample buffer */
++    char prof_rate[4];			/* profiling clock rate */
++    char dimen[15];			/* phys. dim., usually "seconds" */
++    char dimen_abbrev;			/* usually 's' for "seconds" */
++  };
++
++struct gmon_cg_arc_record
++  {
++    char from_pc[sizeof (char *)];	/* address within caller's body */
++    char self_pc[sizeof (char *)];	/* address within callee's body */
++    char count[4];			/* number of arc traversals */
++  };
++
++__END_DECLS
++
++#endif /* sys/gmon_out.h */
+diff --git a/libc/sysdeps/linux/alpha/bits/atomicity.h b/libc/sysdeps/linux/alpha/bits/atomicity.h
+new file mode 100644
+index 000000000..9388f2384
+--- /dev/null
++++ b/libc/sysdeps/linux/alpha/bits/atomicity.h
+@@ -0,0 +1,102 @@
++/* Low-level functions for atomic operations.  Alpha version.
++   Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H	1
++
++#include <inttypes.h>
++
++
++static inline int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  register int result, tmp;
++
++  __asm__ __volatile__ (
++	"/* Inline exchange & add */\n"
++	"1:\t"
++	"ldl_l	%0,%3\n\t"
++	"addl	%0,%4,%1\n\t"
++	"stl_c	%1,%2\n\t"
++	"beq	%1,2f\n"
++	".subsection 1\n"
++	"2:\t"
++	"br	1b\n"
++	".previous\n\t"
++	"mb\n\t"
++	"/* End exchange & add */"
++	: "=&r"(result), "=&r"(tmp), "=m"(*mem)
++	: "m" (*mem), "r"(val));
++
++  return result;
++}
++
++static inline void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  register int result;
++
++  __asm__ __volatile__ (
++	"/* Inline exchange & add */\n"
++	"1:\t"
++	"ldl_l	%0,%2\n\t"
++	"addl	%0,%3,%0\n\t"
++	"stl_c	%0,%1\n\t"
++	"beq	%0,2f\n\t"
++	".subsection 1\n"
++	"2:\t"
++	"br	1b\n"
++	".previous\n\t"
++	"mb\n\t"
++	"/* End exchange & add */"
++	: "=&r"(result), "=m"(*mem)
++	: "m" (*mem), "r"(val));
++}
++
++static inline long
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  long int ret;
++
++  __asm__ __volatile__ (
++	"/* Inline compare & swap */\n"
++	"1:\t"
++	"ldq_l	%0,%4\n\t"
++	"cmpeq	%0,%2,%0\n\t"
++	"beq	%0,3f\n\t"
++	"mov	%3,%0\n\t"
++	"stq_c	%0,%1\n\t"
++	"beq	%0,2f\n\t"
++	".subsection 1\n"
++	"2:\t"
++	"br	1b\n"
++	".previous\n\t"
++	"3:\t"
++	"mb\n\t"
++	"/* End compare & swap */"
++	: "=&r"(ret), "=m"(*p)
++	: "r"(oldval), "r"(newval), "m"(*p));
++
++  return ret;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/alpha/bits/machine-gmon.h b/libc/sysdeps/linux/alpha/bits/machine-gmon.h
+new file mode 100644
+index 000000000..5f5522c0b
+--- /dev/null
++++ b/libc/sysdeps/linux/alpha/bits/machine-gmon.h
+@@ -0,0 +1,26 @@
++/* Machine-specific calling sequence for `mcount' profiling function.  alpha
++   Copyright (C) 1995, 1996, 1997 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define _MCOUNT_DECL(from, self) \
++ void __mcount (u_long from, u_long self)
++
++/* Call __mcount with our the return PC for our caller, and the return
++   PC our caller will return to.  Empty since we use an assembly stub
++   instead. */
++#define MCOUNT
+diff --git a/libpthread/linuxthreads/sysdeps/alpha/sigcontextinfo.h b/libc/sysdeps/linux/alpha/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/alpha/sigcontextinfo.h
+rename to libc/sysdeps/linux/alpha/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/alpha/stackinfo.h b/libc/sysdeps/linux/alpha/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/alpha/stackinfo.h
+rename to libc/sysdeps/linux/alpha/bits/stackinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/arm/bits/armsigctx.h b/libc/sysdeps/linux/arm/bits/armsigctx.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/arm/bits/armsigctx.h
+rename to libc/sysdeps/linux/arm/bits/armsigctx.h
+diff --git a/libc/sysdeps/linux/arm/bits/atomicity.h b/libc/sysdeps/linux/arm/bits/atomicity.h
+new file mode 100644
+index 000000000..1a437a6d3
+--- /dev/null
++++ b/libc/sysdeps/linux/arm/bits/atomicity.h
+@@ -0,0 +1,87 @@
++/* Low-level functions for atomic operations.  ARM version.
++   Copyright (C) 1997, 1998, 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H    1
++
++#include <inttypes.h>
++
++
++static inline int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  int tmp1;
++  int tmp2;
++  int result;
++  __asm__ ("\n"
++	   "0:\tldr\t%0,[%3]\n\t"
++	   "add\t%1,%0,%4\n\t"
++	   "swp\t%2,%1,[%3]\n\t"
++	   "cmp\t%0,%2\n\t"
++	   "swpne\t%1,%2,[%3]\n\t"
++	   "bne\t0b"
++	   : "=&r" (result), "=&r" (tmp1), "=&r" (tmp2)
++	   : "r" (mem), "r"(val)
++	   : "cc", "memory");
++  return result;
++}
++
++static inline void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  int tmp1;
++  int tmp2;
++  int tmp3;
++  __asm__ ("\n"
++	   "0:\tldr\t%0,[%3]\n\t"
++	   "add\t%1,%0,%4\n\t"
++	   "swp\t%2,%1,[%3]\n\t"
++	   "cmp\t%0,%2\n\t"
++	   "swpne\t%1,%2,[%3]\n\t"
++	   "bne\t0b"
++	   : "=&r" (tmp1), "=&r" (tmp2), "=&r" (tmp3)
++	   : "r" (mem), "r"(val)
++	   : "cc", "memory");
++}
++
++static inline int
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  int result, tmp;
++  __asm__ ("\n"
++	   "0:\tldr\t%1,[%2]\n\t"
++	   "mov\t%0,#0\n\t"
++	   "cmp\t%1,%4\n\t"
++	   "bne\t1f\n\t"
++	   "swp\t%0,%3,[%2]\n\t"
++	   "cmp\t%1,%0\n\t"
++	   "swpne\t%1,%0,[%2]\n\t"
++	   "bne\t0b\n\t"
++	   "mov\t%0,#1\n"
++	   "1:"
++	   : "=&r" (result), "=&r" (tmp)
++	   : "r" (p), "r" (newval), "r" (oldval)
++	   : "cc", "memory");
++  return result;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/arm/bits/machine-gmon.h b/libc/sysdeps/linux/arm/bits/machine-gmon.h
+new file mode 100644
+index 000000000..039dfd951
+--- /dev/null
++++ b/libc/sysdeps/linux/arm/bits/machine-gmon.h
+@@ -0,0 +1,67 @@
++/* Machine-dependent definitions for profiling support.  ARM version.
++   Copyright (C) 1996, 1997, 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* GCC for the ARM cannot compile __builtin_return_address(N) for N != 0, 
++   so we must use an assembly stub.  */
++
++#include <sysdep.h>
++#ifndef NO_UNDERSCORES
++/* The asm symbols for C functions are `_function'.
++   The canonical name for the counter function is `mcount', no _.  */
++void _mcount (void) asm ("mcount");
++#else
++/* The canonical name for the function is `_mcount' in both C and asm,
++   but some old asm code might assume it's `mcount'.  */
++void _mcount (void);
++weak_alias (_mcount, mcount)
++#endif
++
++static void mcount_internal (u_long frompc, u_long selfpc);
++
++#define _MCOUNT_DECL(frompc, selfpc) \
++static void mcount_internal (u_long frompc, u_long selfpc)
++
++/* This macro/func MUST save r0, r1 because the compiler inserts
++	blind calls to _mount(), ignoring the fact that _mcount may
++	clobber registers; therefore, _mcount may NOT clobber registers */
++/* if (this_fp!=0) {
++	r0 = this_fp
++	r1 = this_lr
++  	r1 = [r1-4] which is caller's lr 
++	if (r1!=0) 
++		r1 = caller's lr
++	call mcount_internal(this_lr, caller's_lr)
++   }
++*/
++
++#define MCOUNT								\
++void _mcount (void)							\
++{									\
++  __asm__("stmdb	sp!, {r0, r1, r2, r3};"				\
++	  "movs		fp, fp;"				      	\
++          "moveq	r1, #0;"					\
++	  "ldrne	r1, [fp, $-4];"					\
++	  "ldrne	r0, [fp, $-12];"				\
++	  "movnes	r0, r0;"					\
++	  "ldrne	r0, [r0, $-4];"					\
++	  "movs		r0, r0;"					\
++	  "blne		mcount_internal;"				\
++	  "ldmia	sp!, {r0, r1, r2, r3}");			\
++}
++
+diff --git a/libc/sysdeps/linux/arm/bits/profil-counter.h b/libc/sysdeps/linux/arm/bits/profil-counter.h
+new file mode 100644
+index 000000000..5d8be9dba
+--- /dev/null
++++ b/libc/sysdeps/linux/arm/bits/profil-counter.h
+@@ -0,0 +1,32 @@
++/* Low-level statistical profiling support function.  Linux/ARM version.
++   Copyright (C) 1996, 1997, 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <signal.h>
++#include <bits/armsigctx.h>
++
++void
++profil_counter (int signo, int _a2, int _a3, int _a4, union k_sigcontext sc)
++{
++  void *pc;
++  if (sc.v20.magic == SIGCONTEXT_2_0_MAGIC)
++    pc = (void *) sc.v20.reg.ARM_pc;
++  else
++    pc = (void *) sc.v21.arm_pc;
++  profil_count (pc);
++}
+diff --git a/libc/sysdeps/linux/arm/bits/sigcontextinfo.h b/libc/sysdeps/linux/arm/bits/sigcontextinfo.h
+new file mode 100644
+index 000000000..aebc3cfd5
+--- /dev/null
++++ b/libc/sysdeps/linux/arm/bits/sigcontextinfo.h
+@@ -0,0 +1,35 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Philip Blundell <philb@gnu.org>, 1999.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <bits/armsigctx.h>
++
++#define SIGCONTEXT int _a2, int _a3, int _a4, union k_sigcontext
++#define SIGCONTEXT_EXTRA_ARGS _a2, _a3, _a4,
++
++#define GET_PC(ctx)	((void *)((ctx.v20.magic == SIGCONTEXT_2_0_MAGIC) ? \
++			 ctx.v20.reg.ARM_pc : ctx.v21.arm_pc))
++#define GET_FRAME(ctx)	\
++	ADVANCE_STACK_FRAME((void *)((ctx.v20.magic == SIGCONTEXT_2_0_MAGIC) ? \
++			 ctx.v20.reg.ARM_fp : ctx.v21.arm_fp))
++#define GET_STACK(ctx)	((void *)((ctx.v20.magic == SIGCONTEXT_2_0_MAGIC) ? \
++			 ctx.v20.reg.ARM_sp : ctx.v21.arm_sp))
++#define ADVANCE_STACK_FRAME(frm)	\
++			((struct layout *)frm - 1)
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libpthread/linuxthreads/sysdeps/arm/stackinfo.h b/libc/sysdeps/linux/arm/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/arm/stackinfo.h
+rename to libc/sysdeps/linux/arm/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/common/.cvsignore b/libc/sysdeps/linux/common/.cvsignore
+index f8fa8225d..0232d6900 100644
+--- a/libc/sysdeps/linux/common/.cvsignore
++++ b/libc/sysdeps/linux/common/.cvsignore
+@@ -1,3 +1,4 @@
+ crti.S
+ crtn.S
+ initfini.S
++gmon-start.S
+diff --git a/libc/sysdeps/linux/common/Makefile b/libc/sysdeps/linux/common/Makefile
+index 5b9717f2b..d51fc4281 100644
+--- a/libc/sysdeps/linux/common/Makefile
++++ b/libc/sysdeps/linux/common/Makefile
+@@ -29,6 +29,9 @@ CSRC=	waitpid.c getdnnm.c gethstnm.c getcwd.c ptrace.c \
+ ifneq ($(strip $(EXCLUDE_BRK)),y)
+ CSRC+=sbrk.c
+ endif
++ifeq ($(strip $(UCLIBC_PROFILING)),y)
++CSRC+=gmon.c
++endif
+ COBJS=$(patsubst %.c,%.o, $(CSRC))
+ 
+ MSRC=syscalls.c
+@@ -44,6 +47,9 @@ SAFECFLAGS := $(subst -g,,$(SAFECFLAGS))
+ ifeq ($(strip $(DOPIC)),y)
+ SAFECFLAGS+=-fPIC
+ endif
++ifeq ($(strip $(UCLIBC_PROFILING)),y)
++SAFECFLAGS+=-DGMON_SUPPORT
++endif
+ 
+ OBJ=$(COBJS) $(MOBJ)
+ 
+diff --git a/libc/sysdeps/linux/common/bits/atomicity.h b/libc/sysdeps/linux/common/bits/atomicity.h
+new file mode 100644
+index 000000000..1a756498b
+--- /dev/null
++++ b/libc/sysdeps/linux/common/bits/atomicity.h
+@@ -0,0 +1,54 @@
++/* Low-level functions for atomic operations.  Stub version.
++   Copyright (C) 1997,2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H	1
++
++#include <inttypes.h>
++
++#warning stub atomicity functions are not really atomic
++
++static inline int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  int result = *mem;
++  *mem += val;
++  return result;
++}
++
++static inline void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  *mem += val;
++}
++
++static inline int
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  if (*p != oldval)
++    return 0;
++
++  *p = newval;
++  return 1;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/common/bits/machine-gmon.h b/libc/sysdeps/linux/common/bits/machine-gmon.h
+new file mode 100644
+index 000000000..eb046b068
+--- /dev/null
++++ b/libc/sysdeps/linux/common/bits/machine-gmon.h
+@@ -0,0 +1,54 @@
++/* Machine-dependent definitions for profiling support.  Generic GCC 2 version.
++   Copyright (C) 1996, 1997, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* GCC version 2 gives us a perfect magical function to get
++   just the information we need:
++     void *__builtin_return_address (unsigned int N)
++   returns the return address of the frame N frames up.  */
++
++/* Be warned that GCC cannot usefully compile __builtin_return_address(N)
++   for N != 0 on all machines.  In this case, you may have to write
++   your own version of _mcount().  */
++
++#if __GNUC__ < 2
++ #error "This file uses __builtin_return_address, a GCC 2 extension."
++#endif
++
++#include <sysdep.h>
++#ifndef NO_UNDERSCORES
++/* The asm symbols for C functions are `_function'.
++   The canonical name for the counter function is `mcount', no _.  */
++void _mcount (void) asm ("mcount");
++#else
++/* The canonical name for the function is `_mcount' in both C and asm,
++   but some old asm code might assume it's `mcount'.  */
++void _mcount (void);
++weak_alias (_mcount, mcount)
++#endif
++
++static void mcount_internal (u_long frompc, u_long selfpc);
++
++#define _MCOUNT_DECL(frompc, selfpc) \
++static inline void mcount_internal (u_long frompc, u_long selfpc)
++
++#define MCOUNT \
++void _mcount (void)							      \
++{									      \
++  mcount_internal ((u_long) RETURN_ADDRESS (1), (u_long) RETURN_ADDRESS (0)); \
++}
+diff --git a/libc/sysdeps/linux/common/bits/profil-counter.h b/libc/sysdeps/linux/common/bits/profil-counter.h
+new file mode 100644
+index 000000000..9cae5840d
+--- /dev/null
++++ b/libc/sysdeps/linux/common/bits/profil-counter.h
+@@ -0,0 +1,27 @@
++/* Machine-dependent SIGPROF signal handler.  "Generic" version w/ sigcontext
++   Copyright (C) 1996, 1997 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* In many Unix systems signal handlers are called like this
++   and the interrupted PC is easily findable in the `struct sigcontext'.  */
++
++static void
++profil_counter (int signr, int code, struct sigcontext *scp)
++{
++  profil_count ((void *) scp->sc_pc);
++}
+diff --git a/libc/sysdeps/linux/common/bits/sigcontextinfo.h b/libc/sysdeps/linux/common/bits/sigcontextinfo.h
+new file mode 100644
+index 000000000..40305b488
+--- /dev/null
++++ b/libc/sysdeps/linux/common/bits/sigcontextinfo.h
+@@ -0,0 +1,27 @@
++/* Copyright (C) 1998, 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* In general we cannot provide any information.  */
++#define SIGCONTEXT struct sigcontext *
++#define SIGCONTEXT_EXTRA_ARGS
++#define GET_PC(ctx)	((void *) 0)
++#define GET_FRAME(ctx)	((void *) 0)
++#define GET_STACK(ctx)	((void *) 0)
++#define CALL_SIGHANDLER(handler, signo, ctx) \
++  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libc/sysdeps/linux/common/bits/stackinfo.h b/libc/sysdeps/linux/common/bits/stackinfo.h
+new file mode 100644
+index 000000000..1ed7b9503
+--- /dev/null
++++ b/libc/sysdeps/linux/common/bits/stackinfo.h
+@@ -0,0 +1,34 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  Since there is no general truth we can't say
++   anything here.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++#error Machine stack direction unknown.
++#if 0
++#define _STACK_GROWS_DOWN	1
++#define _STACK_GROWS_UP		1
++#endif
++
++#endif	/* stackinfo.h */
++
++
+diff --git a/libc/sysdeps/linux/common/gmon-start.c b/libc/sysdeps/linux/common/gmon-start.c
+new file mode 100644
+index 000000000..6878a7a71
+--- /dev/null
++++ b/libc/sysdeps/linux/common/gmon-start.c
+@@ -0,0 +1,58 @@
++/* Code to enable profiling at program startup.
++   Copyright (C) 1995,1996,1997,2000,2001,2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <features.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <sys/types.h>
++#include <sys/gmon.h>
++
++#ifdef __UCLIBC_PROFILING__
++
++/* Beginning and end of our code segment. We cannot declare them
++   as the external functions since we want the addresses of those
++   labels. Taking the address of a function may have different
++   meanings on different platforms. */
++
++extern void _start;
++extern void etext;
++
++
++void __gmon_start__ (void)
++{
++#ifdef __UCLIBC_CTOR_DTOR__
++    /* Protect from being called more than once.  Since crti.o is linked
++       into every shared library, each of their init functions will call us.  */
++    static int called;
++
++    if (called)
++	return;
++
++    called = 1;
++#endif
++
++    /* Start keeping profiling records.  */
++    monstartup ((u_long) &_start, (u_long) &etext);
++
++    /* Call _mcleanup before exiting; it will write out gmon.out from the
++       collected data.  */
++    atexit (&_mcleanup);
++}
++#endif
++
+diff --git a/libc/sysdeps/linux/common/gmon.c b/libc/sysdeps/linux/common/gmon.c
+new file mode 100644
+index 000000000..b3fe788f7
+--- /dev/null
++++ b/libc/sysdeps/linux/common/gmon.c
+@@ -0,0 +1,641 @@
++/*-
++ * Copyright (c) 1983, 1992, 1993
++ *	The Regents of the University of California.  All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 4. Neither the name of the University nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++#include <features.h>
++#include <sys/param.h>
++#include <sys/time.h>
++#include <sys/gmon.h>
++#include <sys/gmon_out.h>
++#include <sys/uio.h>
++
++#include <errno.h>
++#include <stdio.h>
++#include <fcntl.h>
++#include <unistd.h>
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <signal.h>
++#include <sys/time.h>
++#include <sys/types.h>
++
++#ifdef __UCLIBC_PROFILING__
++
++/*  Head of basic-block list or NULL. */
++struct __bb *__bb_head;
++
++struct gmonparam _gmonparam = { GMON_PROF_OFF };
++
++/*
++ * See profil(2) where this is described:
++ */
++static int	s_scale;
++#define		SCALE_1_TO_1	0x10000L
++
++#define ERR(s) write (STDERR_FILENO, s, sizeof (s) - 1)
++
++void moncontrol __P ((int mode));
++static void write_hist __P ((int fd));
++static void write_call_graph __P ((int fd));
++static void write_bb_counts __P ((int fd));
++
++/*
++ * Control profiling
++ *	profiling is what mcount checks to see if
++ *	all the data structures are ready.
++ */
++void moncontrol (int mode)
++{
++    struct gmonparam *p = &_gmonparam;
++
++    /* Don't change the state if we ran into an error.  */
++    if (p->state == GMON_PROF_ERROR)
++	return;
++
++    if (mode)
++    {
++	/* start */
++	profil((void *) p->kcount, p->kcountsize, p->lowpc, s_scale);
++	p->state = GMON_PROF_ON;
++    }
++    else
++    {
++	/* stop */
++	profil(NULL, 0, 0, 0);
++	p->state = GMON_PROF_OFF;
++    }
++}
++
++
++void monstartup (u_long lowpc, u_long highpc)
++{
++    register int o;
++    char *cp;
++    struct gmonparam *p = &_gmonparam;
++
++    /*
++     * round lowpc and highpc to multiples of the density we're using
++     * so the rest of the scaling (here and in gprof) stays in ints.
++     */
++    p->lowpc = ROUNDDOWN(lowpc, HISTFRACTION * sizeof(HISTCOUNTER));
++    p->highpc = ROUNDUP(highpc, HISTFRACTION * sizeof(HISTCOUNTER));
++    p->textsize = p->highpc - p->lowpc;
++    p->kcountsize = p->textsize / HISTFRACTION;
++    p->hashfraction = HASHFRACTION;
++    p->log_hashfraction = -1;
++    /* The following test must be kept in sync with the corresponding
++       test in mcount.c.  */
++    if ((HASHFRACTION & (HASHFRACTION - 1)) == 0) {
++	/* if HASHFRACTION is a power of two, mcount can use shifting
++	   instead of integer division.  Precompute shift amount. */
++	p->log_hashfraction = ffs(p->hashfraction * sizeof(*p->froms)) - 1;
++    }
++    p->fromssize = p->textsize / HASHFRACTION;
++    p->tolimit = p->textsize * ARCDENSITY / 100;
++    if (p->tolimit < MINARCS)
++	p->tolimit = MINARCS;
++    else if (p->tolimit > MAXARCS)
++	p->tolimit = MAXARCS;
++    p->tossize = p->tolimit * sizeof(struct tostruct);
++
++    cp = calloc (p->kcountsize + p->fromssize + p->tossize, 1);
++    if (! cp)
++    {
++	ERR("monstartup: out of memory\n");
++	p->tos = NULL;
++	p->state = GMON_PROF_ERROR;
++	return;
++    }
++    p->tos = (struct tostruct *)cp;
++    cp += p->tossize;
++    p->kcount = (HISTCOUNTER *)cp;
++    cp += p->kcountsize;
++    p->froms = (ARCINDEX *)cp;
++
++    p->tos[0].link = 0;
++
++    o = p->highpc - p->lowpc;
++    if (p->kcountsize < (u_long) o)
++    {
++#ifndef hp300
++	s_scale = ((float)p->kcountsize / o ) * SCALE_1_TO_1;
++#else
++	/* avoid floating point operations */
++	int quot = o / p->kcountsize;
++
++	if (quot >= 0x10000)
++	    s_scale = 1;
++	else if (quot >= 0x100)
++	    s_scale = 0x10000 / quot;
++	else if (o >= 0x800000)
++	    s_scale = 0x1000000 / (o / (p->kcountsize >> 8));
++	else
++	    s_scale = 0x1000000 / ((o << 8) / p->kcountsize);
++#endif
++    } else
++	s_scale = SCALE_1_TO_1;
++
++    moncontrol(1);
++}
++
++
++/* Return frequency of ticks reported by profil. */
++static int profile_frequency (void)
++{
++    /*
++     * Discover the tick frequency of the machine if something goes wrong,
++     * we return 0, an impossible hertz.
++     */
++    struct itimerval tim;
++
++    tim.it_interval.tv_sec = 0;
++    tim.it_interval.tv_usec = 1;
++    tim.it_value.tv_sec = 0;
++    tim.it_value.tv_usec = 0;
++    setitimer(ITIMER_REAL, &tim, 0);
++    setitimer(ITIMER_REAL, 0, &tim);
++    if (tim.it_interval.tv_usec < 2)
++	return 0;
++    return (1000000 / tim.it_interval.tv_usec);
++}
++
++
++static void write_hist (int fd)
++{
++    u_char tag = GMON_TAG_TIME_HIST;
++    struct gmon_hist_hdr thdr __attribute__ ((aligned (__alignof__ (char *))));
++
++    if (_gmonparam.kcountsize > 0)
++    {
++	struct iovec iov[3] =
++	{
++	    { &tag, sizeof (tag) },
++	    { &thdr, sizeof (struct gmon_hist_hdr) },
++	    { _gmonparam.kcount, _gmonparam.kcountsize }
++	};
++
++	*(char **) thdr.low_pc = (char *) _gmonparam.lowpc;
++	*(char **) thdr.high_pc = (char *) _gmonparam.highpc;
++	*(int32_t *) thdr.hist_size = (_gmonparam.kcountsize
++		/ sizeof (HISTCOUNTER));
++	*(int32_t *) thdr.prof_rate = profile_frequency ();
++	strncpy (thdr.dimen, "seconds", sizeof (thdr.dimen));
++	thdr.dimen_abbrev = 's';
++
++	writev (fd, iov, 3);
++    }
++}
++
++
++static void write_call_graph (int fd)
++{
++#define NARCS_PER_WRITEV	32
++    u_char tag = GMON_TAG_CG_ARC;
++    struct gmon_cg_arc_record raw_arc[NARCS_PER_WRITEV]
++	__attribute__ ((aligned (__alignof__ (char*))));
++    ARCINDEX from_index, to_index;
++    int from_len;
++    u_long frompc;
++    struct iovec iov[2 * NARCS_PER_WRITEV];
++    int nfilled;
++
++    for (nfilled = 0; nfilled < NARCS_PER_WRITEV; ++nfilled)
++    {
++	iov[2 * nfilled].iov_base = &tag;
++	iov[2 * nfilled].iov_len = sizeof (tag);
++
++	iov[2 * nfilled + 1].iov_base = &raw_arc[nfilled];
++	iov[2 * nfilled + 1].iov_len = sizeof (struct gmon_cg_arc_record);
++    }
++
++    nfilled = 0;
++    from_len = _gmonparam.fromssize / sizeof (*_gmonparam.froms);
++    for (from_index = 0; from_index < from_len; ++from_index)
++    {
++	if (_gmonparam.froms[from_index] == 0)
++	    continue;
++
++	frompc = _gmonparam.lowpc;
++	frompc += (from_index * _gmonparam.hashfraction
++		* sizeof (*_gmonparam.froms));
++	for (to_index = _gmonparam.froms[from_index];
++		to_index != 0;
++		to_index = _gmonparam.tos[to_index].link)
++	{
++	    struct arc
++	    {
++		char *frompc;
++		char *selfpc;
++		int32_t count;
++	    }
++	    arc;
++
++	    arc.frompc = (char *) frompc;
++	    arc.selfpc = (char *) _gmonparam.tos[to_index].selfpc;
++	    arc.count  = _gmonparam.tos[to_index].count;
++	    memcpy (raw_arc + nfilled, &arc, sizeof (raw_arc [0]));
++
++	    if (++nfilled == NARCS_PER_WRITEV)
++	    {
++		writev (fd, iov, 2 * nfilled);
++		nfilled = 0;
++	    }
++	}
++    }
++    if (nfilled > 0)
++	writev (fd, iov, 2 * nfilled);
++}
++
++
++static void write_bb_counts (int fd)
++{
++    struct __bb *grp;
++    u_char tag = GMON_TAG_BB_COUNT;
++    size_t ncounts;
++    size_t i;
++
++    struct iovec bbhead[2] =
++    {
++	{ &tag, sizeof (tag) },
++	{ &ncounts, sizeof (ncounts) }
++    };
++    struct iovec bbbody[8];
++    size_t nfilled;
++
++    for (i = 0; i < (sizeof (bbbody) / sizeof (bbbody[0])); i += 2)
++    {
++	bbbody[i].iov_len = sizeof (grp->addresses[0]);
++	bbbody[i + 1].iov_len = sizeof (grp->counts[0]);
++    }
++
++    /* Write each group of basic-block info (all basic-blocks in a
++       compilation unit form a single group). */
++
++    for (grp = __bb_head; grp; grp = grp->next)
++    {
++	ncounts = grp->ncounts;
++	writev (fd, bbhead, 2);
++	for (nfilled = i = 0; i < ncounts; ++i)
++	{
++	    if (nfilled > (sizeof (bbbody) / sizeof (bbbody[0])) - 2)
++	    {
++		writev (fd, bbbody, nfilled);
++		nfilled = 0;
++	    }
++
++	    bbbody[nfilled++].iov_base = (char *) &grp->addresses[i];
++	    bbbody[nfilled++].iov_base = &grp->counts[i];
++	}
++	if (nfilled > 0)
++	    writev (fd, bbbody, nfilled);
++    }
++}
++
++
++static void write_gmon (void)
++{
++    struct gmon_hdr ghdr __attribute__ ((aligned (__alignof__ (int))));
++    int fd = -1;
++    char *env;
++
++#ifndef O_NOFOLLOW
++# define O_NOFOLLOW	0
++#endif
++
++    env = getenv ("GMON_OUT_PREFIX");
++    if (env != NULL 
++#if 0
++	    && !__libc_enable_secure
++#endif
++	    )
++    {
++	size_t len = strlen (env);
++	char buf[len + 20];
++	sprintf (buf, "%s.%u", env, getpid ());
++	fd = open (buf, O_CREAT|O_TRUNC|O_WRONLY|O_NOFOLLOW, 0666);
++    }
++
++    if (fd == -1)
++    {
++	fd = open ("gmon.out", O_CREAT|O_TRUNC|O_WRONLY|O_NOFOLLOW, 0666);
++	if (fd < 0)
++	{
++	    char buf[300];
++	    int errnum = errno;
++	    fprintf (stderr, "_mcleanup: gmon.out: %s\n",
++		    strerror_r (errnum, buf, sizeof buf));
++	    return;
++	}
++    }
++
++    /* write gmon.out header: */
++    memset (&ghdr, '\0', sizeof (struct gmon_hdr));
++    memcpy (&ghdr.cookie[0], GMON_MAGIC, sizeof (ghdr.cookie));
++    *(int32_t *) ghdr.version = GMON_VERSION;
++    write (fd, &ghdr, sizeof (struct gmon_hdr));
++
++    /* write PC histogram: */
++    write_hist (fd);
++
++    /* write call-graph: */
++    write_call_graph (fd);
++
++    /* write basic-block execution counts: */
++    write_bb_counts (fd);
++
++    close (fd);
++}
++
++
++void write_profiling (void)
++{
++    int save = _gmonparam.state;
++    _gmonparam.state = GMON_PROF_OFF;
++    if (save == GMON_PROF_ON)
++	write_gmon ();
++    _gmonparam.state = save;
++}
++
++
++void _mcleanup (void)
++{
++    moncontrol (0);
++
++    if (_gmonparam.state != GMON_PROF_ERROR)
++	write_gmon ();
++
++    /* free the memory. */
++    if (_gmonparam.tos != NULL)
++	free (_gmonparam.tos);
++}
++
++#ifndef SIGPROF
++
++/* Enable statistical profiling, writing samples of the PC into at most
++   SIZE bytes of SAMPLE_BUFFER; every processor clock tick while profiling
++   is enabled, the system examines the user PC and increments
++   SAMPLE_BUFFER[((PC - OFFSET) / 2) * SCALE / 65536].  If SCALE is zero,
++   disable profiling.  Returns zero on success, -1 on error.  */
++
++int profil (u_short *sample_buffer, size_t size, size_t offset, u_int scale)
++{
++    if (scale == 0)
++	/* Disable profiling.  */
++	return 0;
++
++    __set_errno (ENOSYS);
++    return -1;
++}
++
++#else
++
++static u_short *samples;
++static size_t nsamples;
++static size_t pc_offset;
++static u_int pc_scale;
++
++static inline void profil_count (void *pc)
++{
++    size_t i = (pc - pc_offset - (void *) 0) / 2;
++
++    if (sizeof (unsigned long long int) > sizeof (size_t))
++	i = (unsigned long long int) i * pc_scale / 65536;
++    else
++	i = i / 65536 * pc_scale + i % 65536 * pc_scale / 65536;
++
++    if (i < nsamples)
++	++samples[i];
++}
++
++/* Get the machine-dependent definition of `profil_counter', the signal
++   handler for SIGPROF.  It calls `profil_count' (above) with the PC of the
++   interrupted code.  */
++#include <bits/profil-counter.h>
++
++/* Enable statistical profiling, writing samples of the PC into at most
++   SIZE bytes of SAMPLE_BUFFER; every processor clock tick while profiling
++   is enabled, the system examines the user PC and increments
++   SAMPLE_BUFFER[((PC - OFFSET) / 2) * SCALE / 65536].  If SCALE is zero,
++   disable profiling.  Returns zero on success, -1 on error.  */
++
++int profil (u_short *sample_buffer, size_t size, size_t offset, u_int scale)
++{
++    static struct sigaction oact;
++    static struct itimerval otimer;
++    struct sigaction act;
++    struct itimerval timer;
++
++    if (sample_buffer == NULL)
++    {
++	/* Disable profiling.  */
++	if (samples == NULL)
++	    /* Wasn't turned on.  */
++	    return 0;
++
++	if (setitimer (ITIMER_PROF, &otimer, NULL) < 0)
++	    return -1;
++	samples = NULL;
++	return sigaction (SIGPROF, &oact, NULL);
++    }
++
++    if (samples)
++    {
++	/* Was already turned on.  Restore old timer and signal handler
++	   first.  */
++	if (setitimer (ITIMER_PROF, &otimer, NULL) < 0
++		|| sigaction (SIGPROF, &oact, NULL) < 0)
++	    return -1;
++    }
++
++    samples = sample_buffer;
++    nsamples = size / sizeof *samples;
++    pc_offset = offset;
++    pc_scale = scale;
++
++    act.sa_handler = (__sighandler_t) &profil_counter;
++    act.sa_flags = SA_RESTART;
++    __sigfillset (&act.sa_mask);
++    if (sigaction (SIGPROF, &act, &oact) < 0)
++	return -1;
++
++    timer.it_value.tv_sec = 0;
++    timer.it_value.tv_usec = 1;
++    timer.it_interval = timer.it_value;
++    return setitimer (ITIMER_PROF, &timer, &otimer);
++}
++
++#endif
++
++
++/* This file provides the machine-dependent definitions of the _MCOUNT_DECL
++   and MCOUNT macros.  */
++#include <bits/machine-gmon.h>
++#include <bits/atomicity.h>
++
++/*
++ * mcount is called on entry to each function compiled with the profiling
++ * switch set.  _mcount(), which is declared in a machine-dependent way
++ * with _MCOUNT_DECL, does the actual work and is either inlined into a
++ * C routine or called by an assembly stub.  In any case, this magic is
++ * taken care of by the MCOUNT definition in <machine/profile.h>.
++ *
++ * _mcount updates data structures that represent traversals of the
++ * program's call graph edges.  frompc and selfpc are the return
++ * address and function address that represents the given call graph edge.
++ *
++ * Note: the original BSD code used the same variable (frompcindex) for
++ * both frompcindex and frompc.  Any reasonable, modern compiler will
++ * perform this optimization.
++ */
++_MCOUNT_DECL(frompc, selfpc)	/* _mcount; may be static, inline, etc */
++{
++	register ARCINDEX *frompcindex;
++	register struct tostruct *top, *prevtop;
++	register struct gmonparam *p;
++	register ARCINDEX toindex;
++	int i;
++
++	p = &_gmonparam;
++	/*
++	 * check that we are profiling
++	 * and that we aren't recursively invoked.
++	 */
++	if (! compare_and_swap (&p->state, GMON_PROF_ON, GMON_PROF_BUSY))
++	  return;
++
++	/*
++	 * check that frompcindex is a reasonable pc value.
++	 * for example:	signal catchers get called from the stack,
++	 *		not from text space.  too bad.
++	 */
++	frompc -= p->lowpc;
++	if (frompc > p->textsize)
++		goto done;
++
++	/* The following test used to be
++		if (p->log_hashfraction >= 0)
++	   But we can simplify this if we assume the profiling data
++	   is always initialized by the functions in gmon.c.  But
++	   then it is possible to avoid a runtime check and use the
++	   smae `if' as in gmon.c.  So keep these tests in sync.  */
++	if ((HASHFRACTION & (HASHFRACTION - 1)) == 0) {
++	  /* avoid integer divide if possible: */
++	    i = frompc >> p->log_hashfraction;
++	} else {
++	    i = frompc / (p->hashfraction * sizeof(*p->froms));
++	}
++	frompcindex = &p->froms[i];
++	toindex = *frompcindex;
++	if (toindex == 0) {
++		/*
++		 *	first time traversing this arc
++		 */
++		toindex = ++p->tos[0].link;
++		if (toindex >= p->tolimit)
++			/* halt further profiling */
++			goto overflow;
++
++		*frompcindex = toindex;
++		top = &p->tos[toindex];
++		top->selfpc = selfpc;
++		top->count = 1;
++		top->link = 0;
++		goto done;
++	}
++	top = &p->tos[toindex];
++	if (top->selfpc == selfpc) {
++		/*
++		 * arc at front of chain; usual case.
++		 */
++		top->count++;
++		goto done;
++	}
++	/*
++	 * have to go looking down chain for it.
++	 * top points to what we are looking at,
++	 * prevtop points to previous top.
++	 * we know it is not at the head of the chain.
++	 */
++	for (; /* goto done */; ) {
++		if (top->link == 0) {
++			/*
++			 * top is end of the chain and none of the chain
++			 * had top->selfpc == selfpc.
++			 * so we allocate a new tostruct
++			 * and link it to the head of the chain.
++			 */
++			toindex = ++p->tos[0].link;
++			if (toindex >= p->tolimit)
++				goto overflow;
++
++			top = &p->tos[toindex];
++			top->selfpc = selfpc;
++			top->count = 1;
++			top->link = *frompcindex;
++			*frompcindex = toindex;
++			goto done;
++		}
++		/*
++		 * otherwise, check the next arc on the chain.
++		 */
++		prevtop = top;
++		top = &p->tos[top->link];
++		if (top->selfpc == selfpc) {
++			/*
++			 * there it is.
++			 * increment its count
++			 * move it to the head of the chain.
++			 */
++			top->count++;
++			toindex = prevtop->link;
++			prevtop->link = top->link;
++			top->link = *frompcindex;
++			*frompcindex = toindex;
++			goto done;
++		}
++
++	}
++done:
++	p->state = GMON_PROF_ON;
++	return;
++overflow:
++	p->state = GMON_PROF_ERROR;
++	return;
++}
++
++/*
++ * Actual definition of mcount function.  Defined in <machine/profile.h>,
++ * which is included by <sys/gmon.h>.
++ */
++MCOUNT
++
++#endif
++
+diff --git a/libc/sysdeps/linux/common/initfini.c b/libc/sysdeps/linux/common/initfini.c
+index 64fdf6eb4..ba4d68fc9 100644
+--- a/libc/sysdeps/linux/common/initfini.c
++++ b/libc/sysdeps/linux/common/initfini.c
+@@ -38,7 +38,6 @@
+ 
+ #include <features.h>
+ 
+-#undef GMON_SUPPORT
+ 
+ /* We use embedded asm for .section unconditionally, as this makes it
+    easier to insert the necessary directives into crtn.S. */
+@@ -87,6 +86,7 @@ dummy (void (*foo) (void))
+ asm ("\n/*@_init_PROLOG_BEGINS*/");
+ 
+ #ifdef GMON_SUPPORT
++asm ("\n/*@_init_GMON_STUFF_BEGINS*/");
+ static void
+ call_gmon_start(void)
+ {
+@@ -96,6 +96,7 @@ call_gmon_start(void)
+   if (gmon_start)
+     gmon_start ();
+ }
++asm ("\n/*@_init_GMON_STUFF_PAUSES*/");
+ #endif
+ 
+ SECTION (".init")
+@@ -106,6 +107,7 @@ extern void _init (void);
+ void _init (void)
+ {
+ #ifdef GMON_SUPPORT
++asm ("\n/*@_init_GMON_STUFF_UNPAUSES*/");
+   /* We cannot use the normal constructor mechanism in gcrt1.o because it
+      appears before crtbegin.o in the link, so the header elt of .ctors
+      would come after the elt for __gmon_start__.  One approach is for
+@@ -113,6 +115,7 @@ void _init (void)
+      module which has a constructor; but then user code's constructors
+      would come first, and not be profiled.  */
+   call_gmon_start ();
++asm ("\n/*@_init_GMON_STUFF_ENDS*/");
+ #else
+   asm ("\n/*@_init_PROLOG_PAUSES*/");
+   {
+diff --git a/libc/sysdeps/linux/cris/bits/machine-gmon.h b/libc/sysdeps/linux/cris/bits/machine-gmon.h
+new file mode 100644
+index 000000000..2f36a34d6
+--- /dev/null
++++ b/libc/sysdeps/linux/cris/bits/machine-gmon.h
+@@ -0,0 +1,28 @@
++/* PowerPC-specific implementation of profiling support.
++   Copyright (C) 1997, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++void __mcount_internal (unsigned long frompc, unsigned long selfpc);
++
++#define _MCOUNT_DECL(frompc, selfpc) \
++void __mcount_internal (unsigned long frompc, unsigned long selfpc)
++
++
++/* Define MCOUNT as empty since we have the implementation in another
++   file.  FIXME: Just stubs, currently.  */
++#define MCOUNT
+diff --git a/libc/sysdeps/linux/cris/bits/profil-counter.h b/libc/sysdeps/linux/cris/bits/profil-counter.h
+new file mode 100644
+index 000000000..37adc1fee
+--- /dev/null
++++ b/libc/sysdeps/linux/cris/bits/profil-counter.h
+@@ -0,0 +1,26 @@
++/* Low-level statistical profiling support function.  Linux/CRIS version.
++   Copyright (C) 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <signal.h>
++
++static void
++profil_counter (int signo, struct sigcontext *scp)
++{
++  profil_count ((void *) scp->regs.irp);
++}
+diff --git a/libpthread/linuxthreads/sysdeps/cris/stackinfo.h b/libc/sysdeps/linux/cris/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/cris/stackinfo.h
+rename to libc/sysdeps/linux/cris/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/i386/Makefile b/libc/sysdeps/linux/i386/Makefile
+index 9ca790cff..c7e1db947 100644
+--- a/libc/sysdeps/linux/i386/Makefile
++++ b/libc/sysdeps/linux/i386/Makefile
+@@ -21,10 +21,14 @@ include $(TOPDIR)Rules.mak
+ ASFLAGS=$(CFLAGS)
+ 
+ CRT0_SRC = crt0.S
+-CRT0_OBJ = crt0.o crt1.o
++CRT0_OBJ = crt0.o crt1.o gcrt1.o
++CRT0_DEPS=gmon-start.S
+ 
+ SSRC=__longjmp.S vfork.S clone.S setjmp.S bsd-setjmp.S \
+ 	bsd-_setjmp.S syscall.S
++ifeq ($(strip $(UCLIBC_PROFILING)),y)
++SSRC+=mcount.S
++endif
+ SOBJS=$(patsubst %.S,%.o, $(SSRC))
+ 
+ CSRC=brk.c sigaction.c
+@@ -53,6 +57,13 @@ $(COBJS): %.o : %.c
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
++ifeq ($(strip $(UCLIBC_PROFILING)),y)
++SAFECFLAGS := $(subst -g,,$(CFLAGS))
++gmon-start.S: ../common/gmon-start.c
++	$(CC) $(SAFECFLAGS) -c $< -S -o $*.S
++gcrt1.o: $(CRT0_DEPS)
++endif
++
+ headers:
+ 
+ 
+diff --git a/libc/sysdeps/linux/i386/bits/atomicity.h b/libc/sysdeps/linux/i386/bits/atomicity.h
+new file mode 100644
+index 000000000..df2fb8184
+--- /dev/null
++++ b/libc/sysdeps/linux/i386/bits/atomicity.h
+@@ -0,0 +1,57 @@
++/* Low-level functions for atomic operations.  ix86 version, x >= 4.
++   Copyright (C) 1997, 2000, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H	1
++
++#include <inttypes.h>
++
++
++static inline uint32_t
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, uint32_t val)
++{
++  register uint32_t result;
++  __asm__ __volatile__ ("lock; xaddl %0,%1"
++			: "=r" (result), "=m" (*mem) : "0" (val), "1" (*mem));
++  return result;
++}
++
++static inline void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  __asm__ __volatile__ ("lock; addl %1,%0"
++			: "=m" (*mem) : "ir" (val), "0" (*mem));
++}
++
++static inline char
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  char ret;
++  long int readval;
++
++  __asm__ __volatile__ ("lock; cmpxchgl %3, %1; sete %0"
++                        : "=q" (ret), "=m" (*p), "=a" (readval)
++                        : "r" (newval), "1" (*p), "a" (oldval));
++  return ret;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/i386/bits/machine-gmon.h b/libc/sysdeps/linux/i386/bits/machine-gmon.h
+new file mode 100644
+index 000000000..6c860bc01
+--- /dev/null
++++ b/libc/sysdeps/linux/i386/bits/machine-gmon.h
+@@ -0,0 +1,41 @@
++/* i386-specific implementation of profiling support.
++   Copyright (C) 1997, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1997.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <sysdep.h>
++
++/* We need a special version of the `mcount' function since for ix86 it
++   must not clobber any register.  This has several reasons:
++     - there is a bug in gcc as of version 2.7.2.2 which prohibits the
++       use of profiling together with nested functions
++     - the ELF `fixup' function uses GCC's regparm feature
++     - some (future) systems might want to pass parameters in registers.  */
++
++/* We must not pollute the global namespace.  */
++#define mcount_internal __mcount_internal
++
++extern void mcount_internal (u_long frompc, u_long selfpc);
++
++#define _MCOUNT_DECL(frompc, selfpc) \
++void mcount_internal (u_long frompc, u_long selfpc)
++
++
++/* Define MCOUNT as empty since we have the implementation in another
++   file.  */
++#define MCOUNT
+diff --git a/libc/sysdeps/linux/i386/bits/profil-counter.h b/libc/sysdeps/linux/i386/bits/profil-counter.h
+new file mode 100644
+index 000000000..80933a36f
+--- /dev/null
++++ b/libc/sysdeps/linux/i386/bits/profil-counter.h
+@@ -0,0 +1,27 @@
++/* Low-level statistical profiling support function.  Linux/i386 version.
++   Copyright (C) 1996, 1997, 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <signal.h>
++#include <bits/sigcontextinfo.h>
++
++static void
++profil_counter (int signo, SIGCONTEXT scp)
++{
++  profil_count ((void *) GET_PC (scp));
++}
+diff --git a/libpthread/linuxthreads/sysdeps/i386/sigcontextinfo.h b/libc/sysdeps/linux/i386/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/i386/sigcontextinfo.h
+rename to libc/sysdeps/linux/i386/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/i386/stackinfo.h b/libc/sysdeps/linux/i386/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/i386/stackinfo.h
+rename to libc/sysdeps/linux/i386/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/i386/crt0.S b/libc/sysdeps/linux/i386/crt0.S
+index e871c0876..3930a1690 100644
+--- a/libc/sysdeps/linux/i386/crt0.S
++++ b/libc/sysdeps/linux/i386/crt0.S
+@@ -74,7 +74,7 @@ _start:
+ 	pushl %ebp      /* callers %ebp (frame pointer) */
+ 	movl %esp,%ebp  /* mark callers stack frame as invalid */
+ 
+-#if defined L_crt1 && defined __UCLIBC_CTOR_DTOR__
++#if (defined L_crt1 || defined L_gcrt1 ) && defined __UCLIBC_CTOR_DTOR__
+ 	/* Push .init and .fini arguments to __uClibc_start_main() on the stack */
+ 	pushl $_fini
+ 	pushl $_init
+@@ -99,3 +99,8 @@ _start:
+ 	hlt
+ .size _start,.-_start
+ 
++
++#if defined L_gcrt1
++# include "./gmon-start.S"
++#endif
++
+diff --git a/libc/sysdeps/linux/i386/mcount.S b/libc/sysdeps/linux/i386/mcount.S
+new file mode 100644
+index 000000000..704a7b851
+--- /dev/null
++++ b/libc/sysdeps/linux/i386/mcount.S
+@@ -0,0 +1,54 @@
++/* i386-specific implemetation of profiling support.
++   Copyright (C) 1997, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1997.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++
++/* We need a special version of the `mcount' function since for ix86 it
++   must not clobber any register.  This has several reasons:
++     - there is a bug in gcc as of version 2.7.2.2 which prohibits the
++       use of profiling together with nested functions
++     - the ELF `fixup' function uses GCC's regparm feature
++     - some (future) systems might want to pass parameters in registers.  */
++
++        .globl _mcount
++	.type _mcount,@function;
++	.align 1<<4
++_mcount:
++	/* Save the caller-clobbered registers.  */
++	pushl %eax
++	pushl %ecx
++	pushl %edx
++
++	movl 12(%esp), %edx
++	movl 4(%ebp), %eax
++
++	/* No need to access the PLT or GOT, __mcount_internal is an
++	   internal function and we can make a relative call.  */
++	call __mcount_internal
++
++	/* Pop the saved registers.  Please note that `mcount' has no
++	   return value.  */
++	popl %edx
++	popl %ecx
++	popl %eax
++	ret
++	.size _mcount,.-_mcount;
++
++#undef mcount
++.weak mcount ; mcount = _mcount
+diff --git a/libc/sysdeps/linux/m68k/bits/atomicity.h b/libc/sysdeps/linux/m68k/bits/atomicity.h
+new file mode 100644
+index 000000000..464948086
+--- /dev/null
++++ b/libc/sysdeps/linux/m68k/bits/atomicity.h
+@@ -0,0 +1,64 @@
++/* Low-level functions for atomic operations.  m680x0 version, x >= 2.
++   Copyright (C) 1997 Free Software Foundation, Inc.
++   Contributed by Andreas Schwab <schwab@issan.informatik.uni-dortmund.de>.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H	1
++
++#include <inttypes.h>
++
++
++static inline int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  register int result = *mem;
++  register int temp;
++  __asm__ __volatile__ ("1: move%.l %0,%1;"
++			"   add%.l %2,%1;"
++			"   cas%.l %0,%1,%3;"
++			"   jbne 1b"
++			: "=d" (result), "=&d" (temp)
++			: "d" (val), "m" (*mem), "0" (result) : "memory");
++  return result;
++}
++
++static inline void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  /* XXX Use cas here as well?  */
++  __asm__ __volatile__ ("add%.l %0,%1"
++			: : "id" (val), "m" (*mem) : "memory");
++}
++
++static inline int
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  char ret;
++  long int readval;
++
++  __asm__ __volatile__ ("cas%.l %2,%3,%1; seq %0"
++                        : "=dm" (ret), "=m" (*p), "=d" (readval)
++                        : "d" (newval), "m" (*p), "2" (oldval));
++  return ret;
++}
++
++#endif /* atomicity.h */
+diff --git a/libpthread/linuxthreads/sysdeps/m68k/sigcontextinfo.h b/libc/sysdeps/linux/m68k/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/m68k/sigcontextinfo.h
+rename to libc/sysdeps/linux/m68k/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/m68k/stackinfo.h b/libc/sysdeps/linux/m68k/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/m68k/stackinfo.h
+rename to libc/sysdeps/linux/m68k/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/mips/bits/atomicity.h b/libc/sysdeps/linux/mips/bits/atomicity.h
+new file mode 100644
+index 000000000..bccacd9c9
+--- /dev/null
++++ b/libc/sysdeps/linux/mips/bits/atomicity.h
+@@ -0,0 +1,98 @@
++/* Low-level functions for atomic operations. Mips version.
++   Copyright (C) 2001, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _MIPS_ATOMICITY_H
++#define _MIPS_ATOMICITY_H    1
++
++#include <inttypes.h>
++
++static inline int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  int result, tmp;
++
++  __asm__ __volatile__
++    ("/* Inline exchange & add */\n"
++     "1:\n\t"
++     ".set	push\n\t"
++     ".set	mips2\n\t"
++     "ll	%0,%3\n\t"
++     "addu	%1,%4,%0\n\t"
++     "sc	%1,%2\n\t"
++     ".set	pop\n\t"
++     "beqz	%1,1b\n\t"
++     "/* End exchange & add */"
++     : "=&r"(result), "=&r"(tmp), "=m"(*mem)
++     : "m" (*mem), "r"(val)
++     : "memory");
++
++  return result;
++}
++
++static inline void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  int result;
++
++  __asm__ __volatile__
++    ("/* Inline atomic add */\n"
++     "1:\n\t"
++     ".set	push\n\t"
++     ".set	mips2\n\t"
++     "ll	%0,%2\n\t"
++     "addu	%0,%3,%0\n\t"
++     "sc	%0,%1\n\t"
++     ".set	pop\n\t"
++     "beqz	%0,1b\n\t"
++     "/* End atomic add */"
++     : "=&r"(result), "=m"(*mem)
++     : "m" (*mem), "r"(val)
++     : "memory");
++}
++
++static inline int
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  long int ret, temp;
++
++  __asm__ __volatile__
++    ("/* Inline compare & swap */\n"
++     "1:\n\t"
++     ".set	push\n\t"
++     ".set	mips2\n\t"
++     "ll	%1,%5\n\t"
++     "move	%0,$0\n\t"
++     "bne	%1,%3,2f\n\t"
++     "move	%0,%4\n\t"
++     "sc	%0,%2\n\t"
++     ".set	pop\n\t"
++     "beqz	%0,1b\n"
++     "2:\n\t"
++     "/* End compare & swap */"
++     : "=&r" (ret), "=&r" (temp), "=m" (*p)
++     : "r" (oldval), "r" (newval), "m" (*p)
++     : "memory");
++
++  return ret;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/mips/bits/machine-gmon.h b/libc/sysdeps/linux/mips/bits/machine-gmon.h
+new file mode 100644
+index 000000000..102da2c36
+--- /dev/null
++++ b/libc/sysdeps/linux/mips/bits/machine-gmon.h
+@@ -0,0 +1,68 @@
++/* Machine-specific calling sequence for `mcount' profiling function.  MIPS
++   Copyright (C) 1996, 1997, 2000, 2001, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define _MCOUNT_DECL(frompc,selfpc) \
++static void __attribute_used__ __mcount (u_long frompc, u_long selfpc)
++
++/* Call __mcount with our the return PC for our caller,
++   and the return PC our caller will return to.  */
++#ifdef __PIC__
++#define CPLOAD ".cpload $25;"
++#define CPRESTORE ".cprestore 44\n\t"
++#else
++#define CPLOAD
++#define CPRESTORE
++#endif
++
++#define MCOUNT asm(\
++	".globl _mcount;\n\t" \
++	".align 2;\n\t" \
++	".type _mcount,@function;\n\t" \
++	".ent _mcount\n\t" \
++        "_mcount:\n\t" \
++        ".frame $sp,44,$31\n\t" \
++        ".set noreorder;\n\t" \
++        ".set noat;\n\t" \
++        CPLOAD \
++	"subu $29,$29,48;\n\t" \
++	CPRESTORE \
++        "sw $4,24($29);\n\t" \
++        "sw $5,28($29);\n\t" \
++        "sw $6,32($29);\n\t" \
++        "sw $7,36($29);\n\t" \
++        "sw $2,40($29);\n\t" \
++        "sw $1,16($29);\n\t" \
++        "sw $31,20($29);\n\t" \
++        "move $5,$31;\n\t" \
++        "move $4,$1;\n\t" \
++        "jal __mcount;\n\t" \
++        "nop;\n\t" \
++        "lw $4,24($29);\n\t" \
++        "lw $5,28($29);\n\t" \
++        "lw $6,32($29);\n\t" \
++        "lw $7,36($29);\n\t" \
++        "lw $2,40($29);\n\t" \
++        "lw $31,20($29);\n\t" \
++        "lw $1,16($29);\n\t" \
++        "addu $29,$29,56;\n\t" \
++        "j $31;\n\t" \
++        "move $31,$1;\n\t" \
++        ".set reorder;\n\t" \
++        ".set at\n\t" \
++        ".end _mcount");
+diff --git a/libpthread/linuxthreads/sysdeps/mips/sigcontextinfo.h b/libc/sysdeps/linux/mips/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/mips/sigcontextinfo.h
+rename to libc/sysdeps/linux/mips/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/mips/stackinfo.h b/libc/sysdeps/linux/mips/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/mips/stackinfo.h
+rename to libc/sysdeps/linux/mips/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/powerpc/bits/atomicity.h b/libc/sysdeps/linux/powerpc/bits/atomicity.h
+new file mode 100644
+index 000000000..a3f672e5e
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/atomicity.h
+@@ -0,0 +1,104 @@
++/* Low-level functions for atomic operations.  PowerPC version.
++   Copyright (C) 1997, 1998, 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H	1
++
++#include <inttypes.h>
++
++#if BROKEN_PPC_ASM_CR0
++# define __ATOMICITY_INLINE /* nothing */
++#else
++# define __ATOMICITY_INLINE inline
++#endif
++
++static __ATOMICITY_INLINE int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  int tmp, result;
++  __asm__ ("\n\
++0:	lwarx	%0,0,%2	\n\
++	add%I3	%1,%0,%3	\n\
++	stwcx.	%1,0,%2	\n\
++	bne-	0b	\n\
++" : "=&b"(result), "=&r"(tmp) : "r" (mem), "Ir"(val) : "cr0", "memory");
++  return result;
++}
++
++static __ATOMICITY_INLINE void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  int tmp;
++  __asm__ ("\n\
++0:	lwarx	%0,0,%1	\n\
++	add%I2	%0,%0,%2	\n\
++	stwcx.	%0,0,%1	\n\
++	bne-	0b	\n\
++" : "=&b"(tmp) : "r" (mem), "Ir"(val) : "cr0", "memory");
++}
++
++static __ATOMICITY_INLINE int
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  int result;
++  __asm__ ("\n\
++0:	lwarx	%0,0,%1	\n\
++	sub%I2c.	%0,%0,%2	\n\
++	cntlzw	%0,%0	\n\
++	bne-	1f	\n\
++	stwcx.	%3,0,%1	\n\
++	bne-	0b	\n\
++1:	\n\
++" : "=&b"(result) : "r"(p), "Ir"(oldval), "r"(newval) : "cr0", "memory");
++  return result >> 5;
++}
++
++static __ATOMICITY_INLINE long int
++__attribute__ ((unused))
++always_swap (volatile long int *p, long int newval)
++{
++  long int result;
++  __asm__ ("\n\
++0:	lwarx	%0,0,%1	\n\
++	stwcx.	%2,0,%1	\n\
++	bne-	0b	\n\
++" : "=&r"(result) : "r"(p), "r"(newval) : "cr0", "memory");
++  return result;
++}
++
++static __ATOMICITY_INLINE int
++__attribute__ ((unused))
++test_and_set (volatile long int *p, long int newval)
++{
++  int result;
++  __asm__ ("\n\
++0:	lwarx	%0,0,%1	\n\
++	cmpwi	%0,0	\n\
++	bne-	1f	\n\
++	stwcx.	%2,0,%1	\n\
++	bne-	0b	\n\
++1:	\n\
++" : "=&r"(result) : "r"(p), "r"(newval) : "cr0", "memory");
++  return result;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/powerpc/bits/machine-gmon.h b/libc/sysdeps/linux/powerpc/bits/machine-gmon.h
+new file mode 100644
+index 000000000..b0f3d8130
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/machine-gmon.h
+@@ -0,0 +1,31 @@
++/* PowerPC-specific implementation of profiling support.
++   Copyright (C) 1997 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* We need a special version of the `mcount' function because it has
++   to preserve more registers than your usual function.  */
++
++void __mcount_internal (unsigned long frompc, unsigned long selfpc);
++
++#define _MCOUNT_DECL(frompc, selfpc) \
++void __mcount_internal (unsigned long frompc, unsigned long selfpc)
++
++
++/* Define MCOUNT as empty since we have the implementation in another
++   file.  */
++#define MCOUNT
+diff --git a/libc/sysdeps/linux/powerpc/bits/profil-counter.h b/libc/sysdeps/linux/powerpc/bits/profil-counter.h
+new file mode 100644
+index 000000000..6ce7eab01
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/profil-counter.h
+@@ -0,0 +1,28 @@
++/* Low-level statistical profiling support function.  Linux/ipowerpc version.
++   Copyright (C) 1996, 1997, 1998 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <signal.h>
++#include <bits/sigcontextinfo.h>
++
++static void
++profil_counter (int signo, SIGCONTEXT scp)
++{
++  profil_count ((void *) GET_PC (scp));
++}
++
+diff --git a/libpthread/linuxthreads/sysdeps/powerpc/sigcontextinfo.h b/libc/sysdeps/linux/powerpc/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/powerpc/sigcontextinfo.h
+rename to libc/sysdeps/linux/powerpc/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/powerpc/stackinfo.h b/libc/sysdeps/linux/powerpc/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/powerpc/stackinfo.h
+rename to libc/sysdeps/linux/powerpc/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/sh/bits/machine-gmon.h b/libc/sysdeps/linux/sh/bits/machine-gmon.h
+new file mode 100644
+index 000000000..46c7b191a
+--- /dev/null
++++ b/libc/sysdeps/linux/sh/bits/machine-gmon.h
+@@ -0,0 +1,32 @@
++/* Machine-dependent definitions for profiling support.  SH version.
++   Copyright (C) 1996, 1997, 1998, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* We must not pollute the global namespace.  */
++#define mcount_internal __mcount_internal
++
++void mcount_internal (u_long frompc, u_long selfpc);
++
++#define _MCOUNT_DECL(frompc, selfpc) \
++void mcount_internal (u_long frompc, u_long selfpc)
++
++
++/* Define MCOUNT as empty since we have the implementation in another
++   file.  */
++#define MCOUNT
++
+diff --git a/libc/sysdeps/linux/sh/bits/profil-counter.h b/libc/sysdeps/linux/sh/bits/profil-counter.h
+new file mode 100644
+index 000000000..fe1df15ad
+--- /dev/null
++++ b/libc/sysdeps/linux/sh/bits/profil-counter.h
+@@ -0,0 +1,28 @@
++/* Low-level statistical profiling support function.  Linux/SH version.
++   Copyright (C) 1996, 1997, 1998, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <signal.h>
++
++static void
++profil_counter (int signo, int _a2, int _a3, int _a4, struct sigcontext sc)
++{
++  void *pc;
++  pc = (void *) sc.sc_pc;
++  profil_count (pc);
++}
+diff --git a/libpthread/linuxthreads/sysdeps/sh/sigcontextinfo.h b/libc/sysdeps/linux/sh/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/sh/sigcontextinfo.h
+rename to libc/sysdeps/linux/sh/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/sh/stackinfo.h b/libc/sysdeps/linux/sh/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/sh/stackinfo.h
+rename to libc/sysdeps/linux/sh/bits/stackinfo.h
+diff --git a/libc/sysdeps/linux/sparc/bits/atomicity.h b/libc/sysdeps/linux/sparc/bits/atomicity.h
+new file mode 100644
+index 000000000..ec82541c2
+--- /dev/null
++++ b/libc/sysdeps/linux/sparc/bits/atomicity.h
+@@ -0,0 +1,98 @@
++/* Low-level functions for atomic operations.  Sparc32 version.
++   Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _ATOMICITY_H
++#define _ATOMICITY_H	1
++
++#include <inttypes.h>
++
++static int
++__attribute__ ((unused))
++exchange_and_add (volatile uint32_t *mem, int val)
++{
++  static unsigned char lock;
++  int result, tmp;
++
++  __asm__ __volatile__("1:	ldstub	[%1], %0\n\t"
++		       "	cmp	%0, 0\n\t"
++		       "	bne	1b\n\t"
++		       "	 nop"
++		       : "=&r" (tmp)
++		       : "r" (&lock)
++		       : "memory");
++  result = *mem;
++  *mem += val;
++  __asm__ __volatile__("stb	%%g0, [%0]"
++		       : /* no outputs */
++		       : "r" (&lock)
++		       : "memory");
++  return result;
++}
++
++static void
++__attribute__ ((unused))
++atomic_add (volatile uint32_t *mem, int val)
++{
++  static unsigned char lock;
++  int tmp;
++
++  __asm__ __volatile__("1:	ldstub	[%1], %0\n\t"
++		       "	cmp	%0, 0\n\t"
++		       "	bne	1b\n\t"
++		       "	 nop"
++		       : "=&r" (tmp)
++		       : "r" (&lock)
++		       : "memory");
++  *mem += val;
++  __asm__ __volatile__("stb	%%g0, [%0]"
++		       : /* no outputs */
++		       : "r" (&lock)
++		       : "memory");
++}
++
++static int
++__attribute__ ((unused))
++compare_and_swap (volatile long int *p, long int oldval, long int newval)
++{
++  static unsigned char lock;
++  int ret, tmp;
++
++  __asm__ __volatile__("1:	ldstub	[%1], %0\n\t"
++		       "	cmp	%0, 0\n\t"
++		       "	bne	1b\n\t"
++		       "	 nop"
++		       : "=&r" (tmp)
++		       : "r" (&lock)
++		       : "memory");
++  if (*p != oldval)
++    ret = 0;
++  else
++    {
++      *p = newval;
++      ret = 1;
++    }
++  __asm__ __volatile__("stb	%%g0, [%0]"
++		       : /* no outputs */
++		       : "r" (&lock)
++		       : "memory");
++
++  return ret;
++}
++
++#endif /* atomicity.h */
+diff --git a/libc/sysdeps/linux/sparc/bits/profil-counter.h b/libc/sysdeps/linux/sparc/bits/profil-counter.h
+new file mode 100644
+index 000000000..1e22e8cce
+--- /dev/null
++++ b/libc/sysdeps/linux/sparc/bits/profil-counter.h
+@@ -0,0 +1,26 @@
++/* Low-level statistical profiling support function.  Linux/SPARC version.
++   Copyright (C) 1997, 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <signal.h>
++
++void
++profil_counter (int signo, struct sigcontext *si)
++{
++  profil_count ((void *) si->si_regs.pc);
++}
+diff --git a/libpthread/linuxthreads/sysdeps/sparc/sigcontextinfo.h b/libc/sysdeps/linux/sparc/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/sparc/sigcontextinfo.h
+rename to libc/sysdeps/linux/sparc/bits/sigcontextinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/sparc/stackinfo.h b/libc/sysdeps/linux/sparc/bits/stackinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/sparc/stackinfo.h
+rename to libc/sysdeps/linux/sparc/bits/stackinfo.h
+diff --git a/libpthread/linuxthreads/sysdeps/v850/sigcontextinfo.h b/libc/sysdeps/linux/v850/bits/sigcontextinfo.h
+similarity index 100%
+rename from libpthread/linuxthreads/sysdeps/v850/sigcontextinfo.h
+rename to libc/sysdeps/linux/v850/bits/sigcontextinfo.h
+diff --git a/libc/sysdeps/linux/v850/bits/stackinfo.h b/libc/sysdeps/linux/v850/bits/stackinfo.h
+new file mode 100644
+index 000000000..3ed732aac
+--- /dev/null
++++ b/libc/sysdeps/linux/v850/bits/stackinfo.h
+@@ -0,0 +1,23 @@
++/*
++ * bits/stackinfo.h -- v850-specific pthread definitions
++ *
++ *  Copyright (C) 2003  NEC Electronics Corporation
++ *  Copyright (C) 2003  Miles Bader <miles@gnu.org>
++ *
++ * This file is subject to the terms and conditions of the GNU Lesser
++ * General Public License.  See the file COPYING.LIB in the main
++ * directory of this archive for more details.
++ *
++ * Written by Miles Bader <miles@gnu.org>
++ */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++/* On v80 the stack grows down.  */
++#define _STACK_GROWS_DOWN	1
++
++#endif	/* stackinfo.h */
+diff --git a/libpthread/linuxthreads/signals.c b/libpthread/linuxthreads/signals.c
+index 3819d4099..7cb6d3c57 100644
+--- a/libpthread/linuxthreads/signals.c
++++ b/libpthread/linuxthreads/signals.c
+@@ -21,7 +21,7 @@
+ #include "internals.h"
+ #include "spinlock.h"
+ #include <ucontext.h>
+-#include <sigcontextinfo.h>
++#include <bits/sigcontextinfo.h>
+ 
+ /* mods for uClibc: __libc_sigaction is not in any standard headers */
+ extern int __libc_sigaction (int sig, const struct sigaction *act, struct sigaction *oact);
+diff --git a/libpthread/linuxthreads/sysdeps/arm/sigcontextinfo.h b/libpthread/linuxthreads/sysdeps/arm/sigcontextinfo.h
+deleted file mode 100644
+index 0e6d295c3..000000000
+--- a/libpthread/linuxthreads/sysdeps/arm/sigcontextinfo.h
++++ /dev/null
+@@ -1,108 +0,0 @@
+-/* Copyright (C) 1999 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by Philip Blundell <philb@gnu.org>, 1999.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-
+-/* Definition of `struct sigcontext' for Linux/ARM
+-   Copyright (C) 1996, 1997, 1998, 1999, 2000 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-/* The format of struct sigcontext changed between 2.0 and 2.1 kernels.
+-   Fortunately 2.0 puts a magic number in the first word and this is not
+-   a legal value for `trap_no', so we can tell them apart.  */
+-
+-/* Early 2.2 and 2.3 kernels do not have the `fault_address' member in
+-   the sigcontext structure.  Unfortunately there is no reliable way
+-   to test for its presence and this word will contain garbage for too-old
+-   kernels.  Versions 2.2.14 and 2.3.35 (plus later versions) are known to
+-   include this element.  */
+-
+-#ifndef __ARMSIGCTX_H
+-#define __ARMSIGCTX_H	1
+-
+-#include <asm/ptrace.h>
+-
+-union k_sigcontext
+-  {
+-    struct
+-      {
+-	unsigned long int trap_no;
+-	unsigned long int error_code;
+-	unsigned long int oldmask;
+-	unsigned long int arm_r0;
+-	unsigned long int arm_r1;
+-	unsigned long int arm_r2;
+-	unsigned long int arm_r3;
+-	unsigned long int arm_r4;
+-	unsigned long int arm_r5;
+-	unsigned long int arm_r6;
+-	unsigned long int arm_r7;
+-	unsigned long int arm_r8;
+-	unsigned long int arm_r9;
+-	unsigned long int arm_r10;
+-	unsigned long int arm_fp;
+-	unsigned long int arm_ip;
+-	unsigned long int arm_sp;
+-	unsigned long int arm_lr;
+-	unsigned long int arm_pc;
+-	unsigned long int arm_cpsr;
+-	unsigned long fault_address;
+-      } v21;
+-    struct
+-      {
+-	unsigned long int magic;
+-	struct pt_regs reg;
+-	unsigned long int trap_no;
+-	unsigned long int error_code;
+-	unsigned long int oldmask;
+-      } v20;
+-};
+-
+-#define SIGCONTEXT_2_0_MAGIC	0x4B534154
+-
+-#endif	/* bits/armsigctx.h */
+-
+-#define SIGCONTEXT int _a2, int _a3, int _a4, union k_sigcontext
+-#define SIGCONTEXT_EXTRA_ARGS _a2, _a3, _a4,
+-
+-#define GET_PC(ctx)	((void *)((ctx.v20.magic == SIGCONTEXT_2_0_MAGIC) ? \
+-			 ctx.v20.reg.ARM_pc : ctx.v21.arm_pc))
+-#define GET_FRAME(ctx)	\
+-	ADVANCE_STACK_FRAME((void *)((ctx.v20.magic == SIGCONTEXT_2_0_MAGIC) ? \
+-			 ctx.v20.reg.ARM_fp : ctx.v21.arm_fp))
+-#define GET_STACK(ctx)	((void *)((ctx.v20.magic == SIGCONTEXT_2_0_MAGIC) ? \
+-			 ctx.v20.reg.ARM_sp : ctx.v21.arm_sp))
+-#define ADVANCE_STACK_FRAME(frm)	\
+-			((struct layout *)frm - 1)
+-#define CALL_SIGHANDLER(handler, signo, ctx) \
+-  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libpthread/linuxthreads/sysdeps/cris/sigcontextinfo.h b/libpthread/linuxthreads/sysdeps/cris/sigcontextinfo.h
+deleted file mode 100644
+index 8a6c93aab..000000000
+--- a/libpthread/linuxthreads/sysdeps/cris/sigcontextinfo.h
++++ /dev/null
+@@ -1,27 +0,0 @@
+-/* Copyright (C) 1998, 1999 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+-   Boston, MA 02111-1307, USA.  */
+-
+-/* In general we cannot provide any information.  */
+-#define SIGCONTEXT struct sigcontext *
+-#define SIGCONTEXT_EXTRA_ARGS
+-#define GET_PC(ctx)	((void *) 0)
+-#define GET_FRAME(ctx)	((void *) 0)
+-#define GET_STACK(ctx)	((void *) 0)
+-#define CALL_SIGHANDLER(handler, signo, ctx) \
+-  (handler)((signo), SIGCONTEXT_EXTRA_ARGS (ctx))
+diff --git a/libpthread/linuxthreads/sysdeps/i386/i686/pt-machine.h b/libpthread/linuxthreads/sysdeps/i386/i686/pt-machine.h
+deleted file mode 100644
+index 3596224c1..000000000
+--- a/libpthread/linuxthreads/sysdeps/i386/i686/pt-machine.h
++++ /dev/null
+@@ -1,79 +0,0 @@
+-/* Machine-dependent pthreads configuration and inline functions.
+-   i686 version.
+-   Copyright (C) 1996-2001, 2002 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by Richard Henderson <rth@tamu.edu>.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public License as
+-   published by the Free Software Foundation; either version 2.1 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+-   Boston, MA 02111-1307, USA.  */
+-
+-#ifndef _PT_MACHINE_H
+-#define _PT_MACHINE_H	1
+-
+-#ifndef PT_EI
+-# define PT_EI extern inline
+-#endif
+-#include "kernel-features.h"
+-
+-#ifndef ASSEMBLER
+-extern long int testandset (int *spinlock);
+-extern int __compare_and_swap (long int *p, long int oldval, long int newval);
+-
+-/* Get some notion of the current stack.  Need not be exactly the top
+-   of the stack, just something somewhere in the current frame.  */
+-#define CURRENT_STACK_FRAME  __builtin_frame_address (0)
+-
+-
+-/* Spinlock implementation; required.  */
+-PT_EI long int
+-testandset (int *spinlock)
+-{
+-  long int ret;
+-
+-  __asm__ __volatile__ (
+-	"xchgl %0, %1"
+-	: "=r" (ret), "=m" (*spinlock)
+-	: "0" (1), "m" (*spinlock)
+-	: "memory");
+-
+-  return ret;
+-}
+-
+-
+-/* Compare-and-swap for semaphores.  It's always available on i686.  */
+-#define HAS_COMPARE_AND_SWAP
+-
+-PT_EI int
+-__compare_and_swap (long int *p, long int oldval, long int newval)
+-{
+-  char ret;
+-  long int readval;
+-
+-  __asm__ __volatile__ ("lock; cmpxchgl %3, %1; sete %0"
+-			: "=q" (ret), "=m" (*p), "=a" (readval)
+-			: "r" (newval), "m" (*p), "a" (oldval)
+-			: "memory");
+-  return ret;
+-}
+-#endif
+-
+-#if __ASSUME_LDT_WORKS > 0
+-#include "../useldt.h"
+-#endif
+-
+-/* The P4 and above really want some help to prevent overheating.  */
+-#define BUSY_WAIT_NOP	__asm__ ("rep; nop")
+-
+-#endif /* pt-machine.h */
+diff --git a/libpthread/linuxthreads/sysdeps/i386/pt-machine.h b/libpthread/linuxthreads/sysdeps/i386/pt-machine.h
+index 79c69b549..e8a9b4e67 100644
+--- a/libpthread/linuxthreads/sysdeps/i386/pt-machine.h
++++ b/libpthread/linuxthreads/sysdeps/i386/pt-machine.h
+@@ -35,6 +35,52 @@ extern int __compare_and_swap (long int *p, long int oldval, long int newval);
+ #define CURRENT_STACK_FRAME  __builtin_frame_address (0)
+ 
+ 
++/* See if we can optimize for newer cpus... */
++#if defined __GNUC__ && __GNUC__ >= 2 && defined __i486__ || defined __pentium__ || defined __pentiumpro__
++
++/* Spinlock implementation; required.  */
++PT_EI long int
++testandset (int *spinlock)
++{
++  long int ret;
++
++  __asm__ __volatile__ (
++	"xchgl %0, %1"
++	: "=r" (ret), "=m" (*spinlock)
++	: "0" (1), "m" (*spinlock)
++	: "memory");
++
++  return ret;
++}
++
++/* Compare-and-swap for semaphores.  It's always available on i686.  */
++#define HAS_COMPARE_AND_SWAP
++
++PT_EI int
++__compare_and_swap (long int *p, long int oldval, long int newval)
++{
++  char ret;
++  long int readval;
++
++  __asm__ __volatile__ ("lock; cmpxchgl %3, %1; sete %0"
++			: "=q" (ret), "=m" (*p), "=a" (readval)
++			: "r" (newval), "m" (*p), "a" (oldval)
++			: "memory");
++  return ret;
++}
++
++#if __ASSUME_LDT_WORKS > 0
++#include "../useldt.h"
++#endif
++
++/* The P4 and above really want some help to prevent overheating.  */
++#define BUSY_WAIT_NOP	__asm__ ("rep; nop")
++
++
++#else /* Generic i386 implementation */
++
++
++
+ /* Spinlock implementation; required.  */
+ PT_EI long int
+ testandset (int *spinlock)
+@@ -103,6 +149,8 @@ compare_and_swap_is_available (void)
+      Otherwise, it's a 486 or above and it has cmpxchg.  */
+   return changed != 0;
+ }
++#endif /* Generic i386 implementation */
++
+ #endif /* __ASSEMBLER__ */
+ 
+ #endif /* pt-machine.h */
+diff --git a/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/local_lim.h b/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/local_lim.h
+deleted file mode 100644
+index 545a90b2e..000000000
+--- a/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/local_lim.h
++++ /dev/null
+@@ -1,55 +0,0 @@
+-/* Minimum guaranteed maximum values for system limits.  Linux version.
+-   Copyright (C) 1993, 94, 95, 96, 97, 98 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+-   Boston, MA 02111-1307, USA.  */
+-
+-/* The kernel header pollutes the namespace with the NR_OPEN symbol.
+-   Remove this after including the header if necessary.  */
+-#ifndef NR_OPEN
+-# define __undef_NR_OPEN
+-#endif
+-
+-/* The kernel sources contain a file with all the needed information.  */
+-#include <linux/limits.h>
+-
+-/* Have to remove NR_OPEN?  */
+-#ifdef __undef_NR_OPEN
+-# undef NR_OPEN
+-# undef __undef_NR_OPEN
+-#endif
+-
+-/* The number of data keys per process.  */
+-#define _POSIX_THREAD_KEYS_MAX	128
+-/* This is the value this implementation supports.  */
+-#define PTHREAD_KEYS_MAX	1024
+-
+-/* Controlling the iterations of destructors for thread-specific data.  */
+-#define _POSIX_THREAD_DESTRUCTOR_ITERATIONS	4
+-/* Number of iterations this implementation does.  */
+-#define PTHREAD_DESTRUCTOR_ITERATIONS	_POSIX_THREAD_DESTRUCTOR_ITERATIONS
+-
+-/* The number of threads per process.  */
+-#define _POSIX_THREAD_THREADS_MAX	64
+-/* This is the value this implementation supports.  */
+-#define PTHREAD_THREADS_MAX	1024
+-
+-/* Maximum amount by which a process can descrease its asynchronous I/O
+-   priority level.  */
+-#define AIO_PRIO_DELTA_MAX	20
+-
+-/* Minimum size for a thread.  We are free to choose a reasonable value.  */
+-#define PTHREAD_STACK_MIN	16384
+diff --git a/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/posix_opt.h b/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/posix_opt.h
+deleted file mode 100644
+index 15683b77e..000000000
+--- a/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/posix_opt.h
++++ /dev/null
+@@ -1,110 +0,0 @@
+-/* Define POSIX options for Linux.
+-   Copyright (C) 1996, 1997, 1998, 1999 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+-   Boston, MA 02111-1307, USA.  */
+-
+-#ifndef	_POSIX_OPT_H
+-#define	_POSIX_OPT_H	1
+-
+-/* Job control is supported.  */
+-#define	_POSIX_JOB_CONTROL	1
+-
+-/* Processes have a saved set-user-ID and a saved set-group-ID.  */
+-#define	_POSIX_SAVED_IDS	1
+-
+-/* Priority scheduling is supported.  */
+-#define	_POSIX_PRIORITY_SCHEDULING	1
+-
+-/* Synchronizing file data is supported.  */
+-#define	_POSIX_SYNCHRONIZED_IO	1
+-
+-/* The fsync function is present.  */
+-#define	_POSIX_FSYNC	1
+-
+-/* Mapping of files to memory is supported.  */
+-#define	_POSIX_MAPPED_FILES	1
+-
+-/* Locking of all memory is supported.  */
+-#define	_POSIX_MEMLOCK	1
+-
+-/* Locking of ranges of memory is supported.  */
+-#define	_POSIX_MEMLOCK_RANGE	1
+-
+-/* Setting of memory protections is supported.  */
+-#define	_POSIX_MEMORY_PROTECTION	1
+-
+-/* Implementation supports `poll' function.  */
+-#define	_POSIX_POLL	1
+-
+-/* Implementation supports `select' and `pselect' functions.  */
+-#define	_POSIX_SELECT	1
+-
+-/* Only root can change owner of file.  */
+-#define	_POSIX_CHOWN_RESTRICTED	1
+-
+-/* `c_cc' member of 'struct termios' structure can be disabled by
+-   using the value _POSIX_VDISABLE.  */
+-#define	_POSIX_VDISABLE	'\0'
+-
+-/* Filenames are not silently truncated.  */
+-#define	_POSIX_NO_TRUNC	1
+-
+-/* X/Open realtime support is available.  */
+-#define _XOPEN_REALTIME	1
+-
+-/* X/Open realtime thread support is available.  */
+-#define _XOPEN_REALTIME_THREADS	1
+-
+-/* XPG4.2 shared memory is supported.  */
+-#define	_XOPEN_SHM	1
+-
+-/* Tell we have POSIX threads.  */
+-#define _POSIX_THREADS	1
+-
+-/* We have the reentrant functions described in POSIX.  */
+-#define _POSIX_REENTRANT_FUNCTIONS      1
+-#define _POSIX_THREAD_SAFE_FUNCTIONS	1
+-
+-/* We provide priority scheduling for threads.  */
+-#define	_POSIX_THREAD_PRIORITY_SCHEDULING	1
+-
+-/* We support user-defined stack sizes.  */
+-#define _POSIX_THREAD_ATTR_STACKSIZE	1
+-
+-/* We support user-defined stacks.  */
+-#define _POSIX_THREAD_ATTR_STACKADDR	1
+-
+-/* We support POSIX.1b semaphores, but only the non-shared form for now.  */
+-/*#define _POSIX_SEMAPHORES	1	XXX We are not quite there now.  */
+-
+-/* Real-time signals are supported.  */
+-#define _POSIX_REALTIME_SIGNALS	1
+-
+-/* We support asynchronous I/O.  */
+-#define _POSIX_ASYNCHRONOUS_IO	1
+-/* Alternative name for Unix98.  */
+-#define _LFS_ASYNCHRONOUS_IO	1
+-
+-/* The LFS support in asynchronous I/O is also available.  */
+-#define _LFS64_ASYNCHRONOUS_IO	1
+-
+-/* The rest of the LFS is also available.  */
+-#define _LFS_LARGEFILE		1
+-#define _LFS64_LARGEFILE	1
+-#define _LFS64_STDIO		1
+-
+-#endif /* posix_opt.h */
+diff --git a/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/sigthread.h b/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/sigthread.h
+deleted file mode 100644
+index 36b11b040..000000000
+--- a/libpthread/linuxthreads/sysdeps/unix/sysv/linux/bits/sigthread.h
++++ /dev/null
+@@ -1,37 +0,0 @@
+-/* Signal handling function for threaded programs.
+-   Copyright (C) 1998 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Library General Public License as
+-   published by the Free Software Foundation; either version 2 of the
+-   License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Library General Public License for more details.
+-
+-   You should have received a copy of the GNU Library General Public
+-   License along with the GNU C Library; see the file COPYING.LIB.  If not,
+-   write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+-   Boston, MA 02111-1307, USA.  */
+-
+-#ifndef _BITS_SIGTHREAD_H 
+-#define _BITS_SIGTHREAD_H	1
+-
+-#if !defined _SIGNAL_H && !defined _PTHREAD_H
+-# error "Never include this file directly.  Use <pthread.h> instead"
+-#endif
+-
+-/* Functions for handling signals. */
+-
+-/* Modify the signal mask for the calling thread.  The arguments have
+-   the same meaning as for sigprocmask(2). */
+-extern int pthread_sigmask __P ((int __how, __const __sigset_t *__newmask,
+-				 __sigset_t *__oldmask));
+-
+-/* Send signal SIGNO to the given thread. */
+-extern int pthread_kill __P ((pthread_t __thread_id, int __signo));
+-
+-#endif	/* bits/sigthread.h */

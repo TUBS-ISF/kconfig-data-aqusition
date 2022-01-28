@@ -1,0 +1,104 @@
+"2005-02-08 20:55:33 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index c197f238e..abc1856ad 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1130,6 +1130,16 @@ config SSP_QUICK_CANARY
+ 	  /dev/*random.
+ 	  Most people will answer N.
+ 
++config SSP_USE_ERANDOM
++	bool "Propolice uses /dev/erandom as canary source"
++	depends on UCLIBC_HAS_SSP && !SSP_QUICK_CANARY
++	default n
++	help
++	  Propolice uses /dev/erandom as canary source.
++	  This requires a modified kernel.
++	  For more info see http://frandom.sourceforge.net/.
++	  Most people will answer N.
++
+ choice
+ 	prompt "Propolice protection blocking signal"
+ 	depends on UCLIBC_HAS_SSP
+@@ -1160,7 +1170,6 @@ endchoice
+ 
+ config UCLIBC_BUILD_SSP
+ 	bool "Build uClibc with propolice protection"
+-	depends on UCLIBC_SECURITY
+ 	depends on UCLIBC_HAS_SSP
+ 	default n
+ 	help
+diff --git a/libc/sysdeps/linux/common/ssp.c b/libc/sysdeps/linux/common/ssp.c
+index a3470ecdc..004a42b28 100644
+--- a/libc/sysdeps/linux/common/ssp.c
++++ b/libc/sysdeps/linux/common/ssp.c
+@@ -29,7 +29,7 @@
+ #include <sys/un.h>
+ #include <sys/syslog.h>
+ #include <sys/time.h>
+-#ifdef HAVE_DEV_ERANDOM
++#ifdef __SSP_USE_ERANDOM__
+ #include <sys/sysctl.h>
+ #endif
+ 
+@@ -43,15 +43,12 @@
+ 
+ unsigned long __guard = 0UL;
+ 
++void __guard_setup(void) __attribute__ ((constructor));
+ void __guard_setup(void)
+ {
+ 	size_t size;
+ 	struct timeval tv;
+ 
+-#ifdef HAVE_DEV_ERANDOM
+-	int mib[3];
+-#endif
+-
+ 	if (__guard != 0UL)
+ 		return;
+ 
+@@ -59,7 +56,8 @@ void __guard_setup(void)
+ 	__guard = 0xFF0A0D00UL;
+ 
+ #ifndef __SSP_QUICK_CANARY__
+-#ifdef HAVE_DEV_ERANDOM
++#ifdef __SSP_USE_ERANDOM__
++	int mib[3];
+ 	/* Random is another depth in Linux, hence an array of 3. */
+ 	mib[0] = CTL_KERN;
+ 	mib[1] = KERN_RANDOM;
+@@ -77,7 +75,7 @@ void __guard_setup(void)
+ 	{
+ 		int fd;
+ 
+-#ifdef HAVE_DEV_ERANDOM
++#ifdef __SSP_USE_ERANDOM__
+ 		if ((fd = __libc_open("/dev/erandom", O_RDONLY)) == (-1))
+ #endif
+ 			fd = __libc_open("/dev/urandom", O_RDONLY);
+@@ -97,6 +95,7 @@ void __guard_setup(void)
+ 	__guard ^= tv.tv_usec ^ tv.tv_sec;
+ }
+ 
++void __stack_smash_handler(char func[], int damaged __attribute__ ((unused)));
+ void __stack_smash_handler(char func[], int damaged)
+ {
+ 	extern char *__progname;
+@@ -107,13 +106,13 @@ void __stack_smash_handler(char func[], int damaged)
+ 	sigfillset(&mask);
+ 
+ 	sigdelset(&mask, SSP_SIGTYPE);	/* Block all signal handlers */
+-	sigprocmask(SIG_BLOCK, &mask, NULL);	/* except SIGABRT */
++	sigprocmask(SIG_BLOCK, &mask, NULL);	/* except SSP_SIGTYPE */
+ 
+-	/* print error message to stderr and syslog */
++	/* Print error message to stderr and syslog */
+ 	fprintf(stderr, "%s%s%s()\n", __progname, message, func);
+ 	syslog(LOG_INFO, "%s%s%s()", __progname, message, func);
+ 
+-	/* Make sure the default handler is associated with the our signal handler */
++	/* Make the default handler associated with the signal handler */
+ 	memset(&sa, 0, sizeof(struct sigaction));
+ 	sigfillset(&sa.sa_mask);	/* Block all signals */
+ 	sa.sa_flags = 0;

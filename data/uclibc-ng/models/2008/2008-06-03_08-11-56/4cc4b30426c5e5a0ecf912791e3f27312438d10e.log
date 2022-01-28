@@ -1,0 +1,2637 @@
+"2008-06-03 08:11:56 +0000"
+diff --git a/Makefile.in b/Makefile.in
+index 1608dc7da..b593a64dc 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -221,6 +221,69 @@ ifeq ($(UCLIBC_HAS_THREADS_NATIVE),y)
+ 	# Remove this as it is only used internally.
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/tls.h
+ endif
++ifneq ($(UCLIBC_HAS_GNU_ERROR),y)
++	# Remove error.h upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/error.h
++endif
++ifneq ($(UCLIBC_HAS_BSD_ERR),y)
++	# Remove err.h upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/err.h
++endif
++ifneq ($(UCLIBC_SUSV3_LEGACY),y)
++	# Remove timeb.h since the LEGACY ftime() was disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/timeb.h
++endif
++ifneq ($(UCLIBC_HAS_EPOLL),y)
++	# Remove epoll.h since epoll_*() were disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/epoll.h
++endif
++ifneq ($(UCLIBC_HAS_XATTR),y)
++	# Remove xattr.h since extended attributes were disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/xattr.h
++endif
++ifneq ($(UCLIBC_SV4_DEPRECATED),y)
++	# Remove ustst.h since ustat was disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/ustat.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/ustat.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/ustat.h
++endif
++ifneq ($(UCLIBC_HAS_PTY),y)
++	# Remove pty.h since PTY support was disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/pty.h
++endif
++ifneq ($(UCLIBC_LINUX_SPECIFIC),y)
++	# Remove linux-specific headers as requested
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/inotify.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/perm.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/personality.h
++endif
++ifneq ($(UCLIBC_SV4_DEPRECATED),y)
++	# Remove ustat.h since deprecated SV4 support was disabled upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/ustat.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/ustat.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/ustat.h
++endif
++ifeq ($(UCLIBC_HAS_REALTIME)$(UCLIBC_HAS_ADVANCED_REALTIME),)
++	# Remove SUSv-realtime related message-queue headers upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/mqueue.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/mqueue.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/mqueue.h
++endif
++ifneq ($(UCLIBC_HAS_REALTIME),y)
++	# Remove SUSv-realtime related headers upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sched.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/sched.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/sched.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/semaphore.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/semaphore.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/semaphore.h
++endif
++ifneq ($(UCLIBC_HAS_SOCKET),y)
++	# Remove socket related headers upon request
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/socket.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/bits/socket.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/sys/socketvar.h
++endif
+ 
+ # Installs development library links.
+ install_dev: install_headers
+diff --git a/TODO b/TODO
+index 3a8be1d46..fa5a9bbf5 100644
+--- a/TODO
++++ b/TODO
+@@ -144,6 +144,10 @@ Manuel's todo:
+   e) Allow use of the older non-table-based ctype functions when using
+      stub locale support. (smaller)
+   f) __drand48_iterate should be void
++  g) alphasort vs. versionsort. The former seems to be SVID, the latter GNU
++     i.e. reverse to what we currently do. The latter is unimplemented.
++  h) ponder removal/configs to turn off: __xpg_*, bsd_signal, dysize,
++     getw/putw, utimes,
+ 
+   2) Additional str{f|p}time issues.
+   ----------------------------------
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 7372f260e..8ac002d41 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -357,7 +357,7 @@ config HAS_NO_THREADS
+ 	default n
+ 
+ config UCLIBC_HAS_THREADS
+-	bool "POSIX Threading Support"
++	bool "POSIX Threading support"
+ 	depends on !HAS_NO_THREADS
+ 	default y
+ 	help
+@@ -399,6 +399,15 @@ config LINUXTHREADS_OLD
+ 	  the latest code from glibc, so it may be the only choice for the
+ 	  newer ports (like alpha/amd64/64bit arches and hppa).
+ 
++config UCLIBC_HAS_SYSLOG
++	bool "Syslog support"
++	default y
++	depends on UCLIBC_HAS_NETWORK_SUPPORT
++	select UCLIBC_HAS_SOCKET
++	help
++	  Support sending messages to the system logger.
++	  This requires socket-support.
++
+ config UCLIBC_HAS_LFS
+ 	bool "Large File Support"
+ 	default y
+@@ -493,7 +502,7 @@ config UCLIBC_SUSV3_LEGACY
+ 	help
+ 	  Enable this option if you want to have SuSv3 LEGACY functions
+ 	  in the library, else they are replaced by SuSv3 proposed macros.
+-	  Currently applies to bcopy/bzero/bcmp/index/rindex.
++	  Currently applies to bcopy/bzero/bcmp/index/rindex/ftime.
+ 	  WARNING! ABI incompatibility.
+ 
+ config UCLIBC_SUSV3_LEGACY_MACROS
+@@ -538,17 +547,40 @@ config UCLIBC_HAS___PROGNAME
+ 
+ 	  If unsure, just answer N.
+ 
++config UCLIBC_HAS_PTY
++	bool "Support for pseudo-terminals"
++	default y
++	help
++	  This enables support for pseudo-terminals (see man 4 pts
++	  and man 7 pty).
++
++	  If unsure, just answer Y.
++
+ config UNIX98PTY_ONLY
+ 	bool "Support only Unix 98 PTYs"
+ 	default y
++	depends on UCLIBC_HAS_PTY
+ 	help
+ 	  If you want to support only Unix 98 PTYs enable this.  Some older
+ 	  applications may need this disabled.  For most current programs,
+ 	  you can generally answer Y.
+ 
++config UCLIBC_HAS_GETPT
++	bool "Support getpt() (glibc-compat)"
++	default n
++	depends on UCLIBC_HAS_PTY
++	help
++	  Some packages may need getpt().
++	  All of those are non-standard and can be considered
++	  GNU/libc compatibility.
++	  Either use posix_openpt() or just open /dev/ptmx yourself.
++
++	  If unsure, just say N.
++
+ config ASSUME_DEVPTS
+ 	bool "Assume that /dev/pts is a devpts or devfs file system"
+ 	default y
++	depends on UCLIBC_HAS_PTY
+ 	help
+ 	  Enable this if /dev/pts is on a devpts or devfs filesystem.  Both
+ 	  these filesystems automatically manage permissions on the /dev/pts
+@@ -649,6 +681,8 @@ config UCLIBC_GRP_BUFFER_SIZE
+ 	  The value can be found using sysconf() with the _SC_GETGR_R_SIZE_MAX
+ 	  parameter.
+ 
++comment "Support various families of functions"
++
+ config UCLIBC_LINUX_MODULE_24
+ 	bool "Linux kernel module functions"
+ 	default y
+@@ -659,13 +693,250 @@ config UCLIBC_LINUX_MODULE_24
+ 
+ 	  Say N if you do not use kernel modules.
+ 
++config UCLIBC_LINUX_SPECIFIC
++	bool "Linux specific functions"
++	default y
++	help
++	  fstatfs(), inotify_*(), ioperm(), iopl(), madvise(), modify_ldt(),
++	  personality(), ppoll(), setresuid()
++
++config UCLIBC_HAS_GNU_ERROR
++	bool "Support GNU extensions for error-reporting"
++	default y
++	help
++	  Support for the GNU-specific error(), error_at_line(),
++	  void (* error_print_progname)(), error_message_count
++	  functions and variables.  Some GNU packages
++	  utilize these for extra useful output, but in general
++	  are not required.
++
++	  If unsure, just answer N.
++
++config UCLIBC_BSD_SPECIFIC
++	bool "BSD specific functions"
++	default y
++	help
++	  mincore(), getdomainname(), setdomainname()
++
++	  If unsure, say N.
++
++config UCLIBC_HAS_BSD_ERR
++	bool "BSD err functions"
++	default y
++	help
++	  These functions are non-standard BSD extensions.
++	  err(), errx(), warn(), warnx(), verr(), verrx(), vwarn(), vwarnx()
++
++	  If unsure, say N.
++
++config UCLIBC_HAS_OBSOLETE_BSD_SIGNAL
++	bool "BSD obsolete signal functions"
++	default n
++	help
++	  These  functions are provided as a compatibility interface for
++	  programs that make use of the historical System V signal API.
++	  This API is obsolete:
++	  new applications should use the POSIX signal API (sigaction(2),
++	  sigprocmask(2), etc.).
++	  Affected functions:
++
++	  sigset(), sighold(), sigrelse(), sigignore()
++
++	  If unsure, say N.
++
++config UCLIBC_HAS_OBSOLETE_SYSV_SIGNAL
++	bool "SYSV obsolete signal functions"
++	default n
++	help
++	  Use of sysv_signal() should be avoided; use sigaction(2) instead.
++
++	  If unsure, say N.
++
++config UCLIBC_NTP_LEGACY
++	bool "ntp_*() aliases"
++	default n
++	help
++	  Provide legacy aliases for ntp functions:
++	  ntp_adjtime(), ntp_gettime()
++
++	  It is safe to say N here.
++
++config UCLIBC_SV4_DEPRECATED
++	bool "Enable SVr4 deprecated functions"
++	default n
++	help
++	  These functions are DEPRECATED in System V release 4.
++	  Say N unless you desparately need one of the functions below:
++
++	  ustat() [use statfs(2) in your code instead]
++
++config UCLIBC_HAS_REALTIME
++	bool "Realtime-related family of SUSv functions"
++	default y
++	# glitch in mq_{send,receive} currently forces this on
++	select UCLIBC_HAS_ADVANCED_REALTIME
++	help
++	  These functions are part of the Timers option and need not
++	  be available on all implementations.
++	  Includes AIO, message-queue, scheduler, semaphore functions:
++
++	  aio.h
++	  mqueue.h
++	  sched.h
++	  semaphore.h
++
++	  aio_cancel()
++	  aio_error()
++	  aio_fsync()
++	  aio_read()
++	  lio_listio()
++	  aio_return()
++	  aio_suspend()
++	  aio_write()
++	  clock_getres(), clock_gettime(), clock_settime()
++	  fdatasync()
++	  mlockall(), munlockall()
++	  mlock(), munlock()
++	  mq_close()
++	  mq_getattr()
++	  mq_notify()
++	  mq_open()
++	  mq_receive()
++	  mq_send()
++	  mq_setattr()
++	  mq_unlink()
++	  nanosleep()
++	  sched_getparam()
++	  sched_get_priority_max(), sched_get_priority_min()
++	  sched_getscheduler()
++	  sched_rr_get_interval()
++	  sched_setparam()
++	  sched_setscheduler()
++	  sem_close()
++	  sem_destroy()
++	  sem_getvalue()
++	  sem_init()
++	  sem_open()
++	  sem_post()
++	  sem_trywait(), sem_wait()
++	  sem_unlink()
++	  sigqueue()
++	  sigtimedwait(), sigwaitinfo()
++	  timer_create()
++	  timer_delete()
++	  timer_getoverrun(), timer_gettime(), timer_settime()
++
++config UCLIBC_HAS_ADVANCED_REALTIME
++	bool "Advanced realtime-related family of SUSv functions"
++	default y
++	depends on UCLIBC_HAS_REALTIME
++	help
++	  These functions are part of the Timers option and need not
++	  be available on all implementations.
++
++	  clock_getcpuclockid()
++	  clock_nanosleep()
++	  mq_timedreceive()
++	  mq_timedsend()
++	  posix_fadvise()
++	  posix_fallocate()
++	  posix_madvise()
++	  posix_memalign()
++	  posix_mem_offset()
++	  posix_spawnattr_destroy(), posix_spawnattr_init()
++	  posix_spawnattr_getflags(), posix_spawnattr_setflags()
++	  posix_spawnattr_getpgroup(), posix_spawnattr_setpgroup()
++	  posix_spawnattr_getschedparam(), posix_spawnattr_setschedparam()
++	  posix_spawnattr_getschedpolicy(), posix_spawnattr_setschedpolicy()
++	  posix_spawnattr_getsigdefault(), posix_spawnattr_setsigdefault()
++	  posix_spawnattr_getsigmask(), posix_spawnattr_setsigmask()
++	  posix_spawn_file_actions_addclose()
++	  posix_spawn_file_actions_adddup2()
++	  posix_spawn_file_actions_addopen()
++	  posix_spawn_file_actions_destroy()
++	  posix_spawn_file_actions_init()
++	  posix_spawn()
++	  posix_spawnp()
++	  posix_typed_mem_get_info()
++	  pthread_mutex_timedlock()
++	  sem_timedwait()
++
++#config UCLIBC_HAS_TERMIOS
++#	bool "termios functions"
++#	default y
++#	help
++#	  Get and set terminal attributes, line control, get and set baud
++#	  rate.
++#	  termios(), tcgetattr(), tcsetattr(), tcsendbreak(), tcdrain(),
++#	  tcflush(), tcflow(), cfmakeraw(), cfgetospeed(), cfgetispeed(),
++#	  cfsetispeed(), cfsetospeed(), cfsetspeed()
++#
++#	  If unsure, say Y.
++
++config UCLIBC_HAS_EPOLL
++	bool "epoll"
++	default y
++	help
++	  epoll_create(), epoll_ctl(), epoll_wait() functions.
++
++config UCLIBC_HAS_XATTR
++	bool "Extended Attributes"
++	default y
++	help
++	  Extended Attributes support.
++
++	  setxattr()
++	  lsetxattr()
++	  fsetxattr()
++	  getxattr()
++	  lgetxattr()
++	  fgetxattr()
++	  listxattr()
++	  llistxattr()
++	  flistxattr()
++	  removexattr()
++	  lremovexattr()
++	  fremovexattr()
++
++	  Say N unless you need support for extended attributes and the
++	  filesystems do actually support them.
++
++config UCLIBC_HAS_PROFILING
++	bool "Profiling support"
++	default y
++	help
++	  gcc's -finstrument-functions needs these.
++
++	  Most people can safely answer N.
+ endmenu
+ 
+-menu "Networking Support"
++menuconfig UCLIBC_HAS_NETWORK_SUPPORT
++	bool "Networking Support"
++	default y
++	help
++	  Say N here if you do not need network support.
++
++if UCLIBC_HAS_NETWORK_SUPPORT
++config UCLIBC_HAS_SOCKET
++	bool "Socket support"
++	default y
++	help
++	  If you want to include support for sockets then answer Y.
++
++config UCLIBC_HAS_IPV4
++	bool "IP version 4 support"
++	default y
++	select UCLIBC_HAS_SOCKET
++	help
++	  If you want to include support for the Internet Protocol
++	  (IP version 4) then answer Y.
++
++	  Most people will say Y.
+ 
+ config UCLIBC_HAS_IPV6
+-	bool "IP version 6 Support"
++	bool "IP version 6 support"
+ 	default n
++	select UCLIBC_HAS_SOCKET
+ 	help
+ 	  If you want to include support for the next version of the Internet
+ 	  Protocol (IP version 6) then answer Y.
+@@ -703,6 +974,7 @@ config UCLIBC_HAS_REENTRANT_RPC
+ config UCLIBC_USE_NETLINK
+ 	bool "Use netlink to query interfaces"
+ 	default n
++	depends on UCLIBC_HAS_SOCKET
+ 	help
+ 	  In newer versions of Linux (2.4.17+), support was added for querying
+ 	  network device information via netlink rather than the old style
+@@ -722,7 +994,7 @@ config UCLIBC_HAS_BSD_RES_CLOSE
+ 
+ 	  Most people will say N.
+ 
+-endmenu
++endif
+ 
+ 
+ menu "String and Stdio Support"
+diff --git a/include/fcntl.h b/include/fcntl.h
+index a43890215..adeabaebb 100644
+--- a/include/fcntl.h
++++ b/include/fcntl.h
+@@ -177,7 +177,7 @@ extern int lockf64 (int __fd, int __cmd, __off64_t __len);
+ # endif
+ #endif
+ 
+-#ifdef __USE_XOPEN2K
++#if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /* Advice the system about the expected behaviour of the application with
+    respect to the file associated with FD.  */
+ # ifndef __USE_FILE_OFFSET64
+@@ -199,7 +199,7 @@ extern int posix_fadvise64 (int __fd, __off64_t __offset, __off64_t __len,
+ 
+ #endif
+ 
+-#if 0
++#if 0 // && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ 
+ /* FIXME -- uClibc should probably implement these... */
+ 
+diff --git a/include/mqueue.h b/include/mqueue.h
+index 1ccad5bba..f75b50611 100644
+--- a/include/mqueue.h
++++ b/include/mqueue.h
+@@ -20,6 +20,8 @@
+ #define _MQUEUE_H	1
+ 
+ #include <features.h>
++#if defined __UCLIBC_HAS_REALTIME__ || \
++	defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ #include <sys/types.h>
+ #include <fcntl.h>
+ #define __need_sigevent_t
+@@ -28,9 +30,10 @@
+ #include <time.h>
+ /* Get the definition of mqd_t and struct mq_attr.  */
+ #include <bits/mqueue.h>
++#endif
+ 
+ __BEGIN_DECLS
+-
++#if defined __UCLIBC_HAS_REALTIME__
+ /* Establish connection between a process and a message queue NAME and
+    return message queue descriptor or (mqd_t) -1 on error.  OFLAG determines
+    the type of access used.  If O_CREAT is on OFLAG, the third argument is
+@@ -69,8 +72,9 @@ extern ssize_t mq_receive (mqd_t __mqdes, char *__msg_ptr, size_t __msg_len,
+ /* Add message pointed by MSG_PTR to message queue MQDES.  */
+ extern int mq_send (mqd_t __mqdes, const char *__msg_ptr, size_t __msg_len,
+ 		    unsigned int __msg_prio);
++#endif
+ 
+-#ifdef __USE_XOPEN2K
++#if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /* Receive the oldest from highest priority messages in message queue
+    MQDES, stop waiting if ABS_TIMEOUT expires.  */
+ extern ssize_t mq_timedreceive (mqd_t __mqdes, char *__restrict __msg_ptr,
+diff --git a/include/netinet/in.h b/include/netinet/in.h
+index 018b39b70..6bfc5e780 100644
+--- a/include/netinet/in.h
++++ b/include/netinet/in.h
+@@ -216,6 +216,7 @@ extern const struct in6_addr in6addr_loopback;   /* ::1 */
+ #include <bits/socket.h>
+ 
+ 
++#if 1 /* defined __UCLIBC_HAS_IPV4__ */
+ /* Structure describing an Internet socket address.  */
+ struct sockaddr_in
+   {
+@@ -229,6 +230,7 @@ struct sockaddr_in
+ 			   sizeof (in_port_t) -
+ 			   sizeof (struct in_addr)];
+   };
++#endif
+ 
+ /* Ditto, for IPv6.  */
+ struct sockaddr_in6
+diff --git a/include/signal.h b/include/signal.h
+index 288febd01..3eaee4931 100644
+--- a/include/signal.h
++++ b/include/signal.h
+@@ -73,7 +73,7 @@ typedef __uid_t uid_t;
+ 
+ /* Type of a signal handler.  */
+ typedef void (*__sighandler_t) (int);
+-
++#if defined __UCLIBC_HAS_OBSOLETE_SYSV_SIGNAL__
+ /* The X/Open definition of `signal' specifies the SVID semantic.  Use
+    the additional function `sysv_signal' when X/Open compatibility is
+    requested.  */
+@@ -83,6 +83,7 @@ extern __sighandler_t __sysv_signal (int __sig, __sighandler_t __handler)
+ extern __sighandler_t sysv_signal (int __sig, __sighandler_t __handler)
+      __THROW;
+ #endif
++#endif /* __UCLIBC_HAS_OBSOLETE_SYSV_SIGNAL__ */
+ 
+ /* Set the handler for the signal SIG to HANDLER, returning the old
+    handler, or SIG_ERR on error.
+@@ -268,7 +269,7 @@ extern int sigpending (sigset_t *__set) __THROW __nonnull ((1));
+ extern int sigwait (__const sigset_t *__restrict __set, int *__restrict __sig)
+      __nonnull ((1, 2));
+ 
+-# ifdef __USE_POSIX199309
++# if defined __USE_POSIX199309 && defined __UCLIBC_HAS_REALTIME__
+ /* Select any of pending signals from SET and place information in INFO.
+ 
+    This function is a cancellation point and therefore not marked with
+@@ -363,7 +364,7 @@ extern int sigaltstack (__const struct sigaltstack *__restrict __ss,
+ 
+ #endif /* use BSD or X/Open Unix.  */
+ 
+-#ifdef __USE_XOPEN_EXTENDED
++#if defined __USE_XOPEN_EXTENDED && defined __UCLIBC_HAS_OBSOLETE_BSD_SIGNAL__
+ /* Simplified interface for signal management.  */
+ 
+ /* Add SIG to the calling process' signal mask.  */
+diff --git a/include/stdlib.h b/include/stdlib.h
+index 276f1ba66..354134906 100644
+--- a/include/stdlib.h
++++ b/include/stdlib.h
+@@ -489,7 +489,7 @@ extern void cfree (void *__ptr) __THROW;
+ extern void *valloc (size_t __size) __THROW __attribute_malloc__ __wur;
+ #endif
+ 
+-#ifdef __USE_XOPEN2K
++#if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /* Allocate memory of SIZE bytes with an alignment of ALIGNMENT.  */
+ extern int posix_memalign (void **__memptr, size_t __alignment, size_t __size)
+      __THROW __nonnull ((1)) __wur;
+@@ -817,7 +817,7 @@ extern int posix_openpt (int __oflag) __wur;
+ #ifdef __USE_XOPEN
+ /* The next four functions all take a master pseudo-tty fd and
+    perform an operation on the associated slave:  */
+-
++#ifdef __UCLIBC_HAS_PTY__
+ /* Chown the slave to the calling user.  */
+ extern int grantpt (int __fd) __THROW;
+ 
+@@ -829,6 +829,7 @@ extern int unlockpt (int __fd) __THROW;
+    the master FD is open on, or NULL on errors.
+    The returned storage is good until the next call to this function.  */
+ extern char *ptsname (int __fd) __THROW __wur;
++#endif /* __UCLIBC_HAS_PTY__ */
+ #endif
+ 
+ #ifdef __USE_GNU
+diff --git a/include/sys/mman.h b/include/sys/mman.h
+index 7bb1595bb..326685f61 100644
+--- a/include/sys/mman.h
++++ b/include/sys/mman.h
+@@ -98,17 +98,18 @@ static inline int msync (void *__addr, size_t __len, int __flags) { return 0; }
+ 
+ #endif
+ 
+-#ifdef __USE_BSD
++#if defined __USE_BSD && defined __UCLIBC_LINUX_SPECIFIC__
+ /* Advise the system about particular usage patterns the program follows
+    for the region starting at ADDR and extending LEN bytes.  */
+ extern int madvise (void *__addr, size_t __len, int __advice) __THROW;
+ #endif
+-#ifdef __USE_XOPEN2K
++#if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /* This is the POSIX name for this function.  */
+ extern int posix_madvise (void *__addr, size_t __len, int __advice) __THROW;
+ #endif
+ 
+-#ifdef __ARCH_USE_MMU__
++#if defined __UCLIBC_HAS_REALTIME__
++# ifdef __ARCH_USE_MMU__
+ 
+ /* Guarantee all whole pages mapped by the range [ADDR,ADDR+LEN) to
+    be memory resident.  */
+@@ -135,8 +136,9 @@ static inline int munlock (__const void *__addr, size_t __len) { return 0; }
+ static inline int mlockall (int __flags) { return 0; }
+ static inline int munlockall (void) { return 0; }
+ #endif
++#endif /* __UCLIBC_HAS_REALTIME__ */
+ 
+-#ifdef __USE_MISC
++#if defined __USE_MISC && defined __UCLIBC_BSD_SPECIFIC__
+ /* mincore returns the memory residency status of the pages in the
+    current process's address space specified by [start, start + len).
+    The status is returned in a vector of bytes.  The least significant
+diff --git a/include/sys/poll.h b/include/sys/poll.h
+index 70f0d3159..a298dac15 100644
+--- a/include/sys/poll.h
++++ b/include/sys/poll.h
+@@ -59,7 +59,7 @@ __BEGIN_DECLS
+    __THROW.  */
+ extern int poll (struct pollfd *__fds, nfds_t __nfds, int __timeout);
+ 
+-#ifdef __USE_GNU
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
+ /* Like poll, but before waiting the threads signal mask is replaced
+    with that specified in the fourth parameter.  For better usability,
+    the timeout value is specified using a TIMESPEC object.
+diff --git a/include/sys/statfs.h b/include/sys/statfs.h
+index 3b2226b41..f4177d4c9 100644
+--- a/include/sys/statfs.h
++++ b/include/sys/statfs.h
+@@ -45,6 +45,7 @@ extern int statfs64 (__const char *__file, struct statfs64 *__buf)
+      __THROW __nonnull ((1, 2));
+ #endif
+ 
++#if defined __UCLIBC_LINUX_SPECIFIC__
+ /* Return information about the filesystem containing the file FILDES
+    refers to.  */
+ #ifndef __USE_FILE_OFFSET64
+@@ -62,6 +63,7 @@ extern int __REDIRECT_NTH (fstatfs, (int __fildes, struct statfs *__buf),
+ extern int fstatfs64 (int __fildes, struct statfs64 *__buf)
+      __THROW __nonnull ((2));
+ #endif
++#endif /* __UCLIBC_LINUX_SPECIFIC__ */
+ 
+ __END_DECLS
+ 
+diff --git a/include/sys/timex.h b/include/sys/timex.h
+index 773a5ab8d..d2020a6d2 100644
+--- a/include/sys/timex.h
++++ b/include/sys/timex.h
+@@ -119,8 +119,10 @@ __BEGIN_DECLS
+ extern int __adjtimex (struct timex *__ntx) __THROW;
+ extern int adjtimex (struct timex *__ntx) __THROW;
+ 
++#if defined __UCLIBC_NTP_LEGACY__
+ extern int ntp_gettime (struct ntptimeval *__ntv) __THROW;
+ extern int ntp_adjtime (struct timex *__tntx) __THROW;
++#endif
+ 
+ __END_DECLS
+ 
+diff --git a/include/time.h b/include/time.h
+index d25b40845..8fca37b55 100644
+--- a/include/time.h
++++ b/include/time.h
+@@ -329,6 +329,7 @@ extern int dysize (int __year) __THROW  __attribute__ ((__const__));
+ 
+ 
+ # ifdef __USE_POSIX199309
++#  if defined __UCLIBC_HAS_REALTIME__
+ /* Pause execution for a number of nanoseconds.
+ 
+    This function is a cancellation point and therefore not marked with
+@@ -346,10 +347,10 @@ extern int clock_gettime (clockid_t __clock_id, struct timespec *__tp) __THROW;
+ /* Set clock CLOCK_ID to value TP.  */
+ extern int clock_settime (clockid_t __clock_id, __const struct timespec *__tp)
+      __THROW;
+-
++#endif /* __UCLIBC_HAS_REALTIME__ */
+ #ifdef __UCLIBC_MJN3_ONLY__
+ #warning "mjn3 FIXME: a bunch of unimplemented function prototypes."
+-#  ifdef __USE_XOPEN2K
++#  if defined __USE_XOPEN2K && defined __UCLIBC_HAS_ADVANCED_REALTIME__
+ /* High-resolution sleep with the specified clock.
+ 
+    This function is a cancellation point and therefore not marked with
+@@ -363,7 +364,7 @@ extern int clock_getcpuclockid (pid_t __pid, clockid_t *__clock_id) __THROW;
+ #  endif
+ #endif /* __UCLIBC_MJN3_ONLY__ */
+ 
+-
++#  if defined __UCLIBC_HAS_REALTIME__
+ /* Create new per-process timer using CLOCK_ID.  */
+ extern int timer_create (clockid_t __clock_id,
+ 			 struct sigevent *__restrict __evp,
+@@ -383,7 +384,8 @@ extern int timer_gettime (timer_t __timerid, struct itimerspec *__value)
+ 
+ /* Get expiration overrun for timer TIMERID.  */
+ extern int timer_getoverrun (timer_t __timerid) __THROW;
+-# endif
++#  endif /* __UCLIBC_HAS_REALTIME__ */
++# endif /* __USE_POSIX199309 */
+ 
+ 
+ #ifdef __UCLIBC_MJN3_ONLY__
+diff --git a/include/unistd.h b/include/unistd.h
+index 3b72b8222..e0219e770 100644
+--- a/include/unistd.h
++++ b/include/unistd.h
+@@ -703,10 +703,12 @@ extern int getresuid (__uid_t *__ruid, __uid_t *__euid, __uid_t *__suid)
+ extern int getresgid (__gid_t *__rgid, __gid_t *__egid, __gid_t *__sgid)
+      __THROW;
+ 
++#if defined __UCLIBC_LINUX_SPECIFIC__
+ /* Set the real user ID, effective user ID, and saved-set user ID,
+    of the calling process to RUID, EUID, and SUID, respectively.  */
+ extern int setresuid (__uid_t __ruid, __uid_t __euid, __uid_t __suid)
+      __THROW;
++#endif
+ 
+ /* Set the real group ID, effective group ID, and saved-set group ID,
+    of the calling process to RGID, EGID, and SGID, respectively.  */
+@@ -857,7 +859,7 @@ extern int sethostname (__const char *__name, size_t __len)
+    This call is restricted to the super-user.  */
+ extern int sethostid (long int __id) __THROW __wur;
+ 
+-
++#if defined __UCLIBC_BSD_SPECIFIC__
+ /* Get and set the NIS (aka YP) domain name, if any.
+    Called just like `gethostname' and `sethostname'.
+    The NIS domain name is usually the empty string when not using NIS.  */
+@@ -865,7 +867,7 @@ extern int getdomainname (char *__name, size_t __len)
+      __THROW __nonnull ((1)) __wur;
+ extern int setdomainname (__const char *__name, size_t __len)
+      __THROW __nonnull ((1)) __wur;
+-
++#endif
+ 
+ /* Revoke access permissions to all processes currently communicating
+    with the control terminal, and then send a SIGHUP signal to the process
+@@ -1064,7 +1066,8 @@ extern int lockf64 (int __fd, int __cmd, __off64_t __len) __wur;
+        __result; }))
+ #endif
+ 
+-#if defined __USE_POSIX199309 || defined __USE_UNIX98
++#if (defined __USE_POSIX199309 || defined __USE_UNIX98) \
++	&& defined __UCLIBC_HAS_REALTIME__
+ /* Synchronize at least the data part of a file with the underlying
+    media.  */
+ extern int fdatasync (int __fildes) __THROW;
+diff --git a/ldso/include/dl-syscall.h b/ldso/include/dl-syscall.h
+index d017866eb..96d704d85 100644
+--- a/ldso/include/dl-syscall.h
++++ b/ldso/include/dl-syscall.h
+@@ -59,7 +59,11 @@
+    dynamic linking at all, so we cannot return any error codes.
+    We just punt if there is an error. */
+ #define __NR__dl_exit __NR_exit
+-static __always_inline _syscall1(void, _dl_exit, int, status);
++static __always_inline attribute_noreturn void _dl_exit(int status)
++{
++	while (1)
++		INLINE_SYSCALL(exit, 1, status);
++}
+ 
+ #define __NR__dl_close __NR_close
+ static __always_inline _syscall1(int, _dl_close, int, fd);
+diff --git a/libc/inet/Makefile.in b/libc/inet/Makefile.in
+index f3f65f4e7..493041ff6 100644
+--- a/libc/inet/Makefile.in
++++ b/libc/inet/Makefile.in
+@@ -10,14 +10,22 @@ include $(top_srcdir)libc/inet/rpc/Makefile.in
+ INET_DIR := $(top_srcdir)libc/inet
+ INET_OUT := $(top_builddir)libc/inet
+ 
+-CSRC :=	getservice.c getproto.c hostid.c getnetent.c getnetbynm.c getnetbyad.c \
+-	inet_net.c ntop.c herror.c if_index.c gai_strerror.c getaddrinfo.c \
+-	in6_addr.c ether_addr.c ntohl.c opensock.c ifaddrs.c
++CSRC :=
++ifneq ($(UCLIBC_HAS_IPV4)$(UCLIBC_HAS_IPV6),)
++CSRC +=	getservice.c getproto.c hostid.c getnetent.c getnetbynm.c getnetbyad.c \
++	inet_net.c herror.c if_index.c gai_strerror.c getaddrinfo.c \
++	ether_addr.c ntohl.c ifaddrs.c ntop.c
++endif
++ifeq ($(UCLIBC_HAS_IPV6),y)
++CSRC += in6_addr.c
++endif
+ 
+ # multi source addr.c
+ addr_CSRC :=	inet_aton.c inet_addr.c inet_ntoa.c inet_makeaddr.c \
+ 	inet_lnaof.c inet_netof.c
++ifneq ($(UCLIBC_HAS_IPV4)$(UCLIBC_HAS_IPV6),)
+ CSRC += $(addr_CSRC)
++endif
+ 
+ # multi source resolv.c
+ resolv_CSRC +=	encodeh.c decodeh.c encoded.c decoded.c lengthd.c encodeq.c \
+@@ -28,16 +36,21 @@ resolv_CSRC +=	encodeh.c decodeh.c encoded.c decoded.c lengthd.c encodeq.c \
+ 	get_hosts_byaddr_r.c gethostbyname2.c getnameinfo.c gethostent.c \
+ 	gethostbyname_r.c gethostbyname2_r.c gethostbyaddr_r.c \
+ 	res_comp.c ns_name.c ethers.c
++ifneq ($(UCLIBC_HAS_IPV4)$(UCLIBC_HAS_IPV6),)
+ CSRC += $(resolv_CSRC)
+ 
+ # unused ATM
+ CSRC += encodep.c decodep.c formquery.c
++endif
++
+ 
+ # multi source socketcalls.c
+ socketcalls_CSRC +=	accept.c bind.c connect.c getpeername.c getsockname.c \
+ 	getsockopt.c listen.c recv.c recvfrom.c recvmsg.c send.c sendmsg.c \
+ 	sendto.c setsockopt.c shutdown.c socket.c socketpair.c
+-CSRC += $(socketcalls_CSRC)
++ifeq ($(UCLIBC_HAS_SOCKET),y)
++CSRC += $(socketcalls_CSRC) opensock.c
++endif
+ 
+ INET_SRC := $(patsubst %.c,$(INET_DIR)/%.c,$(CSRC))
+ INET_OBJ := $(patsubst %.c,$(INET_OUT)/%.o,$(CSRC))
+diff --git a/libc/inet/getaddrinfo.c b/libc/inet/getaddrinfo.c
+index 0b885afd2..e3caf6f0d 100644
+--- a/libc/inet/getaddrinfo.c
++++ b/libc/inet/getaddrinfo.c
+@@ -501,7 +501,7 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 		return -EAI_FAMILY;
+ 	}
+ 
+-#if __UCLIBC_HAS_IPV6__
++#if defined __UCLIBC_HAS_IPV6__
+ 	if (at->family == AF_UNSPEC)
+ 	{
+ 	    char *namebuf = strdupa (name);
+@@ -558,7 +558,7 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 	     * IPv6 addresses.
+ 	     */
+ 
+-#if __UCLIBC_HAS_IPV6__
++#if defined __UCLIBC_HAS_IPV6__
+ 	    if (req->ai_family == AF_UNSPEC || req->ai_family == AF_INET6)
+ 		gethosts (AF_INET6, struct in6_addr);
+ #endif
+@@ -598,7 +598,7 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 	    memset (at->next, '\0', sizeof (struct gaih_addrtuple));
+ 	}
+ 
+-#if __UCLIBC_HAS_IPV6__
++#if defined __UCLIBC_HAS_IPV6__
+ 	if (req->ai_family == 0 || req->ai_family == AF_INET6)
+ 	{
+ 	    at->family = AF_INET6;
+@@ -680,19 +680,22 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 	    else
+ 		namelen = 0;
+ 
+-#if __UCLIBC_HAS_IPV6__
++#if defined __UCLIBC_HAS_IPV6__
+ 	    if (at2->family == AF_INET6 || v4mapped)
+ 	    {
+ 		family = AF_INET6;
+ 		socklen = sizeof (struct sockaddr_in6);
+ 	    }
++#endif
++#if defined __UCLIBC_HAS_IPV4__ && defined __UCLIBC_HAS_IPV6__
+ 	    else
+ #endif
++#if defined __UCLIBC_HAS_IPV4__
+ 	    {
+ 		family = AF_INET;
+ 		socklen = sizeof (struct sockaddr_in);
+ 	    }
+-
++#endif
+ 	    for (st2 = st; st2 != NULL; st2 = st2->next)
+ 	    {
+ 		*pai = malloc (sizeof (struct addrinfo) + socklen + namelen);
+@@ -710,7 +713,7 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ #endif /* SALEN */
+ 		(*pai)->ai_addr->sa_family = family;
+ 
+-#if __UCLIBC_HAS_IPV6__
++#if defined __UCLIBC_HAS_IPV6__
+ 		if (family == AF_INET6)
+ 		{
+ 		    struct sockaddr_in6 *sin6p =
+@@ -733,8 +736,11 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 		    sin6p->sin6_port = st2->port;
+ 		    sin6p->sin6_scope_id = at2->scopeid;
+ 		}
++#endif
++#if defined __UCLIBC_HAS_IPV4__ && defined __UCLIBC_HAS_IPV6__
+ 		else
+ #endif
++#if defined __UCLIBC_HAS_IPV4__
+ 		{
+ 		    struct sockaddr_in *sinp =
+ 			(struct sockaddr_in *) (*pai)->ai_addr;
+@@ -744,7 +750,7 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 		    sinp->sin_port = st2->port;
+ 		    memset (sinp->sin_zero, '\0', sizeof (sinp->sin_zero));
+ 		}
+-
++#endif
+ 		if (c)
+ 		{
+ 		    (*pai)->ai_canonname = ((void *) (*pai) +
+@@ -766,7 +772,7 @@ gaih_inet (const char *name, const struct gaih_service *service,
+ 
+ static struct gaih gaih[] =
+ {
+-#if __UCLIBC_HAS_IPV6__
++#if defined __UCLIBC_HAS_IPV6__
+     { PF_INET6, gaih_inet },
+ #endif
+     { PF_INET, gaih_inet },
+diff --git a/libc/inet/hostid.c b/libc/inet/hostid.c
+index 170d87361..c11ab6c12 100644
+--- a/libc/inet/hostid.c
++++ b/libc/inet/hostid.c
+@@ -47,7 +47,7 @@ long int gethostid(void)
+ 	char host[MAXHOSTNAMELEN + 1];
+ 	int fd, id;
+ 
+-	/* If hostid was already set the we can return that value.
++	/* If hostid was already set then we can return that value.
+ 	 * It is not an error if we cannot read this file. It is not even an
+ 	 * error if we cannot read all the bytes, we just carry on trying...
+ 	 */
+diff --git a/libc/inet/if_index.c b/libc/inet/if_index.c
+index 03e7089cf..005d9d09e 100644
+--- a/libc/inet/if_index.c
++++ b/libc/inet/if_index.c
+@@ -287,14 +287,6 @@ if_nameindex (void)
+ #endif
+ libc_hidden_def(if_nameindex)
+ 
+-#if 0
+-struct if_nameindex *
+-if_nameindex (void)
+-{
+-  return (if_nameindex_netlink () != NULL ? : if_nameindex_ioctl ());
+-}
+-#endif
+-
+ char *
+ if_indextoname (unsigned int ifindex, char *ifname)
+ {
+diff --git a/libc/inet/resolv.c b/libc/inet/resolv.c
+index 9776fa4a7..ce19c8698 100644
+--- a/libc/inet/resolv.c
++++ b/libc/inet/resolv.c
+@@ -187,7 +187,6 @@ libc_hidden_proto(fopen)
+ libc_hidden_proto(fclose)
+ libc_hidden_proto(random)
+ libc_hidden_proto(getservbyport)
+-libc_hidden_proto(getdomainname)
+ libc_hidden_proto(uname)
+ libc_hidden_proto(inet_addr)
+ libc_hidden_proto(inet_aton)
+@@ -218,11 +217,12 @@ libc_hidden_proto(fprintf)
+ libc_hidden_proto(__h_errno_location)
+ #ifdef __UCLIBC_HAS_XLOCALE__
+ libc_hidden_proto(__ctype_b_loc)
+-#elif __UCLIBC_HAS_CTYPE_TABLES__
++#elif defined __UCLIBC_HAS_CTYPE_TABLES__
+ libc_hidden_proto(__ctype_b)
+ #endif
+ libc_hidden_proto(__uc_malloc)
+-
++int __libc_getdomainname(char *name, size_t len);
++libc_hidden_proto(__libc_getdomainname)
+ 
+ 
+ #define MAX_RECURSE 5
+@@ -747,12 +747,14 @@ int attribute_hidden __dns_lookup(const char *name, int type, int nscount, char
+ 	unsigned char * packet = malloc(PACKETSZ);
+ 	char *dns, *lookup = malloc(MAXDNAME);
+ 	int variant = -1;
+-	struct sockaddr_in sa;
+ 	int local_ns = -1, local_id = -1;
+ #ifdef __UCLIBC_HAS_IPV6__
+ 	bool v6;
+ 	struct sockaddr_in6 sa6;
+ #endif
++#ifdef __UCLIBC_HAS_IPV4__
++	struct sockaddr_in sa;
++#endif
+ 
+ 	fd = -1;
+ 
+@@ -840,6 +842,7 @@ int attribute_hidden __dns_lookup(const char *name, int type, int nscount, char
+ 			rc = connect(fd, (struct sockaddr *) &sa6, sizeof(sa6));
+ 		} else {
+ #endif
++#ifdef __UCLIBC_HAS_IPV4__
+ 			sa.sin_family = AF_INET;
+ 			sa.sin_port = htons(NAMESERVER_PORT);
+ 			__UCLIBC_MUTEX_LOCK(__resolv_lock);
+@@ -848,6 +851,7 @@ int attribute_hidden __dns_lookup(const char *name, int type, int nscount, char
+ 			sa.sin_addr.s_addr = inet_addr(dns);
+ 			__UCLIBC_MUTEX_UNLOCK(__resolv_lock);
+ 			rc = connect(fd, (struct sockaddr *) &sa, sizeof(sa));
++#endif
+ #ifdef __UCLIBC_HAS_IPV6__
+ 		}
+ #endif
+@@ -1853,15 +1857,19 @@ int getnameinfo(const struct sockaddr *sa, socklen_t addrlen, char *host,
+ 
+ 	ok = sa->sa_family;
+ 	if (ok == AF_LOCAL) /* valid */;
++#ifdef __UCLIBC_HAS_IPV4__
+ 	else if (ok == AF_INET) {
+ 		if (addrlen < sizeof (struct sockaddr_in))
+ 			goto BAD_FAM;
++	}
++#endif
+ #ifdef __UCLIBC_HAS_IPV6__
+-	} else if (ok == AF_INET6) {
++	else if (ok == AF_INET6) {
+ 		if (addrlen < sizeof (struct sockaddr_in6))
+ 			goto BAD_FAM;
++	}
+ #endif /* __UCLIBC_HAS_IPV6__ */
+-	} else
++	else
+ BAD_FAM:
+ 		return EAI_FAMILY;
+ 
+@@ -1878,15 +1886,19 @@ BAD_FAM:
+ 					h = gethostbyaddr ((const void *)
+ 						&(((const struct sockaddr_in6 *) sa)->sin6_addr),
+ 						sizeof(struct in6_addr), AF_INET6);
+-				else
+ #endif /* __UCLIBC_HAS_IPV6__ */
++#if defined __UCLIBC_HAS_IPV6__ && defined __UCLIBC_HAS_IPV4__
++				else
++#endif
++#ifdef __UCLIBC_HAS_IPV4__
+ 					h = gethostbyaddr ((const void *) &(((const struct sockaddr_in *)sa)->sin_addr),
+ 					  sizeof(struct in_addr), AF_INET);
++#endif /* __UCLIBC_HAS_IPV4__ */
+ 
+ 				if (h) {
+ 					char *c;
+ 					if ((flags & NI_NOFQDN)
+-					    && (getdomainname (domain, sizeof(domain)) == 0)
++					    && (__libc_getdomainname (domain, sizeof(domain)) == 0)
+ 					    && (c = strstr (h->h_name, domain))
+ 					    && (c != h->h_name) && (*(--c) == '.')) {
+ 						strncpy (host, h->h_name,
+@@ -1952,11 +1964,16 @@ BAD_FAM:
+ 							memcpy (host + real_hostlen, scopebuf, scopelen + 1);
+ 						}
+ #endif
+-					} else
++					}
+ #endif /* __UCLIBC_HAS_IPV6__ */
++#if defined __UCLIBC_HAS_IPV6__ && defined __UCLIBC_HAS_IPV4__
++						else
++#endif /* __UCLIBC_HAS_IPV6__ && defined __UCLIBC_HAS_IPV4__ */
++#if defined __UCLIBC_HAS_IPV4__
+ 						c = inet_ntop (AF_INET, (const void *)
+ 							&(((const struct sockaddr_in *) sa)->sin_addr),
+ 							host, hostlen);
++#endif /* __UCLIBC_HAS_IPV4__ */
+ 
+ 					if (c == NULL) {
+ 						errno = serrno;
+@@ -2752,3 +2769,4 @@ int ns_name_unpack(const u_char *msg, const u_char *eom, const u_char *src,
+ }
+ libc_hidden_def(ns_name_unpack)
+ #endif /* L_ns_name */
++/* vi: set sw=4 ts=4: */
+diff --git a/libc/inet/socketcalls.c b/libc/inet/socketcalls.c
+index 9a6e2e151..ca93f6a18 100644
+--- a/libc/inet/socketcalls.c
++++ b/libc/inet/socketcalls.c
+@@ -168,7 +168,8 @@ libc_hidden_def(listen)
+ extern __typeof(recv) __libc_recv;
+ #ifdef __NR_recv
+ #define __NR___libc_recv __NR_recv
+-_syscall4(ssize_t, __libc_recv, int, sockfd, __ptr_t, buffer, size_t, len, int, flags);
++_syscall4(ssize_t, __libc_recv, int, sockfd, __ptr_t, buffer, size_t, len,
++	int, flags);
+ #elif defined(__NR_socketcall)
+ /* recv, recvfrom added by bir7@leland.stanford.edu */
+ ssize_t __libc_recv(int sockfd, __ptr_t buffer, size_t len, int flags)
+@@ -197,8 +198,8 @@ libc_hidden_weak(recv)
+ extern __typeof(recvfrom) __libc_recvfrom;
+ #ifdef __NR_recvfrom
+ #define __NR___libc_recvfrom __NR_recvfrom
+-_syscall6(ssize_t, __libc_recvfrom, int, sockfd, __ptr_t, buffer, size_t, len, int, flags, 
+-	struct sockaddr *, to, socklen_t *, tolen);
++_syscall6(ssize_t, __libc_recvfrom, int, sockfd, __ptr_t, buffer, size_t, len,
++	int, flags, struct sockaddr *, to, socklen_t *, tolen);
+ #elif defined(__NR_socketcall)
+ /* recv, recvfrom added by bir7@leland.stanford.edu */
+ ssize_t __libc_recvfrom(int sockfd, __ptr_t buffer, size_t len, int flags,
+@@ -295,8 +296,8 @@ libc_hidden_weak(sendmsg)
+ extern __typeof(sendto) __libc_sendto;
+ #ifdef __NR_sendto
+ #define __NR___libc_sendto  __NR_sendto
+-_syscall6(ssize_t, __libc_sendto, int, sockfd, const void *, buffer, size_t, len, 
+-	int, flags, const struct sockaddr *, to, socklen_t, tolen);
++_syscall6(ssize_t, __libc_sendto, int, sockfd, const void *, buffer,
++	size_t, len, int, flags, const struct sockaddr *, to, socklen_t, tolen);
+ #elif defined(__NR_socketcall)
+ /* send, sendto added by bir7@leland.stanford.edu */
+ ssize_t __libc_sendto(int sockfd, const void *buffer, size_t len, int flags,
+diff --git a/libc/misc/dirent/Makefile.in b/libc/misc/dirent/Makefile.in
+index 89a00ed5e..b35efa0b1 100644
+--- a/libc/misc/dirent/Makefile.in
++++ b/libc/misc/dirent/Makefile.in
+@@ -5,8 +5,8 @@
+ # Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+ #
+ 
+-CSRC :=	alphasort.c closedir.c dirfd.c opendir.c readdir.c rewinddir.c scandir.c \
+-	seekdir.c telldir.c readdir_r.c
++CSRC :=	alphasort.c closedir.c dirfd.c opendir.c readdir.c rewinddir.c \
++	scandir.c seekdir.c telldir.c readdir_r.c
+ 
+ ifeq ($(UCLIBC_HAS_LFS),y)
+ CSRC +=	readdir64.c alphasort64.c scandir64.c readdir64_r.c
+diff --git a/libc/misc/error/Makefile.in b/libc/misc/error/Makefile.in
+index c529e955e..9facacff0 100644
+--- a/libc/misc/error/Makefile.in
++++ b/libc/misc/error/Makefile.in
+@@ -5,7 +5,13 @@
+ # Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+ #
+ 
+-CSRC := error.c err.c
++CSRC :=
++ifeq ($(UCLIBC_HAS_BSD_ERR),y)
++CSRC += err.c
++endif
++ifeq ($(UCLIBC_HAS_GNU_ERROR),y)
++CSRC += error.c
++endif
+ 
+ MISC_ERROR_DIR := $(top_srcdir)libc/misc/error
+ MISC_ERROR_OUT := $(top_builddir)libc/misc/error
+diff --git a/libc/misc/error/err.c b/libc/misc/error/err.c
+index cd331500a..ab9c8b72b 100644
+--- a/libc/misc/error/err.c
++++ b/libc/misc/error/err.c
+@@ -19,6 +19,8 @@
+ #warning REMINDER: Deal with wide oriented stderr case.
+ #endif
+ 
++#if defined __USE_BSD
++
+ libc_hidden_proto(vwarn)
+ libc_hidden_proto(vwarnx)
+ libc_hidden_proto(verr)
+@@ -124,3 +126,4 @@ void attribute_noreturn errx(int status, const char *format, ...)
+ 	while(1)
+ 		va_end(args);
+ }
++#endif
+diff --git a/libc/misc/statfs/fstatvfs.c b/libc/misc/statfs/fstatvfs.c
+index bc00cc6b5..231d45207 100644
+--- a/libc/misc/statfs/fstatvfs.c
++++ b/libc/misc/statfs/fstatvfs.c
+@@ -34,7 +34,21 @@ libc_hidden_proto(setmntent)
+ libc_hidden_proto(getmntent_r)
+ libc_hidden_proto(endmntent)
+ 
+-libc_hidden_proto(fstatfs)
++#if !defined __UCLIBC_LINUX_SPECIFIC__
++#ifndef __USE_FILE_OFFSET64
++extern int fstatfs (int __fildes, struct statfs *__buf)
++     __THROW __nonnull ((2));
++#else
++# ifdef __REDIRECT_NTH
++extern int __REDIRECT_NTH (fstatfs, (int __fildes, struct statfs *__buf),
++			   fstatfs64) __nonnull ((2));
++# else
++#  define fstatfs fstatfs64
++# endif
++#endif
++#endif
++extern __typeof(fstatfs) __libc_fstatfs;
++libc_hidden_proto(__libc_fstatfs)
+ libc_hidden_proto(fstat)
+ libc_hidden_proto(stat)
+ 
+@@ -44,7 +58,7 @@ int fstatvfs (int fd, struct statvfs *buf)
+     struct stat st;
+ 
+     /* Get as much information as possible from the system.  */
+-    if (fstatfs (fd, &fsbuf) < 0)
++    if (__libc_fstatfs (fd, &fsbuf) < 0)
+ 	return -1;
+ 
+ #define STAT(st) fstat (fd, st)
+diff --git a/libc/misc/statfs/statvfs.c b/libc/misc/statfs/statvfs.c
+index 077a2fb0b..0feb8731d 100644
+--- a/libc/misc/statfs/statvfs.c
++++ b/libc/misc/statfs/statvfs.c
+@@ -34,7 +34,8 @@ libc_hidden_proto(setmntent)
+ libc_hidden_proto(getmntent_r)
+ libc_hidden_proto(endmntent)
+ 
+-libc_hidden_proto(statfs)
++extern __typeof(statfs) __libc_statfs;
++libc_hidden_proto(__libc_statfs)
+ libc_hidden_proto(stat)
+ 
+ int statvfs (const char *file, struct statvfs *buf)
+@@ -43,7 +44,7 @@ int statvfs (const char *file, struct statvfs *buf)
+     struct stat st;
+ 
+     /* Get as much information as possible from the system.  */
+-    if (statfs (file, &fsbuf) < 0)
++    if (__libc_statfs (file, &fsbuf) < 0)
+ 	return -1;
+ 
+ #define STAT(st) stat (file, st)
+diff --git a/libc/misc/syslog/Makefile.in b/libc/misc/syslog/Makefile.in
+index fd9ae198f..8355ac0cd 100644
+--- a/libc/misc/syslog/Makefile.in
++++ b/libc/misc/syslog/Makefile.in
+@@ -13,7 +13,9 @@ MISC_SYSLOG_OUT := $(top_builddir)libc/misc/syslog
+ MISC_SYSLOG_SRC := $(patsubst %.c,$(MISC_SYSLOG_DIR)/%.c,$(CSRC))
+ MISC_SYSLOG_OBJ := $(patsubst %.c,$(MISC_SYSLOG_OUT)/%.o,$(CSRC))
+ 
++ifeq ($(UCLIBC_HAS_SYSLOG),y)
+ libc-y += $(MISC_SYSLOG_OBJ)
++endif
+ 
+ objclean-y += misc_syslog_objclean
+ 
+diff --git a/libc/misc/sysvipc/sem.c b/libc/misc/sysvipc/sem.c
+index 51706c58d..07705c9d9 100644
+--- a/libc/misc/sysvipc/sem.c
++++ b/libc/misc/sysvipc/sem.c
+@@ -19,6 +19,7 @@
+ 
+ #include <errno.h>
+ #include <sys/sem.h>
++#include <stddef.h>
+ #include "ipc.h"
+ 
+ 
+@@ -26,6 +27,7 @@
+ /* Return identifier for array of NSEMS semaphores associated with
+    KEY.  */
+ #include <stdarg.h>
++#include <stdlib.h>
+ /* arg for semctl system calls. */
+ union semun {
+     int val;			/* value for SETVAL */
+@@ -53,7 +55,7 @@ int semctl(int semid, int semnum, int cmd, ...)
+ #ifdef __NR_semctl
+     return __semctl(semid, semnum, cmd | __IPC_64, arg.__pad);
+ #else
+-    return __syscall_ipc(IPCOP_semctl, semid, semnum, cmd | __IPC_64, &arg, 0);
++    return __syscall_ipc(IPCOP_semctl, semid, semnum, cmd|__IPC_64, &arg, NULL);
+ #endif
+ }
+ #endif
+@@ -84,7 +86,7 @@ _syscall3(int, semop, int, semid, struct sembuf *, sops, size_t, nsops);
+ /* Perform user-defined atomical operation of array of semaphores.  */
+ int semop (int semid, struct sembuf *sops, size_t nsops)
+ {
+-    return __syscall_ipc(IPCOP_semop, semid, (int) nsops, 0, sops, 0);
++    return __syscall_ipc(IPCOP_semop, semid, (int) nsops, 0, sops, NULL);
+ }
+ #endif
+ #endif
+diff --git a/libc/misc/time/Makefile.in b/libc/misc/time/Makefile.in
+index b90b9b48f..4c4d510b1 100644
+--- a/libc/misc/time/Makefile.in
++++ b/libc/misc/time/Makefile.in
+@@ -5,8 +5,10 @@
+ # Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+ #
+ 
+-CSRC := adjtime.c ftime.c
+-
++CSRC := adjtime.c
++ifeq ($(UCLIBC_SUSV3_LEGACY),y)
++CSRC += ftime.c
++endif
+ # multi source time.c
+ CSRC +=	asctime.c asctime_r.c clock.c ctime.c ctime_r.c gmtime.c gmtime_r.c \
+ 	localtime.c localtime_r.c mktime.c strftime.c strptime.c tzset.c \
+diff --git a/libc/signal/Makefile.in b/libc/signal/Makefile.in
+index 8429d2ef6..4451d6622 100644
+--- a/libc/signal/Makefile.in
++++ b/libc/signal/Makefile.in
+@@ -6,10 +6,15 @@
+ #
+ 
+ CSRC :=	allocrtsig.c killpg.c raise.c sigaction.c sigaddset.c sigandset.c \
+-	sigblock.c sigdelset.c sigempty.c sigfillset.c siggetmask.c sighold.c \
+-	sigignore.c sigintr.c sigisempty.c sigismem.c sigjmp.c signal.c \
+-	sigorset.c sigpause.c sigrelse.c sigset.c sigsetmask.c sigsetops.c \
+-	sysv_signal.c sigwait.c
++	sigblock.c sigdelset.c sigempty.c sigfillset.c siggetmask.c \
++	sigintr.c sigisempty.c sigismem.c sigjmp.c signal.c \
++	sigorset.c sigpause.c sigsetmask.c sigsetops.c sigwait.c
++ifeq ($(UCLIBC_HAS_OBSOLETE_BSD_SIGNAL),y)
++CSRC += sighold.c sigignore.c sigrelse.c sigset.c
++endif
++ifeq ($(UCLIBC_HAS_OBSOLETE_SYSV_SIGNAL),y)
++CSRC += sysv_signal.c
++endif
+ 
+ ifneq ($(strip $(ARCH_OBJS)),)
+ CSRC := $(filter-out $(notdir $(ARCH_OBJS:.o=.c)),$(CSRC))
+diff --git a/libc/signal/sigwait.c b/libc/signal/sigwait.c
+index 8ff2541a0..99832f809 100644
+--- a/libc/signal/sigwait.c
++++ b/libc/signal/sigwait.c
+@@ -22,6 +22,7 @@
+ #include <signal.h>
+ #include <string.h>
+ 
++#if defined __UCLIBC_HAS_REALTIME__
+ libc_hidden_proto(sigwaitinfo)
+ 
+ int __sigwait (const sigset_t *set, int *sig) attribute_hidden;
+@@ -34,6 +35,67 @@ int __sigwait (const sigset_t *set, int *sig)
+ 	}
+ 	return 1;
+ }
++#else /* __UCLIBC_HAS_REALTIME__ */
++/* variant without REALTIME extensions */
++libc_hidden_proto(sigfillset)
++libc_hidden_proto(sigaction)
++libc_hidden_proto(sigsuspend)
++
++static int was_sig; /* obviously not thread-safe */
++static void ignore_signal(int sig)
++{
++	was_sig = sig;
++}
++int __sigwait (const sigset_t *set, int *sig) attribute_hidden;
++int __sigwait (const sigset_t *set, int *sig)
++{
++  sigset_t tmp_mask;
++  struct sigaction saved[NSIG];
++  struct sigaction action;
++  int save_errno;
++  int this;
++
++  /* Prepare set.  */
++  sigfillset (&tmp_mask);
++
++  /* Unblock all signals in the SET and register our nice handler.  */
++  action.sa_handler = ignore_signal;
++  action.sa_flags = 0;
++  sigfillset (&action.sa_mask);       /* Block all signals for handler.  */
++
++  /* Make sure we recognize error conditions by setting WAS_SIG to a
++     value which does not describe a legal signal number.  */
++  was_sig = -1;
++
++  for (this = 1; this < NSIG; ++this)
++    if (__sigismember (set, this))
++      {
++        /* Unblock this signal.  */
++        __sigdelset (&tmp_mask, this);
++
++        /* Register temporary action handler.  */
++        if (sigaction (this, &action, &saved[this]) != 0)
++          goto restore_handler;
++      }
++
++  /* Now we can wait for signals.  */
++  sigsuspend (&tmp_mask);
++
++ restore_handler:
++  save_errno = errno;
++
++  while (--this >= 1)
++    if (__sigismember (set, this))
++      /* We ignore errors here since we must restore all handlers.  */
++      sigaction (this, &saved[this], NULL);
++
++  __set_errno (save_errno);
++
++  /* Store the result and return.  */
++  *sig = was_sig;
++  return was_sig == -1 ? -1 : 0;
++}
++#endif /* __UCLIBC_HAS_REALTIME__ */
+ libc_hidden_proto(sigwait)
+ weak_alias(__sigwait,sigwait)
+ libc_hidden_def(sigwait)
+diff --git a/libc/stdlib/Makefile.in b/libc/stdlib/Makefile.in
+index ad2a95935..dfef6d18e 100644
+--- a/libc/stdlib/Makefile.in
++++ b/libc/stdlib/Makefile.in
+@@ -12,10 +12,16 @@ include $(top_srcdir)libc/stdlib/malloc-standard/Makefile.in
+ CSRC := \
+ 	abort.c getenv.c mkdtemp.c mktemp.c realpath.c mkstemp.c \
+ 	rand.c random.c random_r.c setenv.c system.c div.c ldiv.c lldiv.c \
+-	getpt.c ptsname.c grantpt.c unlockpt.c drand48-iter.c jrand48.c \
++	getpt.c drand48-iter.c jrand48.c \
+ 	jrand48_r.c lrand48.c lrand48_r.c mrand48.c mrand48_r.c nrand48.c \
+ 	nrand48_r.c rand_r.c srand48.c srand48_r.c seed48.c seed48_r.c \
+-	valloc.c posix_memalign.c a64l.c l64a.c __uc_malloc.c
++	valloc.c a64l.c l64a.c __uc_malloc.c
++ifeq ($(UCLIBC_HAS_ADVANCED_REALTIME),y)
++CSRC += posix_memalign.c
++endif
++ifeq ($(UCLIBC_HAS_PTY),y)
++CSRC += grantpt.c unlockpt.c ptsname.c
++endif
+ ifeq ($(UCLIBC_HAS_ARC4RANDOM),y)
+ CSRC += arc4random.c
+ endif
+diff --git a/libc/stdlib/_atexit.c b/libc/stdlib/_atexit.c
+index 21aa30c81..e5840f471 100644
+--- a/libc/stdlib/_atexit.c
++++ b/libc/stdlib/_atexit.c
+@@ -107,6 +107,7 @@ extern void *__dso_handle __attribute__ ((__weak__));
+ #ifdef L_atexit
+ int attribute_hidden atexit(aefuncp func)
+ #else
++int old_atexit(aefuncp func);
+ int old_atexit(aefuncp func)
+ #endif
+ {
+diff --git a/libc/stdlib/bsd_getpt.c b/libc/stdlib/bsd_getpt.c
+index 9b93448bc..5f0f63f7a 100644
+--- a/libc/stdlib/bsd_getpt.c
++++ b/libc/stdlib/bsd_getpt.c
+@@ -22,6 +22,7 @@
+ #include <string.h>
+ #include <unistd.h>
+ 
++#if defined __USE_BSD
+ libc_hidden_proto(open)
+ /* Experimentally off - libc_hidden_proto(mempcpy) */
+ 
+@@ -76,3 +77,4 @@ __getpt (void)
+   __set_errno (ENOENT);
+   return -1;
+ }
++#endif
+diff --git a/libc/stdlib/getpt.c b/libc/stdlib/getpt.c
+index 3dbaf9ed7..950664509 100644
+--- a/libc/stdlib/getpt.c
++++ b/libc/stdlib/getpt.c
+@@ -20,8 +20,13 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <stdlib.h>
++#include <stdbool.h>
+ #include <unistd.h>
+ #include <paths.h>
++#include <sys/statfs.h>
++
++extern __typeof(statfs) __libc_statfs;
++libc_hidden_proto(__libc_statfs)
+ 
+ libc_hidden_proto(open)
+ libc_hidden_proto(close)
+@@ -47,36 +52,37 @@ extern int __bsd_getpt (void) attribute_hidden;
+ 
+ /* Open a master pseudo terminal and return its file descriptor.  */
+ int
+-getpt (void)
++posix_openpt (int flags)
+ {
++#define have_no_dev_ptmx (1<<0)
++#define devpts_mounted   (1<<1)
+ #if !defined __UNIX98PTY_ONLY__
+-  static smallint have_no_dev_ptmx;
++  static smallint _state;
+ #endif
+   int fd;
+ 
+ #if !defined __UNIX98PTY_ONLY__
+-  if (!have_no_dev_ptmx)
++  if (!(_state & have_no_dev_ptmx))
+ #endif
+     {
+-      fd = open (_PATH_DEVPTMX, O_RDWR);
++      fd = open (_PATH_DEVPTMX, flags);
+       if (fd != -1)
+ 	{
+ #if defined __ASSUME_DEVPTS__
+ 	  return fd;
+ #else
+ 	  struct statfs fsbuf;
+-	  static smallint devpts_mounted;
+ 
+ 	  /* Check that the /dev/pts filesystem is mounted
+ 	     or if /dev is a devfs filesystem (this implies /dev/pts).  */
+-	  if (devpts_mounted
+-	      || (statfs (_PATH_DEVPTS, &fsbuf) == 0
++	  if ((_state & devpts_mounted)
++	      || (__libc_statfs (_PATH_DEVPTS, &fsbuf) == 0
+ 		  && fsbuf.f_type == DEVPTS_SUPER_MAGIC)
+-	      || (statfs (_PATH_DEV, &fsbuf) == 0	
++	      || (__libc_statfs (_PATH_DEV, &fsbuf) == 0
+ 		  && fsbuf.f_type == DEVFS_SUPER_MAGIC))
+ 	    {
+ 	      /* Everything is ok.  */
+-	      devpts_mounted = 1;
++	      _state |= devpts_mounted;
+ 	      return fd;
+ 	    }
+ 
+@@ -84,7 +90,7 @@ getpt (void)
+              are not usable.  */
+ 	  close (fd);
+ #if !defined __UNIX98PTY_ONLY__
+-	  have_no_dev_ptmx = 1;
++	  _state |= have_no_dev_ptmx;
+ #endif
+ #endif
+ 	}
+@@ -92,16 +98,25 @@ getpt (void)
+ 	{
+ #if !defined __UNIX98PTY_ONLY__
+ 	  if (errno == ENOENT || errno == ENODEV)
+-	    have_no_dev_ptmx = 1;
++	    _state |= have_no_dev_ptmx;
+ 	  else
+ #endif
+ 	    return -1;
+ 	}
+     }
++  return -1;
++}
+ 
++#if defined __USE_GNU && defined __UCLIBC_HAS_GETPT__
++int
++getpt (void)
++{
++	int fd = posix_openpt(O_RDWR);
+ #if !defined __UNIX98PTY_ONLY__
+-  return __bsd_getpt ();
++	if (fd == -1)
++		fd = __bsd_getpt();
+ #endif
++	return fd;
+ }
+ 
+ #if !defined __UNIX98PTY_ONLY__
+@@ -111,3 +126,4 @@ getpt (void)
+ # define __getpt __bsd_getpt
+ # include "bsd_getpt.c"
+ #endif
++#endif /* GNU && __UCLIBC_HAS_GETPT__ */
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 618785d62..d61ae9f4f 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -26,7 +26,54 @@ endif
+ 
+ ifneq ($(UCLIBC_LINUX_MODULE_24),y)
+ CSRC := $(filter-out create_module.c delete_module.c init_module.c \
+-		query_module.c,$(CSRC))
++		query_module.c get_kernel_syms.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_LINUX_SPECIFIC),y)
++# we need these internally: fstatfs.c statfs.c
++CSRC := $(filter-out inotify.c ioperm.c iopl.c madvise.c \
++	modify_ldt.c personality.c prctl.c readahead.c reboot.c \
++	remap_file_pages.c sched_getaffinity.c sched_setaffinity.c \
++	sendfile64.c sendfile.c setfsgid.c setfsuid.c setresuid.c \
++	splice.c vmsplice.c tee.c swapoff.c swapon.c sysctl.c sysinfo.c \
++	uselib.c vhangup.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_BSD_SPECIFIC),y)
++# we need these internally: getdomainname.c
++CSRC := $(filter-out mincore.c setdomainname.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_NTP_LEGACY),y)
++CSRC := $(filter-out ntp_gettime.c,$(CSRC))
++endif
++
++
++ifneq ($(UCLIBC_HAS_REALTIME),y)
++# aio_cancel|aio_error|aio_fsync|aio_read|aio_return|aio_suspend|aio_write|clock_getres|clock_gettime|clock_settime|clock_settime|fdatasync|lio_listio|mlockall|munlockall|mlock|munlock|mq_close|mq_getattr|mq_notify|mq_open|mq_receive|mq_timedreceive|mq_send|mq_timedsend|mq_setattr|mq_unlink|nanosleep|sched_getparam|sched_get_priority_max|sched_get_priority_min|sched_getscheduler|sched_rr_get_interval|sched_setparam|sched_setscheduler|sem_close|sem_destroy|sem_getvalue|sem_init|sem_open|sem_post|sem_trywait|sem_wait|sem_unlink|sem_wait|shm_open|shm_unlink|sigqueue|sigtimedwait|sigwaitinfo|sigwaitinfo|timer_create|timer_delete|timer_getoverrun|timer_gettime|timer_settime
++CSRC := $(filter-out clock_getres.c clock_gettime.c clock_settime.c fdatasync.c Makefile.in mlockall.c mlock.c munlockall.c munlock.c nanosleep.c __rt_sigtimedwait.c sched_getparam.c sched_get_priority_max.c sched_get_priority_min.c sched_getscheduler.c sched_rr_get_interval.c sched_setparam.c sched_setscheduler.c sigqueue.c,$(CSRC))
++endif
++
++
++ifneq ($(UCLIBC_HAS_ADVANCED_REALTIME),y)
++# clock_getcpuclockid|clock_nanosleep|mq_timedreceive|mq_timedsend|posix_fadvise|posix_fallocate|posix_madvise|posix_memalign|posix_mem_offset|posix_spawnattr_destroy|posix_spawnattr_init|posix_spawnattr_getflags|posix_spawnattr_setflags|posix_spawnattr_getpgroup|posix_spawnattr_setpgroup|posix_spawnattr_getschedparam|posix_spawnattr_setschedparam|posix_spawnattr_getschedpolicy|posix_spawnattr_setschedpolicy|posix_spawnattr_getsigdefault|posix_spawnattr_setsigdefault|posix_spawnattr_getsigmask|posix_spawnattr_setsigmask|posix_spawnattr_init|posix_spawnattr_setflags|posix_spawnattr_setpgroup|posix_spawnattr_setschedparam|posix_spawnattr_setschedpolicy|posix_spawnattr_setsigdefault|posix_spawnattr_setsigmask|posix_spawn_file_actions_addclose|posix_spawn_file_actions_addopen|posix_spawn_file_actions_adddup2|posix_spawn_file_actions_addopen|posix_spawn_file_actions_destroy|posix_spawn_file_actions_init|posix_spawn_file_actions_init|posix_spawn|posix_spawnp|posix_spawnp|posix_typed_mem_get_info|pthread_mutex_timedlock|sem_timedwait
++CSRC := $(filter-out posix_fadvise64.c posix_fadvise.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_HAS_EPOLL),y)
++CSRC := $(filter-out epoll.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_HAS_XATTR),y)
++CSRC := $(filter-out xattr.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_HAS_PROFILING),y)
++CSRC := $(filter-out noophooks.c pcprofile.c,$(CSRC))
++endif
++
++ifneq ($(UCLIBC_SV4_DEPRECATED),y)
++CSRC := $(filter-out ustat.c,$(CSRC))
+ endif
+ 
+ # fails for some reason
+diff --git a/libc/sysdeps/linux/common/adjtimex.c b/libc/sysdeps/linux/common/adjtimex.c
+index e1225f46c..280f90e5a 100644
+--- a/libc/sysdeps/linux/common/adjtimex.c
++++ b/libc/sysdeps/linux/common/adjtimex.c
+@@ -14,4 +14,6 @@ libc_hidden_proto(adjtimex)
+ 
+ _syscall1(int, adjtimex, struct timex *, buf);
+ libc_hidden_def(adjtimex)
++#if defined __UCLIBC_NTP_LEGACY__
+ strong_alias(adjtimex,ntp_adjtime)
++#endif
+diff --git a/libc/sysdeps/linux/common/fstatfs.c b/libc/sysdeps/linux/common/fstatfs.c
+index 7bcfeb36f..830de8103 100644
+--- a/libc/sysdeps/linux/common/fstatfs.c
++++ b/libc/sysdeps/linux/common/fstatfs.c
+@@ -10,7 +10,27 @@
+ #include <sys/syscall.h>
+ #include <sys/vfs.h>
+ 
+-libc_hidden_proto(fstatfs)
++#if !defined __UCLIBC_LINUX_SPECIFIC__
++#ifndef __USE_FILE_OFFSET64
++extern int fstatfs (int __fildes, struct statfs *__buf)
++     __THROW __nonnull ((2));
++#else
++# ifdef __REDIRECT_NTH
++extern int __REDIRECT_NTH (fstatfs, (int __fildes, struct statfs *__buf),
++	fstatfs64) __nonnull ((2));
++# else
++#  define fstatfs fstatfs64
++# endif
++#endif
++#endif
++extern __typeof(fstatfs) __libc_fstatfs;
++libc_hidden_proto(__libc_fstatfs)
++#define __NR___libc_fstatfs __NR_fstatfs
++_syscall2(int, __libc_fstatfs, int, fd, struct statfs *, buf);
++libc_hidden_def(__libc_fstatfs)
+ 
+-_syscall2(int, fstatfs, int, fd, struct statfs *, buf);
+-libc_hidden_def(fstatfs)
++#if defined __UCLIBC_LINUX_SPECIFIC__
++libc_hidden_proto(fstatfs)
++weak_alias(__libc_fstatfs,fstatfs)
++libc_hidden_weak(fstatfs)
++#endif
+diff --git a/libc/sysdeps/linux/common/getdomainname.c b/libc/sysdeps/linux/common/getdomainname.c
+index d98651a97..86f6dfd32 100644
+--- a/libc/sysdeps/linux/common/getdomainname.c
++++ b/libc/sysdeps/linux/common/getdomainname.c
+@@ -16,8 +16,13 @@
+ /* Experimentally off - libc_hidden_proto(strcpy) */
+ libc_hidden_proto(uname)
+ 
+-libc_hidden_proto(getdomainname)
+-int getdomainname(char *name, size_t len)
++#if !defined __UCLIBC_BSD_SPECIFIC__
++extern int getdomainname (char *__name, size_t __len)
++	__THROW __nonnull ((1)) __wur;
++#endif
++extern __typeof(getdomainname) __libc_getdomainname;
++libc_hidden_proto(__libc_getdomainname)
++int __libc_getdomainname(char *name, size_t len)
+ {
+   struct utsname uts;
+ 
+@@ -43,5 +48,10 @@ int getdomainname(char *name, size_t len)
+ #endif
+   return 0;
+ }
+-libc_hidden_def(getdomainname)
++libc_hidden_def(__libc_getdomainname)
++#if defined __UCLIBC_BSD_SPECIFIC__
++libc_hidden_proto(getdomainname)
++weak_alias(__libc_getdomainname,getdomainname)
++libc_hidden_weak(getdomainname)
++#endif /* __UCLIBC_BSD_SPECIFIC__ */
+ #endif
+diff --git a/libc/sysdeps/linux/common/getdtablesize.c b/libc/sysdeps/linux/common/getdtablesize.c
+index 4efd8280d..44d21862f 100644
+--- a/libc/sysdeps/linux/common/getdtablesize.c
++++ b/libc/sysdeps/linux/common/getdtablesize.c
+@@ -9,6 +9,8 @@
+ #include <sys/resource.h>
+ #include <limits.h>
+ 
++/* XXX: _BSD || _XOPEN_SOURCE >= 500 */
++#if defined __USE_BSD || defined __USE_XOPEN_EXTENDED
+ libc_hidden_proto(getdtablesize)
+ 
+ libc_hidden_proto(getrlimit)
+@@ -27,3 +29,4 @@ int getdtablesize (void)
+   return getrlimit (RLIMIT_NOFILE, &ru) < 0 ? __LOCAL_OPEN_MAX : ru.rlim_cur;
+ }
+ libc_hidden_def(getdtablesize)
++#endif
+diff --git a/libc/sysdeps/linux/common/getpgid.c b/libc/sysdeps/linux/common/getpgid.c
+index 3acd00db6..49f780adf 100644
+--- a/libc/sysdeps/linux/common/getpgid.c
++++ b/libc/sysdeps/linux/common/getpgid.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_UNIX98
+ #include <unistd.h>
+ 
+ #define __NR___syscall_getpgid __NR_getpgid
+@@ -17,3 +19,4 @@ pid_t getpgid(pid_t pid)
+ {
+ 	return (__syscall_getpgid(pid));
+ }
++#endif
+diff --git a/libc/sysdeps/linux/common/getpgrp.c b/libc/sysdeps/linux/common/getpgrp.c
+index 704ff5ace..a2fe44560 100644
+--- a/libc/sysdeps/linux/common/getpgrp.c
++++ b/libc/sysdeps/linux/common/getpgrp.c
+@@ -11,5 +11,6 @@
+ #include <unistd.h>
+ 
+ #ifdef __NR_getpgrp
++/* According to the manpage the POSIX.1 version is favoured */
+ _syscall0(pid_t, getpgrp);
+ #endif
+diff --git a/libc/sysdeps/linux/common/getrlimit.c b/libc/sysdeps/linux/common/getrlimit.c
+index 0684edca2..ecb09d1e2 100644
+--- a/libc/sysdeps/linux/common/getrlimit.c
++++ b/libc/sysdeps/linux/common/getrlimit.c
+@@ -17,7 +17,7 @@ libc_hidden_proto(getrlimit)
+ 
+ /* Only wrap getrlimit if the new ugetrlimit is not present and getrlimit sucks */
+ 
+-#if defined(__NR_ugetrlimit)
++#if defined __NR_ugetrlimit
+ 
+ /* just call ugetrlimit() */
+ # define __NR___syscall_ugetrlimit __NR_ugetrlimit
+diff --git a/libc/sysdeps/linux/common/mincore.c b/libc/sysdeps/linux/common/mincore.c
+index b4e053127..1dc9a9a1a 100644
+--- a/libc/sysdeps/linux/common/mincore.c
++++ b/libc/sysdeps/linux/common/mincore.c
+@@ -7,9 +7,9 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __NR_mincore && (defined __USE_BSD || defined __USE_SVID)
+ #include <unistd.h>
+ #include <sys/mman.h>
+-
+-#ifdef __NR_mincore
+ _syscall3(int, mincore, void *, start, size_t, length, unsigned char *, vec);
+ #endif
+diff --git a/libc/sysdeps/linux/common/mprotect.c b/libc/sysdeps/linux/common/mprotect.c
+index a5e6920a5..7122f0f2f 100644
+--- a/libc/sysdeps/linux/common/mprotect.c
++++ b/libc/sysdeps/linux/common/mprotect.c
+@@ -10,6 +10,6 @@
+ #include <sys/syscall.h>
+ #include <sys/mman.h>
+ 
+-#ifdef __NR_mprotect
++#if defined __ARCH_USE_MMU__ && defined __NR_mprotect
+ _syscall3(int, mprotect, void *, addr, size_t, len, int, prot);
+ #endif
+diff --git a/libc/sysdeps/linux/common/msync.c b/libc/sysdeps/linux/common/msync.c
+index 352fb4903..88f021f43 100644
+--- a/libc/sysdeps/linux/common/msync.c
++++ b/libc/sysdeps/linux/common/msync.c
+@@ -10,17 +10,13 @@
+ #include <sys/syscall.h>
+ #include <unistd.h>
+ 
+-#ifdef __NR_msync
++#if defined __NR_msync && defined __ARCH_USE_MMU__
+ 
+ #include <sys/mman.h>
+ 
+-#ifdef __ARCH_USE_MMU__
+-
+ extern __typeof(msync) __libc_msync;
+ #define __NR___libc_msync __NR_msync
+ _syscall3(int, __libc_msync, void *, addr, size_t, length, int, flags);
+ weak_alias(__libc_msync,msync)
+ 
+ #endif
+-
+-#endif
+diff --git a/libc/sysdeps/linux/common/munlockall.c b/libc/sysdeps/linux/common/munlockall.c
+index 20e8e72ab..39507715a 100644
+--- a/libc/sysdeps/linux/common/munlockall.c
++++ b/libc/sysdeps/linux/common/munlockall.c
+@@ -8,7 +8,9 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __NR_munlockall && defined __ARCH_USE_MMU__
+ #include <sys/mman.h>
+-#if defined __ARCH_USE_MMU__
++
+ _syscall0(int, munlockall);
+ #endif
+diff --git a/libc/sysdeps/linux/common/nanosleep.c b/libc/sysdeps/linux/common/nanosleep.c
+index b0600251f..c464403c5 100644
+--- a/libc/sysdeps/linux/common/nanosleep.c
++++ b/libc/sysdeps/linux/common/nanosleep.c
+@@ -10,6 +10,8 @@
+ #include <sys/syscall.h>
+ #include <time.h>
+ 
++#if defined __USE_POSIX199309 && defined __NR_nanosleep
++
+ extern __typeof(nanosleep) __libc_nanosleep;
+ #define __NR___libc_nanosleep __NR_nanosleep
+ _syscall2(int, __libc_nanosleep, const struct timespec *, req,
+@@ -17,3 +19,4 @@ _syscall2(int, __libc_nanosleep, const struct timespec *, req,
+ libc_hidden_proto(nanosleep)
+ weak_alias(__libc_nanosleep,nanosleep)
+ libc_hidden_weak(nanosleep)
++#endif
+diff --git a/libc/sysdeps/linux/common/poll.c b/libc/sysdeps/linux/common/poll.c
+index 3b0a1fd52..164e08120 100644
+--- a/libc/sysdeps/linux/common/poll.c
++++ b/libc/sysdeps/linux/common/poll.c
+@@ -28,7 +28,7 @@ extern __typeof(poll) __libc_poll;
+ _syscall3(int, __libc_poll, struct pollfd *, fds,
+ 	unsigned long int, nfds, int, timeout);
+ 
+-#elif defined(__NR_ppoll)
++#elif defined(__NR_ppoll) && defined __UCLIBC_LINUX_SPECIFIC__
+ 
+ libc_hidden_proto(ppoll)
+ int __libc_poll(struct pollfd *fds, nfds_t nfds, int timeout)
+diff --git a/libc/sysdeps/linux/common/posix_fadvise.c b/libc/sysdeps/linux/common/posix_fadvise.c
+index a7ece5aec..45734f9b2 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise.c
++++ b/libc/sysdeps/linux/common/posix_fadvise.c
+@@ -46,6 +46,7 @@ strong_alias(posix_fadvise,posix_fadvise64)
+ #else
+ int posix_fadvise(int fd attribute_unused, off_t offset attribute_unused, off_t len attribute_unused, int advice attribute_unused)
+ {
++#warning This is not correct as far as SUSv3 is concerned.
+ 	return ENOSYS;
+ }
+ #endif
+diff --git a/libc/sysdeps/linux/common/posix_fadvise64.c b/libc/sysdeps/linux/common/posix_fadvise64.c
+index 994139c9c..7944c4985 100644
+--- a/libc/sysdeps/linux/common/posix_fadvise64.c
++++ b/libc/sysdeps/linux/common/posix_fadvise64.c
+@@ -74,6 +74,7 @@ int posix_fadvise64(int fd, __off64_t offset, __off64_t len, int advice)
+  */
+ int posix_fadvise64(int fd, __off64_t offset, __off64_t len, int advice)
+ {
++#warning This is not correct as far as SUSv3 is concerned.
+ 	return ENOSYS;
+ }
+ #endif /* __NR_fadvise64_64 */
+diff --git a/libc/sysdeps/linux/common/ppoll.c b/libc/sysdeps/linux/common/ppoll.c
+index ab96e8ba4..90b3517b2 100644
+--- a/libc/sysdeps/linux/common/ppoll.c
++++ b/libc/sysdeps/linux/common/ppoll.c
+@@ -20,7 +20,7 @@
+ #include <sys/syscall.h>
+ #include <sys/poll.h>
+ 
+-#ifdef __NR_ppoll
++#if defined __NR_ppoll && defined __UCLIBC_LINUX_SPECIFIC__
+ 
+ libc_hidden_proto(ppoll)
+ 
+diff --git a/libc/sysdeps/linux/common/ptrace.c b/libc/sysdeps/linux/common/ptrace.c
+index 56a21e5ce..9d6767374 100644
+--- a/libc/sysdeps/linux/common/ptrace.c
++++ b/libc/sysdeps/linux/common/ptrace.c
+@@ -4,12 +4,12 @@
+  * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+  */
+ 
+-#include <errno.h>
++#include <sys/syscall.h>
+ #include <sys/types.h>
+ #include <sys/ptrace.h>
+-#include <sys/syscall.h>
+ #include <stdarg.h>
+ 
++#if defined __NR_ptrace && defined __USE_BSD && defined __USE_MISC
+ #define __NR___syscall_ptrace __NR_ptrace
+ 
+ static inline _syscall4(long, __syscall_ptrace, enum __ptrace_request, request,
+@@ -40,3 +40,4 @@ ptrace (enum __ptrace_request request, ...)
+ 
+   return res;
+ }
++#endif
+diff --git a/libc/sysdeps/linux/common/quotactl.c b/libc/sysdeps/linux/common/quotactl.c
+index 7363c63e0..cb044a4e8 100644
+--- a/libc/sysdeps/linux/common/quotactl.c
++++ b/libc/sysdeps/linux/common/quotactl.c
+@@ -8,6 +8,9 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_BSD
+ #include <sys/quota.h>
+ _syscall4(int, quotactl, int, cmd, const char *, special,
+ 		  int, id, caddr_t, addr);
++#endif
+diff --git a/libc/sysdeps/linux/common/sbrk.c b/libc/sysdeps/linux/common/sbrk.c
+index 4ac2d2a21..734a4ce01 100644
+--- a/libc/sysdeps/linux/common/sbrk.c
++++ b/libc/sysdeps/linux/common/sbrk.c
+@@ -21,7 +21,7 @@ void * sbrk (intptr_t increment)
+     void *oldbrk;
+ 
+     if (__curbrk == NULL)
+-	if (brk (0) < 0)		/* Initialize the break.  */
++	if (brk (NULL) < 0)	/* Initialize the break.  */
+ 	    return (void *) -1;
+ 
+     if (increment == 0)
+diff --git a/libc/sysdeps/linux/common/select.c b/libc/sysdeps/linux/common/select.c
+index 03fda35b7..71a4990ab 100644
+--- a/libc/sysdeps/linux/common/select.c
++++ b/libc/sysdeps/linux/common/select.c
+@@ -12,8 +12,7 @@
+ 
+ extern __typeof(select) __libc_select;
+ 
+-#if !defined(__NR__newselect) && !defined(__NR_select)
+-
++#if !defined(__NR__newselect) && !defined(__NR_select) && defined __USE_XOPEN2K
+ # define __NR___libc_pselect6 __NR_pselect6
+ _syscall6(int, __libc_pselect6, int, n, fd_set *, readfds, fd_set *, writefds,
+ 	fd_set *, exceptfds, const struct timespec *, timeout,
+diff --git a/libc/sysdeps/linux/common/seteuid.c b/libc/sysdeps/linux/common/seteuid.c
+index 35a68334d..5a6e9a25a 100644
+--- a/libc/sysdeps/linux/common/seteuid.c
++++ b/libc/sysdeps/linux/common/seteuid.c
+@@ -11,6 +11,11 @@
+ #include <sys/types.h>
+ #include <sys/syscall.h>
+ 
++#if !defined __UCLIBC_LINUX_SPECIFIC__
++#undef __NR_setresuid
++#undef __NR_setresuid32
++#endif
++
+ libc_hidden_proto(seteuid)
+ 
+ #if (defined __NR_setresuid || defined __NR_setresuid32) && defined __USE_GNU
+diff --git a/libc/sysdeps/linux/common/setpgid.c b/libc/sysdeps/linux/common/setpgid.c
+index 144ffa959..3447b999d 100644
+--- a/libc/sysdeps/linux/common/setpgid.c
++++ b/libc/sysdeps/linux/common/setpgid.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_UNIX98 || defined __USE_SVID
+ #include <unistd.h>
+ 
+ libc_hidden_proto(setpgid)
+@@ -21,3 +23,4 @@ int setpgid(pid_t pid, pid_t pgid)
+ 	return (__syscall_setpgid(pid, pgid));
+ }
+ libc_hidden_def(setpgid)
++#endif
+diff --git a/libc/sysdeps/linux/common/setresuid.c b/libc/sysdeps/linux/common/setresuid.c
+index 883d7a952..54b92465c 100644
+--- a/libc/sysdeps/linux/common/setresuid.c
++++ b/libc/sysdeps/linux/common/setresuid.c
+@@ -8,7 +8,7 @@
+  */
+ 
+ #include <sys/syscall.h>
+-#ifdef __USE_GNU
++#if defined __USE_GNU && defined __UCLIBC_LINUX_SPECIFIC__
+ #include <unistd.h>
+ 
+ #if defined(__NR_setresuid32)
+diff --git a/libc/sysdeps/linux/common/sigaltstack.c b/libc/sysdeps/linux/common/sigaltstack.c
+index 624c87792..0c9308408 100644
+--- a/libc/sysdeps/linux/common/sigaltstack.c
++++ b/libc/sysdeps/linux/common/sigaltstack.c
+@@ -10,7 +10,8 @@
+ #include <sys/syscall.h>
+ #include <signal.h>
+ 
+-#ifdef __NR_sigaltstack
++#if defined __NR_sigaltstack && (defined __USE_BSD || defined __USE_UNIX98)
++
+ _syscall2(int, sigaltstack, const struct sigaltstack *, ss,
+ 		  struct sigaltstack *, oss);
+ #endif
+diff --git a/libc/sysdeps/linux/common/sigpending.c b/libc/sysdeps/linux/common/sigpending.c
+index e2928cbe1..fa272c0f5 100644
+--- a/libc/sysdeps/linux/common/sigpending.c
++++ b/libc/sysdeps/linux/common/sigpending.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_POSIX
+ #include <signal.h>
+ #undef sigpending
+ 
+@@ -22,3 +24,4 @@ int sigpending(sigset_t * set)
+ #else
+ _syscall1(int, sigpending, sigset_t *, set);
+ #endif
++#endif
+diff --git a/libc/sysdeps/linux/common/sigprocmask.c b/libc/sysdeps/linux/common/sigprocmask.c
+index dd7bd6c3a..d36a5045e 100644
+--- a/libc/sysdeps/linux/common/sigprocmask.c
++++ b/libc/sysdeps/linux/common/sigprocmask.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_POSIX
+ #include <signal.h>
+ 
+ #undef sigprocmask
+@@ -68,3 +70,4 @@ int sigprocmask(int how, const sigset_t * set, sigset_t * oldset)
+ }
+ #endif
+ libc_hidden_def(sigprocmask)
++#endif
+diff --git a/libc/sysdeps/linux/common/sigqueue.c b/libc/sysdeps/linux/common/sigqueue.c
+index 9019852f1..5d8e852fe 100644
+--- a/libc/sysdeps/linux/common/sigqueue.c
++++ b/libc/sysdeps/linux/common/sigqueue.c
+@@ -22,6 +22,7 @@
+ #include <string.h>
+ 
+ #include <sys/syscall.h>
++#if defined __USE_POSIX199309
+ 
+ libc_hidden_proto(getpid)
+ libc_hidden_proto(getuid)
+@@ -51,3 +52,4 @@ int sigqueue (pid_t pid, int sig, const union sigval val)
+ }
+ 
+ #endif
++#endif
+diff --git a/libc/sysdeps/linux/common/sigsuspend.c b/libc/sysdeps/linux/common/sigsuspend.c
+index 373bd333a..81bbbeec4 100644
+--- a/libc/sysdeps/linux/common/sigsuspend.c
++++ b/libc/sysdeps/linux/common/sigsuspend.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_POSIX
+ #include <signal.h>
+ 
+ extern __typeof(sigsuspend) __libc_sigsuspend;
+@@ -33,3 +35,4 @@ int __libc_sigsuspend(const sigset_t * set)
+ libc_hidden_proto(sigsuspend)
+ weak_alias(__libc_sigsuspend,sigsuspend)
+ libc_hidden_weak(sigsuspend)
++#endif
+diff --git a/libc/sysdeps/linux/common/statfs.c b/libc/sysdeps/linux/common/statfs.c
+index eb029a26a..38c277fad 100644
+--- a/libc/sysdeps/linux/common/statfs.c
++++ b/libc/sysdeps/linux/common/statfs.c
+@@ -12,6 +12,14 @@
+ #include <sys/param.h>
+ #include <sys/vfs.h>
+ 
++extern __typeof(statfs) __libc_statfs;
++libc_hidden_proto(__libc_statfs)
++#define __NR___libc_statfs __NR_statfs
++_syscall2(int, __libc_statfs, const char *, path, struct statfs *, buf);
++libc_hidden_def(__libc_statfs)
++
++#if defined __UCLIBC_LINUX_SPECIFIC__
+ libc_hidden_proto(statfs)
+-_syscall2(int, statfs, const char *, path, struct statfs *, buf);
+-libc_hidden_def(statfs)
++weak_alias(__libc_statfs,statfs)
++libc_hidden_weak(statfs)
++#endif
+diff --git a/libc/sysdeps/linux/common/symlink.c b/libc/sysdeps/linux/common/symlink.c
+index 80fb58a28..97f34eb8f 100644
+--- a/libc/sysdeps/linux/common/symlink.c
++++ b/libc/sysdeps/linux/common/symlink.c
+@@ -8,5 +8,7 @@
+  */
+ 
+ #include <sys/syscall.h>
++#if defined __USE_BSD || defined __USE_UNIX98 || defined __USE_XOPEN2K
+ #include <unistd.h>
+ _syscall2(int, symlink, const char *, oldpath, const char *, newpath);
++#endif
+diff --git a/libc/sysdeps/linux/common/sync.c b/libc/sysdeps/linux/common/sync.c
+index 48fac63ea..dd69e335b 100644
+--- a/libc/sysdeps/linux/common/sync.c
++++ b/libc/sysdeps/linux/common/sync.c
+@@ -7,10 +7,9 @@
+  * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+  */
+ 
+-#include <features.h>
+-#include <errno.h>
+-#include <sys/types.h>
+ #include <sys/syscall.h>
++# if defined __USE_BSD || defined __USE_UNIX98
++#include <sys/types.h>
+ #include <unistd.h>
+ 
+ #ifndef INLINE_SYSCALL
+@@ -23,4 +22,4 @@ void sync(void)
+ {
+ 	INLINE_SYSCALL(sync, 0);
+ }
+-
++#endif
+diff --git a/libc/sysdeps/linux/common/sysctl.c b/libc/sysdeps/linux/common/sysctl.c
+index 3cd4f5e41..adee22837 100644
+--- a/libc/sysdeps/linux/common/sysctl.c
++++ b/libc/sysdeps/linux/common/sysctl.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++#if defined __NR__sysctl && (defined __USE_GNU || defined __USE_BSD)
++
+ /* psm: including sys/sysctl.h would depend on kernel headers */
+ extern int sysctl (int *__name, int __nlen, void *__oldval,
+ 		   size_t *__oldlenp, void *__newval, size_t __newlen) __THROW;
+@@ -29,13 +31,14 @@ int sysctl(int *name, int nlen, void *oldval, size_t * oldlenp,
+ 		   void *newval, size_t newlen)
+ {
+ 	struct __sysctl_args args = {
+-	  name:name,
+-	  nlen:nlen,
+-	  oldval:oldval,
+-	  oldlenp:oldlenp,
+-	  newval:newval,
+-	  newlen:newlen
++	  .name = name,
++	  .nlen = nlen,
++	  .oldval = oldval,
++	  .oldlenp = oldlenp,
++	  .newval = newval,
++	  .newlen = newlen
+ 	};
+ 
+ 	return _sysctl(&args);
+ }
++#endif
+diff --git a/libc/sysdeps/linux/common/sysfs.c b/libc/sysdeps/linux/common/sysfs.c
+index 5099d7bb0..a4292f768 100644
+--- a/libc/sysdeps/linux/common/sysfs.c
++++ b/libc/sysdeps/linux/common/sysfs.c
+@@ -9,8 +9,9 @@
+ 
+ /* libc isn't really supposed to export this */
+ #if 0
+-
+ #include <sys/syscall.h>
+-_syscall3(int, sysfs, int, option, unsigned int, index, char, addr);
+ 
++#if defined __USE_SVID
++_syscall3(int, sysfs, int, option, unsigned int, index, char, addr);
++#endif
+ #endif
+diff --git a/libc/sysdeps/linux/common/tee.c b/libc/sysdeps/linux/common/tee.c
+index 647440815..6725e82bb 100644
+--- a/libc/sysdeps/linux/common/tee.c
++++ b/libc/sysdeps/linux/common/tee.c
+@@ -10,19 +10,7 @@
+ #include <sys/syscall.h>
+ #include <fcntl.h>
+ 
+-libc_hidden_proto(tee)
+-
+ #ifdef __NR_tee
+ _syscall4(ssize_t, tee, int, __fdin, int, __fdout, size_t, __len,
+ 	unsigned int, __flags);
+-#else
+-ssize_t tee(int __fdin, int __fdout, size_t __len, unsigned int __flags)
+-{
+-	__set_errno(ENOSYS);
+-	return -1;
+-}
+ #endif
+-
+-libc_hidden_def(tee)
+-
+-
+diff --git a/libc/sysdeps/linux/common/truncate64.c b/libc/sysdeps/linux/common/truncate64.c
+index e227900c5..53c46fc56 100644
+--- a/libc/sysdeps/linux/common/truncate64.c
++++ b/libc/sysdeps/linux/common/truncate64.c
+@@ -57,7 +57,7 @@ int truncate64 (const char * path, __off64_t length)
+ }
+ 
+ #else /* __WORDSIZE */
+-#error Your machine is not 64 bit or 32 bit, I am dazed and confused.
++#error Your machine is not 64 bit nor 32 bit, I am dazed and confused.
+ #endif /* __WORDSIZE */
+ 
+ #else  /* __NR_truncate64 */
+diff --git a/libc/sysdeps/linux/common/umount.c b/libc/sysdeps/linux/common/umount.c
+index f524ea1da..c62f9fb7c 100644
+--- a/libc/sysdeps/linux/common/umount.c
++++ b/libc/sysdeps/linux/common/umount.c
+@@ -8,6 +8,8 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_GNU
+ #include <sys/mount.h>
+ 
+ /* arch provides umount() syscall */
+@@ -36,3 +38,4 @@ int umount(const char *special_file)
+ }
+ 
+ #endif
++#endif
+diff --git a/libc/sysdeps/linux/common/umount2.c b/libc/sysdeps/linux/common/umount2.c
+index 97ab41e72..25c24d450 100644
+--- a/libc/sysdeps/linux/common/umount2.c
++++ b/libc/sysdeps/linux/common/umount2.c
+@@ -8,8 +8,10 @@
+  */
+ 
+ #include <sys/syscall.h>
+-#ifdef __NR_umount2	/* Old kernels don't have umount2 */
++
++#if defined __USE_GNU
+ #include <sys/mount.h>
++#ifdef __NR_umount2	/* Old kernels don't have umount2 */
+ _syscall2(int, umount2, const char *, special_file, int, flags);
+ #else
+ int umount2(const char *special_file, int flags)
+@@ -18,3 +20,4 @@ int umount2(const char *special_file, int flags)
+ 	return -1;
+ }
+ #endif
++#endif
+diff --git a/libc/sysdeps/linux/common/uselib.c b/libc/sysdeps/linux/common/uselib.c
+index a18f3f463..ffc5d77a1 100644
+--- a/libc/sysdeps/linux/common/uselib.c
++++ b/libc/sysdeps/linux/common/uselib.c
+@@ -6,6 +6,8 @@
+  *
+  * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+  */
++#if 0
++linux specific and we do not use it in uClibc.
+ 
+ #include <sys/syscall.h>
+ #include <unistd.h>
+@@ -13,3 +15,4 @@
+ int uselib (const char *library);
+ _syscall1(int, uselib, const char *, library);
+ #endif
++#endif
+diff --git a/libc/sysdeps/linux/common/utimes.c b/libc/sysdeps/linux/common/utimes.c
+index 4c7e10a87..83ddb7381 100644
+--- a/libc/sysdeps/linux/common/utimes.c
++++ b/libc/sysdeps/linux/common/utimes.c
+@@ -35,4 +35,5 @@ int utimes(const char *file, const struct timeval tvp[2])
+ 	return utime(file, times);
+ }
+ #endif
++link_warning(utimes, "the use of LEGACY `utimes' is discouraged, use `utime'")
+ libc_hidden_def(utimes)
+diff --git a/libc/sysdeps/linux/common/wait3.c b/libc/sysdeps/linux/common/wait3.c
+index 5de975c25..8a2d43f7a 100644
+--- a/libc/sysdeps/linux/common/wait3.c
++++ b/libc/sysdeps/linux/common/wait3.c
+@@ -4,11 +4,13 @@
+  * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+  */
+ 
+-#include <syscall.h>
++#include <sys/syscall.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ #include <sys/resource.h>
+ 
++#if defined __USE_BSD
++
+ libc_hidden_proto(wait4)
+ 
+ /* Wait for a child to exit.  When one does, put its status in *STAT_LOC and
+@@ -20,3 +22,4 @@ pid_t wait3 (__WAIT_STATUS stat_loc, int options, struct rusage * usage)
+ {
+       return wait4 (WAIT_ANY, stat_loc, options, usage);
+ }
++#endif
+diff --git a/libc/sysdeps/linux/common/wait4.c b/libc/sysdeps/linux/common/wait4.c
+index 4f0f21ddf..ff3b82645 100644
+--- a/libc/sysdeps/linux/common/wait4.c
++++ b/libc/sysdeps/linux/common/wait4.c
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include <sys/syscall.h>
++#if defined __USE_BSD || defined __USE_XOPEN_EXTENDED
+ #include <sys/wait.h>
+ #include <sys/resource.h>
+ 
+@@ -22,3 +23,4 @@ pid_t wait4(pid_t pid, int *status, int opts, struct rusage *rusage)
+ 	return (__syscall_wait4(pid, status, opts, rusage));
+ }
+ libc_hidden_def(wait4)
++#endif
+diff --git a/libc/sysdeps/linux/common/waitid.c b/libc/sysdeps/linux/common/waitid.c
+index 0e25acb62..b8d2f70ba 100644
+--- a/libc/sysdeps/linux/common/waitid.c
++++ b/libc/sysdeps/linux/common/waitid.c
+@@ -6,10 +6,11 @@
+  */
+ 
+ #include <sys/syscall.h>
++
++#if defined __USE_SVID || defined __USE_XOPEN
+ #include <unistd.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ 
+-#ifdef __NR_waitid
+ _syscall4(int, waitid, idtype_t, idtype, id_t, id, siginfo_t*, infop, int, options);
+ #endif
+diff --git a/libc/sysdeps/linux/i386/sys/io.h b/libc/sysdeps/linux/i386/sys/io.h
+index 39a7877f7..87b99a94a 100644
+--- a/libc/sysdeps/linux/i386/sys/io.h
++++ b/libc/sysdeps/linux/i386/sys/io.h
+@@ -23,6 +23,7 @@
+ 
+ __BEGIN_DECLS
+ 
++#if defined __UCLIBC_LINUX_SPECIFIC__
+ /* If TURN_ON is TRUE, request for permission to do direct i/o on the
+    port numbers in the range [FROM,FROM+NUM-1].  Otherwise, turn I/O
+    permission off for that range.  This call requires root privileges.
+@@ -37,6 +38,7 @@ extern int ioperm (unsigned long int __from, unsigned long int __num,
+    access any I/O port is granted.  This call requires root
+    privileges. */
+ extern int iopl (int __level) __THROW;
++#endif /* __UCLIBC_LINUX_SPECIFIC__ */
+ 
+ #if defined __GNUC__ && __GNUC__ >= 2
+ 
+diff --git a/libc/unistd/fpathconf.c b/libc/unistd/fpathconf.c
+index 23b628f48..f3e2ffe83 100644
+--- a/libc/unistd/fpathconf.c
++++ b/libc/unistd/fpathconf.c
+@@ -32,7 +32,21 @@
+ //#include "linux_fsinfo.h"
+ 
+ libc_hidden_proto(fstat)
+-libc_hidden_proto(fstatfs)
++#if !defined __UCLIBC_LINUX_SPECIFIC__
++#ifndef __USE_FILE_OFFSET64
++extern int fstatfs (int __fildes, struct statfs *__buf)
++     __THROW __nonnull ((2));
++#else
++# ifdef __REDIRECT_NTH
++	 extern int __REDIRECT_NTH (fstatfs, (int __fildes, struct statfs *__buf),
++	                            fstatfs64) __nonnull ((2));
++# else
++#  define fstatfs fstatfs64
++# endif
++#endif
++#endif
++extern __typeof(fstatfs) __libc_fstatfs;
++libc_hidden_proto(__libc_fstatfs)
+ 
+ /* The Linux kernel headers mention this as a kind of generic value.  */
+ #define LINUX_LINK_MAX	127
+@@ -54,7 +68,7 @@ long int fpathconf(int fd, int name)
+ 	struct statfs fsbuf;
+ 
+ 	/* Determine the filesystem type.  */
+-	if (fstatfs (fd, &fsbuf) < 0)
++	if (__libc_fstatfs (fd, &fsbuf) < 0)
+ 	{
+ 	    if (errno == ENOSYS)
+ 		/* not possible, return the default value.  */
+@@ -128,7 +142,7 @@ long int fpathconf(int fd, int name)
+ 		struct statfs buf;
+ 		int save_errno = errno;
+ 
+-		if (fstatfs (fd, &buf) < 0)
++		if (__libc_fstatfs (fd, &buf) < 0)
+ 		{
+ 		    if (errno == ENOSYS)
+ 		    {
+diff --git a/libc/unistd/pathconf.c b/libc/unistd/pathconf.c
+index 8e3c0a352..7f7efbb7f 100644
+--- a/libc/unistd/pathconf.c
++++ b/libc/unistd/pathconf.c
+@@ -31,7 +31,8 @@
+ #include <sys/statfs.h>
+ //#include <sys/statvfs.h>
+ 
+-libc_hidden_proto(statfs)
++extern __typeof(statfs) __libc_statfs;
++libc_hidden_proto(__libc_statfs)
+ libc_hidden_proto(stat)
+ 
+ 
+@@ -83,7 +84,7 @@ pathconf (const char *path, int name)
+ 	struct statfs buf;
+ 	int save_errno = errno;
+ 
+-	if (statfs (path, &buf) < 0)
++	if (__libc_statfs (path, &buf) < 0)
+ 	  {
+ 	    if (errno == ENOSYS)
+ 	      {
+diff --git a/libc/unistd/sleep.c b/libc/unistd/sleep.c
+index 4381c45c7..c5c9cdd21 100644
+--- a/libc/unistd/sleep.c
++++ b/libc/unistd/sleep.c
+@@ -27,6 +27,9 @@ libc_hidden_proto(sleep)
+ 
+ libc_hidden_proto(sigaction)
+ libc_hidden_proto(sigprocmask)
++
++/* version perusing nanosleep */
++#if defined __UCLIBC_HAS_REALTIME__
+ //libc_hidden_proto(__sigaddset)
+ //libc_hidden_proto(__sigemptyset)
+ //libc_hidden_proto(__sigismember)
+@@ -114,4 +117,56 @@ unsigned int sleep (unsigned int seconds)
+     return result;
+ }
+ #endif
++#else /* __UCLIBC_HAS_REALTIME__ */
++libc_hidden_proto(sigaction)
++/* no nanosleep, use signals and alarm() */
++static void sleep_alarm_handler(int attribute_unused sig)
++{
++}
++unsigned int sleep (unsigned int seconds)
++{
++    struct sigaction act, oact;
++    sigset_t set, oset;
++    unsigned int result, remaining;
++    time_t before, after;
++    int old_errno = errno;
++
++    /* This is not necessary but some buggy programs depend on this.  */
++    if (seconds == 0)
++	return 0;
++
++    /* block SIGALRM */
++    if (__sigemptyset (&set) < 0
++	    || __sigaddset (&set, SIGALRM) < 0
++	    || sigprocmask (SIG_BLOCK, &set, &oset))
++	return seconds;
++
++    act.sa_handler = sleep_alarm_handler;
++    act.sa_flags = 0;
++    act.sa_mask = oset;
++    if (sigaction(SIGALRM, &act, &oact) < 0)
++    	return seconds;
++
++    before = time(NULL);
++    remaining = alarm(seconds);
++    if (remaining && remaining > seconds) {
++    	/* restore user's alarm */
++	(void) sigaction(SIGALRM, &oact, (struct sigaction *) NULL);
++	alarm(remaining); /* restore old alarm */
++	sigsuspend(&oset);
++	after = time(NULL);
++    } else {
++	sigsuspend (&oset);
++	after = time(NULL);
++	(void) sigaction (SIGALRM, &oact, NULL);
++    }
++    result = after - before;
++    alarm(remaining > result ? remaining - result : 0);
++    sigprocmask (SIG_SETMASK, &oset, NULL);
++
++    __set_errno(old_errno);
++
++    return result > seconds ? 0 : seconds - result;
++}
++#endif /* __UCLIBC_HAS_REALTIME__ */
+ libc_hidden_def(sleep)
+diff --git a/libc/unistd/usleep.c b/libc/unistd/usleep.c
+index 91b88278d..8a27f900a 100644
+--- a/libc/unistd/usleep.c
++++ b/libc/unistd/usleep.c
+@@ -9,6 +9,8 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++#if defined __USE_BSD || defined __USE_POSIX98
++#if defined __UCLIBC_HAS_REALTIME__
+ /*libc_hidden_proto(nanosleep) need the reloc for cancellation*/
+ 
+ int usleep (__useconds_t usec)
+@@ -19,3 +21,15 @@ int usleep (__useconds_t usec)
+     };
+     return(nanosleep(&ts, NULL));
+ }
++#else /* __UCLIBC_HAS_REALTIME__ */
++libc_hidden_proto(select)
++int usleep (__useconds_t usec)
++{
++	struct timeval tv;
++
++	tv.tv_sec = 0;
++	tv.tv_usec = usec;
++	return select(0, NULL, NULL, NULL, &tv);
++}
++#endif /* __UCLIBC_HAS_REALTIME__ */
++#endif
+diff --git a/librt/Makefile.in b/librt/Makefile.in
+index f6433d30b..c91552acc 100644
+--- a/librt/Makefile.in
++++ b/librt/Makefile.in
+@@ -16,6 +16,7 @@ librt_FULL_NAME := librt-$(VERSION).so
+ librt_DIR := $(top_srcdir)librt
+ librt_OUT := $(top_builddir)librt
+ 
++ifeq ($(UCLIBC_HAS_REALTIME),y)
+ librt_SRC := $(wildcard $(librt_DIR)/*.c)
+ librt_OBJ := $(patsubst $(librt_DIR)/%.c,$(librt_OUT)/%.o,$(librt_SRC))
+ 
+@@ -28,7 +29,7 @@ librt-so-y += $(librt_OBJ:.o=.os)
+ 
+ lib-a-y += $(top_builddir)lib/librt.a
+ lib-so-y += $(top_builddir)lib/librt.so
+-objclean-y += librt_clean
++endif
+ 
+ ifeq ($(DOPIC),y)
+ $(top_builddir)lib/librt.so: $(top_builddir)lib/librt.a $(libc.depend)
+@@ -48,5 +49,7 @@ $(top_builddir)lib/librt.a: $(librt-a-y)
+ 	$(do_strip)
+ 	$(do_ar)
+ 
++objclean-y += librt_clean
++
+ librt_clean:
+ 	$(RM) $(librt_OUT)/*.{o,os,a}
+diff --git a/librt/mq_receive.c b/librt/mq_receive.c
+index fa48426b9..276b1f573 100644
+--- a/librt/mq_receive.c
++++ b/librt/mq_receive.c
+@@ -6,6 +6,7 @@
+ #include <stddef.h>
+ #include <sys/syscall.h>
+ #include <mqueue.h>
++#warning FIXME: hard dependency on ADVANCED REALTIME feature
+ 
+ librt_hidden_proto(mq_timedreceive)
+ #ifdef __NR_mq_timedreceive
+diff --git a/librt/mq_send.c b/librt/mq_send.c
+index ee2af4454..fbfc99e46 100644
+--- a/librt/mq_send.c
++++ b/librt/mq_send.c
+@@ -6,6 +6,7 @@
+ #include <stddef.h>
+ #include <sys/syscall.h>
+ #include <mqueue.h>
++#warning FIXME: hard dependency on ADVANCED REALTIME feature
+ 
+ librt_hidden_proto(mq_timedsend)
+ #ifdef __NR_mq_timedsend
+diff --git a/libutil/Makefile.in b/libutil/Makefile.in
+index a1c0beefc..1c4b910ba 100644
+--- a/libutil/Makefile.in
++++ b/libutil/Makefile.in
+@@ -20,6 +20,10 @@ libutil_SRC := $(wildcard $(libutil_DIR)/*.c)
+ ifneq ($(ARCH_USE_MMU),y)
+ libutil_SRC := $(filter-out $(libutil_DIR)/forkpty.c,$(libutil_SRC))
+ endif
++ifneq ($(UCLIBC_HAS_PTY),y)
++libutil_SRC := $(filter-out $(libutil_DIR)/openpty.c $(libutil_DIR)/forkpty.c \
++		,$(libutil_SRC))
++endif
+ libutil_OBJ := $(patsubst $(libutil_DIR)/%.c,$(libutil_OUT)/%.o,$(libutil_SRC))
+ 
+ ifeq ($(DOPIC),y)
+diff --git a/libutil/openpty.c b/libutil/openpty.c
+index 9a65e56b1..5f58476e9 100644
+--- a/libutil/openpty.c
++++ b/libutil/openpty.c
+@@ -106,7 +106,7 @@ openpty (int *amaster, int *aslave, char *name, struct termios *termp,
+ #endif
+   int master, slave;
+ 
+-  master = getpt ();
++  master = posix_openpt (O_RDWR);
+   if (master == -1)
+     return -1;
+ 

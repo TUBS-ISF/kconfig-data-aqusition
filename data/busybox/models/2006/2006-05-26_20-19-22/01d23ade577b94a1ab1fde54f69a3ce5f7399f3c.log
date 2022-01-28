@@ -1,0 +1,483 @@
+"2006-05-26 20:19:22 +0000"
+diff --git a/Config.in b/Config.in
+index bd94f493c..b299ee730 100644
+--- a/Config.in
++++ b/Config.in
+@@ -80,6 +80,21 @@ config CONFIG_LOCALE_SUPPORT
+ 	  Enable this if your system has locale support and you would like
+ 	  busybox to support locale settings.
+ 
++config CONFIG_GETOPT_LONG
++	bool "Enable getopt long (system needs struct option for this to work)"
++	default n
++	depends on !CONFIG_NO_GETOPT_LONG
++	help
++	  EXPERIMENTAL!
++	  Enable this if your system support long options for getopt and
++	  you want to use them in busybox.
++
++# remove this comment to disable getopt_long per default.
++#config CONFIG_NO_GETOPT_LONG
++#	bool
++#	default y
++#	depends on !CONFIG_GETOPT_LONG
++
+ config CONFIG_FEATURE_DEVFS
+ 	bool "Use devfs names for devices"
+ 	default n
+diff --git a/Rules.mak b/Rules.mak
+index cce41dcb9..8e03a0a12 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -308,9 +308,9 @@ ifeq ($(strip $(PREFIX)),)
+     PREFIX:=`pwd`/_install
+ endif
+ 
+-#ifneq ($(strip $(CONFIG_GETOPT_LONG)),y)
+-#    CFLAGS += -D__need_getopt
+-#endif
++ifneq ($(strip $(CONFIG_GETOPT_LONG)),y)
++    CFLAGS += -D__need_getopt
++endif
+ 
+ # Additional complications due to support for pristine source dir.
+ # Include files in the build directory should take precedence over
+diff --git a/archival/Config.in b/archival/Config.in
+index be0dc7779..22e7ec458 100644
+--- a/archival/Config.in
++++ b/archival/Config.in
+@@ -209,7 +209,7 @@ config CONFIG_FEATURE_TAR_GNU_EXTENSIONS
+ config CONFIG_FEATURE_TAR_LONG_OPTIONS
+ 	bool "Enable long options"
+ 	default n
+-	depends on CONFIG_TAR
++	depends on CONFIG_TAR && CONFIG_GETOPT_LONG
+ 	help
+ 		Enable use of long options, increases size by about 400 Bytes
+ 
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index 34e83e194..ec2273c35 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -65,6 +65,13 @@ config CONFIG_SETCONSOLE
+ 	  This program redirects the system console to another device,
+ 	  like the current tty while logged in via telnet.
+ 
++config CONFIG_FEATURE_SETCONSOLE_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_SET_CONSOLE && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the setconsole applet.
++
+ config CONFIG_SETKEYCODES
+ 	bool "setkeycodes"
+ 	default n
+diff --git a/console-tools/setconsole.c b/console-tools/setconsole.c
+index bf06cc530..79a4313f0 100644
+--- a/console-tools/setconsole.c
++++ b/console-tools/setconsole.c
+@@ -16,10 +16,12 @@
+ 
+ #include "busybox.h"
+ 
++#if ENABLE_FEATURE_SETCONSOLE_LONG_OPTIONS
+ static const struct option setconsole_long_options[] = {
+ 	{ "reset", 0, NULL, 'r' },
+ 	{ 0, 0, 0, 0 }
+ };
++#endif
+ 
+ #define OPT_SETCONS_RESET 1
+ 
+@@ -28,7 +30,9 @@ int setconsole_main(int argc, char **argv)
+ 	unsigned long flags;
+ 	const char *device = CURRENT_TTY;
+ 
++#if ENABLE_FEATURE_SETCONSOLE_LONG_OPTIONS
+ 	bb_applet_long_options = setconsole_long_options;
++#endif
+ 	flags = bb_getopt_ulflags(argc, argv, "r");
+ 
+ 	if (argc - optind > 1)
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index d7e31e868..818854cb1 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -232,6 +232,13 @@ config CONFIG_ENV
+ 	  a command; without options it displays the current
+ 	  environment.
+ 
++config CONFIG_FEATURE_ENV_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_ENV && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the env applet.
++
+ config CONFIG_EXPR
+ 	bool "expr"
+ 	default n
+@@ -293,6 +300,13 @@ config CONFIG_INSTALL
+ 	help
+ 	  Copy files and set attributes.
+ 
++config CONFIG_FEATURE_INSTALL_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_INSTALL && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the install applet.
++
+ config CONFIG_LENGTH
+ 	bool "length"
+ 	default n
+@@ -362,7 +376,7 @@ config CONFIG_FEATURE_LS_USERNAME
+ config CONFIG_FEATURE_LS_COLOR
+ 	bool "Allow use of color to identify file types"
+ 	default y
+-	depends on CONFIG_LS
++	depends on CONFIG_LS && CONFIG_GETOPT_LONG
+ 	help
+ 	  This enables the --color option to ls.
+ 
+@@ -389,6 +403,13 @@ config CONFIG_MKDIR
+ 	help
+ 	  mkdir is used to create directories with the specified names.
+ 
++config CONFIG_FEATURE_MKDIR_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_MKDIR && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the mkdir applet.
++
+ config CONFIG_MKFIFO
+ 	bool "mkfifo"
+ 	default n
+@@ -409,6 +430,13 @@ config CONFIG_MV
+ 	help
+ 	  mv is used to move or rename files or directories.
+ 
++config CONFIG_FEATURE_MV_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_MV && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the mv applet.
++
+ config CONFIG_NICE
+ 	bool "nice"
+ 	default n
+diff --git a/coreutils/env.c b/coreutils/env.c
+index fd58a23da..a07c0c617 100644
+--- a/coreutils/env.c
++++ b/coreutils/env.c
+@@ -50,12 +50,13 @@
+ #include <getopt.h> /* struct option */
+ #include "busybox.h"
+ 
+-
++#if ENABLE_FEATURE_ENV_LONG_OPTIONS
+ static const struct option env_long_options[] = {
+ 	{ "ignore-environment", 0, NULL, 'i' },
+ 	{ "unset", 1, NULL, 'u' },
+ 	{ 0, 0, 0, 0 }
+ };
++#endif
+ 
+ int env_main(int argc, char** argv)
+ {
+@@ -67,7 +68,9 @@ int env_main(int argc, char** argv)
+ 	extern char **environ;
+ 
+ 	bb_opt_complementally = "u::";
++#if ENABLE_FEATURE_ENV_LONG_OPTIONS
+ 	bb_applet_long_options = env_long_options;
++#endif
+ 
+ 	opt = bb_getopt_ulflags(argc, argv, "+iu:", &unset_env);
+ 
+diff --git a/coreutils/install.c b/coreutils/install.c
+index 7739fb615..90b3ef31b 100644
+--- a/coreutils/install.c
++++ b/coreutils/install.c
+@@ -39,6 +39,7 @@
+ #define INSTALL_OPT_MODE  32
+ #define INSTALL_OPT_OWNER  64
+ 
++#if ENABLE_FEATURE_INSTALL_LONG_OPTIONS
+ static const struct option install_long_options[] = {
+ 	{ "directory",	0,	NULL,	'd' },
+ 	{ "preserve-timestamps",	0,	NULL,	'p' },
+@@ -48,6 +49,7 @@ static const struct option install_long_options[] = {
+ 	{ "owner",	0,	NULL,	'o' },
+ 	{ 0,	0,	0,	0 }
+ };
++#endif
+ 
+ int install_main(int argc, char **argv)
+ {
+@@ -60,7 +62,9 @@ int install_main(int argc, char **argv)
+ 	int copy_flags = FILEUTILS_DEREFERENCE | FILEUTILS_FORCE;
+ 	int ret = EXIT_SUCCESS, flags, i, isdir;
+ 
++#if ENABLE_FEATURE_INSTALL_LONG_OPTIONS
+ 	bb_applet_long_options = install_long_options;
++#endif
+ 	bb_opt_complementally = "?:s--d:d--s";
+ 	/* -c exists for backwards compatibility, its needed */
+ 	flags = bb_getopt_ulflags(argc, argv, "cdpsg:m:o:", &gid_str, &mode_str, &uid_str);	/* 'a' must be 2nd */
+diff --git a/coreutils/mkdir.c b/coreutils/mkdir.c
+index 48a95badb..47f4cc843 100644
+--- a/coreutils/mkdir.c
++++ b/coreutils/mkdir.c
+@@ -34,11 +34,13 @@
+ #include <getopt.h> /* struct option */
+ #include "busybox.h"
+ 
++#if ENABLE_FEATURE_MKDIR_LONG_OPTIONS
+ static const struct option mkdir_long_options[] = {
+ 	{ "mode", 1, NULL, 'm' },
+ 	{ "parents", 0, NULL, 'p' },
+ 	{ 0, 0, 0, 0 }
+ };
++#endif
+ 
+ int mkdir_main (int argc, char **argv)
+ {
+@@ -48,7 +50,9 @@ int mkdir_main (int argc, char **argv)
+ 	unsigned long opt;
+ 	char *smode;
+ 
++#if ENABLE_FEATURE_MKDIR_LONG_OPTIONS
+ 	bb_applet_long_options = mkdir_long_options;
++#endif
+ 	opt = bb_getopt_ulflags(argc, argv, "m:p", &smode);
+ 	if(opt & 1) {
+ 			mode = 0777;
+diff --git a/coreutils/mv.c b/coreutils/mv.c
+index 1c0dc3d72..02252c7ef 100644
+--- a/coreutils/mv.c
++++ b/coreutils/mv.c
+@@ -35,11 +35,13 @@
+ #include "busybox.h"
+ #include "libcoreutils/coreutils.h"
+ 
++#if ENABLE_FEATURE_MV_LONG_OPTIONS
+ static const struct option mv_long_options[] = {
+ 	{ "interactive", 0, NULL, 'i' },
+ 	{ "force", 0, NULL, 'f' },
+ 	{ 0, 0, 0, 0 }
+ };
++#endif
+ 
+ #define OPT_FILEUTILS_FORCE       1
+ #define OPT_FILEUTILS_INTERACTIVE 2
+@@ -55,7 +57,9 @@ int mv_main(int argc, char **argv)
+ 	int dest_exists;
+ 	int status = 0;
+ 
++#if ENABLE_FEATURE_MV_LONG_OPTIONS
+ 	bb_applet_long_options = mv_long_options;
++#endif
+ 	bb_opt_complementally = "f-i:i-f";
+ 	flags = bb_getopt_ulflags(argc, argv, "fi");
+ 	if (optind + 2 > argc) {
+diff --git a/debianutils/Config.in b/debianutils/Config.in
+index 146a24e61..626272474 100644
+--- a/debianutils/Config.in
++++ b/debianutils/Config.in
+@@ -46,6 +46,13 @@ config CONFIG_RUN_PARTS
+ 	  Unless you know that run-parts is used in some of your scripts
+ 	  you can safely say N here.
+ 
++config CONFIG_FEATURE_RUN_PARTS_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_RUN_PARTS && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the run-parts applet.
++
+ config CONFIG_START_STOP_DAEMON
+ 	bool "start-stop-daemon"
+ 	default y
+@@ -54,6 +61,13 @@ config CONFIG_START_STOP_DAEMON
+ 	  termination of system-level processes, usually the ones
+ 	  started during the startup of the system.
+ 
++config CONFIG_FEATURE_START_STOP_DAEMON_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_START_STOP_DAEMON && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the start-stop-daemon applet.
++
+ config CONFIG_WHICH
+ 	bool "which"
+ 	default n
+diff --git a/debianutils/start_stop_daemon.c b/debianutils/start_stop_daemon.c
+index b44a23b4b..5c596c40a 100644
+--- a/debianutils/start_stop_daemon.c
++++ b/debianutils/start_stop_daemon.c
+@@ -200,7 +200,7 @@ do_stop(void)
+ 	}
+ }
+ 
+-
++#if ENABLE_FEATURE_START_STOP_DAEMON_LONG_OPTIONS
+ static const struct option ssd_long_options[] = {
+ 	{ "stop",			0,		NULL,		'K' },
+ 	{ "start",			0,		NULL,		'S' },
+@@ -215,6 +215,7 @@ static const struct option ssd_long_options[] = {
+ 	{ "pidfile",			1,		NULL,		'p' },
+ 	{ 0,				0,		0,		0 }
+ };
++#endif
+ 
+ #define SSD_CTX_STOP		1
+ #define SSD_CTX_START		2
+@@ -229,7 +230,9 @@ start_stop_daemon_main(int argc, char **argv)
+ 	char *signame = NULL;
+ 	char *startas = NULL;
+ 
++#if ENABLE_FEATURE_START_STOP_DAEMON_LONG_OPTIONS
+ 	bb_applet_long_options = ssd_long_options;
++#endif
+ 
+ 	/* Check required one context option was given */
+ 	bb_opt_complementally = "K:S:?:K--S:S--K";
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 637d4b9c2..eae977fac 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -169,7 +169,7 @@ config CONFIG_HDPARM
+ config CONFIG_FEATURE_HDPARM_GET_IDENTITY
+ 	bool "Support obtaining detailed information directly from drives"
+ 	default y
+-	depends on CONFIG_HDPARM
++	depends on CONFIG_HDPARM && CONFIG_GETOPT_LONG
+ 	help
+ 	  Enables the -I and -Istdin options to obtain detailed information
+ 	  directly from drives about their capabilities and supported ATA
+diff --git a/networking/Config.in b/networking/Config.in
+index e76002c0d..c718af0e9 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -49,6 +49,13 @@ config CONFIG_FTPPUT
+ 	help
+ 	  Store a remote file via FTP.
+ 
++config CONFIG_FEATURE_FTPGETPUT_LONG_OPTIONS
++	bool "Enable long options in ftpget/ftpput"
++	default n
++	depends on CONFIG_GETOPT_LONG && (CONFIG_FTPGET || CONFIG_FTPPUT)
++	help
++	  Support long options for the ftpget/ftpput applet.
++
+ config CONFIG_HOSTNAME
+ 	bool "hostname"
+ 	default n
+@@ -411,6 +418,13 @@ config CONFIG_FEATURE_IPCALC_FANCY
+ 	help
+ 	  Adds the options hostname, prefix and silent to the output of "ipcalc".
+ 
++config CONFIG_FEATURE_IPCALC_LONG_OPTIONS
++	bool "Enable long options"
++	default n
++	depends on CONFIG_IPCALC && CONFIG_GETOPT_LONG
++	help
++	  Support long options for the ipcalc applet.
++
+ config CONFIG_NAMEIF
+ 	bool "nameif"
+ 	default n
+diff --git a/networking/ftpgetput.c b/networking/ftpgetput.c
+index 40e1328a9..a401ec50a 100644
+--- a/networking/ftpgetput.c
++++ b/networking/ftpgetput.c
+@@ -278,6 +278,7 @@ static int ftp_send(ftp_host_info_t *server, FILE *control_stream,
+ #define FTPGETPUT_OPT_PASSWORD	8
+ #define FTPGETPUT_OPT_PORT	16
+ 
++#if ENABLE_FEATURE_FTPGETPUT_LONG_OPTIONS
+ static const struct option ftpgetput_long_options[] = {
+ 	{"continue", 1, NULL, 'c'},
+ 	{"verbose", 0, NULL, 'v'},
+@@ -286,6 +287,7 @@ static const struct option ftpgetput_long_options[] = {
+ 	{"port", 1, NULL, 'P'},
+ 	{0, 0, 0, 0}
+ };
++#endif
+ 
+ int ftpgetput_main(int argc, char **argv)
+ {
+@@ -319,7 +321,9 @@ int ftpgetput_main(int argc, char **argv)
+ 	/*
+ 	 * Decipher the command line
+ 	 */
++#if ENABLE_FEATURE_FTPGETPUT_LONG_OPTIONS
+ 	bb_applet_long_options = ftpgetput_long_options;
++#endif
+ 	opt = bb_getopt_ulflags(argc, argv, "cvu:p:P:", &server->user, &server->password, &port);
+ 
+ 	/* Process the non-option command line arguments */
+diff --git a/networking/ipcalc.c b/networking/ipcalc.c
+index a24629a9d..ade4ed101 100644
+--- a/networking/ipcalc.c
++++ b/networking/ipcalc.c
+@@ -82,6 +82,7 @@ int ipcalc_main(int argc, char **argv)
+ 	char *ipstr, *prefixstr;
+ #endif
+ 
++#if ENABLE_FEATURE_IPCALC_LONG_OPTIONS
+ 	static const struct option long_options[] = {
+ 		{"netmask",		no_argument, NULL, 'm'},
+ 		{"broadcast",	no_argument, NULL, 'b'},
+@@ -95,6 +96,7 @@ int ipcalc_main(int argc, char **argv)
+ 	};
+ 
+ 	bb_applet_long_options = long_options;
++#endif
+ 	mode = bb_getopt_ulflags(argc, argv,
+ #ifdef CONFIG_FEATURE_IPCALC_FANCY
+ 			"mbnphs"
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 6bc366531..a493fbfb4 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -199,10 +199,10 @@ config CONFIG_HWCLOCK
+ 	  shutdown in the hardware clock, so the hardware will keep the
+ 	  correct time when Linux is _not_ running.
+ 
+-config CONFIG_FEATURE_HWCLOCK_LONGOPTIONS
++config CONFIG_FEATURE_HWCLOCK_LONG_OPTIONS
+ 	bool "Support long options (--hctosys,...)"
+ 	default n
+-	depends on CONFIG_HWCLOCK
++	depends on CONFIG_HWCLOCK && CONFIG_GETOPT_LONG
+ 	help
+ 	  By default, the hwclock utility only uses short options.  If you
+ 	  are overly fond of its long options, such as --hctosys, --utc, etc)
+diff --git a/util-linux/hwclock.c b/util-linux/hwclock.c
+index 2fe57b2fc..3d7f40026 100644
+--- a/util-linux/hwclock.c
++++ b/util-linux/hwclock.c
+@@ -37,7 +37,7 @@ struct linux_rtc_time {
+ #define RTC_SET_TIME   _IOW('p', 0x0a, struct linux_rtc_time) /* Set RTC time    */
+ #define RTC_RD_TIME    _IOR('p', 0x09, struct linux_rtc_time) /* Read RTC time   */
+ 
+-#ifdef CONFIG_FEATURE_HWCLOCK_LONGOPTIONS
++#if ENABLE_FEATURE_HWCLOCK_LONG_OPTIONS
+ # ifndef _GNU_SOURCE
+ #  define _GNU_SOURCE
+ # endif
+@@ -186,7 +186,7 @@ int hwclock_main ( int argc, char **argv )
+ 	unsigned long opt;
+ 	int utc;
+ 
+-#ifdef CONFIG_FEATURE_HWCLOCK_LONGOPTIONS
++#if ENABLE_FEATURE_HWCLOCK_LONG_OPTIONS
+ static const struct option hwclock_long_options[] = {
+ 		{ "localtime", 0, 0, 'l' },
+ 		{ "utc",       0, 0, 'u' },

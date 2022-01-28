@@ -1,0 +1,125 @@
+"2015-03-22 14:49:27 +0100"
+diff --git a/Makefile.in b/Makefile.in
+index 5d60ddaba..a64fec956 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -310,6 +310,7 @@ HEADERS_RM-$(UCLIBC_LINUX_SPECIFIC)          += \
+ 	sys/perm.h \
+ 	sys/personality.h \
+ 	sys/prctl.h \
++	sys/random.h \
+ 	sys/reboot.h \
+ 	sys/sendfile.h \
+ 	bits/signalfd.h \
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index f5210cdf9..35c1cee9a 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1025,7 +1025,7 @@ config UCLIBC_LINUX_SPECIFIC
+ 	help
+ 	  accept4(), bdflush(),
+ 	  capget(), capset(), eventfd(), fallocate(),
+-	  fstatfs(), inotify_*(), ioperm(), iopl(),
++	  fstatfs(), getrandom(), inotify_*(), ioperm(), iopl(),
+ 	  madvise(), modify_ldt(), pipe2(), personality(),
+ 	  prctl()/arch_prctl(), pivot_root(), modify_ldt(),
+ 	  ppoll(), readahead(), reboot(), remap_file_pages(),
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 8ee956b6b..82525984a 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -27,6 +27,7 @@ CSRC-$(UCLIBC_LINUX_SPECIFIC) += \
+ 	eventfd.c \
+ 	eventfd_read.c \
+ 	eventfd_write.c \
++	getrandom.c \
+ 	inotify.c \
+ 	ioperm.c \
+ 	iopl.c \
+diff --git a/libc/sysdeps/linux/common/bits/kernel-features.h b/libc/sysdeps/linux/common/bits/kernel-features.h
+index 6184c2b9d..708bb4906 100644
+--- a/libc/sysdeps/linux/common/bits/kernel-features.h
++++ b/libc/sysdeps/linux/common/bits/kernel-features.h
+@@ -507,3 +507,8 @@
+ #if defined __x86_64__ && __LINUX_KERNEL_VERSION >= 0x030100
+ # define __ASSUME_GETCPU_SYSCALL        1
+ #endif
++
++/* getrandom syscall (widely) appeared around 4.0.0 */
++#if __LINUX_KERNEL_VERSION >= 0x040000
++# define __ASSUME_GETRANDOM_SYSCALL 1
++#endif
+diff --git a/libc/sysdeps/linux/common/getrandom.c b/libc/sysdeps/linux/common/getrandom.c
+new file mode 100644
+index 000000000..d33d5224a
+--- /dev/null
++++ b/libc/sysdeps/linux/common/getrandom.c
+@@ -0,0 +1,14 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * getrandom() for uClibc
++ *
++ * Copyright (C) 2015 Bernhard Reutner-Fischer
++ *
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sys/syscall.h>
++#include <sys/random.h>
++#ifdef __NR_getrandom
++_syscall3(int, getrandom, void *, buf, size_t, buflen, unsigned int, flags)
++#endif
+diff --git a/libc/sysdeps/linux/common/stubs.c b/libc/sysdeps/linux/common/stubs.c
+index 2c50307aa..19a33714a 100644
+--- a/libc/sysdeps/linux/common/stubs.c
++++ b/libc/sysdeps/linux/common/stubs.c
+@@ -157,6 +157,10 @@ make_stub(getpeername)
+ make_stub(getpgrp)
+ #endif
+ 
++#if !defined __NR_getrandom && defined __UCLIBC_LINUX_SPECIFIC__
++make_stub(getrandom)
++#endif
++
+ #if !defined __NR_getsockname && !defined __NR_socketcall && defined __UCLIBC_HAS_SOCKET__
+ make_stub(getsockname)
+ #endif
+diff --git a/libc/sysdeps/linux/common/sys/random.h b/libc/sysdeps/linux/common/sys/random.h
+new file mode 100644
+index 000000000..42f802576
+--- /dev/null
++++ b/libc/sysdeps/linux/common/sys/random.h
+@@ -0,0 +1,33 @@
++/* Copyright (C) 2015 Bernhard Reutner-Fischer
++ * Licensed under the LGPL v2.1 or later, see the file COPYING.LIB in this tarball.
++*/
++
++#ifndef	_SYS_RANDOM_H
++#define	_SYS_RANDOM_H	1
++#include <features.h>
++
++__BEGIN_DECLS
++
++#if defined __UCLIBC_LINUX_SPECIFIC__ && defined __USE_GNU
++# if 0 /*def __ASSUME_GETRANDOM_SYSCALL */
++#  include <linux/random.h>
++# else
++#  undef GRND_NONBLOCK
++#  undef GRND_RANDOM
++/*
++ * Flags for getrandom(2)
++ *
++ * GRND_NONBLOCK	Don't block and return EAGAIN instead
++ * GRND_RANDOM		Use the /dev/random pool instead of /dev/urandom
++ */
++#  define GRND_NONBLOCK	0x0001
++#  define GRND_RANDOM	0x0002
++# endif
++/* FIXME: aren't there a couple of __restrict and const missing ? */
++extern int getrandom(void *__buf, size_t count, unsigned int flags)
++	   __nonnull ((1)) __wur;
++#endif
++
++__END_DECLS
++
++#endif /* sys/random.h */

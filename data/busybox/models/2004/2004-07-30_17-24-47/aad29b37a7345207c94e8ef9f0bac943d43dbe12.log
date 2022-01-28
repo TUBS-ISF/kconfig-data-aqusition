@@ -1,0 +1,111 @@
+"2004-07-30 17:24:47 +0000"
+diff --git a/coreutils/Config.in b/coreutils/Config.in
+index 5c0180a5e..c995e55ff 100644
+--- a/coreutils/Config.in
++++ b/coreutils/Config.in
+@@ -538,6 +538,7 @@ config CONFIG_WC
+ config CONFIG_WHO
+ 	bool "who"
+ 	default n
++	select CONFIG_FEATURE_U_W_TMP
+ 	help
+ 	  who is used to show who is logged on.
+ 
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index db038abb0..d9938b066 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -57,6 +57,15 @@ config CONFIG_GETTY
+ 	help
+ 	  getty lets you log in on a tty, it is normally invoked by init.
+ 
++config CONFIG_FEATURE_U_W_TMP
++	bool "  Support utmp and wtmp files"
++	depends on CONFIG_GETTY || CONFIG_LOGIN || CONFIG_SU || CONFIG_WHO || CONFIG_LAST
++	default n
++	help
++	  The files /var/run/utmp and /var/run/wtmp can be used to track when
++	  user's have logged into and logged out of the system, allowing programs
++	  such as 'who' and 'last' to list who is currently logged in.
++
+ config CONFIG_LOGIN
+ 	bool "login"
+ 	default n
+diff --git a/loginutils/getty.c b/loginutils/getty.c
+index b211733ee..2b37136fe 100644
+--- a/loginutils/getty.c
++++ b/loginutils/getty.c
+@@ -228,7 +228,7 @@ static void termio_final(struct options *op, struct termio *tp,
+ 
+ 				  struct chardata *cp);
+ static int caps_lock(const char *s);
+-static int bcode(const char *s);
++static int bcode(char *s);
+ static void error(const char *fmt, ...) __attribute__ ((noreturn));
+ 
+ #ifdef CONFIG_FEATURE_U_W_TMP
+@@ -503,6 +503,9 @@ static void update_utmp(char *line)
+ 	 * utmp file can be opened for update, and if we are able to find our
+ 	 * entry in the utmp file.
+ 	 */
++	if (access(_PATH_UTMP, R_OK|W_OK) == -1) {
++		creat(_PATH_UTMP, O_RDWR);
++	}
+ 	utmpname(_PATH_UTMP);
+ 	setutent();
+ 	while ((utp = getutent())
+@@ -531,6 +534,9 @@ static void update_utmp(char *line)
+ 	endutent();
+ 
+ 	{
++		if (access(_PATH_WTMP, R_OK|W_OK) == -1) {
++			creat(_PATH_WTMP, O_RDWR);
++		}
+ 		updwtmp(_PATH_WTMP, &ut);
+ 	}
+ }
+@@ -953,7 +959,7 @@ static int caps_lock(const char *s)
+ }
+ 
+ /* bcode - convert speed string to speed code; return 0 on failure */
+-static int bcode(const char *s)
++static int bcode(char *s)
+ {
+ 	int r;
+ 	unsigned long value;
+diff --git a/loginutils/login.c b/loginutils/login.c
+index 20fab0753..93d81d314 100644
+--- a/loginutils/login.c
++++ b/loginutils/login.c
+@@ -403,8 +403,6 @@ static void motd ( )
+ #ifdef CONFIG_FEATURE_U_W_TMP
+ // vv  Taken from tinylogin utmp.c  vv
+ 
+-#define _WTMP_FILE "/var/log/wtmp"
+-
+ #define	NO_UTENT \
+ 	"No utmp entry.  You must exec \"login\" from the lowest level \"sh\""
+ #define	NO_TTY \
+@@ -480,6 +478,9 @@ static void setutmp(const char *name, const char *line)
+ 	setutent();
+ 	pututline(&utent);
+ 	endutent();
+-	updwtmp(_WTMP_FILE, &utent);
++	if (access(_PATH_WTMP, R_OK|W_OK) == -1) {
++		creat(_PATH_WTMP, O_RDWR);
++	}
++	updwtmp(_PATH_WTMP, &utent);
+ }
+ #endif /* CONFIG_FEATURE_U_W_TMP */
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index ded26b3a8..3c92c4674 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -83,6 +83,7 @@ config CONFIG_DEVFSD_VERBOSE
+ config CONFIG_LAST
+ 	bool "last"
+ 	default n
++	select CONFIG_FEATURE_U_W_TMP
+ 	help
+ 	  'last' displays a list of the last users that logged into the system.
+ 

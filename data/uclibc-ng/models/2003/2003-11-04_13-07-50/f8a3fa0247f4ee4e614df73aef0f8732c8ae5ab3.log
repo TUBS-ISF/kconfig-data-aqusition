@@ -1,0 +1,2684 @@
+"2003-11-04 13:07:50 +0000"
+diff --git a/Makefile b/Makefile
+index 32871786c..7fe64c8bc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -28,7 +28,7 @@ noconfig_targets := menuconfig config oldconfig randconfig \
+ TOPDIR=./
+ include Rules.mak
+ 
+-DIRS = extra ldso libc libcrypt libresolv libnsl libutil libm libpthread
++DIRS = ldso libc libcrypt libresolv libnsl libutil libm libpthread
+ ifeq ($(strip $(UCLIBC_HAS_GETTEXT_AWARENESS)),y)
+ 	DIRS += libintl
+ endif
+@@ -118,13 +118,13 @@ include/bits/uClibc_config.h: .config
+ 	fi;
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf -o extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf -o extra/Configs/Config.in
+ 
+ headers: include/bits/uClibc_config.h
+ ifeq ($(strip $(UCLIBC_HAS_MMU)),y)
+-	@./extra/scripts/fix_includes.sh -k $(KERNEL_SOURCE) -t $(TARGET_ARCH)
++	@set -x; ./extra/scripts/fix_includes.sh -k $(KERNEL_SOURCE) -t $(TARGET_ARCH)
+ else
+-	@./extra/scripts/fix_includes.sh -k $(KERNEL_SOURCE) -t $(TARGET_ARCH) -n
++	@set -x; ./extra/scripts/fix_includes.sh -k $(KERNEL_SOURCE) -t $(TARGET_ARCH) -n
+ endif
+ 	@if [ "$(TARGET_ARCH)" = "mipsel" ]; then \
+ 	    $(LN) -fs mips libc/sysdeps/linux/mipsel; \
+@@ -275,25 +275,6 @@ ifeq ($(strip $(HAVE_SHARED)),y)
+ 	fi;
+ endif
+ 
+-# Using the wrapper toolchain is depricated.  You should 
+-# really use a _real_ toolchain instead....
+-install_toolchain: install_utils
+-	$(INSTALL) -d $(PREFIX)$(DEVEL_TOOL_PREFIX)/bin
+-	$(INSTALL) -d $(PREFIX)$(SYSTEM_DEVEL_PREFIX)/bin
+-	$(LN) -fs $(SYSTEM_DEVEL_PREFIX)/bin/$(TARGET_ARCH)-uclibc-ldd \
+-		$(PREFIX)$(DEVEL_TOOL_PREFIX)/bin/ldd
+-	$(INSTALL) -m 755 ldso/util/ldd \
+-		$(PREFIX)$(SYSTEM_DEVEL_PREFIX)/bin/$(TARGET_ARCH)-uclibc-ldd
+-	$(INSTALL) -m 755 ldso/util/ldconfig \
+-		$(PREFIX)$(SYSTEM_DEVEL_PREFIX)/bin/$(TARGET_ARCH)-uclibc-ldconfig;
+-	$(INSTALL) -m 755 ldso/util/ldconfig \
+-		$(PREFIX)$(SYSTEM_DEVEL_PREFIX)/bin/$(TARGET_ARCH)-uclibc-ldconfig;
+-	# For now, don't bother with readelf since surely the host
+-	# system has binutils, or we couldn't have gotten this far...
+-	#$(LN) -fs $(SYSTEM_DEVEL_PREFIX)/bin/$(TARGET_ARCH)-uclibc-readelf \
+-	#	$(PREFIX)$(DEVEL_TOOL_PREFIX)/bin/readelf
+-	$(MAKE) -C extra/gcc-uClibc install
+-
+ ifeq ($(strip $(HAVE_SHARED)),y)
+ utils: $(TOPDIR)ldso/util/ldd
+ 	$(MAKE) -C ldso utils
+@@ -303,16 +284,16 @@ endif
+ 
+ install_utils: utils
+ ifeq ($(strip $(HAVE_SHARED)),y)
+-	$(INSTALL) -d $(PREFIX)$(SYSTEM_DEVEL_PREFIX)/sbin
+-	$(INSTALL) -d $(PREFIX)$(SYSTEM_DEVEL_PREFIX)/usr/bin
++	$(INSTALL) -d $(PREFIX)$(RUNTIME_PREFIX)/sbin
++	$(INSTALL) -d $(PREFIX)$(RUNTIME_PREFIX)/usr/bin
+ 	$(INSTALL) -m 755 ldso/util/ldd \
+-		$(PREFIX)$(SYSTEM_DEVEL_PREFIX)/usr/bin/ldd
++		$(PREFIX)$(RUNTIME_PREFIX)/usr/bin/ldd
+ 	$(INSTALL) -m 755 ldso/util/ldconfig \
+-		$(PREFIX)$(SYSTEM_DEVEL_PREFIX)/sbin/ldconfig;
++		$(PREFIX)$(RUNTIME_PREFIX)/sbin/ldconfig;
+ 	# For now, don't bother with readelf since surely the host
+ 	# system has binutils, or we couldn't have gotten this far...
+ 	#$(INSTALL) -m 755 ldso/util/readelf \
+-	#	$(PREFIX)$(SYSTEM_DEVEL_PREFIX)/usr/bin/readelf
++	#	$(PREFIX)$(RUNTIME_PREFIX)/usr/bin/readelf
+ endif
+ 
+ # Installs run-time libraries and helper apps in preparation for
+@@ -360,56 +341,46 @@ all: menuconfig
+ 
+ # configuration
+ # ---------------------------------------------------------------------------
+-extra/config/conf: buildconf
+-	-@if [ ! -f .config ] ; then \
+-		cp extra/Configs/Config.$(TARGET_ARCH).default .config; \
+-	fi
+-
+-buildconf:
++extra/config/conf:
+ 	make -C extra/config conf
+ 
+-extra/config/mconf: buildmconf
+-	-@if [ ! -f .config ] ; then \
+-		cp extra/Configs/Config.$(TARGET_ARCH).default .config; \
+-	fi
+-
+-buildmconf:
++extra/config/mconf:
+ 	make -C extra/config ncurses mconf
+ 
+ menuconfig: extra/config/mconf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/mconf extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/mconf extra/Configs/Config.in
+ 
+ config: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf extra/Configs/Config.in
+ 
+ oldconfig: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf -o extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf -o extra/Configs/Config.in
+ 
+ randconfig: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf -r extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf -r extra/Configs/Config.in
+ 
+ allyesconfig: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf -y extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf -y extra/Configs/Config.in
+ 
+ allnoconfig: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf -n extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf -n extra/Configs/Config.in
+ 
+ defconfig: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+-	@./extra/config/conf -d extra/Configs/Config.$(TARGET_ARCH)
++	@./extra/config/conf -d extra/Configs/Config.in
+ 
+ 
+ clean:
+@@ -421,7 +392,6 @@ clean:
+ 	$(MAKE) -C libc/misc/wchar clean
+ 	$(MAKE) -C libc/unistd clean
+ 	$(MAKE) -C libc/sysdeps/linux/common clean
+-	$(MAKE) -C extra/gcc-uClibc clean
+ 	$(MAKE) -C extra/locale clean
+ 	@set -e; \
+ 	for i in `(cd $(TOPDIR)/libc/sysdeps/linux/common/sys; ls *.h)` ; do \
+diff --git a/Rules.mak b/Rules.mak
+index c29a4e261..03ada6bd9 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -83,31 +83,10 @@ check_gcc=$(shell if $(CC) $(1) -S -o /dev/null -xc /dev/null > /dev/null 2>&1;
+ AWK:=$(shell if [ -x /usr/bin/nawk ]; then echo "/usr/bin/nawk"; \
+ 	else echo "/usr/bin/awk"; fi)
+ 
+-HOST_ARCH:=$(shell uname -m | sed \
+-		-e 's/i.86/i386/' \
+-		-e 's/sparc.*/sparc/' \
+-		-e 's/arm.*/arm/g' \
+-		-e 's/m68k.*/m68k/' \
+-		-e 's/ppc/powerpc/g' \
+-		-e 's/v850.*/v850/g' \
+-		-e 's/sh[234].*/sh/' \
+-		-e 's/mips.*/mips/' \
+-		)
+-ifeq ($(strip $(TARGET_ARCH)),)
+-TARGET_ARCH:=$(shell $(CC) -dumpmachine | sed -e s'/-.*//' \
+-		-e 's/i.86/i386/' \
+-		-e 's/sparc.*/sparc/' \
+-		-e 's/arm.*/arm/g' \
+-		-e 's/m68k.*/m68k/' \
+-		-e 's/ppc/powerpc/g' \
+-		-e 's/v850.*/v850/g' \
+-		-e 's/sh[234]/sh/' \
+-		-e 's/mips-.*/mips/' \
+-		-e 's/mipsel-.*/mipsel/' \
+-		-e 's/cris.*/cris/' \
+-		)
+-endif
+-export TARGET_ARCH
++# Make certain these contain a final "/", but no "//"s.
++RUNTIME_PREFIX:=$(strip $(subst //,/, $(subst ,/, $(subst ",, $(strip $(RUNTIME_PREFIX))))))
++DEVEL_PREFIX:=$(strip $(subst //,/, $(subst ,/, $(subst ",, $(strip $(DEVEL_PREFIX))))))
++export RUNTIME_PREFIX DEVEL_PREFIX
+ 
+ ARFLAGS:=r
+ 
+@@ -218,7 +197,7 @@ ifeq ($(HAVE_SHARED),y)
+     LIBRARY_CACHE:=#-DUSE_CACHE
+     ifeq ($(BUILD_UCLIBC_LDSO),y)
+ 	LDSO:=$(TOPDIR)lib/$(UCLIBC_LDSO)
+-	DYNAMIC_LINKER:=$(SHARED_LIB_LOADER_PATH)/$(UCLIBC_LDSO)
++	DYNAMIC_LINKER:=$(SHARED_LIB_LOADER_PREFIX)/$(UCLIBC_LDSO)
+ 	BUILD_DYNAMIC_LINKER:=$(shell cd $(TOPDIR) && pwd)/lib/$(UCLIBC_LDSO)
+     else
+ 	LDSO:=$(SYSTEM_LDSO)
+@@ -245,17 +224,6 @@ LIBGCC_CFLAGS ?= $(CFLAGS) $(CPU_CFLAGS-y)
+ LIBGCC:=$(shell $(CC) $(LIBGCC_CFLAGS) -print-libgcc-file-name)
+ LIBGCC_DIR:=$(dir $(LIBGCC))
+ 
+-# TARGET_PREFIX is the directory under which which the uClibc runtime
+-# environment will be installed and used on the target system.   The 
+-# result will look something like the following:
+-#   TARGET_PREFIX/
+-#	lib/            <contains all runtime and static libs>
+-#	usr/lib/        <this directory is searched for runtime libs>
+-#	etc/            <weher the shared library cache and configuration 
+-#	                information go if you enabled LIBRARY_CACHE above>
+-# Very few people will need to change this value from the default...
+-TARGET_PREFIX = /
+-
+ ########################################
+ #
+ # uClinux shared lib support
+@@ -269,3 +237,5 @@ ifeq ($(CONFIG_BINFMT_SHARED_FLAT),y)
+   SHARED_TARGET = lib/libc
+ endif
+ 
++TARGET_ARCH:=$(strip $(subst ",, $(strip $(TARGET_ARCH))))
++
+diff --git a/extra/Configs/Config.alpha b/extra/Configs/Config.alpha
+index b8c9f2505..e810c6dd7 100644
+--- a/extra/Configs/Config.alpha
++++ b/extra/Configs/Config.alpha
+@@ -3,14 +3,15 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
+-
+ config HAVE_ELF
+ 	bool
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	default y
+ 
++config TARGET_ARCH
++	default "alpha"
++
+ config ARCH_CFLAGS
+ 	string
+ 
+@@ -20,10 +21,3 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.arm b/extra/Configs/Config.arm
+index c7ec716e0..291aea4a8 100644
+--- a/extra/Configs/Config.arm
++++ b/extra/Configs/Config.arm
+@@ -3,14 +3,13 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
+-
+ config HAVE_ELF
+ 	bool
+ 	default y
+ 
++config TARGET_ARCH
++	default "arm"
++
+ config ARCH_CFLAGS
+ 	string
+ 
+@@ -41,60 +40,54 @@ choice
+ 	  If you don't know what to do, choose "Generic Arm".
+ 
+ config CONFIG_GENERIC_ARM
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Generic Arm"
+ 
+ config CONFIG_ARM610
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Arm 610"
+ 
+ config CONFIG_ARM710
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Arm 710"
+ 
+ config CONFIG_ARM720T
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Arm 720T"
+ 
+ config CONFIG_ARM920T
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Arm 920T"
+ 
+ config CONFIG_ARM922T
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Arm 922T"
+ 
+ config CONFIG_ARM926T
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Arm 926T"
+ 
+ config CONFIG_ARM_SA110
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Intel StrongArm SA-110"
+ 
+ config CONFIG_ARM_SA1100
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Intel StrongArm SA-1100"
+ 
+ config CONFIG_ARM_XSCALE
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "Intel Xscale"
+ 
+ endchoice
+ 
+-choice
+-	prompt "Target Processor Endianness"
+-	default ARCH_LITTLE_ENDIAN
+-	help
+-	  This is the endianness you wish to build use.  Choose either Big
+-	  Endian, or Little Endian.
+-
+-config ARCH_LITTLE_ENDIAN
+-	bool "Little Endian"
+-
+-config ARCH_BIG_ENDIAN
+-	bool "Big Endian"
+-
+-endchoice
+-
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y if CONFIG_ARM7TDMI
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.arm.default b/extra/Configs/Config.arm.default
+deleted file mode 100644
+index 0858dd557..000000000
+--- a/extra/Configs/Config.arm.default
++++ /dev/null
+@@ -1,63 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-CONFIG_GENERIC_ARM=y
+-# CONFIG_ARM7TDMI is not set
+-# CONFIG_STRONGARM is not set
+-# CONFIG_XSCALE is not set
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-LDSO_LDD_SUPPORT=y
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-# UCLIBC_HAS_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="$(DEVEL_PREFIX)/lib"
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+diff --git a/extra/Configs/Config.cris b/extra/Configs/Config.cris
+index 2a2b0939a..94d703ae1 100644
+--- a/extra/Configs/Config.cris
++++ b/extra/Configs/Config.cris
+@@ -3,14 +3,13 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
+-
+ config HAVE_ELF
+ 	bool
+ 	default y
+ 
++config TARGET_ARCH
++	default "cris"
++
+ config ARCH_CFLAGS
+ 	string
+ 
+@@ -32,14 +31,9 @@ choice
+ 		- CRIS  Generic support for Axis' CRIS architecture.
+ 
+ config CONFIG_CRIS
++	select UCLIBC_HAS_MMU
++	select ARCH_HAS_NO_FPU
+ 	bool "CRIS"
+ 
+ endchoice
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.cris.default b/extra/Configs/Config.cris.default
+deleted file mode 100644
+index 21e4645e4..000000000
+--- a/extra/Configs/Config.cris.default
++++ /dev/null
+@@ -1,112 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-CONFIG_CRIS=y
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="$(AXIS_KERNEL_DIR)"
+-C_SYMBOL_PREFIX=""
+-HAVE_DOT_CONFIG=y
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-# LDSO_LDD_SUPPORT is not set
+-UCLIBC_CTOR_DTOR=y
+-# UCLIBC_PROFILING is not set
+-UCLIBC_HAS_THREADS=y
+-# PTHREADS_DEBUG_SUPPORT is not set
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-# MALLOC_GLIBC_COMPAT is not set
+-# UCLIBC_DYNAMIC_ATEXIT is not set
+-HAS_SHADOW=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-# UCLIBC_HAS_TM_EXTENSIONS is not set
+-UCLIBC_HAS_TZ_CACHING=y
+-UCLIBC_HAS_TZ_FILE=y
+-UCLIBC_HAS_TZ_FILE_READ_MANY=y
+-UCLIBC_TZ_FILE_PATH="/etc/TZ"
+-
+-#
+-# Networking Support
+-#
+-UCLIBC_HAS_IPV6=y
+-UCLIBC_HAS_RPC=y
+-# UCLIBC_HAS_FULL_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-UCLIBC_HAS_CTYPE_TABLES=y
+-UCLIBC_HAS_CTYPE_SIGNED=y
+-# UCLIBC_HAS_CTYPE_UNSAFE is not set
+-UCLIBC_HAS_CTYPE_CHECKED=y
+-# UCLIBC_HAS_CTYPE_ENFORCED is not set
+-# UCLIBC_HAS_WCHAR is not set
+-# UCLIBC_HAS_LOCALE is not set
+-# UCLIBC_HAS_HEXADECIMAL_FLOATS is not set
+-# UCLIBC_HAS_GLIBC_CUSTOM_PRINTF is not set
+-# USE_OLD_VFPRINTF is not set
+-UCLIBC_PRINTF_SCANF_POSITIONAL_ARGS=9
+-# UCLIBC_HAS_SCANF_GLIBC_A_FLAG is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_NONE is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_256 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_512 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_1024 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_2048 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_4096 is not set
+-UCLIBC_HAS_STDIO_BUFSIZ_8192=y
+-UCLIBC_HAS_STDIO_BUILTIN_BUFFER_NONE=y
+-# UCLIBC_HAS_STDIO_BUILTIN_BUFFER_4 is not set
+-# UCLIBC_HAS_STDIO_BUILTIN_BUFFER_8 is not set
+-UCLIBC_HAS_STDIO_GETC_MACRO=y
+-UCLIBC_HAS_STDIO_PUTC_MACRO=y
+-UCLIBC_HAS_STDIO_AUTO_RW_TRANSITION=y
+-# UCLIBC_HAS_FOPEN_LARGEFILE_MODE is not set
+-# UCLIBC_HAS_FOPEN_EXCLUSIVE_MODE is not set
+-# UCLIBC_HAS_GLIBC_CUSTOM_STREAMS is not set
+-UCLIBC_HAS_PRINTF_M_SPEC=y
+-UCLIBC_HAS_ERRNO_MESSAGES=y
+-UCLIBC_HAS_SYS_ERRLIST=y
+-UCLIBC_HAS_SIGNUM_MESSAGES=y
+-UCLIBC_HAS_SYS_SIGLIST=y
+-UCLIBC_HAS_GNU_GETOPT=y
+-
+-#
+-# Big and Tall
+-#
+-UCLIBC_HAS_REGEX=y
+-# UCLIBC_HAS_WORDEXP is not set
+-# UCLIBC_HAS_FTW is not set
+-UCLIBC_HAS_GLOB=y
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="/lib"
+-DEVEL_PREFIX="$(AXIS_TOP_DIR)/target/cris-axis-linux-gnuuclibc"
+-SYSTEM_DEVEL_PREFIX="$(TOPDIR)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/include"
+-
+-#
+-# uClibc development/debugging options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+-# UCLIBC_MJN3_ONLY is not set
+diff --git a/extra/Configs/Config.e1 b/extra/Configs/Config.e1
+index ddb0b50b7..06b5a9206 100644
+--- a/extra/Configs/Config.e1
++++ b/extra/Configs/Config.e1
+@@ -4,46 +4,27 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
++config HAVE_ELF
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
++	select ARCH_HAS_C_SYMBOL_PREFIX
++	bool
++	default n
+ 
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "e1"
+ 
+ config ARCH_E1 
+ 	bool
+ 	default y
+ 
+-config HAVE_ELF
+-	bool
+-	default n
+-
+ config ARCH_CFLAGS
+ 	string
+ 	default "-I$(KERNEL_SOURCE)/include -mgnu-param" 
+ 
+-#	--bitwise-or
+-
+ config ARCH_LDFLAGS
+ 	string
+ 
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-config HAVE_ELF
+-	bool
+-	default n
+-
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y
+-
+-config ARCH_HAS_C_SYMBOL_PREFIX
+-        bool
+-        default y
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.e1.default b/extra/Configs/Config.e1.default
+deleted file mode 100644
+index 44621262e..000000000
+--- a/extra/Configs/Config.e1.default
++++ /dev/null
+@@ -1,64 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-# HAVE_ELF is not set
+-ARCH_CFLAGS="-I$(KERNEL_SOURCE)/include -mgnu-param"
+-ARCH_HAS_NO_MMU=y
+-ARCH_HAS_C_SYMBOL_PREFIX=y
+-UCLIBC_HAS_FLOATS=y
+-# HAS_FPU is not set
+-UCLIBC_HAS_SOFT_FLOAT=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-UCLIBC_UCLINUX_BROKEN_MUNMAP=y
+-EXCLUDE_BRK=y
+-C_SYMBOL_PREFIX="_"
+-HAVE_DOT_CONFIG=y
+-
+-#
+-# General Library Settings
+-#
+-# DOPIC is not set
+-# UCLIBC_CTOR_DTOR is not set
+-# UCLIBC_PROFILING is not set
+-# UCLIBC_HAS_THREADS is not set
+-# UCLIBC_HAS_LFS is not set
+-MALLOC=y
+-# MALLOC_930716 is not set
+-UCLIBC_DYNAMIC_ATEXIT=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-# ASSUME_DEVPTS is not set
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-# UCLIBC_HAS_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-UCLIBC_HAS_WCHAR=y
+-# UCLIBC_HAS_LOCALE is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-DODEBUG=y
+-# DOASSERTS is not set
+-# UCLIBC_MALLOC_DEBUGGING is not set
+diff --git a/extra/Configs/Config.h8300 b/extra/Configs/Config.h8300
+index 9bce0f063..6e869c0a7 100644
+--- a/extra/Configs/Config.h8300
++++ b/extra/Configs/Config.h8300
+@@ -3,9 +3,15 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
++config HAVE_ELF
++	bool
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
++	select ARCH_HAS_C_SYMBOL_PREFIX
++	default y
+ 
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "h8300"
+ 
+ choice
+ 	prompt "Target Processor"
+@@ -21,10 +27,6 @@ config CONFIG_H8S
+ 
+ endchoice
+ 
+-config HAVE_ELF
+-	bool
+-	default y
+-
+ config ARCH_CFLAGS
+ 	string
+ 
+@@ -34,18 +36,3 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y
+-
+-config ARCH_HAS_C_SYMBOL_PREFIX
+-	bool
+-	default y
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.h8300.default b/extra/Configs/Config.h8300.default
+deleted file mode 100644
+index bb1787809..000000000
+--- a/extra/Configs/Config.h8300.default
++++ /dev/null
+@@ -1,64 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-# CONFIG_H8300H is not set
+-CONFIG_H8S=y
+-HAVE_ELF=y
+-ARCH_HAS_NO_MMU=y
+-ARCH_HAS_C_SYMBOL_PREFIX=y
+-UCLIBC_HAS_FLOATS=y
+-# HAS_FPU is not set
+-UCLIBC_HAS_SOFT_FLOAT=y
+-DO_C99_MATH=y
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="$(ROOTDIR)/$(LINUXDIR)/."
+-UCLIBC_UCLINUX_BROKEN_MUNMAP=y
+-EXCLUDE_BRK=y
+-C_SYMBOL_PREFIX="_"
+-HAVE_DOT_CONFIG=y
+-
+-#
+-# General Library Settings
+-#
+-# DOPIC is not set
+-UCLIBC_CTOR_DTOR=y
+-# UCLIBC_HAS_THREADS is not set
+-UCLIBC_HAS_LFS=y
+-MALLOC=y
+-# MALLOC_930716 is not set
+-UCLIBC_DYNAMIC_ATEXIT=y
+-# HAS_SHADOW is not set
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-UCLIBC_HAS_RPC=y
+-UCLIBC_HAS_FULL_RPC=y
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# UCLIBC_MALLOC_DEBUGGING is not set
+diff --git a/extra/Configs/Config.i386 b/extra/Configs/Config.i386
+index d208fa95b..79e433a0f 100644
+--- a/extra/Configs/Config.i386
++++ b/extra/Configs/Config.i386
+@@ -3,14 +3,17 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
+-
+ config HAVE_ELF
+ 	bool
++	select HAS_FPU
++	select ARCH_LITTLE_ENDIAN
++	select UCLIBC_HAS_MMU
+ 	default y
+ 
++config TARGET_ARCH
++	string
++	default "i386"
++
+ config ARCH_CFLAGS
+ 	string
+ 
+@@ -21,7 +24,7 @@ config LIBGCC_CFLAGS
+ 	string
+ 
+ choice
+-	prompt "Target Processor Type"
++	prompt "Target x86 Processor Family"
+ 	default CONFIG_GENERIC_386
+ 	help
+ 	  This is the processor type of your CPU. This information is used for
+@@ -58,6 +61,7 @@ config CONFIG_GENERIC_386
+ 	bool "Generic 386"
+ 
+ config CONFIG_386
++	select ARCH_HAS_NO_FPU
+ 	bool "386"
+ 
+ config CONFIG_486
+@@ -98,9 +102,3 @@ config CONFIG_CYRIXIII
+ 
+ endchoice
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+diff --git a/extra/Configs/Config.i386.default b/extra/Configs/Config.i386.default
+deleted file mode 100644
+index 87adee429..000000000
+--- a/extra/Configs/Config.i386.default
++++ /dev/null
+@@ -1,73 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-CONFIG_GENERIC_386=y
+-# CONFIG_386 is not set
+-# CONFIG_486 is not set
+-# CONFIG_586 is not set
+-# CONFIG_586MMX is not set
+-# CONFIG_686 is not set
+-# CONFIG_PENTIUMIII is not set
+-# CONFIG_PENTIUM4 is not set
+-# CONFIG_K6 is not set
+-# CONFIG_K7 is not set
+-# CONFIG_CRUSOE is not set
+-# CONFIG_WINCHIPC6 is not set
+-# CONFIG_WINCHIP2 is not set
+-# CONFIG_CYRIXIII is not set
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-LDSO_LDD_SUPPORT=y
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-# UCLIBC_HAS_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="$(DEVEL_PREFIX)/lib"
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+diff --git a/extra/Configs/Config.i960 b/extra/Configs/Config.i960
+index cf3938ad8..3c30a1c85 100644
+--- a/extra/Configs/Config.i960
++++ b/extra/Configs/Config.i960
+@@ -3,12 +3,13 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "i960"
+ 
+ config HAVE_ELF
+ 	bool
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
+ 	default n
+ 
+ config ARCH_CFLAGS
+@@ -21,18 +22,7 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 	
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y
+-
+ config ARCH_HAS_C_SYMBOL_PREFIX
+ 	bool
+ 	default y
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 82e633839..0dd73787e 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -2,13 +2,130 @@
+ # For a description of the syntax of this configuration file,
+ # see extra/config/Kconfig-language.txt
+ #
+-config HAVE_DOT_CONFIG
+-	bool
+-	default y
++mainmenu "uClibc C Library Configuration"
++
++
++choice
++	prompt "Target Architecture"
++	default TARGET_I386
++	help
++	  Stuff
++
++config TARGET_ALPHA
++	bool "alpha"
++
++config TARGET_ARM
++	bool "arm"
++
++config TARGET_CRIS
++	bool "cris"
++
++config TARGET_E1
++	bool "e1"
++
++config TARGET_H8300
++	bool "h8300"
++
++config TARGET_I386
++	bool "i386"
++
++config TARGET_I960
++	bool "i960"
++
++config TARGET_M68K
++	bool "m68k"
++
++config TARGET_MICROBLAZE
++	bool "microblaze"
++
++config TARGET_MIPS
++	bool "mips"
++
++config TARGET_POWERPC
++	bool "powerpc"
++
++config TARGET_SH
++	bool "SuperH"
++
++config TARGET_SPARC
++	bool "sparc"
++
++config TARGET_V850
++	bool "v850"
++
++endchoice
++
++
++menu "Target Architecture Features and Options"
++
++if TARGET_ALPHA
++source "extra/Configs/Config.alpha"
++endif
+ 
++if TARGET_ARM
++source "extra/Configs/Config.arm"
++endif
++
++if TARGET_CRIS
++source "extra/Configs/Config.cris"
++endif
++
++if TARGET_E1
++source "extra/Configs/Config.e1"
++endif
++
++if TARGET_H8300
++source "extra/Configs/Config.h8300"
++endif
++
++if TARGET_I386
++source "extra/Configs/Config.i386"
++endif
++
++if TARGET_I960
++source "extra/Configs/Config.i960"
++endif
++
++if TARGET_M68K
++source "extra/Configs/Config.m68k"
++endif
++
++if TARGET_MICROBLAZE
++source "extra/Configs/Config.microblaze"
++endif
++
++if TARGET_MIPS
++source "extra/Configs/Config.mips"
++endif
++
++if TARGET_POWERPC
++source "extra/Configs/Config.powerpc"
++endif
++
++if TARGET_SH
++source "extra/Configs/Config.sh"
++endif
++
++if TARGET_SPARC
++source "extra/Configs/Config.sparc"
++endif
++
++if TARGET_V850
++source "extra/Configs/Config.v850"
++endif
++
++
++
++source "extra/Configs/Config.in.arch"
++
++endmenu
+ 
+ menu "General Library Settings"
+ 
++config HAVE_NO_PIC
++	bool
++	default n
++
+ config DOPIC
+ 	bool "Generate Position Independent Code (PIC)"
+ 	default y
+@@ -818,7 +935,7 @@ endmenu
+ 
+ menu "Library Installation Options"
+ 
+-config SHARED_LIB_LOADER_PATH
++config SHARED_LIB_LOADER_PREFIX
+ 	string "Shared library loader path"
+ 	depends on BUILD_UCLIBC_LDSO
+ 	default "$(DEVEL_PREFIX)/lib"
+@@ -827,6 +944,9 @@ config SHARED_LIB_LOADER_PATH
+ 	  shared library will be invoked.  This value will be compiled into
+ 	  every binary compiled with uClibc.
+ 
++	  For a typical target system this should be set to "/lib", such that
++	  'make install' will install /lib/ld-uClibc.so.0.
++
+ 	  BIG FAT WARNING:
+ 	  If you do not have a shared library loader with the correct name
+ 	  sitting in the directory this points to, your binaries will not 
+@@ -848,20 +968,25 @@ config SYSTEM_LDSO
+ 
+ config RUNTIME_PREFIX
+ 	string "uClibc runtime library directory"
+-	default "/usr/$(TARGET_ARCH)-linux-uclibc"
++	default "/usr/$(TARGET_ARCH)-linux-uclibc/"
+ 	help
+ 	  RUNTIME_PREFIX is the directory into which the uClibc runtime
+ 	  libraries will be installed.   The result will look something
+ 	  like the following:
+ 	      $(RUNTIME_PREFIX)/
+ 	          lib/            <contains all runtime libraries>
++	          bin/ldd         <the ldd utility program>
++	          sbin/ldconfig   <the ldconfig utility program>
+ 	  This value is used by the 'make install' Makefile target.  Since this
+-	  directory is compiled into the uclibc cross compiler wrapper, you
+-	  have to recompile uClibc if you change this value...
++	  directory is compiled into the shared library loader, you will need to
++	  recompile uClibc if you change this value...
++
++	  For a typical target system this should be set to "/", such that
++	  'make install' will install /lib/libuClibc-<VERSION>.so
+ 
+ config DEVEL_PREFIX
+ 	string "uClibc development environment directory"
+-	default "/usr/$(TARGET_ARCH)-linux-uclibc"
++	default "/usr/$(TARGET_ARCH)-linux-uclibc/usr/"
+ 	help
+ 	  DEVEL_PREFIX is the directory into which the uClibc development
+ 	  environment will be installed.   The result will look something
+@@ -869,29 +994,11 @@ config DEVEL_PREFIX
+ 	      $(DEVEL_PREFIX)/
+ 	          lib/            <contains static libs>
+ 		  include/        <Where all the header files go>
+-	  This value is used by the 'make install' Makefile target.  Since this
+-	  directory is compiled into the uclibc cross compiler wrapper, you
+-	  have to recompile uClibc if you change this value...
+-
+-config SYSTEM_DEVEL_PREFIX
+-	string "uClibc development environment system directory"
+-	default "$(DEVEL_PREFIX)"
+-	help
+-	  SYSTEM_DEVEL_PREFIX is the directory prefix used when installing
+-	  bin/arch-uclibc-gcc, bin/arch-uclibc-ld, etc.   This is only used by
+-	  the 'make install' target, and is not compiled into anything.  This
+-	  defaults to $(DEVEL_PREFIX), but makers of .rpms and .debs may want
+-	  to set this to "/usr" instead.
+-
+-config DEVEL_TOOL_PREFIX
+-	string "uClibc development environment tool directory"
+-	default "$(DEVEL_PREFIX)/usr"
+-	help
+-	  DEVEL_TOOL_PREFIX is the directory prefix used when installing
+-	  bin/gcc, bin/ld, etc.   This is only used by the 'make install'
+-	  target, and is not compiled into anything.  This defaults to
+-	  $(DEVEL_PREFIX)/usr, but makers of .rpms and .debs may want to
+-	  set this to something else.
++	  This value is used by the 'make install' Makefile target when
++	  installing a uClibc development environment.
++
++	  For a typical target system this should be set to "/usr", such that
++	  'make install' will install /usr/include/<header files>.
+ 
+ endmenu
+ 
+diff --git a/extra/Configs/Config.in.arch b/extra/Configs/Config.in.arch
+index 21953e107..6b2011dee 100644
+--- a/extra/Configs/Config.in.arch
++++ b/extra/Configs/Config.in.arch
+@@ -3,6 +3,25 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
++choice
++	prompt "Target Processor Endianness"
++	default ARCH_LITTLE_ENDIAN
++	help
++	  This is the endianness you wish to build use.  Choose either Big
++	  Endian, or Little Endian.
++
++config ARCH_LITTLE_ENDIAN
++	bool "Little Endian"
++
++config ARCH_BIG_ENDIAN
++	bool "Big Endian"
++
++endchoice
++
++config ARCH_HAS_NO_MMU
++	bool
++	default n
++
+ config UCLIBC_HAS_MMU
+ 	bool "Target CPU has a memory management unit (MMU)"
+ 	default y
+@@ -27,6 +46,10 @@ config UCLIBC_HAS_FLOATS
+ 	  Answering N to this option can reduce the size of uClibc.  Most people
+ 	  will answer Y.
+ 
++config ARCH_HAS_NO_FPU
++	bool
++	default n
++
+ config HAS_FPU
+ 	bool "Target CPU has a floating point unit (FPU)"
+ 	depends on UCLIBC_HAS_FLOATS && !ARCH_HAS_NO_FPU
+@@ -93,3 +116,7 @@ config C_SYMBOL_PREFIX
+ 	default "_" if ARCH_HAS_C_SYMBOL_PREFIX
+ 	default "" if !ARCH_HAS_C_SYMBOL_PREFIX
+ 
++config HAVE_DOT_CONFIG
++	bool
++	default y
++
+diff --git a/extra/Configs/Config.m68k b/extra/Configs/Config.m68k
+index 77ba79408..23e5a19d8 100644
+--- a/extra/Configs/Config.m68k
++++ b/extra/Configs/Config.m68k
+@@ -3,12 +3,13 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "m68k"
+ 
+ config HAVE_ELF
+ 	bool
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
+ 	default y
+ 
+ config ARCH_CFLAGS
+@@ -25,14 +26,3 @@ config HAVE_ELF
+ 	bool
+ 	default y
+ 
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.m68k.default b/extra/Configs/Config.m68k.default
+deleted file mode 100644
+index beb027976..000000000
+--- a/extra/Configs/Config.m68k.default
++++ /dev/null
+@@ -1,61 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-ARCH_HAS_NO_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-# HAS_FPU is not set
+-UCLIBC_HAS_SOFT_FLOAT=y
+-DO_C99_MATH=y
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="$(ROOTDIR)/$(LINUXDIR)/."
+-UCLIBC_UCLINUX_BROKEN_MUNMAP=y
+-EXCLUDE_BRK=y
+-C_SYMBOL_PREFIX=""
+-HAVE_DOT_CONFIG=y
+-
+-#
+-# General Library Settings
+-#
+-# DOPIC is not set
+-UCLIBC_CTOR_DTOR=y
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-MALLOC=y
+-# MALLOC_930716 is not set
+-UCLIBC_DYNAMIC_ATEXIT=y
+-# HAS_SHADOW is not set
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-UCLIBC_HAS_RPC=y
+-UCLIBC_HAS_FULL_RPC=y
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# UCLIBC_MALLOC_DEBUGGING is not set
+diff --git a/extra/Configs/Config.microblaze b/extra/Configs/Config.microblaze
+index abcd9300e..957d39698 100644
+--- a/extra/Configs/Config.microblaze
++++ b/extra/Configs/Config.microblaze
+@@ -3,9 +3,16 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
++config TARGET_ARCH
++	default "microblaze"
+ 
+-menu "Target Architecture Features and Options"
++config HAVE_ELF
++	bool
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_NO_FPU
++	select ARCH_HAS_C_SYMBOL_PREFIX
++	select HAVE_NO_PIC
++	default y
+ 
+ config ARCH_CFLAGS
+ 	string
+@@ -16,34 +23,7 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-config HAVE_ELF
+-	bool
+-	default y
+-
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y
+-
+-config ARCH_HAS_NO_FPU
+-	bool
+-	default y
+-
+-config ARCH_HAS_C_SYMBOL_PREFIX
+-	bool
+-	default y
+-
+-config HAVE_NO_PIC
+-	bool
+-	default y
+-
+ config CROSS
+         string
+ 	default "mb-"
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.microblaze.default b/extra/Configs/Config.microblaze.default
+deleted file mode 100644
+index 4b8925375..000000000
+--- a/extra/Configs/Config.microblaze.default
++++ /dev/null
+@@ -1,59 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-ARCH_HAS_NO_MMU=y
+-ARCH_HAS_NO_FPU=y
+-ARCH_HAS_C_SYMBOL_PREFIX=y
+-HAVE_NO_PIC=y
+-CROSS="mb-"
+-UCLIBC_HAS_FLOATS=y
+-UCLIBC_HAS_SOFT_FLOAT=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/home/jwilliam/uClinux-dist/linux-2.4.x"
+-UCLIBC_UCLINUX_BROKEN_MUNMAP=y
+-EXCLUDE_BRK=y
+-C_SYMBOL_PREFIX="_"
+-
+-#
+-# General Library Settings
+-#
+-# UCLIBC_HAS_THREADS is not set
+-UCLIBC_HAS_LFS=y
+-MALLOC=y
+-# MALLOC_930716 is not set
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-# ASSUME_DEVPTS is not set
+-
+-#
+-# Networking Support
+-#
+-UCLIBC_HAS_IPV6=y
+-UCLIBC_HAS_RPC=y
+-UCLIBC_HAS_FULL_RPC=y
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-USE_OLD_VFPRINTF=y
+-
+-#
+-# Library Installation Options
+-#
+-DEVEL_PREFIX="/usr/local/tools/microblaze-elf-gcc"
+-SYSTEM_DEVEL_PREFIX="/usr/local"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)"
+-
+-#
+-# uClibc hacking options
+-#
+-DODEBUG=y
+-# DOASSERTS is not set
+diff --git a/extra/Configs/Config.mips b/extra/Configs/Config.mips
+index 390be1374..b61b1deea 100644
+--- a/extra/Configs/Config.mips
++++ b/extra/Configs/Config.mips
+@@ -3,9 +3,9 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "mips" if ARCH_BIG_ENDIAN
++	default "mipsel" if ARCH_LITTLE_ENDIAN
+ 
+ config HAVE_ELF
+ 	bool
+@@ -21,10 +21,3 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.mips.default b/extra/Configs/Config.mips.default
+deleted file mode 100644
+index 6d429e4a0..000000000
+--- a/extra/Configs/Config.mips.default
++++ /dev/null
+@@ -1,61 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-ARCH_CFLAGS="-mno-split-addresses"
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-DO_C99_MATH=y
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-# LDSO_LDD_SUPPORT is not set
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-UCLIBC_HAS_RPC=y
+-UCLIBC_HAS_FULL_RPC=y
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="/lib"
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-DODEBUG=y
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+diff --git a/extra/Configs/Config.mipsel b/extra/Configs/Config.mipsel
+deleted file mode 100644
+index 390be1374..000000000
+--- a/extra/Configs/Config.mipsel
++++ /dev/null
+@@ -1,30 +0,0 @@
+-#
+-# For a description of the syntax of this configuration file,
+-# see extra/config/Kconfig-language.txt
+-#
+-
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
+-
+-config HAVE_ELF
+-	bool
+-	default y
+-
+-config ARCH_CFLAGS
+-	string
+-	default "-mno-split-addresses"
+-
+-config ARCH_LDFLAGS
+-	string
+-
+-config LIBGCC_CFLAGS
+-	string
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.mipsel.default b/extra/Configs/Config.mipsel.default
+deleted file mode 100644
+index 6d429e4a0..000000000
+--- a/extra/Configs/Config.mipsel.default
++++ /dev/null
+@@ -1,61 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-ARCH_CFLAGS="-mno-split-addresses"
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-DO_C99_MATH=y
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-# LDSO_LDD_SUPPORT is not set
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-UCLIBC_HAS_RPC=y
+-UCLIBC_HAS_FULL_RPC=y
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="/lib"
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-DODEBUG=y
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+diff --git a/extra/Configs/Config.powerpc b/extra/Configs/Config.powerpc
+index b8c9f2505..79e3db730 100644
+--- a/extra/Configs/Config.powerpc
++++ b/extra/Configs/Config.powerpc
+@@ -3,12 +3,12 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "powerpc"
+ 
+ config HAVE_ELF
+ 	bool
++	select UCLIBC_HAS_MMU
+ 	default y
+ 
+ config ARCH_CFLAGS
+@@ -20,10 +20,3 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.powerpc.default b/extra/Configs/Config.powerpc.default
+deleted file mode 100644
+index 5ee4982b5..000000000
+--- a/extra/Configs/Config.powerpc.default
++++ /dev/null
+@@ -1,59 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-LDSO_LDD_SUPPORT=y
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-# UCLIBC_HAS_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="$(DEVEL_PREFIX)/lib"
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+diff --git a/extra/Configs/Config.sh b/extra/Configs/Config.sh
+index bf4326c52..5a9eaf525 100644
+--- a/extra/Configs/Config.sh
++++ b/extra/Configs/Config.sh
+@@ -3,9 +3,11 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "sh2" if CONFIG_SH2
++	default "sh3" if CONFIG_SH3
++	default "sh4" if CONFIG_SH4
++	default "sh64" if CONFIG_SH5
+ 
+ config HAVE_ELF
+ 	bool
+@@ -41,46 +43,28 @@ choice
+ 	  - "SH2" Hitachi SH2
+ 	  - "SH3" Hitachi SH3
+ 	  - "SH4" Hitachi SH4
++	  - "SH5" SH-5 101, 103
+ 
+ config CONFIG_SH2
++	select ARCH_HAS_NO_FPU
++	select ARCH_HAS_NO_MMU
+ 	bool "SH2"
+ 
+ config CONFIG_SH3
++	select HAS_FPU
++	select UCLIBC_HAS_MMU
+ 	bool "SH3"
+ 
+ config CONFIG_SH4
++	select HAS_FPU
++	select UCLIBC_HAS_MMU
+ 	bool "SH4"
+ 
+-endchoice
+-
+-choice
+-	prompt "Target Processor Endianness"
+-	default ARCH_LITTLE_ENDIAN
+-	help
+-	  This is the endianness you wish to build use.  Choose either Big
+-	  Endian, or Little Endian.
+-
+-config ARCH_LITTLE_ENDIAN
+-	bool "Little Endian"
+-
+-config ARCH_BIG_ENDIAN
+-	bool "Big Endian"
++config CONFIG_SH5
++	select HAS_FPU
++	select UCLIBC_HAS_MMU
++	bool "SH5"
+ 
+ endchoice
+ 
+ 
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y if CONFIG_SH2
+-
+-config ARCH_HAS_NO_FPU
+-       bool
+-       default y if CONFIG_SH2 || CONFIG_SH3
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.sh.default b/extra/Configs/Config.sh.default
+deleted file mode 100644
+index fc9ec12ca..000000000
+--- a/extra/Configs/Config.sh.default
++++ /dev/null
+@@ -1,65 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-HAVE_DOT_HIDDEN=y
+-# CONFIG_SH2 is not set
+-# CONFIG_SH3 is not set
+-CONFIG_SH4=y
+-ARCH_LITTLE_ENDIAN=y
+-# ARCH_BIG_ENDIAN is not set
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-
+-#
+-# General Library Settings
+-#
+-DOPIC=y
+-HAVE_SHARED=y
+-BUILD_UCLIBC_LDSO=y
+-LDSO_LDD_SUPPORT=y
+-UCLIBC_HAS_THREADS=y
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-# UCLIBC_HAS_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-SHARED_LIB_LOADER_PATH="$(DEVEL_PREFIX)/lib"
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc hacking options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# SUPPORT_LD_DEBUG is not set
+-# SUPPORT_LD_DEBUG_EARLY is not set
+diff --git a/extra/Configs/Config.sh64 b/extra/Configs/Config.sh64
+deleted file mode 100644
+index ab77aba66..000000000
+--- a/extra/Configs/Config.sh64
++++ /dev/null
+@@ -1,61 +0,0 @@
+-#
+-# For a description of the syntax of this configuration file,
+-# see extra/config/Kconfig-language.txt
+-#
+-
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
+-
+-config HAVE_ELF
+-	bool
+-	default y
+-
+-config ARCH_CFLAGS
+-	string
+-
+-config ARCH_LDFLAGS
+-	string
+-
+-config LIBGCC_CFLAGS
+-	string
+-
+-choice
+-	prompt "Target Processor Type"
+-	default CONFIG_SH5
+-	help
+-	  This is the processor type of your CPU. This information is used for
+-	  optimizing purposes, as well as to determine if your CPU has an MMU,
+-	  an FPU, etc.  If you pick the wrong CPU type, there is no guarantee
+-	  that uClibc will work at all....
+-
+-	  Here are the available choices:
+-	  - "SH5" SH-5 101, 103
+-
+-config CONFIG_SH5
+-	bool "SH5"
+-
+-endchoice
+-
+-choice
+-	prompt "Target Processor Endianness"
+-	default ARCH_LITTLE_ENDIAN
+-	help
+-	  This is the endianness you wish to build use.  Choose either Big
+-	  Endian, or Little Endian.
+-
+-config ARCH_LITTLE_ENDIAN
+-	bool "Little Endian"
+-
+-config ARCH_BIG_ENDIAN
+-	bool "Big Endian"
+-
+-endchoice
+-
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.sh64.default b/extra/Configs/Config.sh64.default
+deleted file mode 100644
+index 1e90f2182..000000000
+--- a/extra/Configs/Config.sh64.default
++++ /dev/null
+@@ -1,95 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-CONFIG_SH5=y
+-ARCH_LITTLE_ENDIAN=y
+-# ARCH_BIG_ENDIAN is not set
+-UCLIBC_HAS_MMU=y
+-UCLIBC_HAS_FLOATS=y
+-HAS_FPU=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-C_SYMBOL_PREFIX=""
+-HAVE_DOT_CONFIG=y
+-
+-#
+-# General Library Settings
+-#
+-# DOPIC is not set
+-UCLIBC_CTOR_DTOR=y
+-UCLIBC_PROFILING=y
+-# UCLIBC_HAS_THREADS is not set
+-UCLIBC_HAS_LFS=y
+-# MALLOC is not set
+-MALLOC_930716=y
+-UCLIBC_DYNAMIC_ATEXIT=y
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-ASSUME_DEVPTS=y
+-UCLIBC_HAS_TM_EXTENSIONS=y
+-UCLIBC_HAS_TZ_CACHING=y
+-UCLIBC_HAS_TZ_FILE=y
+-UCLIBC_HAS_TZ_FILE_READ_MANY=y
+-UCLIBC_TZ_FILE_PATH="/etc/TZ"
+-
+-#
+-# Networking Support
+-#
+-# UCLIBC_HAS_IPV6 is not set
+-# UCLIBC_HAS_RPC is not set
+-
+-#
+-# String and Stdio Support
+-#
+-UCLIBC_HAS_CTYPE_SIGNED=y
+-UCLIBC_HAS_CTYPE_UNSAFE=y
+-# UCLIBC_HAS_CTYPE_CHECKED is not set
+-# UCLIBC_HAS_CTYPE_ENFORCED is not set
+-# UCLIBC_HAS_WCHAR is not set
+-# UCLIBC_HAS_HEXADECIMAL_FLOATS is not set
+-# UCLIBC_HAS_GLIBC_CUSTOM_PRINTF is not set
+-# USE_OLD_VFPRINTF is not set
+-UCLIBC_PRINTF_SCANF_POSITIONAL_ARGS=9
+-# UCLIBC_HAS_SCANF_GLIBC_A_FLAG is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_NONE is not set
+-UCLIBC_HAS_STDIO_BUFSIZ_256=y
+-# UCLIBC_HAS_STDIO_BUFSIZ_512 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_1024 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_2048 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_4096 is not set
+-# UCLIBC_HAS_STDIO_BUFSIZ_8192 is not set
+-UCLIBC_HAS_STDIO_BUILTIN_BUFFER_NONE=y
+-# UCLIBC_HAS_STDIO_BUILTIN_BUFFER_4 is not set
+-# UCLIBC_HAS_STDIO_BUILTIN_BUFFER_8 is not set
+-UCLIBC_HAS_STDIO_GETC_MACRO=y
+-UCLIBC_HAS_STDIO_PUTC_MACRO=y
+-UCLIBC_HAS_STDIO_AUTO_RW_TRANSITION=y
+-# UCLIBC_HAS_FOPEN_LARGEFILE_MODE is not set
+-# UCLIBC_HAS_FOPEN_EXCLUSIVE_MODE is not set
+-# UCLIBC_HAS_GLIBC_CUSTOM_STREAMS is not set
+-# UCLIBC_HAS_PRINTF_M_SPEC is not set
+-UCLIBC_HAS_ERRNO_MESSAGES=y
+-# UCLIBC_HAS_SYS_ERRLIST is not set
+-UCLIBC_HAS_SIGNUM_MESSAGES=y
+-# UCLIBC_HAS_SYS_SIGLIST is not set
+-
+-#
+-# Library Installation Options
+-#
+-DEVEL_PREFIX="/usr/$(TARGET_ARCH)-linux-uclibc"
+-SYSTEM_DEVEL_PREFIX="$(DEVEL_PREFIX)"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)/usr"
+-
+-#
+-# uClibc development/debugging options
+-#
+-# DODEBUG is not set
+-# DOASSERTS is not set
+-# UCLIBC_MJN3_ONLY is not set
+diff --git a/extra/Configs/Config.sparc b/extra/Configs/Config.sparc
+index b8c9f2505..42748691a 100644
+--- a/extra/Configs/Config.sparc
++++ b/extra/Configs/Config.sparc
+@@ -3,9 +3,8 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
+-
+-menu "Target Architecture Features and Options"
++config TARGET_ARCH
++	default "sparc"
+ 
+ config HAVE_ELF
+ 	bool
+@@ -20,10 +19,3 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.v850 b/extra/Configs/Config.v850
+index 8a54a8fae..11f48d088 100644
+--- a/extra/Configs/Config.v850
++++ b/extra/Configs/Config.v850
+@@ -3,9 +3,16 @@
+ # see extra/config/Kconfig-language.txt
+ #
+ 
+-mainmenu "uClibc C Library Configuration"
++config TARGET_ARCH
++	default "v850"
+ 
+-menu "Target Architecture Features and Options"
++config HAVE_ELF
++	bool
++	select ARCH_HAS_NO_FPU
++	select ARCH_HAS_NO_MMU
++	select ARCH_HAS_C_SYMBOL_PREFIX
++	select HAVE_NO_PIC
++	default y
+ 
+ config ARCH_CFLAGS
+ 	string
+@@ -16,34 +23,7 @@ config ARCH_LDFLAGS
+ config LIBGCC_CFLAGS
+ 	string
+ 
+-config HAVE_ELF
+-	bool
+-	default y
+-
+-config ARCH_HAS_NO_MMU
+-	bool
+-	default y
+-
+-config ARCH_HAS_NO_FPU
+-	bool
+-	default y
+-
+-config ARCH_HAS_C_SYMBOL_PREFIX
+-	bool
+-	default y
+-
+-config HAVE_NO_PIC
+-	bool
+-	default y
+-
+ config CROSS
+         string
+ 	default "v850e-elf-"
+ 
+-source "extra/Configs/Config.in.arch"
+-
+-endmenu
+-
+-source "extra/Configs/Config.in"
+-
+-
+diff --git a/extra/Configs/Config.v850.default b/extra/Configs/Config.v850.default
+deleted file mode 100644
+index 2683635a6..000000000
+--- a/extra/Configs/Config.v850.default
++++ /dev/null
+@@ -1,59 +0,0 @@
+-#
+-# Automatically generated make config: don't edit
+-#
+-
+-#
+-# Target Architecture Features and Options
+-#
+-HAVE_ELF=y
+-ARCH_HAS_NO_MMU=y
+-ARCH_HAS_NO_FPU=y
+-ARCH_HAS_C_SYMBOL_PREFIX=y
+-HAVE_NO_PIC=y
+-CROSS="v850e-elf-"
+-UCLIBC_HAS_FLOATS=y
+-UCLIBC_HAS_SOFT_FLOAT=y
+-# DO_C99_MATH is not set
+-WARNINGS="-Wall"
+-KERNEL_SOURCE="/usr/src/linux"
+-UCLIBC_UCLINUX_BROKEN_MUNMAP=y
+-EXCLUDE_BRK=y
+-C_SYMBOL_PREFIX="_"
+-
+-#
+-# General Library Settings
+-#
+-# UCLIBC_HAS_THREADS is not set
+-UCLIBC_HAS_LFS=y
+-MALLOC=y
+-# MALLOC_930716 is not set
+-HAS_SHADOW=y
+-UCLIBC_HAS_REGEX=y
+-UNIX98PTY_ONLY=y
+-# ASSUME_DEVPTS is not set
+-
+-#
+-# Networking Support
+-#
+-UCLIBC_HAS_IPV6=y
+-UCLIBC_HAS_RPC=y
+-UCLIBC_HAS_FULL_RPC=y
+-
+-#
+-# String and Stdio Support
+-#
+-# UCLIBC_HAS_WCHAR is not set
+-# USE_OLD_VFPRINTF is not set
+-
+-#
+-# Library Installation Options
+-#
+-DEVEL_PREFIX="/usr/local/v850-uclibc"
+-SYSTEM_DEVEL_PREFIX="/usr/local"
+-DEVEL_TOOL_PREFIX="$(DEVEL_PREFIX)"
+-
+-#
+-# uClibc hacking options
+-#
+-DODEBUG=y
+-# DOASSERTS is not set
+diff --git a/extra/Makefile b/extra/Makefile
+index 899dda423..2371a8146 100644
+--- a/extra/Makefile
++++ b/extra/Makefile
+@@ -26,7 +26,7 @@ include $(TOPDIR)Rules.mak
+ LIBC=$(TOPDIR)libc.a
+ 
+ 
+-DIRS = gcc-uClibc
++DIRS = 
+ EXTRA_DIRS_TO_CLEAN = config
+ 
+ all: subdirs
+diff --git a/extra/config/Kconfig-language.txt b/extra/config/Kconfig-language.txt
+index a3037ffcf..371dc92a4 100644
+--- a/extra/config/Kconfig-language.txt
++++ b/extra/config/Kconfig-language.txt
+@@ -18,7 +18,7 @@ organized in a tree structure:
+ 	+- ...
+ 
+ Every entry has its own dependencies. These dependencies are used
+-to determine the visible of an entry. Any child entry is only
++to determine the visibility of an entry. Any child entry is only
+ visible if its parent entry is also visible.
+ 
+ Menu entries
+@@ -50,7 +50,7 @@ applicable everywhere (see syntax).
+ 
+ - type definition: "bool"/"tristate"/"string"/"hex"/"integer"
+   Every config option must have a type. There are only two basic types:
+-  tristate and string, the other types base on these two. The type
++  tristate and string, the other types are based on these two. The type
+   definition optionally accepts an input prompt, so these two examples
+   are equivalent:
+ 
+@@ -64,12 +64,12 @@ applicable everywhere (see syntax).
+   to the user. Optionally dependencies only for this prompt can be added
+   with "if".
+ 
+-- default value: "default" <symbol> ["if" <expr>]
++- default value: "default" <expr> ["if" <expr>]
+   A config option can have any number of default values. If multiple
+   default values are visible, only the first defined one is active.
+   Default values are not limited to the menu entry, where they are
+   defined, this means the default can be defined somewhere else or be
+-  overriden by an earlier definition.
++  overridden by an earlier definition.
+   The default value is only assigned to the config symbol if no other
+   value was set by the user (via the input prompt above). If an input
+   prompt is visible the default value is presented to the user and can
+@@ -81,7 +81,7 @@ applicable everywhere (see syntax).
+   This defines a dependency for this menu entry. If multiple
+   dependencies are defined they are connected with '&&'. Dependencies
+   are applied to all other options within this menu entry (which also
+-  accept "if" expression), so these two examples are equivalent:
++  accept an "if" expression), so these two examples are equivalent:
+ 
+ 	bool "foo" if BAR
+ 	default y if BAR
+@@ -90,10 +90,28 @@ applicable everywhere (see syntax).
+ 	bool "foo"
+ 	default y
+ 
+-- help text: "help"
++- reverse dependencies: "select" <symbol> ["if" <expr>]
++  While normal dependencies reduce the upper limit of a symbol (see
++  below), reverse dependencies can be used to force a lower limit of
++  another symbol. The value of the current menu symbol is used as the
++  minimal value <symbol> can be set to. If <symbol> is selected multiple
++  times, the limit is set to the largest selection.
++  Reverse dependencies can only be used with boolean or tristate
++  symbols.
++
++- numerical ranges: "range" <symbol> <symbol> ["if" <expr>]
++  This allows to limit the range of possible input values for integer
++  and hex symbols. The user can only input a value which is larger than
++  or equal to the first symbol and smaller than or equal to the second
++  symbol.
++
++- help text: "help" or "---help---"
+   This defines a help text. The end of the help text is determined by
+-  the level indentation, this means it ends at the first line which has
++  the indentation level, this means it ends at the first line which has
+   a smaller indentation than the first line of the help text.
++  "---help---" and "help" do not differ in behaviour, "---help---" is
++  used to help visually seperate configuration logic from help within
++  the file as an aid to developers.
+ 
+ 
+ Menu dependencies
+@@ -109,8 +127,8 @@ module state. Dependency expressions have the following syntax:
+            <symbol> '!=' <symbol>               (3)
+            '(' <expr> ')'                       (4)
+            '!' <expr>                           (5)
+-           <expr> '||' <expr>                   (6)
+-           <expr> '&&' <expr>                   (7)
++           <expr> '&&' <expr>                   (6)
++           <expr> '||' <expr>                   (7)
+ 
+ Expressions are listed in decreasing order of precedence. 
+ 
+@@ -123,14 +141,14 @@ Expressions are listed in decreasing order of precedence.
+     otherwise 'y'.
+ (4) Returns the value of the expression. Used to override precedence.
+ (5) Returns the result of (2-/expr/).
+-(6) Returns the result of min(/expr/, /expr/).
+-(7) Returns the result of max(/expr/, /expr/).
++(6) Returns the result of max(/expr/, /expr/).
++(7) Returns the result of min(/expr/, /expr/).
+ 
+ An expression can have a value of 'n', 'm' or 'y' (or 0, 1, 2
+ respectively for calculations). A menu entry becomes visible when it's
+ expression evaluates to 'm' or 'y'.
+ 
+-There are two type of symbols: constant and nonconstant symbols.
++There are two types of symbols: constant and nonconstant symbols.
+ Nonconstant symbols are the most common ones and are defined with the
+ 'config' statement. Nonconstant symbols consist entirely of alphanumeric
+ characters or underscores.
+@@ -142,7 +160,7 @@ Menu structure
+ --------------
+ 
+ The position of a menu entry in the tree is determined in two ways. First
+-it can be specified explicitely:
++it can be specified explicitly:
+ 
+ menu "Network device support"
+ 	depends NET
+@@ -159,8 +177,8 @@ dependency list of the config option NETDEVICES.
+ 
+ The other way to generate the menu structure is done by analyzing the
+ dependencies. If a menu entry somehow depends on the previous entry, it
+-can be made a submenu of it. First the the previous (parent) symbol must
+-be part of the dependency list and then one of these two condititions
++can be made a submenu of it. First, the previous (parent) symbol must
++be part of the dependency list and then one of these two conditions
+ must be true:
+ - the child entry must become invisible, if the parent is set to 'n'
+ - the child entry must only be visible, if the parent is visible
+@@ -177,7 +195,7 @@ comment "module support disabled"
+ 
+ MODVERSIONS directly depends on MODULES, this means it's only visible if
+ MODULES is different from 'n'. The comment on the other hand is always
+-visible when MODULES it's visible (the (empty) dependency of MODULES is
++visible when MODULES is visible (the (empty) dependency of MODULES is
+ also part of the comment dependencies).
+ 
+ 
+@@ -188,12 +206,13 @@ The configuration file describes a series of menu entries, where every
+ line starts with a keyword (except help texts). The following keywords
+ end a menu entry:
+ - config
++- menuconfig
+ - choice/endchoice
+ - comment
+ - menu/endmenu
+ - if/endif
+ - source
+-The first four also start the definition of a menu entry.
++The first five also start the definition of a menu entry.
+ 
+ config:
+ 
+@@ -203,6 +222,14 @@ config:
+ This defines a config symbol <symbol> and accepts any of above
+ attributes as options.
+ 
++menuconfig:
++	"menuconfig" <symbol>
++	<config options>
++
++This is similiar to the simple config entry above, but it also gives a
++hint to front ends, that all suboptions should be displayed as a
++separate list of options.
++
+ choices:
+ 
+ 	"choice"
+diff --git a/extra/config/menu.c b/extra/config/menu.c
+index 4a889d32f..ba5c6a6c5 100644
+--- a/extra/config/menu.c
++++ b/extra/config/menu.c
+@@ -275,9 +275,8 @@ void menu_finalize(struct menu *parent)
+ 				break;
+ 			case P_SELECT:
+ 				sym2 = prop_get_symbol(prop);
+-				if ((sym->type != S_BOOLEAN && sym->type != S_TRISTATE) ||
+-				    (sym2->type != S_BOOLEAN && sym2->type != S_TRISTATE))
+-					fprintf(stderr, "%s:%d:warning: enable is only allowed with boolean and tristate symbols\n",
++				if ((sym->type != S_BOOLEAN) || (sym2->type != S_BOOLEAN))
++					fprintf(stderr, "%s:%d:warning: enable is only allowed with booleans\n",
+ 						prop->file->name, prop->lineno);
+ 				break;
+ 			case P_RANGE:
+diff --git a/ldso/include/dl-elf.h b/ldso/include/dl-elf.h
+index db9ee9556..75c7d2761 100644
+--- a/ldso/include/dl-elf.h
++++ b/ldso/include/dl-elf.h
+@@ -10,9 +10,9 @@
+ #  define LDSO_CACHE "../util/ld.so.cache"
+ #  define LDSO_PRELOAD "../util/ld.so.preload"
+ #else
+-#  define LDSO_CONF  UCLIBC_TARGET_PREFIX "etc/ld.so.conf"
+-#  define LDSO_CACHE UCLIBC_TARGET_PREFIX "etc/ld.so.cache"
+-#  define LDSO_PRELOAD UCLIBC_TARGET_PREFIX "etc/ld.so.preload"
++#  define LDSO_CONF  UCLIBC_RUNTIME_PREFIX "etc/ld.so.conf"
++#  define LDSO_CACHE UCLIBC_RUNTIME_PREFIX "etc/ld.so.cache"
++#  define LDSO_PRELOAD UCLIBC_RUNTIME_PREFIX "etc/ld.so.preload"
+ #endif
+ 
+ 
+diff --git a/ldso/include/ld_elf.h b/ldso/include/ld_elf.h
+index db9ee9556..75c7d2761 100644
+--- a/ldso/include/ld_elf.h
++++ b/ldso/include/ld_elf.h
+@@ -10,9 +10,9 @@
+ #  define LDSO_CACHE "../util/ld.so.cache"
+ #  define LDSO_PRELOAD "../util/ld.so.preload"
+ #else
+-#  define LDSO_CONF  UCLIBC_TARGET_PREFIX "etc/ld.so.conf"
+-#  define LDSO_CACHE UCLIBC_TARGET_PREFIX "etc/ld.so.cache"
+-#  define LDSO_PRELOAD UCLIBC_TARGET_PREFIX "etc/ld.so.preload"
++#  define LDSO_CONF  UCLIBC_RUNTIME_PREFIX "etc/ld.so.conf"
++#  define LDSO_CACHE UCLIBC_RUNTIME_PREFIX "etc/ld.so.cache"
++#  define LDSO_PRELOAD UCLIBC_RUNTIME_PREFIX "etc/ld.so.preload"
+ #endif
+ 
+ 
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index 2f0674d23..b9718f4da 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -28,16 +28,12 @@ LDSO_FULLNAME=ld-uClibc-$(MAJOR_VERSION).$(MINOR_VERSION).$(SUBLEVEL).so
+ 
+ 
+ XXFLAGS=$(XWARNINGS) $(OPTIMIZATION) $(XARCH_CFLAGS) $(CPU_CFLAGS) $(PICFLAG) \
+-	-DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-	-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-	-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 	-fno-builtin -nostdinc -I$(TOPDIR)ldso/include -I. -I$(TOPDIR)include
+ 
+ ifeq ($(DODEBUG),y)
+ XXFLAGS=$(XWARNINGS) -O0 -g3 $(XARCH_CFLAGS) $(CPU_CFLAGS) $(PICFLAG) \
+-	-DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-	-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-	-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 	-fno-builtin -nostdinc -I$(TOPDIR)ldso/include -I. -I$(TOPDIR)include
+ endif
+ 
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index 56f948a54..afb5a3b75 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -361,11 +361,9 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	if(_dl_debug) _dl_dprintf(_dl_debug_file, "\tsearching full lib path list\n");
+ #endif
+ 	if ((tpnt1 = search_for_named_library(libname, secure, 
+-			UCLIBC_TARGET_PREFIX "/usr/X11R6/lib:"
+-			UCLIBC_TARGET_PREFIX "/usr/lib:"
+-			UCLIBC_TARGET_PREFIX "/lib:"
+-			UCLIBC_DEVEL_PREFIX "/lib:"
+-			UCLIBC_BUILD_DIR "/lib:"
++			UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib:"
++			UCLIBC_RUNTIME_PREFIX "usr/lib:"
++			UCLIBC_RUNTIME_PREFIX "lib:"
+ 			"/usr/lib:"
+ 			"/lib", rpnt)
+ 		    ) != NULL) 
+diff --git a/ldso/ldso/readelflib1.c b/ldso/ldso/readelflib1.c
+index 56f948a54..afb5a3b75 100644
+--- a/ldso/ldso/readelflib1.c
++++ b/ldso/ldso/readelflib1.c
+@@ -361,11 +361,9 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	if(_dl_debug) _dl_dprintf(_dl_debug_file, "\tsearching full lib path list\n");
+ #endif
+ 	if ((tpnt1 = search_for_named_library(libname, secure, 
+-			UCLIBC_TARGET_PREFIX "/usr/X11R6/lib:"
+-			UCLIBC_TARGET_PREFIX "/usr/lib:"
+-			UCLIBC_TARGET_PREFIX "/lib:"
+-			UCLIBC_DEVEL_PREFIX "/lib:"
+-			UCLIBC_BUILD_DIR "/lib:"
++			UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib:"
++			UCLIBC_RUNTIME_PREFIX "usr/lib:"
++			UCLIBC_RUNTIME_PREFIX "lib:"
+ 			"/usr/lib:"
+ 			"/lib", rpnt)
+ 		    ) != NULL) 
+diff --git a/ldso/libdl/Makefile b/ldso/libdl/Makefile
+index 009072131..fa7d7129d 100644
+--- a/ldso/libdl/Makefile
++++ b/ldso/libdl/Makefile
+@@ -22,16 +22,12 @@ TOPDIR=../../
+ include $(TOPDIR)Rules.mak
+ 
+ XXFLAGS=$(XWARNINGS) $(OPTIMIZATION) $(XARCH_CFLAGS) $(CPU_CFLAGS) \
+-	-DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-	-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-	-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 	-fno-builtin -nostdinc -D_LIBC -I$(TOPDIR)ldso/include -I. -I$(TOPDIR)include
+ 
+ ifeq ($(DODEBUG),y)
+ XXFLAGS=$(XWARNINGS) -O0 -g3 $(XARCH_CFLAGS) $(CPU_CFLAGS) \
+-	-DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-	-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-	-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 	-fno-builtin -nostdinc -D_LIBC -I$(TOPDIR)ldso/include -I. -I$(TOPDIR)include
+ endif
+ 
+diff --git a/ldso/util/Makefile b/ldso/util/Makefile
+index ac720f64f..0d0c96845 100644
+--- a/ldso/util/Makefile
++++ b/ldso/util/Makefile
+@@ -53,43 +53,30 @@ readsoname.o:	readsoname.c readsoname2.c
+ 	$(HOSTCC) $(HOSTCFLAGS) -I. -I../include -c $< -o $@
+ 	strip -x -R .note -R .comment $*.o
+ 
+-#ldconfig.o:	ldconfig.c
+-#	$(HOSTCC) $(HOSTCFLAGS) -I. -I../include \
+-#		-DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" -c $< -o $@
+-#	strip -x -R .note -R .comment $*.o
+-
+-#ldconfig:	ldconfig.o readsoname.o
+-#	$(HOSTCC) $(HOSTCFLAGS) $^ -o $@
+-#	strip -x -R .note -R .comment $@
+-
+ ldconfig:	ldconfig.c readsoname.c
+-	$(HOSTCC) $(HOSTCFLAGS) $(XXFLAGS) -DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-		-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-		-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	$(HOSTCC) $(HOSTCFLAGS) $(XXFLAGS) \
++		-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 		-DUCLIBC_LDSO=\"$(UCLIBC_LDSO)\" -I. -I../include \
+ 		$^ -o $@
+ 	strip -x -R .note -R .comment $@
+ 
+ ldconfig.target:	ldconfig.c readsoname.c
+-	$(TARGET_CC) $(CFLAGS) $(XXFLAGS) -Wl,-s -DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-		-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-		-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	$(TARGET_CC) $(CFLAGS) $(XXFLAGS) -Wl,-s \
++		-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 		-DUCLIBC_LDSO=\"$(UCLIBC_LDSO)\" -I. -I../include \
+ 		$^ -o $@ $(LDADD_LIBFLOAT)
+ 	$(STRIPTOOL) -x -R .note -R .comment $@
+ 
+ ldd:	ldd.c
+-	$(HOSTCC) $(HOSTCFLAGS) $(XXFLAGS) -DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-		-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-		-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	$(HOSTCC) $(HOSTCFLAGS) $(XXFLAGS) \
++		-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 		-DUCLIBC_LDSO=\"$(UCLIBC_LDSO)\" -I. -I../include \
+ 		$^ -o $@
+ 	strip -x -R .note -R .comment $@
+ 
+ ldd.target:	ldd.c
+-	$(TARGET_CC) $(CFLAGS) $(XXFLAGS) -Wl,-s -DUCLIBC_TARGET_PREFIX=\"$(TARGET_PREFIX)\" \
+-		-DUCLIBC_DEVEL_PREFIX=\"$(DEVEL_PREFIX)\" \
+-		-DUCLIBC_BUILD_DIR=\"$(shell cd $(TOPDIR) && pwd)\" \
++	$(TARGET_CC) $(CFLAGS) $(XXFLAGS) -Wl,-s \
++		-DUCLIBC_RUNTIME_PREFIX=\"$(RUNTIME_PREFIX)\" \
+ 		-DUCLIBC_LDSO=\"$(UCLIBC_LDSO)\" \
+ 		$^ -o $@ $(LDADD_LIBFLOAT)
+ 	$(STRIPTOOL) -x -R .note -R .comment $@
+diff --git a/ldso/util/ldconfig.c b/ldso/util/ldconfig.c
+index 8ae28da77..0b6890ff1 100644
+--- a/ldso/util/ldconfig.c
++++ b/ldso/util/ldconfig.c
+@@ -885,9 +885,9 @@ int main(int argc, char **argv)
+ 		free(extpath);
+ 	    }
+ 
+-	    scan_dir(UCLIBC_TARGET_PREFIX "/usr/X11R6/lib");
+-	    scan_dir(UCLIBC_TARGET_PREFIX "/usr/lib");
+-	    scan_dir(UCLIBC_TARGET_PREFIX "/lib");
++	    scan_dir(UCLIBC_RUNTIME_PREFIX "/usr/X11R6/lib");
++	    scan_dir(UCLIBC_RUNTIME_PREFIX "/usr/lib");
++	    scan_dir(UCLIBC_RUNTIME_PREFIX "/lib");
+ 	}
+ 
+ #ifdef USE_CACHE
+diff --git a/ldso/util/ldd.c b/ldso/util/ldd.c
+index a73d34070..3ea41b424 100644
+--- a/ldso/util/ldd.c
++++ b/ldso/util/ldd.c
+@@ -215,7 +215,7 @@ int check_elf_header(Elf32_Ehdr *const ehdr)
+ }
+ 
+ /* This function's behavior must exactly match that 
+- * in uClibc/ldso/d-link/readelflib1.c */
++ * in uClibc/ldso/ldso/readelflib1.c */
+ static void search_for_named_library(char *name, char *result, const char *path_list)
+ {
+ 	int i, count = 1;
+@@ -322,11 +322,10 @@ void locate_library_file(Elf32_Ehdr* ehdr, Elf32_Dyn* dynamic, int is_suid, stru
+ 	}
+ 
+ 	/* Lastly, search the standard list of paths for the library.
+-	   This list must exactly match the list in uClibc/ldso/d-link/readelflib1.c */
+-	path =	UCLIBC_TARGET_PREFIX "/usr/lib:"
+-			UCLIBC_TARGET_PREFIX "/lib:"
+-			UCLIBC_DEVEL_PREFIX "/lib:"
+-			UCLIBC_BUILD_DIR "/lib:"
++	   This list must exactly match the list in uClibc/ldso/ldso/readelflib1.c */
++	path =	UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib:"
++			UCLIBC_RUNTIME_PREFIX "usr/lib:"
++			UCLIBC_RUNTIME_PREFIX "lib:"
+ 			"/usr/lib:"
+ 			"/lib";
+ 	search_for_named_library(lib->name, buf, path);

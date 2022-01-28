@@ -1,0 +1,3440 @@
+"2018-02-09 09:07:43 +0100"
+diff --git a/src/Kconfig b/src/Kconfig
+index e469612..c097c10 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -663,7 +663,7 @@ config EXPERIMENTAL
+ 	  Use with caution!
+ 
+ config PERF_CNT
+-	def_bool y if JDB && (IA32 || AMD64 || ARM)
++	def_bool y if JDB && (IA32 || AMD64 || ARM || ARM64)
+ 
+ config BIT32
+ 	bool
+diff --git a/src/Makeconf.arm b/src/Makeconf.arm
+index 4aa5ce1..b7dbaf8 100644
+--- a/src/Makeconf.arm
++++ b/src/Makeconf.arm
+@@ -2,7 +2,9 @@
+ # vi:se ft=make:
+ 
+ #OPT_SHARED_FLAGS                  += $(call CHECKCC,-finline-limit=10000,)
+-CROSS_COMPILE			  ?= arm-linux-
++CROSS_COMPILE_DFL-$(CONFIG_BIT32) := arm-linux-
++CROSS_COMPILE_DFL-$(CONFIG_BIT64) := aarch64-linux-
++CROSS_COMPILE                     ?= $(CROSS_COMPILE_DFL-y)
+ SHARED_FLAGS-$(CONFIG_ARM_PXA)    += -mcpu=xscale
+ SHARED_FLAGS-$(CONFIG_ARM_SA)     += -mcpu=strongarm1100
+ SHARED_FLAGS-$(CONFIG_ARM_920T)   += -mcpu=arm920t
+@@ -15,8 +17,14 @@ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A7) += $(call CHECKCC,-mcpu=cortex-a7,-mcpu=cor
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A8) += $(call CHECKCC,-mcpu=cortex-a8)
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A9) += $(call CHECKCC,-mcpu=cortex-a9)
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A15) += $(call CHECKCC,-mcpu=cortex-a15,-mcpu=cortex-a9)
+-SHARED_FLAGS			  += -msoft-float
+-SHARED_FLAGS                      += $(call CHECKCC,-mno-thumb-interwork)
+-SHARED_FLAGS                      += -marm -mabi=aapcs
+-LDFLAGS                           += --no-warn-mismatch
+-LD_EMULATION_CHOICE               := armelf armelf_linux_eabi armelf_fbsd
++SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A57) += $(call CHECKCC,-mcpu=cortex-a57)
++SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A72) += $(call CHECKCC,-mcpu=cortex-a72)
++SHARED_FLAGS-$(CONFIG_BIT32)      += -msoft-float
++SHARED_FLAGS-$(CONFIG_BIT32)      += $(call CHECKCC,-mno-thumb-interwork)
++SHARED_FLAGS-$(CONFIG_BIT32)      += -marm -mabi=aapcs
++SHARED_FLAGS-$(CONFIG_BIT64)      += -mgeneral-regs-only
++LDFLAGS-$(CONFIG_BIT32)           += --no-warn-mismatch
++LDFLAGS                           += $(LDFLAGS-y)
++LD_EMULATION_CHOICE-$(CONFIG_BIT32) := armelf armelf_linux_eabi armelf_fbsd
++LD_EMULATION_CHOICE-$(CONFIG_BIT64) := aarch64linux aarch64elf
++LD_EMULATION_CHOICE := $(LD_EMULATION_CHOICE-y)
+diff --git a/src/Modules.arm b/src/Modules.arm
+index 63637b5..f24dba5 100644
+--- a/src/Modules.arm
++++ b/src/Modules.arm
+@@ -9,9 +9,15 @@ SUBSYSTEMS := 	ABI KERNEL LIBK DRIVERS MINILIBC \
+ 		CXXLIB VERSION JABI TCBOFFSET CRT0
+ 
+ 
+-PREPROCESS_PARTS 	+= arch $(CONFIG_ABI) 32bit $(CONFIG_XARCH) \
+-                           h3800 abs_syscalls
++PREPROCESS_PARTS 	+= arch $(CONFIG_ABI) $(CONFIG_XARCH) h3800
++
++ifeq ($(CONFIG_BIT64),y)
++PREPROCESS_PARTS += 64bit armv8 arm_esr_traps
++BITS := 64
++else
++PREPROCESS_PARTS += 32bit abs_syscalls
+ BITS := 32
++endif
+ 
+ PREPROCESS_PARTS-$(CONFIG_SERIAL)             += serial
+ PREPROCESS_PARTS-$(CONFIG_MP)                 += mp
+@@ -33,6 +39,9 @@ PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A7)            += armca9
+ PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A8)            += armca8
+ PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A9)            += armca9
+ PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A15)           += armca9
++PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A53)           += armca9
++PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A57)           += armca9
++PREPROCESS_PARTS-$(CONFIG_ARM_CORTEX_A72)           += armca9
+ PREPROCESS_PARTS-$(CONFIG_ARM_EM_TZ)                += arm_em_tz
+ PREPROCESS_PARTS-$(CONFIG_ARM_EM_STD)               += arm_em_std
+ PREPROCESS_PARTS-$(CONFIG_ARM_EM_NS)                += arm_em_ns
+@@ -45,7 +54,7 @@ PREPROCESS_PARTS-$(CONFIG_SCHED_WFQ)         += sched_wfq
+ PREPROCESS_PARTS-$(CONFIG_SCHED_FP_WFQ)      += sched_fp_wfq
+ PREPROCESS_PARTS-$(CONFIG_ARM_LPAE)          += arm_lpae
+ PREPROCESS_PARTS-$(CONFIG_CPU_VIRT)                 += hyp vgic arm_esr_traps
+-PREPROCESS_PARTS-y$(CONFIG_CPU_VIRT)                += noncont_mem
++PREPROCESS_PARTS-y$(CONFIG_CPU_VIRT)$(CONFIG_BIT64) += noncont_mem
+ 
+ 
+ #
+@@ -141,10 +150,11 @@ VPATH		+= jdb/arm/$(BITS) jdb/arm jdb
+ PRIVATE_INCDIR 	+= kern/$(CONFIG_XARCH)/$(BITS) kern/$(CONFIG_XARCH) kern
+ 
+ INTERFACES_KERNEL += 	__main mem_op kmem_space boot_uart_init     \
+-			irq_chip_generic bootstrap kern_lib_page              \
++			irq_chip_generic bootstrap                  \
+ 			jdb_extensions outer_cache utcb_support cascade_irq   \
+ 			irq_mgr_multi_chip scu
+ 
++INTERFACES_KERNEL-$(CONFIG_BIT32) += kern_lib_page
+ INTERFACES_KERNEL-$(CONFIG_SERIAL) += uart_console
+ INTERFACES_KERNEL-$(CONFIG_ARM_EM_TZ) += vm
+ INTERFACES_KERNEL-$(CONFIG_CPU_VIRT) += vgic
+@@ -152,7 +162,7 @@ INTERFACES_KERNEL-$(CONFIG_CPU_VIRT) += vgic
+ 
+ 
+ bootstrap_IMPL		:= bootstrap bootstrap-arm-$(BITS)
+-CXXFLAGS_bootstrap      := -O3
++CXXFLAGS_bootstrap      := -O3 $(if $(CONFIG_BIT64),-mcmodel=large)
+ CXXFLAGS_bootstrap-arm-$(BITS) := $(CXXFLAGS_bootstrap)
+ clock_IMPL              := clock
+ config_IMPL	  	:= config config-arm
+@@ -161,8 +171,12 @@ context_IMPL	  	:= context context-arm context-arm-$(BITS) \
+ continuation_IMPL	:= continuation-arm
+ cpu_IMPL	  	:= cpu cpu-arm cpu-arm-hyp cpu-arm-$(BITS)
+ cpu_lock_IMPL  	  	:= cpu_lock cpu_lock-generic
+-entry_frame_IMPL  	:= entry_frame entry_frame-arm                       \
+-			   entry_frame-abs-timeout-hack
++ifeq ($(CONFIG_BIT64),y)
++  entry_frame_IMPL	:= entry_frame-arm entry_frame-abs-timeout-hack
++else
++  entry_frame_IMPL	:= entry_frame entry_frame-arm                       \
++                  	   entry_frame-abs-timeout-hack
++endif
+ fpu_IMPL		:= fpu fpu-arm
+ ipi_IMPL		:= ipi ipi-arm
+ kdb_ke_IMPL		:= kdb_ke-arm
+@@ -190,7 +204,7 @@ sched_context_IMPL	:= sched_context-wfq sched_context-fixed_prio \
+ scu_IMPL                := scu
+ spin_lock_IMPL		:= spin_lock spin_lock-arm spin_lock-arm-$(BITS)
+ startup_IMPL		:= startup startup-arm
+-sys_call_page_IMPL	:= sys_call_page sys_call_page-arm
++sys_call_page_IMPL	:= sys_call_page $(if $(CONFIG_BIT32), sys_call_page-arm)
+ task_IMPL		:= task task-arm
+ thread_IMPL	  	:= thread thread-arm thread-arm-hyp \
+ 			   thread-jdb thread-jdb-$(BITS) thread-ipc \
+diff --git a/src/drivers/arm/64/processor-arm-64.cpp b/src/drivers/arm/64/processor-arm-64.cpp
+new file mode 100644
+index 0000000..1479da8
+--- /dev/null
++++ b/src/drivers/arm/64/processor-arm-64.cpp
+@@ -0,0 +1,81 @@
++INTERFACE[arm && 64bit]:
++
++EXTENSION class Proc
++{
++public:
++  enum : unsigned
++  {
++    Status_mode_user      = 0x00,
++    Status_mode_always_on = 0x100,
++    Status_mode_vmm       = 0x05, // EL1.h
++  };
++};
++
++//--------------------------------------------------------------------
++IMPLEMENTATION [arm && 64bit]:
++
++IMPLEMENT static inline
++Mword Proc::program_counter()
++{
++  Mword pc;
++  asm ("ldr %0, =1f; 1:" : "=r" (pc));
++  return pc;
++}
++
++IMPLEMENT static inline
++Proc::Status Proc::interrupts()
++{
++  Status ret;
++  asm volatile("mrs %0, DAIF" : "=r" (ret));
++  return !(ret & Sti_mask);
++}
++
++IMPLEMENT static inline
++void Proc::cli()
++{
++  asm volatile("msr DAIFSet, %0" : : "i"(Cli_mask >> 6) : "memory");
++}
++
++IMPLEMENT static inline ALWAYS_INLINE
++void Proc::sti()
++{
++  asm volatile("msr DAIFClr, %0" : : "i"(Cli_mask >> 6) : "memory");
++}
++
++IMPLEMENT static inline ALWAYS_INLINE
++Proc::Status Proc::cli_save()
++{
++  Status prev;
++  asm volatile("mrs %0, DAIF \n"
++               "msr DAIFSet, %1"
++               : "=r" (prev)
++               : "i"(Cli_mask >> 6)
++               : "memory");
++  return prev;
++}
++
++//----------------------------------------------------------------
++IMPLEMENTATION[arm && 64bit && mp && !hyp]:
++
++IMPLEMENT static inline
++Cpu_phys_id Proc::cpu_id()
++{
++  unsigned mpidr;
++  __asm__("mrs %0, MPIDR_EL1" : "=r" (mpidr));
++  return Cpu_phys_id(mpidr & 0x7); // mind gic softirq
++}
++
++//----------------------------------------------------------------
++IMPLEMENTATION[arm && 64bit && mp && hyp]:
++
++IMPLEMENT static inline
++Cpu_phys_id Proc::cpu_id()
++{
++  unsigned mpidr;
++  __asm__("mrs %0, MPIDR_EL2" : "=r" (mpidr));
++  return Cpu_phys_id(mpidr & 0x7); // mind gic softirq
++}
++
++
++
++
+diff --git a/src/drivers/arm/mem-arm.cpp b/src/drivers/arm/mem-arm.cpp
+index c6fd70b..8ea974c 100644
+--- a/src/drivers/arm/mem-arm.cpp
++++ b/src/drivers/arm/mem-arm.cpp
+@@ -47,7 +47,7 @@ PUBLIC static inline void Mem::dsb()
+ { __asm__ __volatile__ ("mcr p15, 0, %0, c7, c10, 4" : : "r" (0) : "memory"); }
+ 
+ //-----------------------------------------------------------------------------
+-IMPLEMENTATION [armv7]:
++IMPLEMENTATION [armv7 || armv8]:
+ 
+ PUBLIC static inline void Mem::dmb()
+ { __asm__ __volatile__ ("dmb sy" : : : "memory"); }
+diff --git a/src/jdb/arm/64/jdb_tbuf-arm.cpp b/src/jdb/arm/64/jdb_tbuf-arm.cpp
+new file mode 100644
+index 0000000..63411a9
+--- /dev/null
++++ b/src/jdb/arm/64/jdb_tbuf-arm.cpp
+@@ -0,0 +1,39 @@
++INTERFACE [arm && jdb_logging]:
++
++#define BEGIN_LOG_EVENT(name, sc, fmt)				\
++  do								\
++    {								\
++      Mword __do_log__;						\
++      asm volatile ("1:  movz   %0, #0		\n\t"		\
++		    ".pushsection \".debug.jdb.log_table\" \n\t"	\
++		    "3: .8byte 2f		\n\t"		\
++		    "   .8byte 1b		\n\t"		\
++		    "   .8byte %c[xfmt]		\n\t"		\
++		    ".section \".rodata.log.str\" \n\t"		\
++		    "2: .asciz "#name"		\n\t"           \
++		    "   .asciz "#sc"		\n\t"		\
++		    ".popsection		\n\t"		\
++		    : "=r"(__do_log__)                          \
++                    : [xfmt] "i" (&Tb_entry_formatter_t<fmt>::singleton));  \
++      if (EXPECT_FALSE( __do_log__ ))				\
++	{
++
++IMPLEMENTATION [arm && 64bit && jdb_logging]:
++
++IMPLEMENT_OVERRIDE
++unsigned char
++Jdb_tbuf::get_entry_status(Tb_log_table_entry const *e)
++{
++  return (*reinterpret_cast<Unsigned32 const *>(e->patch) >> 5) & 0xffff;
++}
++
++IMPLEMENT_OVERRIDE
++void
++Jdb_tbuf::set_entry_status(Tb_log_table_entry const *e,
++                           unsigned char value)
++{
++  Unsigned32 *insn = reinterpret_cast<Unsigned32 *>(e->patch);
++  *insn = (*insn & ~(0xffffU << 5)) | (((Unsigned32)value) << 5);
++  Mem_unit::make_coherent_to_pou(insn);
++}
++
+diff --git a/src/jdb/arm/64/jdb_tcb-arm.cpp b/src/jdb/arm/64/jdb_tcb-arm.cpp
+new file mode 100644
+index 0000000..2bda265
+--- /dev/null
++++ b/src/jdb/arm/64/jdb_tcb-arm.cpp
+@@ -0,0 +1,77 @@
++IMPLEMENTATION [arm]:
++
++#include "config.h"
++
++EXTENSION class Jdb_tcb
++{
++  enum
++  {
++    Disasm_x = 41,
++    Disasm_y = 11,
++    Stack_y  = 17,
++  };
++
++};
++
++IMPLEMENT
++void Jdb_tcb::print_entry_frame_regs(Thread *t)
++{
++  Jdb_entry_frame *ef = Jdb::get_entry_frame(Jdb::current_cpu);
++  int from_user       = ef->from_user();
++
++  printf("Registers (before debug entry from %s mode):\n"
++         "[0] %08lx %08lx %08lx %08lx  %08lx %08lx %08lx %08lx\n"
++         "[8] %08lx %08lx %08lx %08lx  %08lx %08lx %08lx %s%08lx\033[m\n"
++         "upsr=%08lx tpidr: urw=%08lx uro=%08lx\n",
++         from_user ? "user" : "kernel",
++	 ef->r[0], ef->r[1],ef->r[2], ef->r[3],
++	 ef->r[4], ef->r[5],ef->r[6], ef->r[7],
++	 ef->r[8], ef->r[9],ef->r[10], ef->r[11],
++	 ef->r[12], ef->usp, ef->r[30], Jdb::esc_iret, ef->pc,
++	 ef->psr, t->tpidrurw(), t->tpidruro());
++}
++
++IMPLEMENT
++void
++Jdb_tcb::info_thread_state(Thread *t)
++{
++  Jdb_tcb_ptr current((Address)t->get_kernel_sp());
++
++  printf("PC=%s%08lx\033[m USP=%08lx\n",
++         Jdb::esc_emph, current.top_value(-2), current.top_value(-5));
++  printf("[0] %08lx %08lx %08lx %08lx [4] %08lx %08lx %08lx %08lx\n",
++         current.top_value(-18), current.top_value(-17),
++         current.top_value(-16), current.top_value(-15),
++         current.top_value(-14), current.top_value(-13),
++         current.top_value(-12), current.top_value(-11));
++  printf("[8] %08lx %08lx %08lx %08lx [c] %08lx %08lx %08lx %08lx\n",
++         current.top_value(-10), current.top_value(-9),
++         current.top_value(-8),  current.top_value(-7),
++         current.top_value(-6),  current.top_value(-4),
++         current.top_value(-3),  current.top_value(-2));
++}
++
++IMPLEMENT
++void
++Jdb_tcb::print_return_frame_regs(Jdb_tcb_ptr const &, Address)
++{}
++
++IMPLEMENT_OVERRIDE
++bool
++Jdb_stack_view::edit_registers()
++{ return false; }
++
++IMPLEMENT inline
++bool
++Jdb_tcb_ptr::is_user_value() const
++{
++  return _offs >= Context::Size - 5 * sizeof(Mword);
++}
++
++IMPLEMENT inline
++const char *
++Jdb_tcb_ptr::user_value_desc() const
++{
++  const char *desc[] = { "PSR", "PC", "KLR", "ULR", "SP" };
++  return desc[(Context::Size - _offs) / sizeof(Mword) - 1];
++}
+diff --git a/src/jdb/arm/64/jdb_trace_set-arm-64.cpp b/src/jdb/arm/64/jdb_trace_set-arm-64.cpp
+new file mode 100644
+index 0000000..1d9a8c6
+--- /dev/null
++++ b/src/jdb/arm/64/jdb_trace_set-arm-64.cpp
+@@ -0,0 +1,11 @@
++IMPLEMENTATION [arm]:
++
++PRIVATE static inline
++void
++Jdb_set_trace::set_ipc_entry(void (*e)())
++{
++  typedef void (*Sys_call)(void);
++  extern Sys_call sys_call_table[];
++  sys_call_table[0] = e;
++}
++
+diff --git a/src/jdb/arm/jdb_bp-arm.cpp b/src/jdb/arm/jdb_bp-arm.cpp
+index d294925..b027a7f 100644
+--- a/src/jdb/arm/jdb_bp-arm.cpp
++++ b/src/jdb/arm/jdb_bp-arm.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [arm]:
++INTERFACE [arm && 32bit]:
+ 
+ #include "jdb.h"
+ #include "jdb_input.h"
+@@ -9,7 +9,7 @@ class Jdb_bp : public Jdb_module, public Jdb_input_task_addr
+ {
+ };
+ 
+-IMPLEMENTATION [arm]:
++IMPLEMENTATION [arm && 32bit]:
+ 
+ #include <cstdio>
+ #include "string_buffer.h"
+diff --git a/src/jdb/arm/jdb_kern_info-cpu-arm.cpp b/src/jdb/arm/jdb_kern_info-cpu-arm.cpp
+index 52b8527..0187150 100644
+--- a/src/jdb/arm/jdb_kern_info-cpu-arm.cpp
++++ b/src/jdb/arm/jdb_kern_info-cpu-arm.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [arm]:
++IMPLEMENTATION [arm && 32bit]:
+ 
+ #include <cstdio>
+ #include <cstring>
+diff --git a/src/kern/arm/64/bootstrap-arm-64.cpp b/src/kern/arm/64/bootstrap-arm-64.cpp
+new file mode 100644
+index 0000000..88c20e8
+--- /dev/null
++++ b/src/kern/arm/64/bootstrap-arm-64.cpp
+@@ -0,0 +1,165 @@
++IMPLEMENTATION [arm && arm_lpae && !hyp]:
++
++#include "cpu.h"
++
++PUBLIC static inline NEEDS["cpu.h"]
++void
++Bootstrap::enable_paging(Mword)
++{
++  unsigned long control = Cpu::Sctlr_generic;
++
++  Mem::dsb();
++  asm volatile("tlbi vmalle1is");
++  Mem::dsb();
++  asm volatile("msr SCTLR_EL1, %[control]" : : [control] "r" (control));
++  Mem::isb();
++}
++
++//---------------------------------------------------------------------------
++IMPLEMENTATION [arm && !hyp]:
++
++extern char kernel_l0_dir[];
++extern char kernel_l1_dir[];
++extern char kernel_l0_vdir[];
++extern char kernel_l1_vdir[];
++extern char kernel_l2_mmio_dir[];
++
++static void
++Bootstrap::leave_hyp_mode()
++{
++  Mword cel;
++  asm volatile ("mrs %0, CurrentEL" : "=r"(cel));
++  cel >>= 2;
++  cel &= 3;
++  Mword tmp;
++
++  switch (cel)
++    {
++    case 3:
++      // monitor mode .. switch to el1
++      asm volatile ("   mrs %[tmp], scr_el3  \n"
++                    "   and %[tmp], %[tmp], #1 \n"
++                    "   orr %[tmp], %[tmp], %[scr] \n"
++                    "   msr scr_el3, %[tmp]  \n"
++                    "   msr spsr_el3, %[psr] \n"
++                    "   adr x4, 1f           \n"
++                    "   msr elr_el3, x4      \n"
++                    "   mov %[tmp], sp       \n"
++                    "   eret                 \n"
++                    "1: mov sp, %[tmp]       \n"
++                    : [tmp]"=&r"(tmp)
++                    : [psr]"r"((0xf << 6) | 5),
++                      [scr]"r"((1 << 10))
++                    : "cc", "x4");
++      break;
++
++    case 2:
++      asm volatile ("   mov %[tmp], sp       \n"
++                    "   msr spsr_el2, %[psr] \n"
++                    "   adr x4, 1f           \n"
++                    "   msr elr_el2, x4      \n"
++                    "   eret                 \n"
++                    "1: mov sp, %[tmp]       \n"
++                    : [tmp]"=&r"(tmp)
++                    : [psr]"r"((0xf << 6) | 5) : "cc", "x4");
++      break;
++    case 1:
++    default:
++      break;
++    }
++}
++
++constexpr unsigned l0_idx(Unsigned64 va)
++{ return (va >> 39) & 0x1ff; }
++
++constexpr unsigned l1_idx(Unsigned64 va)
++{ return (va >> 30) & 0x1ff; }
++
++PUBLIC static Bootstrap::Phys_addr
++Bootstrap::init_paging(void *)
++{
++  leave_hyp_mode();
++
++  Phys_addr *const l0 = reinterpret_cast<Phys_addr*>(kernel_l0_dir + Virt_ofs);
++  Phys_addr *const l1 = reinterpret_cast<Phys_addr*>(kernel_l1_dir + Virt_ofs);
++
++  l0[l0_idx(Mem_layout::Sdram_phys_base)]
++    = Phys_addr((Unsigned64)kernel_l1_dir + Virt_ofs) | Phys_addr(3);
++
++  Phys_addr *const vl0 = reinterpret_cast<Phys_addr*>(kernel_l0_vdir + Virt_ofs);
++  Phys_addr *const vl1 = reinterpret_cast<Phys_addr*>(kernel_l1_vdir + Virt_ofs);
++
++  static_assert(l0_idx(Mem_layout::Map_base) == l0_idx(Mem_layout::Registers_map_start),
++                "Mem_layout::Map_base and Mem_layout::Registers_map_start must share the 516GB index");
++
++  vl0[l0_idx(Mem_layout::Map_base)]
++    = Phys_addr((Unsigned64)kernel_l1_vdir + Virt_ofs) | Phys_addr(3);
++
++  vl1[l1_idx(Mem_layout::Registers_map_start)]
++    = Phys_addr((Unsigned64)kernel_l2_mmio_dir + Virt_ofs) | Phys_addr(3);
++
++  set_mair0(Page::Mair0_prrr_bits);
++
++  l1[l1_idx(Mem_layout::Sdram_phys_base)]
++    = pt_entry(Phys_addr(Mem_layout::Sdram_phys_base), true, true);
++
++  vl1[l1_idx(Mem_layout::Map_base)]
++    = pt_entry(Phys_addr(Mem_layout::Sdram_phys_base), true, false);
++
++
++  unsigned long attribs =   (3UL << 4)  /* SH == IS */
++                          | (1UL << 2)  /* ORGN = normal outer write-back write-allocate */
++                          | (1UL << 0); /* IRGN = normal inner write-back write-allocate */
++
++  asm volatile (
++      "msr tcr_el1, %2   \n"
++      "dsb sy            \n"
++      "msr ttbr0_el1, %0 \n"
++      "msr ttbr1_el1, %1 \n" : :
++      "r"(l0),
++      "r"(vl0),
++      "r"(  (5UL << 32) | (2UL << 30) | (attribs << 24) | (16UL << 16)
++          |               (0UL << 14) | (attribs <<  8) | (16UL << 0)));
++
++
++
++  return Phys_addr(0);
++}
++
++//---------------------------------------------------------------------------
++IMPLEMENTATION [arm]:
++
++static inline
++Bootstrap::Order
++Bootstrap::map_page_order()
++{ return Order(30); }
++
++static inline void
++Bootstrap::set_mair0(Mword v)
++{ asm volatile ("msr MAIR_EL1, %0" : : "r"(v)); }
++
++PUBLIC static inline void
++Bootstrap::create_initial_mappings(void *)
++{}
++
++PUBLIC static inline void
++Bootstrap::add_initial_pmem()
++{}
++
++asm
++(
++".section .text.init,#alloc,#execinstr \n"
++".global _start                        \n"
++"_start:                               \n"
++"     ldr x9, =_stack                  \n"
++"     mov sp, x9                       \n"
++"     bl	bootstrap_main         \n"
++".previous                             \n"
++".section .bss                         \n"
++".p2align 4                            \n"
++"	.space	4096                   \n"
++"_stack:                               \n"
++".previous                             \n"
++);
++
++
+diff --git a/src/kern/arm/64/context-arm-64.cpp b/src/kern/arm/64/context-arm-64.cpp
+new file mode 100644
+index 0000000..973bcc0
+--- /dev/null
++++ b/src/kern/arm/64/context-arm-64.cpp
+@@ -0,0 +1,95 @@
++IMPLEMENTATION [arm]:
++
++PRIVATE inline void
++Context::arm_switch_gp_regs(Context *t)
++{
++  register Mword _old_this asm("x1") = (Mword)this;
++  register Mword _new_this asm("x0") = (Mword)t;
++  unsigned long dummy1, dummy2;
++
++  asm volatile
++    (// save context of old thread
++     "   str   x29, [sp, #-8]!    \n" // FP
++     "   adr   x30, 1f            \n"
++     "   str   x30, [sp, #-8]!    \n"
++     "   mov   x29, sp            \n"
++     "   str   x29, [%[old_sp]]   \n"
++
++     // switch to new stack
++     "   mov   sp, %[new_sp]      \n"
++
++     // deliver requests to new thread
++     "   bl switchin_context_label \n" // call Context::switchin_context(Context *)
++
++     // return to new context
++     "   ldr   x30, [sp], #8      \n"
++     "   br    x30                \n"
++     "1: ldr   x29, [sp], #8      \n"
++
++     :
++                  "=r" (_old_this),
++                  "=r" (_new_this),
++     [old_sp]     "=r" (dummy1),
++     [new_sp]     "=r" (dummy2)
++     :
++     "0" (_old_this),
++     "1" (_new_this),
++     "2" (&_kernel_sp),
++     "3" (t->_kernel_sp)
++     : "x19", "x20", "x21", "x22", "x23", "x24",
++       "x25", "x26", "x27", "x28", "x29", "x30", "memory");
++}
++
++IMPLEMENT inline
++void
++Context::sanitize_user_state(Return_frame *dst) const
++{
++  dst->psr &= ~(Proc::Status_mode_mask | Proc::Status_interrupts_mask);
++  dst->psr |= Proc::Status_mode_user | Proc::Status_always_mask;
++}
++
++IMPLEMENT inline
++void
++Context::fill_user_state()
++{
++  // do not use 'Return_frame const *rf = regs();' here as it triggers an
++  // optimization bug in gcc-4.4(.1)
++  Entry_frame const *ef = regs();
++  asm volatile ("msr SP_EL0, %[rf]"
++                : : [rf] "r" (ef->usp));
++}
++
++IMPLEMENT inline
++void
++Context::spill_user_state()
++{
++  Entry_frame *ef = regs();
++  assert (current() == this);
++  asm volatile ("mrs %[rf], SP_EL0"
++                : [rf] "=r" (ef->usp));
++}
++
++PUBLIC inline void Context::switch_vm_state(Context *) {}
++
++PRIVATE inline
++void
++Context::store_tpidrurw()
++{
++  asm volatile ("mrs %0, TPIDR_EL0" : "=r" (_tpidrurw));
++}
++
++PRIVATE inline
++void
++Context::load_tpidrurw() const
++{
++  asm volatile ("msr TPIDR_EL0, %0" : : "r" (_tpidrurw));
++}
++
++PROTECTED inline
++void
++Context::load_tpidruro() const
++{
++  asm volatile ("msr TPIDRRO_EL0, %0" : : "r" (_tpidruro));
++}
++
++
+diff --git a/src/kern/arm/64/continuation-arm.cpp b/src/kern/arm/64/continuation-arm.cpp
+new file mode 100644
+index 0000000..da4167e
+--- /dev/null
++++ b/src/kern/arm/64/continuation-arm.cpp
+@@ -0,0 +1,31 @@
++INTERFACE[arm && 64bit]:
++
++#include "entry_frame.h"
++#include "types.h"
++
++class Continuation
++{
++public:
++  bool valid(Return_frame const *regs) const
++  { return regs->eret_work; }
++
++  Mword flags(Return_frame const *r) const { return r->pstate; }
++  void flags(Return_frame *r, Mword status) { r->pstate = status; }
++
++  Mword sp(Return_frame const *o) const { return o->usp; }
++  void sp(Return_frame *o, Mword sp) { o->usp = sp; }
++
++  void activate(Return_frame *regs, void *cont_func)
++  {
++    // we use $0 (the zero register for flagging eret work)
++    regs->eret_work = (Mword)cont_func;
++  }
++
++  void clear(Return_frame *regs)
++  { regs->eret_work = 0; }
++
++  void restore(Return_frame *regs)
++  { regs->eret_work = 0; }
++
++};
++
+diff --git a/src/kern/arm/64/cpu-arm-64.cpp b/src/kern/arm/64/cpu-arm-64.cpp
+new file mode 100644
+index 0000000..5d4ecd0
+--- /dev/null
++++ b/src/kern/arm/64/cpu-arm-64.cpp
+@@ -0,0 +1,144 @@
++//----------------------------------------------------------------------
++INTERFACE [arm && armv8]:
++
++EXTENSION class Cpu
++{
++public:
++  enum {
++    Sctlr_m       = 1UL << 0,
++    Sctlr_a       = 1UL << 1,
++    Sctlr_c       = 1UL << 2,
++    Sctlr_sa      = 1UL << 3,
++    Sctlr_sa0     = 1UL << 4,
++    Sctlr_cp15ben = 1UL << 5,
++    Sctlr_itd     = 1UL << 7,
++    Sctlr_sed     = 1UL << 8,
++    Sctlr_uma     = 1UL << 9,
++    Sctlr_i       = 1UL << 12,
++    Sctlr_dze     = 1UL << 14,
++    Sctlr_uct     = 1UL << 15,
++    Sctlr_ntwi    = 1UL << 16,
++    Sctlr_ntwe    = 1UL << 18,
++    Sctlr_wxn     = 1UL << 19,
++    Sctlr_e0e     = 1UL << 24,
++    Sctlr_ee      = 1UL << 25,
++    Sctlr_uci     = 1UL << 26,
++
++    Sctlr_res = (1UL << 11) | (1UL << 20) | (3UL << 22) | (3UL << 28),
++
++    Sctlr_generic = Sctlr_m
++                    | (Config::Cp15_c1_use_alignment_check ?  Sctlr_a : 0)
++                    | Sctlr_c
++                    | Sctlr_cp15ben
++                    | Sctlr_sed
++                    | Sctlr_i
++                    | Sctlr_dze
++                    | Sctlr_uct
++                    | Sctlr_uci
++                    | Sctlr_res,
++  };
++};
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [arm]:
++
++IMPLEMENT_OVERRIDE inline
++void
++Cpu::init_mmu()
++{
++  extern char exception_vector[];
++  asm volatile ("msr VBAR_EL1, %0" : : "r"(&exception_vector));
++}
++
++PUBLIC static inline
++bool
++Cpu::has_generic_timer()
++{ return true; }
++
++PRIVATE static inline
++Mword
++Cpu::midr()
++{
++  Mword m;
++  asm volatile ("mrs %0, midr_el1" : "=r" (m));
++  return m;
++}
++
++IMPLEMENT
++void
++Cpu::id_init()
++{
++  __asm__("mrs %0, ID_AA64PFR0_EL1": "=r" (_cpu_id._pfr[0]));
++  __asm__("mrs %0, ID_AA64PFR1_EL1": "=r" (_cpu_id._pfr[1]));
++  __asm__("mrs %0, ID_AA64DFR0_EL1": "=r" (_cpu_id._dfr0));
++  __asm__("mrs %0, ID_AA64DFR1_EL1": "=r" (_cpu_id._afr0));
++  __asm__("mrs %0, ID_AA64MMFR0_EL1": "=r" (_cpu_id._mmfr[0]));
++  __asm__("mrs %0, ID_AA64MMFR1_EL1": "=r" (_cpu_id._mmfr[1]));
++}
++
++IMPLEMENT
++void Cpu::early_init()
++{
++  early_init_platform();
++
++  Mem_unit::flush_cache();
++}
++
++PUBLIC static inline
++void
++Cpu::enable_dcache()
++{
++  asm volatile("mrs     %0, SCTLR_E1 \n"
++               "orr     %0, %1       \n"
++               "msr     SCTLR_E1, %0 \n"
++               : : "r" (0), "i" (Sctlr_c | Sctlr_i));
++}
++
++PUBLIC static inline
++void
++Cpu::disable_dcache()
++{
++  asm volatile("mrs     %0, SCTLR_E1 \n"
++               "bic     %0, %1       \n"
++               "msr     SCTLR_E1, %0 \n"
++               : : "r" (0), "i" (Sctlr_c | Sctlr_i));
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [arm && armv8]:
++
++PUBLIC static inline NEEDS[Cpu::midr]
++bool
++Cpu::is_smp_capable()
++{
++  // Check for ARM Cortex A53+ CPUs
++  Mword id = midr();
++  return (id & 0xff0fff00) == 0x410fd000;
++}
++
++PUBLIC static inline
++void
++Cpu::enable_smp()
++{
++  if (!is_smp_capable())
++    return;
++
++  Mword cpuectl;
++  asm volatile ("mrs %0, S3_1_C15_C2_1" : "=r" (cpuectl));
++  if (!(cpuectl & (1 << 6)))
++    asm volatile ("msr S3_1_C15_C2_1, %0" : : "r" (cpuectl | (1 << 6)));
++}
++
++PUBLIC static inline
++void
++Cpu::disable_smp()
++{
++  if (!is_smp_capable())
++    return;
++
++  Mword cpuectl;
++  asm volatile ("mrs %0, S3_1_C15_C2_1" : "=r" (cpuectl));
++  if (cpuectl & (1 << 6))
++    asm volatile ("msr S3_1_C15_C2_1, %0" : : "r" (cpuectl & ~(1UL << 6)));
++}
++
+diff --git a/src/kern/arm/64/crt0.S b/src/kern/arm/64/crt0.S
+new file mode 100644
+index 0000000..4c6ea5d
+--- /dev/null
++++ b/src/kern/arm/64/crt0.S
+@@ -0,0 +1,21 @@
++/* -*- c -*- */
++
++#include "asm.h"
++.section .text.init,#alloc,#execinstr
++.type start,#function
++ENTRY(_start_kernel)
++ENTRY(start)
++	ldr	x9, =_stack;
++	mov	sp, x9
++	bl	__main
++
++     /* never returns */
++
++.section ".init.data"
++.p2align 4
++.globl _sstack
++_sstack:
++	.space	4096
++.globl _stack
++.type _stack,#object
++_stack:
+diff --git a/src/kern/arm/64/entry_frame-arm.cpp b/src/kern/arm/64/entry_frame-arm.cpp
+new file mode 100644
+index 0000000..12df96c
+--- /dev/null
++++ b/src/kern/arm/64/entry_frame-arm.cpp
+@@ -0,0 +1,143 @@
++INTERFACE [arm && 64bit]:
++
++#include "l4_types.h"
++#include "types.h"
++#include "processor.h"
++
++class Syscall_frame
++{
++private:
++  Mword r[5];
++
++public:
++  void from(Mword id)
++  { r[4] = id; }
++
++  Mword from_spec() const
++  { return r[4]; }
++
++   L4_obj_ref ref() const
++  { return L4_obj_ref::from_raw(r[2]); }
++
++  void ref(L4_obj_ref const &ref)
++  { r[2] = ref.raw(); }
++
++  L4_timeout_pair timeout() const
++  { return L4_timeout_pair(r[3]); }
++
++  void timeout(L4_timeout_pair const &to)
++  { r[3] = to.raw(); }
++
++  Utcb *utcb() const
++  { return reinterpret_cast<Utcb*>(r[1]); }
++
++  L4_msg_tag tag() const
++  { return L4_msg_tag(r[0]); }
++
++  void tag(L4_msg_tag const &tag)
++  { r[0] = tag.raw(); }
++};
++
++class Entry_frame;
++
++class Return_frame
++{
++public:
++  Mword eret_work;
++  Mword r[31];
++  union
++  {
++    Arm_esr esr;
++    Mword error_code;
++  };
++  Mword pf_address;
++  Mword usp;
++  Mword pc;
++  union
++  {
++    Mword pstate;
++    Mword psr;
++  };
++
++  Mword sp() const
++  { return usp; }
++
++  void sp(Mword sp)
++  { usp = sp; }
++
++  Mword ip() const
++  { return pc; }
++
++  void ip(Mword pc)
++  { this->pc = pc; }
++
++  Syscall_frame *syscall_frame()
++  { return reinterpret_cast<Syscall_frame *>(&r[0]); }
++
++  Syscall_frame const *syscall_frame() const
++  { return reinterpret_cast<Syscall_frame const *>(&r[0]); }
++
++  static Entry_frame *to_entry_frame(Syscall_frame *sf)
++  {
++    // assume Entry_frame == Return_frame
++    return reinterpret_cast<Entry_frame *>
++      (  reinterpret_cast<char *>(sf)
++       - reinterpret_cast<intptr_t>(&reinterpret_cast<Return_frame *>(0)->r[0]));
++  }
++
++  Mword ip_syscall_page_user() const
++  { return pc; }
++};
++
++class Entry_frame : public Return_frame {};
++
++//------------------------------------------------------------------
++IMPLEMENTATION [arm && 64bit && !hyp]:
++
++PUBLIC inline
++bool
++Return_frame::check_valid_user_psr() const
++{ return (pstate & Proc::Status_mode_mask) == 0x01; }
++
++//------------------------------------------------------------------
++IMPLEMENTATION [arm && 64bit && hyp]:
++
++PUBLIC inline
++bool
++Return_frame::check_valid_user_psr() const
++{ return (pstate & 0x1c) != 0x08; }
++
++// ------------------------------------------------------
++IMPLEMENTATION [arm && 64bit]:
++
++#include <cstdio>
++#include "processor.h"
++#include "mem.h"
++
++PUBLIC inline NEEDS["processor.h", "mem.h"]
++void
++Entry_frame::copy_and_sanitize(Entry_frame const *src)
++{
++  Mem::memcpy_mwords(&esr, &src->esr, 34);
++  pstate = access_once(&src->pstate);
++  pstate &= ~(Proc::Status_mode_mask | Proc::Status_interrupts_mask);
++  pstate |= Proc::Status_mode_user | Proc::Status_always_mask;
++}
++
++PUBLIC inline NEEDS["processor.h"]
++void
++Return_frame::psr_set_mode(unsigned char m)
++{
++  pstate = (pstate & ~Proc::Status_mode_mask) | m;
++}
++
++PUBLIC
++void
++Syscall_frame::dump()
++{
++  printf(" R0: %08lx  R1: %08lx  R2: %08lx  R3: %08lx\n",
++         r[0], r[1], r[2], r[3]);
++  printf(" R4: %08lx\n", r[4]);
++}
++
++
+diff --git a/src/kern/arm/64/fpu-arm.cpp b/src/kern/arm/64/fpu-arm.cpp
+new file mode 100644
+index 0000000..9be36d0
+--- /dev/null
++++ b/src/kern/arm/64/fpu-arm.cpp
+@@ -0,0 +1,288 @@
++//------------------------------------------------------------------------
++INTERFACE [armv8 && fpu]:
++
++EXTENSION class Fpu
++{
++public:
++  struct Exception_state_user
++  {
++  };
++
++  struct Fpu_regs
++  {
++    Unsigned32 fpcr, fpsr;
++    Unsigned64 state[64]; // 32 128bit regs
++  };
++};
++
++// ------------------------------------------------------------------------
++INTERFACE [arm && !fpu]:
++
++EXTENSION class Fpu
++{
++public:
++  struct Exception_state_user
++  {
++  };
++};
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && !fpu]:
++
++#include "trap_state.h"
++
++PUBLIC static inline NEEDS["trap_state.h"]
++void
++Fpu::save_user_exception_state(bool, Fpu_state *, Trap_state *,
++                               Exception_state_user *)
++{}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && fpu && armv6plus && !hyp]:
++
++PRIVATE static inline
++void
++Fpu::copro_enable()
++{
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && fpu && armv6plus && hyp]:
++
++PRIVATE static inline
++void
++Fpu::copro_enable()
++{
++  asm volatile("mrs  %0, CPACR_EL2  \n"
++               "orr  %0, %0, %1     \n"
++               "msr  CPACR_EL2, %0  \n"
++               : : "r" (0), "I" (3UL << 20));
++  Mem::isb();
++}
++
++// ------------------------------------------------------------------------
++IMPLEMENTATION [arm && fpu]:
++
++#include <cassert>
++#include <cstdio>
++#include <cstring>
++
++#include "fpu_state.h"
++#include "mem.h"
++#include "processor.h"
++#include "static_assert.h"
++#include "trap_state.h"
++
++IMPLEMENT
++void
++Fpu::init(Cpu_number cpu, bool resume)
++{
++  if (Config::Jdb && !resume && cpu == Cpu_number::boot_cpu())
++    printf("FPU: Initialize\n");
++
++  Fpu &f = fpu.cpu(cpu);
++  if (!resume)
++    show(cpu);
++
++  f.disable();
++  f.set_owner(0);
++}
++
++PRIVATE static inline
++void
++Fpu::save_fpu_regs(Fpu_regs *r)
++{
++  asm volatile("stp     q0, q1,   [%[s], #16 *  0]        \n"
++               "stp     q2, q3,   [%[s], #16 *  2]        \n"
++               "stp     q4, q5,   [%[s], #16 *  4]        \n"
++               "stp     q6, q7,   [%[s], #16 *  6]        \n"
++               "stp     q8, q9,   [%[s], #16 *  8]        \n"
++               "stp     q10, q11, [%[s], #16 * 10]        \n"
++               "stp     q12, q13, [%[s], #16 * 12]        \n"
++               "stp     q14, q15, [%[s], #16 * 14]        \n"
++               "stp     q16, q17, [%[s], #16 * 16]        \n"
++               "stp     q18, q19, [%[s], #16 * 18]        \n"
++               "stp     q20, q21, [%[s], #16 * 20]        \n"
++               "stp     q22, q23, [%[s], #16 * 22]        \n"
++               "stp     q24, q25, [%[s], #16 * 24]        \n"
++               "stp     q26, q27, [%[s], #16 * 26]        \n"
++               "stp     q28, q29, [%[s], #16 * 28]        \n"
++               "stp     q30, q31, [%[s], #16 * 30]        \n"
++               "mrs     %[fpcr], fpcr                     \n"
++               "mrs     %[fpsr], fpsr                     \n"
++               : [fpcr] "=r" (r->fpcr),
++                 [fpsr] "=r" (r->fpsr),
++                 "=m" (r->state)
++               : [s] "r" (r->state));
++}
++
++PRIVATE static inline
++void
++Fpu::restore_fpu_regs(Fpu_regs *r)
++{
++  asm volatile("ldp     q0, q1,   [%[s], #16 *  0]        \n"
++               "ldp     q2, q3,   [%[s], #16 *  2]        \n"
++               "ldp     q4, q5,   [%[s], #16 *  4]        \n"
++               "ldp     q6, q7,   [%[s], #16 *  6]        \n"
++               "ldp     q8, q9,   [%[s], #16 *  8]        \n"
++               "ldp     q10, q11, [%[s], #16 * 10]        \n"
++               "ldp     q12, q13, [%[s], #16 * 12]        \n"
++               "ldp     q14, q15, [%[s], #16 * 14]        \n"
++               "ldp     q16, q17, [%[s], #16 * 16]        \n"
++               "ldp     q18, q19, [%[s], #16 * 18]        \n"
++               "ldp     q20, q21, [%[s], #16 * 20]        \n"
++               "ldp     q22, q23, [%[s], #16 * 22]        \n"
++               "ldp     q24, q25, [%[s], #16 * 24]        \n"
++               "ldp     q26, q27, [%[s], #16 * 26]        \n"
++               "ldp     q28, q29, [%[s], #16 * 28]        \n"
++               "ldp     q30, q31, [%[s], #16 * 30]        \n"
++               "msr     fpcr, %[fpcr]                     \n"
++               "msr     fpsr, %[fpsr]                     \n"
++               : : [fpcr] "r" (r->fpcr),
++                   [fpsr] "r" (r->fpsr),
++                   [s] "r" (r->state),
++                   "m" (r->state));
++}
++
++IMPLEMENT
++void
++Fpu::save_state(Fpu_state *s)
++{
++  Fpu_regs *fpu_regs = reinterpret_cast<Fpu_regs *>(s->state_buffer());
++
++  assert(fpu_regs);
++  save_fpu_regs(fpu_regs);
++}
++
++IMPLEMENT_DEFAULT
++void
++Fpu::restore_state(Fpu_state *s)
++{
++  Fpu_regs *fpu_regs = reinterpret_cast<Fpu_regs *>(s->state_buffer());
++
++  assert(fpu_regs);
++  restore_fpu_regs(fpu_regs);
++}
++
++IMPLEMENT inline
++unsigned
++Fpu::state_size()
++{ return sizeof (Fpu_regs); }
++
++IMPLEMENT inline
++unsigned
++Fpu::state_align()
++{ return 16; }
++
++PUBLIC static inline NEEDS["trap_state.h", <cassert>]
++void
++Fpu::save_user_exception_state(bool, Fpu_state *, Trap_state *, Exception_state_user *)
++{
++}
++
++IMPLEMENTATION [arm && fpu]:
++
++PRIVATE static
++void
++Fpu::show(Cpu_number)
++{}
++
++//-------------------------------------------------------------------------
++IMPLEMENTATION [arm && fpu && !hyp]:
++
++IMPLEMENT inline NEEDS ["fpu_state.h", "mem.h", "static_assert.h", <cstring>]
++void
++Fpu::init_state(Fpu_state *s)
++{
++  Fpu_regs *fpu_regs = reinterpret_cast<Fpu_regs *>(s->state_buffer());
++  static_assert(!(sizeof (*fpu_regs) % sizeof(Mword)),
++                "Non-mword size of Fpu_regs");
++  Mem::memset_mwords(fpu_regs, 0, sizeof (*fpu_regs) / sizeof(Mword));
++}
++
++PUBLIC static
++bool
++Fpu::is_enabled()
++{
++  Mword x;
++  asm volatile ("mrs %0, CPACR_EL1" : "=r"(x));
++  return x & (3UL << 20);
++}
++
++
++PUBLIC static inline
++void
++Fpu::enable()
++{
++  Mword t;
++  asm volatile("mrs  %0, CPACR_EL1  \n"
++               "orr  %0, %0, %1     \n"
++               "msr  CPACR_EL1, %0  \n"
++               : "=r"(t) : "I" (3UL << 20));
++  Mem::isb();
++}
++
++PUBLIC static inline
++void
++Fpu::disable()
++{
++  Mword t;
++  asm volatile("mrs  %0, CPACR_EL1  \n"
++               "bic  %0, %0, %1     \n"
++               "msr  CPACR_EL1, %0  \n"
++               : "=r"(t) : "I" (3UL << 20));
++}
++
++//-------------------------------------------------------------------------
++IMPLEMENTATION [arm && fpu && hyp]:
++
++EXTENSION class Fpu
++{
++private:
++  Mword _fpexc;
++};
++
++IMPLEMENT inline NEEDS ["fpu_state.h", "mem.h", "static_assert.h", <cstring>]
++void
++Fpu::init_state(Fpu_state *s)
++{
++  Fpu_regs *fpu_regs = reinterpret_cast<Fpu_regs *>(s->state_buffer());
++  static_assert(!(sizeof (*fpu_regs) % sizeof(Mword)),
++                "Non-mword size of Fpu_regs");
++  Mem::memset_mwords(fpu_regs, 0, sizeof (*fpu_regs) / sizeof(Mword));
++  fpu_regs->fpexc |= FPEXC_EN;
++}
++
++PUBLIC static
++bool
++Fpu::is_enabled()
++{
++  Mword dummy;
++  __asm__ __volatile__ ("mrs %0, CPTR_EL2" : "=r"(dummy));
++  return !(dummy & (1 << 10));
++}
++
++
++PUBLIC inline
++void
++Fpu::enable()
++{
++  Mword dummy;
++  __asm__ __volatile__ (
++      "mrs %0, CPTR_EL2         \n"
++      "bic %0, %0, #(1 << 10)   \n"
++      "msr CPTR_EL2, %0         \n"
++      : "=&r" (dummy) );
++}
++
++PUBLIC inline
++void
++Fpu::disable()
++{
++  __asm__ __volatile__ (
++      "mrs %0, CPTR_EL2        \n"
++      "orr %0, %0, #(1 << 10)  \n"
++      "msr CPTR_EL2, %0        \n"
++      : "=&r" (dummy) );
++}
++
+diff --git a/src/kern/arm/64/generic_timer.cpp b/src/kern/arm/64/generic_timer.cpp
+new file mode 100644
+index 0000000..f30496d
+--- /dev/null
++++ b/src/kern/arm/64/generic_timer.cpp
+@@ -0,0 +1,113 @@
++INTERFACE [arm && arm_generic_timer]:
++
++namespace Generic_timer {
++
++  enum Timer_type { Physical, Virtual, Hyp };
++
++  template<unsigned Type>  struct T;
++
++  template<> struct T<Virtual>
++  {
++    enum { Type = Virtual };
++    /* In non-HYP mode we use always the virtual counter and the
++     * virtual timer
++     */
++    static Unsigned64 counter() // use the virtual counter
++    { Unsigned64 v; asm volatile("mrs %0, CNTVCT_EL0" : "=r" (v)); return v; }
++
++    static Unsigned64 compare()
++    { Unsigned64 v; asm volatile("mrs %0, CNTV_CVAL_EL0" : "=r" (v)); return v; }
++
++    static void compare(Unsigned64 v)
++    { asm volatile("msr CNTV_CVAL_EL0, %0" : : "r" (v)); }
++
++    static Unsigned32 control()
++    { Unsigned32 v; asm volatile("mrs %0, CNTV_CTL_EL0" : "=r" (v)); return v; }
++
++    static void control(Unsigned32 v)
++    { asm volatile("msr CNTV_CTL_EL0, %0" : : "r" (v)); }
++
++    static void setup_timer_access()
++    {
++      // CNTKCTL: allow access to virtual counter from PL0
++      asm volatile("msr CNTKCTL_EL1, %0" : : "r"(0x2));
++    }
++
++    static Unsigned32 frequency()
++    { Unsigned32 v; asm volatile ("mrs %0, CNTFRQ_EL0": "=r" (v)); return v; }
++
++    static void frequency(Unsigned32 v)
++    { asm volatile ("msr CNTFRQ_EL0, %0" : : "r" (v)); }
++  };
++
++  template<> struct T<Physical>
++  {
++    enum { Type = Physical };
++    /* In non-HYP mode we use always the virtual counter and the
++     * virtual timer
++     */
++    static Unsigned64 counter() // use the virtual counter
++    { Unsigned64 v; asm volatile("mrs %0, CNTPCT_EL0" : "=r" (v)); return v; }
++
++    static Unsigned64 compare()
++    { Unsigned64 v; asm volatile("mrs %0, CNTP_CVAL_EL0" : "=r" (v)); return v; }
++
++    static void compare(Unsigned64 v)
++    { asm volatile("msr CNTP_CVAL_EL0, %0" : : "r" (v)); }
++
++    static Unsigned32 control()
++    { Unsigned32 v; asm volatile("mrs %0, CNTP_CTL_EL0" : "=r" (v)); return v; }
++
++    static void control(Unsigned32 v)
++    { asm volatile("msr CNTP_CTL_EL0, %0" : : "r" (v)); }
++
++    static void setup_timer_access()
++    {
++       // CNTKCTL: allow access to virtual and physical counter from PL0
++      asm volatile("msr CNTKCTL_EL1, %0" : : "r"(0x3));
++    }
++
++    static Unsigned32 frequency()
++    { Unsigned32 v; asm volatile ("mrs %0, CNTFRQ_EL0": "=r" (v)); return v; }
++
++    static void frequency(Unsigned32 v)
++    { asm volatile ("msr CNTFRQ_EL0, %0" : : "r" (v)); }
++  };
++
++  template<> struct T<Hyp>
++  {
++    enum { Type = Hyp };
++    /* In HYP mode we use the physical counter and the
++     * HYP mode timer
++     */
++    static Unsigned64 counter() // use the physical counter
++    { Unsigned64 v; asm volatile("mrs %0, CNTPCT_EL0" : "=r" (v)); return v; }
++
++    static Unsigned64 compare()
++    { Unsigned64 v; asm volatile("mrs %0, CNTHP_CVAL_EL2" : "=r" (v)); return v; }
++
++    static void compare(Unsigned64 v)
++    { asm volatile("msr CNTHP_CVAL_EL2, %0" : : "r" (v)); }
++
++    static Unsigned32 control()
++    { Unsigned32 v; asm volatile("mrs %0, CNTHP_CTL_EL2" : "=r" (v)); return v; }
++
++    static void control(Unsigned32 v)
++    { asm volatile("msr CNTHP_CTL_EL2, %0" : : "r" (v)); }
++
++    static void setup_timer_access()
++    {
++      // CNTKCTL: allow access to virtual and physical counter from PL0
++      asm volatile("msr CNTKCTL_EL1, %0" : : "r"(0x3));
++      // CNTHCTL: forbid access to physical timer from PL0 and PL1
++      asm volatile("msr CNTHCTL_EL2, %0" : : "r"(0x0));
++    }
++
++    static Unsigned32 frequency()
++    { Unsigned32 v; asm volatile ("mrs %0, CNTFRQ_EL0": "=r" (v)); return v; }
++
++    static void frequency(Unsigned32 v)
++    { asm volatile ("msr CNTFRQ_EL0, %0" : : "r" (v)); }
++  };
++}
++
+diff --git a/src/kern/arm/64/ivt.S b/src/kern/arm/64/ivt.S
+new file mode 100644
+index 0000000..29784ed
+--- /dev/null
++++ b/src/kern/arm/64/ivt.S
+@@ -0,0 +1,219 @@
++/* -*- asm -*- */
++
++#include "globalconfig.h"
++#include "config_tcbsize.h"
++#include "tcboffset.h"
++#include "asm_entry.h"
++
++#define EF_ERETW  ( 0 * 8)
++#define EF_ESR    (32 * 8)
++#define EF_PFA    (33 * 8)
++#define EF_SP     (34 * 8)
++#define EF_PC     (35 * 8)
++#define EF_PSTATE (36 * 8)
++#define EF_SIZE   (37 * 8)
++
++.macro save_gprs no_78=0
++	stp	xzr, x0,   [sp]
++	stp	x1, x2,    [sp,  #16]
++	stp	x3, x4,    [sp,  #32]
++	stp	x5, x6,    [sp,  #48]
++	.if \no_78 == 0
++		stp	x7, x8,    [sp,  #64]
++	.endif
++	stp	x9, x10,   [sp,  #80]
++	stp	x11, x12,  [sp,  #96]
++	stp	x13, x14,  [sp, #112]
++	stp	x15, x16,  [sp, #128]
++	stp	x17, x18,  [sp, #144]
++	stp	x19, x20,  [sp, #160]
++	stp	x21, x22,  [sp, #176]
++	stp	x23, x24,  [sp, #192]
++	stp	x25, x26,  [sp, #208]
++	stp	x27, x28,  [sp, #224]
++	stp	x29, x30,  [sp, #240]
++.endm
++
++.macro restore_gprs freg=sp
++	.if \freg != x0
++		ldr	x0,        [\freg,   #8]
++	.endif
++	ldp	x1, x2,    [\freg,  #16]
++	ldp	x3, x4,    [\freg,  #32]
++	ldp	x5, x6,    [\freg,  #48]
++	ldp	x7, x8,    [\freg,  #64]
++	ldp	x9, x10,   [\freg,  #80]
++	ldp	x11, x12,  [\freg,  #96]
++	ldp	x13, x14,  [\freg, #112]
++	ldp	x15, x16,  [\freg, #128]
++	ldp	x17, x18,  [\freg, #144]
++	ldp	x19, x20,  [\freg, #160]
++	ldp	x21, x22,  [\freg, #176]
++	ldp	x23, x24,  [\freg, #192]
++	ldp	x25, x26,  [\freg, #208]
++	ldp	x27, x28,  [\freg, #224]
++	ldp	x29, x30,  [\freg, #240]
++.endm
++
++.macro load_eret_state freg=sp
++	// ldr	x2, [\freg, #EF_SP]
++	// msr	SP_EL0, x2
++	ldp	x3, x4, [\freg, #EF_PC]
++	msr	ELR_EL1, x3
++	msr	SPSR_EL1, x4
++.endm
++
++
++.section	.text.excp, "xa"
++
++.type	leave_by_trigger_exception, function
++.global	leave_by_trigger_exception
++leave_by_trigger_exception:
++	mov	x1, #(0x3e << 26)
++	str	x1,  [x0, #EF_ESR]
++	b	slowtrap_entry
++
++.type	fast_ret_from_irq, function
++.global	fast_ret_from_irq
++.type	__return_from_user_invoke, function
++.global	__return_from_user_invoke
++.type	__iret, function
++.global	__iret
++__iret:
++	ldr	x0, [sp]
++	ldr	x1, [x0, #EF_ERETW]
++	cbnz	x1, 1f // handle continuations
++	mov	sp, x0
++__return_from_user_invoke:
++fast_ret_from_irq:
++	mrs x5, daif
++	cmp x5, #0x3c0
++	b.eq 99f
++	brk 0x400
++99:
++	load_eret_state sp
++	restore_gprs
++	add	sp, sp, #EF_SIZE
++	eret
++
++1:	str	xzr, [x0, #EF_ERETW] // reset continuation
++	br	x1                   // handle continuation in x1
++
++.type	vcpu_resume, function
++.global	vcpu_resume
++vcpu_resume:
++	add	sp, x1, #EF_SIZE
++	load_eret_state x0
++	restore_gprs x0
++	ldr	x0, [x0, #8]
++	eret
++
++
++.global kern_kdebug_ipi_entry
++kern_kdebug_ipi_entry:
++	brk 10
++
++.align 3
++.global	sys_call_table
++sys_call_table:
++	.8byte sys_ipc_wrapper
++
++.Lgeneric_entry:
++	save_gprs 1
++	mrs	x3, ELR_EL1
++	mrs	x4, SPSR_EL1
++	stp	x3, x4, [sp, #EF_PC]
++	mov	x0, sp
++	str	x0, [sp, #-8]!
++	adr	x30, __iret
++	br	x7
++
++.macro ENTRY func
++	sub	sp, sp, #EF_SIZE
++	stp	x7, x8,    [sp,  #64]
++	adr	x7, \func
++	b .Lgeneric_entry
++.endm
++
++.Lirq_entry:
++	sub	sp, sp, #EF_SIZE
++	save_gprs
++	mrs	x3, ELR_EL1
++	mrs	x4, SPSR_EL1
++	stp	x3, x4, [sp, #EF_PC]
++	mov	x0, sp
++	str	x0, [sp, #-8]!
++	adr	x30, __iret
++	b	irq_handler
++
++.Ldbg:
++	sub	sp, sp, #EF_SIZE
++	save_gprs
++	mrs	x3, ELR_EL1
++	mrs	x4, SPSR_EL1
++	stp	x3, x4, [sp, #EF_PC]
++	mov	x0, sp
++	str	x0, [sp, #-8]!
++	adr	x30, __iret
++	b	irq_handler
++
++
++.section	.text.ivt,"xa"
++.align 10
++.global exception_vector
++exception_vector:
++	# from el1 with sp_el0
++	.align 7
++	ENTRY call_nested_trap_handler
++	b .
++
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	# from el1 with sp_el1
++	.align 7
++	ENTRY arm_kernel_sync_entry
++	b .
++
++	.align 7 // IRQ
++	b	.Lirq_entry
++
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	# from el0 aarch64
++	.align 7
++	ENTRY arm_esr_entry
++
++	.align 7 // IRQ
++	b	.Lirq_entry
++
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	# from el0 aarch32
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	.align 7
++	b .
++
++	.align 7
+diff --git a/src/kern/arm/64/kdb_ke-arm.cpp b/src/kern/arm/64/kdb_ke-arm.cpp
+new file mode 100644
+index 0000000..904a9e4
+--- /dev/null
++++ b/src/kern/arm/64/kdb_ke-arm.cpp
+@@ -0,0 +1,14 @@
++IMPLEMENTATION [arm]:
++
++inline void kdb_ke(const char *msg)
++{
++  unsigned long x0 asm("x0") = (unsigned long)msg;
++  asm volatile ("brk #0" : : "r"(x0));
++}
++
++inline void kdb_ke_sequence(const char *msg)
++{
++  unsigned long x0 asm("x0") = (unsigned long)msg;
++  asm volatile ("brk #1" : : "r"(x0));
++}
++
+diff --git a/src/kern/arm/64/kernel_task-arm.cpp b/src/kern/arm/64/kernel_task-arm.cpp
+new file mode 100644
+index 0000000..2814a1b
+--- /dev/null
++++ b/src/kern/arm/64/kernel_task-arm.cpp
+@@ -0,0 +1,11 @@
++IMPLEMENTATION[arm]:
++
++#include "globals.h"
++#include "kmem_space.h"
++
++PRIVATE inline NEEDS["globals.h", "kmem_space.h"]
++Kernel_task::Kernel_task()
++: Task(Ram_quota::root, reinterpret_cast<Pdir*>(Kmem_space::kdir()), Caps::none())
++{}
++
++
+diff --git a/src/kern/arm/64/kernel_thread-arm-64.cpp b/src/kern/arm/64/kernel_thread-arm-64.cpp
+new file mode 100644
+index 0000000..94d4016
+--- /dev/null
++++ b/src/kern/arm/64/kernel_thread-arm-64.cpp
+@@ -0,0 +1,51 @@
++IMPLEMENTATION [arm && mp]:
++
++#include "io.h"
++#include "platform_control.h"
++#include "outer_cache.h"
++#include "scu.h"
++#include "paging.h"
++#include <cstdio>
++
++EXTENSION class Kernel_thread
++{
++  struct Mp_boot_info
++  {
++    Mword sctlr;
++    Mword pdbr;
++    Mword ttbcr;
++  };
++};
++
++PUBLIC
++static void
++Kernel_thread::boot_app_cpus()
++{
++  if (Config::Max_num_cpus <= 1)
++    return;
++
++  extern char _tramp_mp_entry[];
++  extern char _tramp_mp_boot_info[];
++  Mp_boot_info volatile *_tmp = reinterpret_cast<Mp_boot_info*>(_tramp_mp_boot_info);
++
++  if (Scu::Available)
++    {
++      unsigned num_ap_cpus = Cpu::scu->config() & 3;
++      printf("Number of CPUs: %d\n", num_ap_cpus + 1);
++    }
++
++  _tmp->sctlr = Cpu::Sctlr_generic;
++  _tmp->pdbr
++    = Kmem_space::kdir()->virt_to_phys((Address)Kmem_space::kdir()) | Page::Ttbr_bits;
++  _tmp->ttbcr   = Page::Ttbcr_bits;
++
++  __asm__ __volatile__ ("" : : : "memory");
++  Mem_unit::clean_dcache();
++
++  Outer_cache::clean(Kmem_space::kdir()->virt_to_phys((Address)&_tmp->sctlr));
++  Outer_cache::clean(Kmem_space::kdir()->virt_to_phys((Address)&_tmp->pdbr));
++  Outer_cache::clean(Kmem_space::kdir()->virt_to_phys((Address)&_tmp->ttbcr));
++
++  Platform_control::boot_ap_cpus(Kmem_space::kdir()->virt_to_phys((Address)_tramp_mp_entry));
++}
++
+diff --git a/src/kern/arm/64/kmem-arm-64.cpp b/src/kern/arm/64/kmem-arm-64.cpp
+new file mode 100644
+index 0000000..a656d13
+--- /dev/null
++++ b/src/kern/arm/64/kmem-arm-64.cpp
+@@ -0,0 +1,25 @@
++IMPLEMENTATION [!noncont_mem]:
++
++PUBLIC static
++Address
++Kmem::mmio_remap(Address phys)
++{
++  static Address ndev = 0;
++  Address dm = Mem_layout::Registers_map_start + ndev;
++  assert(dm < Mem_layout::Registers_map_end);
++
++  ndev += Config::SUPERPAGE_SIZE;
++
++  auto m = Kmem_space::kdir()->walk(Virt_addr(dm), Pte_ptr::Super_level);
++  assert (!m.is_valid());
++  assert (m.page_order() == Config::SUPERPAGE_SHIFT);
++  Address phys_page = cxx::mask_lsb(phys, Config::SUPERPAGE_SHIFT);
++  m.set_page(m.make_page(Phys_mem_addr(phys_page),
++                         Page::Attr(Page::Rights::RWX(),
++                                    Page::Type::Uncached(),
++                                    Page::Kern::Global())));
++
++  m.write_back_if(true, Mem_unit::Asid_kernel);
++
++  return (phys & ~Config::SUPERPAGE_MASK) | (dm & Config::SUPERPAGE_MASK);
++}
+diff --git a/src/kern/arm/64/kmem_space-arm-64.cpp b/src/kern/arm/64/kmem_space-arm-64.cpp
+new file mode 100644
+index 0000000..4ffa0eb
+--- /dev/null
++++ b/src/kern/arm/64/kmem_space-arm-64.cpp
+@@ -0,0 +1,14 @@
++IMPLEMENTATION [arm]:
++
++typedef Unsigned64 K_ptab_array[512] __attribute__((aligned(0x1000)));
++
++K_ptab_array kernel_l0_vdir;
++K_ptab_array kernel_l1_vdir;
++K_ptab_array kernel_l2_mmio_dir;
++K_ptab_array kernel_l0_dir;
++K_ptab_array kernel_l1_dir;
++Kpdir *Kmem_space::_kdir = (Kpdir *)&kernel_l0_vdir;
++
++// initialize the kernel space (page table)
++IMPLEMENT inline void Kmem_space::init() {}
++
+diff --git a/src/kern/arm/64/mem_layout-arm-64.cpp b/src/kern/arm/64/mem_layout-arm-64.cpp
+new file mode 100644
+index 0000000..6133a78
+--- /dev/null
++++ b/src/kern/arm/64/mem_layout-arm-64.cpp
+@@ -0,0 +1,46 @@
++INTERFACE [arm]:
++
++#include "config.h"
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Virt_layout : Address {
++    User_max             = 0x0000fffeffffffff,
++    Utcb_addr            = User_max + 1 - 0x10000,
++  };
++};
++
++//---------------------------------------------------------------------------
++INTERFACE [arm && !hyp]:
++
++#include "template_math.h"
++
++EXTENSION class Mem_layout
++{
++public:
++  enum Virt_layout_kern : Address {
++    Service_page         = 0xffff1000eac00000,
++    Tbuf_status_page     = Service_page + 0x5000,
++    Tbuf_ustatus_page    = Tbuf_status_page,
++    Tbuf_buffer_area	 = Service_page + 0x200000,
++    Tbuf_ubuffer_area    = Tbuf_buffer_area,
++    Jdb_tmp_map_area     = Service_page + 0x400000,
++    Registers_map_start  = 0xffff000000000000,
++    Registers_map_end    = 0xffff000040000000,
++    Cache_flush_area     = 0xef000000,
++    Cache_flush_area_end = 0xef100000,
++    Map_base             = 0xffff000040000000,
++    //Pmem_start           = 0xf0400000,
++    //Pmem_end             = 0xf5000000,
++
++    Caps_start           = 0xfffff5000000,
++    Caps_end             = 0xfffffd000000,
++    //Utcb_ptr_page        = 0xffffffffd000,
++    // don't care about caches here, because arm uses a register on MP
++    utcb_ptr_align       = Tl_math::Ld<sizeof(void*)>::Res,
++  };
++
++};
++
++
+diff --git a/src/kern/arm/64/mem_op-arm-64.cpp b/src/kern/arm/64/mem_op-arm-64.cpp
+new file mode 100644
+index 0000000..6b9009f
+--- /dev/null
++++ b/src/kern/arm/64/mem_op-arm-64.cpp
+@@ -0,0 +1,17 @@
++IMPLEMENTATION [arm]:
++
++PRIVATE static void
++Mem_op::inv_icache(Address start, Address end)
++{
++  if (Address(end) - Address(start) > 0x2000)
++    asm volatile("ic iallu");
++  else
++    {
++      Mword s = Mem_unit::icache_line_size();
++      for (start &= ~(s - 1);
++           start < end; start += s)
++        asm volatile("ic ivau, %0" : : "r" (start));
++    }
++}
++
++
+diff --git a/src/kern/arm/64/mem_space-arm-64.cpp b/src/kern/arm/64/mem_space-arm-64.cpp
+new file mode 100644
+index 0000000..7119fcb
+--- /dev/null
++++ b/src/kern/arm/64/mem_space-arm-64.cpp
+@@ -0,0 +1,49 @@
++IMPLEMENTATION [arm]:
++
++PROTECTED inline NEEDS["kmem_alloc.h"]
++int
++Mem_space::sync_kernel()
++{
++  // FIXME: add syscall page etc... if needed
++  return 0;
++}
++
++PUBLIC inline NEEDS [Mem_space::virt_to_phys]
++Address
++Mem_space::pmem_to_phys(Address virt) const
++{
++  return virt - Mem_layout::Map_base + Mem_layout::Sdram_phys_base;
++}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [armv8 && arm_lpae && !hyp]:
++
++IMPLEMENT inline NEEDS[Mem_space::asid]
++void
++Mem_space::make_current()
++{
++  asm volatile (
++      "msr TTBR0_EL1, %0            \n" // set TTBR
++      "isb                          \n"
++      :
++      : "r" (Phys_mem_addr::val(_dir_phys) | (asid() << 48)));
++  _current.current() = this;
++}
++
++//----------------------------------------------------------------------------
++IMPLEMENTATION [armv8 && arm_lpae && hyp]:
++
++IMPLEMENT inline NEEDS[Mem_space::asid]
++void
++Mem_space::make_current()
++{
++// FIXME: flush bt only when reassigning ASIDs not on switch !!!!!!!
++  asm volatile (
++      "msr VTTBR_EL2, %0            \n" // set TTBR
++      "isb                          \n"
++      :
++      : "r" (Phys_mem_addr::val(_dir_phys) | (asid() << 48)));
++
++  _current.current() = this;
++}
++
+diff --git a/src/kern/arm/64/mem_unit-arm-64.cpp b/src/kern/arm/64/mem_unit-arm-64.cpp
+new file mode 100644
+index 0000000..25ec93c
+--- /dev/null
++++ b/src/kern/arm/64/mem_unit-arm-64.cpp
+@@ -0,0 +1,17 @@
++IMPLEMENTATION [arm]:
++
++IMPLEMENT inline
++void Mem_unit::tlb_flush()
++{
++  asm volatile("tlbi vmalle1" : : "r" (0) : "memory");
++}
++
++IMPLEMENT inline
++void Mem_unit::dtlb_flush(void *va)
++{
++  asm volatile("tlbi vae1, %0"
++               : : "r" ((((unsigned long)va) >> 12) & 0x00000ffffffffffful)
++               : "memory");
++}
++
++
+diff --git a/src/kern/arm/64/mmu-arm-64.cpp b/src/kern/arm/64/mmu-arm-64.cpp
+new file mode 100644
+index 0000000..3fe2bff
+--- /dev/null
++++ b/src/kern/arm/64/mmu-arm-64.cpp
+@@ -0,0 +1,162 @@
++IMPLEMENTATION [arm && armv8]:
++
++IMPLEMENT static inline
++template < unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::btc_flush()
++{}
++
++IMPLEMENT static inline
++template < unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::btc_inv()
++{}
++
++PUBLIC static inline
++template< unsigned long Flush_area, bool Ram >
++Mword Mmu<Flush_area, Ram>::dcache_line_size()
++{
++  Mword v;
++  __asm__ __volatile__("msr CSSELR_EL1, %1; mrs %0, CCSIDR_EL1" : "=r" (v) : "r"(0));
++  return 16 << (v & 0x7);
++}
++
++PUBLIC static inline
++template< unsigned long Flush_area, bool Ram >
++Mword Mmu<Flush_area, Ram>::icache_line_size()
++{
++  Mword v;
++  __asm__ __volatile__("msr CSSELR_EL1, %1; mrs %0, CCSIDR_EL1" : "=r" (v) : "r"(1));
++  return 16 << (v & 0x7);
++}
++
++//-----------------------------------------------------------------------------
++IMPLEMENTATION [arm && armv8]:
++
++IMPLEMENT inline
++template< unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::flush_cache(void const *start,
++				       void const *end)
++{
++  unsigned i = icache_line_size(), d = dcache_line_size();
++  __asm__ __volatile__ (
++      "1:  dc civac, %[i]  \n"
++      "    ic ivau,  %[i]  \n"
++      "    add %[i], %[i], %[clsz]       \n"
++      "    cmp %[i], %[end]              \n"
++      "    blo 1b                        \n"
++      : [i]     "=&r" (start)
++      :         "0"   ((unsigned long)start & ~((i < d ? d : i) - 1)),
++        [end]   "r"   (end),
++	[clsz]  "ir"  (i < d ? i : d)
++      : "r0", "memory");
++  btc_inv();
++  Mem::dsb();
++}
++
++IMPLEMENT inline
++template< unsigned long Flush_area , bool Ram >
++void Mmu<Flush_area, Ram>::clean_dcache(void const *va)
++{
++  Mem::dsb();
++  __asm__ __volatile__ (
++      "dc cvac, %0       \n" // DCCMVAC
++      :
++      : "r" ((unsigned long)va & ~(dcache_line_size() - 1))
++      : "memory");
++}
++
++IMPLEMENT inline
++template< unsigned long Flush_area , bool Ram >
++void Mmu<Flush_area, Ram>::clean_dcache(void const *start, void const *end)
++{
++  Mem::dsb();
++  __asm__ __volatile__ (
++      "1:  dc cvac, %[i]  \n"
++      "    add %[i], %[i], %[clsz]        \n"
++      "    cmp %[i], %[end]               \n"
++      "    blo 1b                         \n"
++      : [i]     "=&r" (start)
++      :         "0"   ((unsigned long)start & ~(dcache_line_size() - 1)),
++        [end]   "r"   (end),
++	[clsz]  "ir"  (dcache_line_size())
++      : "memory");
++  btc_inv();
++  Mem::dsb();
++}
++
++IMPLEMENT
++template< unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::flush_dcache(void const *start, void const *end)
++{
++  Mem::dsb();
++  __asm__ __volatile__ (
++      "1:  dc civac, %[i] \n"
++      "    add %[i], %[i], %[clsz]      \n"
++      "    cmp %[i], %[end]             \n"
++      "    blo 1b                       \n"
++      : [i]    "=&r" (start)
++      :        "0"   ((unsigned long)start & ~(dcache_line_size() - 1)),
++        [end]  "r"   (end),
++	[clsz] "ir"  (dcache_line_size())
++      : "memory");
++  btc_inv();
++  Mem::dsb();
++}
++
++IMPLEMENT
++template< unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::inv_dcache(void const *start, void const *end)
++{
++  Mem::dsb();
++  __asm__ __volatile__ (
++      "1:  dc ivac, %[i] \n"
++      "    add %[i], %[i], %[clsz]      \n"
++      "    cmp %[i], %[end]             \n"
++      "    blo 1b                       \n"
++      : [i]    "=&r" (start)
++      :        "0"   ((unsigned long)start & ~(dcache_line_size() - 1)),
++        [end]  "r"   (end),
++	[clsz] "ir"  (dcache_line_size())
++      : "memory");
++  btc_inv();
++  Mem::dsb();
++}
++
++//-----------------------------------------------------------------------------
++IMPLEMENTATION [arm && armv8]:
++
++EXTENSION class Mmu
++{
++  static Mword get_clidr()
++  {
++    Mword clidr;
++    asm volatile("mrs %0, CLIDR_EL1" : "=r" (clidr));
++    return clidr;
++  }
++
++  static Mword get_ccsidr(Mword csselr)
++  {
++    Mword ccsidr;
++    Proc::Status s = Proc::cli_save();
++    asm volatile("msr CSSELR_EL1, %0" : : "r" (csselr));
++    Mem::isb();
++    asm volatile("mrs %0, CCSIDR_EL1" : "=r" (ccsidr));
++    Proc::sti_restore(s);
++    return ccsidr;
++  }
++
++  static void dc_cisw(Mword v)
++  {
++    asm volatile("dc cisw, %0" : : "r" (v) : "memory");
++  }
++
++  static void dc_csw(Mword v)
++  {
++    asm volatile("dc csw, %0" : : "r" (v) : "memory");
++  }
++
++  static void ic_iallu()
++  {
++    asm volatile("ic iallu" : : : "memory");
++  }
++};
++
+diff --git a/src/kern/arm/64/paging-arm-64.cpp b/src/kern/arm/64/paging-arm-64.cpp
+new file mode 100644
+index 0000000..9002654
+--- /dev/null
++++ b/src/kern/arm/64/paging-arm-64.cpp
+@@ -0,0 +1,20 @@
++INTERFACE [arm && arm_lpae]:
++
++EXTENSION class K_pte_ptr
++{
++public:
++  enum
++  {
++    Super_level    = 2,
++    Max_level      = 3,
++  };
++};
++
++typedef Ptab::Tupel< Ptab::Traits< Unsigned64, 39, 9, false>,
++                     Ptab::Traits< Unsigned64, 30, 9, true>,
++                     Ptab::Traits< Unsigned64, 21, 9, true>,
++                     Ptab::Traits< Unsigned64, 12, 9, true> >::List Ptab_traits;
++
++typedef Ptab::Shift<Ptab_traits, Virt_addr::Shift>::List Ptab_traits_vpn;
++typedef Ptab::Page_addr_wrap<Page_number, Virt_addr::Shift> Ptab_va_vpn;
++
+diff --git a/src/kern/arm/64/perf_cnt-arm-64.cpp b/src/kern/arm/64/perf_cnt-arm-64.cpp
+new file mode 100644
+index 0000000..f3c9423
+--- /dev/null
++++ b/src/kern/arm/64/perf_cnt-arm-64.cpp
+@@ -0,0 +1,83 @@
++INTERFACE [arm && armv8]:
++
++EXTENSION class Perf_cnt
++{
++private:
++  static void pmcr(Mword val)
++  { asm volatile ("msr PMCR_EL0, %0" : : "r" (val)); }
++
++  static Mword pmcr()
++  { Mword val; asm volatile ("mrs %0, PMCR_EL0" : "=r" (val)); return val;}
++
++
++  static void cntens(Mword val)
++  { asm volatile ("msr PMCNTENSET_EL0, %0" : : "r" (val)); }
++
++  static Mword cntens()
++  { Mword val; asm volatile ("mrs %0, PMCNTENSET_EL0" : "=r" (val)); return val;}
++
++
++  static void cntenc(Mword val)
++  { asm volatile ("msr PMCNTENCLR_EL0, %0" : : "r" (val)); }
++
++
++  static void flag(Mword val)
++  { asm volatile ("msr PMOVSCLR_EL0, %0" : : "r" (val)); }
++
++  static Mword flag()
++  { Mword val; asm volatile ("mrs %0, PMOVSCLR_EL0" : "=r" (val)); return val;}
++
++  static void pmnxsel(Mword val)
++  { asm volatile ("msr PMSELR_EL0, %0" : : "r" (val)); }
++
++  static Mword pmnxsel()
++  { Mword val; asm volatile ("mrs %0, PMSELR_EL0" : "=r" (val)); return val;}
++
++
++  static void ccnt(Mword val)
++  { asm volatile ("msr PMCCNTR_EL0, %0" : : "r" (val)); }
++
++  static Mword ccnt()
++  { Mword val; asm volatile ("mrs %0, PMCCNTR_EL0" : "=r" (val)); return val;}
++
++
++  static void evtsel(Mword val)
++  { asm volatile ("msr PMXEVCNTR_EL0, %0" : : "r" (val)); }
++
++  static Mword evtsel()
++  { Mword val; asm volatile ("mrs %0, PMXEVCNTR_EL0" : "=r" (val)); return val;}
++
++
++  static void pmcnt(Mword val)
++  { asm volatile ("msr PMXEVCNTR_EL0, %0" : : "r" (val)); }
++
++  static Mword pmcnt()
++  { Mword val; asm volatile ("mrs %0, PMXEVCNTR_EL0" : "=r" (val)); return val;}
++
++
++  static void useren(Mword val)
++  { asm volatile ("msr PMUSERENR_EL0, %0" : : "r" (val)); }
++
++  static Mword useren()
++  { Mword val; asm volatile ("mrs %0, PMUSERENR_EL0" : "=r" (val)); return val;}
++
++
++  static void intens(Mword val)
++  { asm volatile ("msr PMINTENSET_EL1, %0" : : "r" (val)); }
++
++  static Mword intens()
++  { Mword val; asm volatile ("mrs %0, PMINTENSET_EL1" : "=r" (val)); return val;}
++
++  static void intenc(Mword val)
++  { asm volatile ("msr PMINTENCLR_E1, %0" : : "r" (val)); }
++
++  enum
++  {
++    PMNC_ENABLE     = 1 << 0,
++    PMNC_PERF_RESET = 1 << 1,
++    PMNC_CNT_RESET  = 1 << 2,
++  };
++
++
++  static int _nr_counters;
++};
+diff --git a/src/kern/arm/64/spin_lock-arm-64.cpp b/src/kern/arm/64/spin_lock-arm-64.cpp
+new file mode 100644
+index 0000000..e634563
+--- /dev/null
++++ b/src/kern/arm/64/spin_lock-arm-64.cpp
+@@ -0,0 +1,63 @@
++IMPLEMENTATION [arm && mp]:
++
++#include "processor.h"
++
++PRIVATE template<typename Lock_t> inline NEEDS["processor.h"]
++void
++Spin_lock<Lock_t>::lock_arch()
++{
++  Lock_t dummy, tmp;
++
++#define L(z,u) \
++  __asm__ __volatile__ ( \
++      "1: ldr" #z "     %" #u "[d], [%[lock]]       \n" \
++      "   tst     %[d], #2                          \n" /* Arch_lock == #2 */ \
++      "   beq 2f                                    \n" \
++      "   wfe                                       \n" \
++      "   b     1b                                  \n" \
++      "2: ldxr" #z "   %" #u "[d], [%[lock]]        \n" \
++      "   tst   %[d], #2                            \n" \
++      "   bne   1b                                  \n" \
++      "   orr   %[tmp], %[d], #2                    \n" \
++      "   stxr" #z " %w[d], %" #u "[tmp], [%[lock]] \n" \
++      "   cbnz  %w[d], 1b                           \n" \
++      : [d] "=&r" (dummy), [tmp] "=&r"(tmp), "+m" (_lock) \
++      : [lock] "r" (&_lock) \
++      : "cc" \
++      )
++  extern char __use_of_invalid_type_for_Spin_lock__sizeof_is_invalid;
++  switch(sizeof(Lock_t))
++    {
++    case 1: L(b,w); break;
++    case 2: L(h,w); break;
++    case 4: L(,w); break;
++    case 8: L(,); break;
++    default: __use_of_invalid_type_for_Spin_lock__sizeof_is_invalid = 10; break;
++    }
++
++#undef L
++}
++
++PRIVATE template<typename Lock_t> inline
++void
++Spin_lock<Lock_t>::unlock_arch()
++{
++  Lock_t tmp;
++#define UNL(z,u) \
++  __asm__ __volatile__( \
++      "ldr"#z " %" #u "[tmp], %[lock]  \n" \
++      "bic %[tmp], %[tmp], #2          \n" /* Arch_lock == #2 */ \
++      "stlr"#z " %" #u "[tmp], %[lock]             \n" \
++      "sev                             \n" \
++      : [lock] "=Q" (_lock), [tmp] "=&r" (tmp))
++  extern char __use_of_invalid_type_for_Spin_lock__sizeof_is_invalid;
++  switch (sizeof(Lock_t))
++    {
++    case 1: UNL(b,w); break;
++    case 2: UNL(h,w); break;
++    case 4: UNL(,w); break;
++    case 8: UNL(,); break;
++    default: __use_of_invalid_type_for_Spin_lock__sizeof_is_invalid = 11; break;
++    }
++#undef UNL
++}
+diff --git a/src/kern/arm/64/thread-arm-64.cpp b/src/kern/arm/64/thread-arm-64.cpp
+new file mode 100644
+index 0000000..fcaabc1
+--- /dev/null
++++ b/src/kern/arm/64/thread-arm-64.cpp
+@@ -0,0 +1,224 @@
++IMPLEMENTATION [arm && 64bit]:
++
++/**
++ * Mangle the error code in case of a kernel lib page fault.
++ *
++ * On 64bit (ARMv8+) this is a nop, there is no kernel lib.
++ */
++PUBLIC static inline
++Mword
++Thread::mangle_kernel_lib_page_fault(Mword, Mword error_code)
++{ return error_code; }
++
++EXTENSION class Thread
++{
++private:
++  // synchronous traps from kernel / hyp mode
++  static void arm_kernel_sync_entry(Trap_state *ts) asm ("arm_kernel_sync_entry");
++};
++
++IMPLEMENT inline
++Mword
++Thread::user_ip() const
++{ return regs()->ip(); }
++
++IMPLEMENT inline
++void
++Thread::user_ip(Mword ip)
++{ regs()->ip(ip); }
++
++IMPLEMENT inline
++bool
++Thread::pagein_tcb_request(Return_frame *regs)
++{
++  //if ((*(Mword*)regs->pc & 0xfff00fff ) == 0xe5900000)
++  if (*(Mword*)regs->pc == 0xe59ee000)
++    {
++      // printf("TCBR: %08lx\n", *(Mword*)regs->pc);
++      // skip faulting instruction
++      regs->pc += 4;
++      // tell program that a pagefault occurred we cannot handle
++      regs->psr |= 0x40000000;	// set zero flag in psr
++      regs->r[0] = 0;
++
++      return true;
++    }
++  return false;
++}
++
++PUBLIC static inline void
++Thread::arm_fast_exit(void *sp, void *pc, void *arg)
++{
++  register void *r0 asm("x0") = arg;
++  asm volatile
++    ("  mov sp, %[stack_p]    \n"    // set stack pointer to regs structure
++     "  br  %[rfe]            \n"
++     : :
++     [stack_p] "r" (sp),
++     [rfe]     "r" (pc),
++     "r" (r0));
++}
++
++PUBLIC static
++bool
++Thread::handle_fpu_trap(Trap_state *ts)
++{
++  if (Fpu::is_enabled())
++    {
++      assert(Fpu::fpu.current().owner() == current());
++      ts->esr.ec() = 0; // tag fpu undef insn
++    }
++  else if (current_thread()->switchin_fpu())
++    {
++      ts->pc -= (ts->psr & Proc::Status_thumb) ? 2 : 4;
++      return true;
++    }
++  else
++    {
++      ts->esr.ec() = 0x07;
++      ts->esr.cv() = 1;
++      ts->esr.cpt_cpnr() = 10;
++    }
++
++  return false;
++}
++
++extern "C" void leave_by_vcpu_upcall(Trap_state *ts)
++{
++  Thread *c = current_thread();
++  Vcpu_state *vcpu = c->vcpu_state().access();
++  vcpu->_regs.s = *ts;
++  c->fast_return_to_user(vcpu->_entry_ip, vcpu->_entry_sp, c->vcpu_state().usr().get());
++}
++
++IMPLEMENT
++void
++Thread::arm_kernel_sync_entry(Trap_state *ts)
++{
++  auto esr = Thread::get_esr();
++  ts->esr = esr;
++  switch (esr.ec())
++    {
++    case 0x25: // data abort -> handle cap space access from the kernel
++      call_nested_trap_handler(ts);
++      break;
++
++    case 0x3c: // BRK
++      call_nested_trap_handler(ts);
++      ts->pc += 4;
++      break;
++
++    default:
++      call_nested_trap_handler(ts);
++      break;
++    }
++}
++
++PRIVATE inline
++void
++Thread::handle_svc(Trap_state *ts)
++{
++  extern void slowtrap_entry(Trap_state *ts) asm ("slowtrap_entry");
++  Mword state = this->state();
++  state_del(Thread_cancel);
++  if (state & (Thread_vcpu_user | Thread_alien))
++    {
++      if (state & Thread_dis_alien)
++        state_del_dirty(Thread_dis_alien);
++      else
++        {
++          slowtrap_entry(ts);
++          return;
++        }
++    }
++
++  typedef void Syscall(void);
++  extern Syscall *sys_call_table[];
++  sys_call_table[0]();
++}
++
++//--------------------------------------------------------------------------
++IMPLEMENTATION [arm && 64bit && !hyp]:
++
++PRIVATE static inline
++Arm_esr
++Thread::get_esr()
++{
++  Arm_esr esr;
++  asm volatile ("mrs %0, ESR_EL1" : "=r"(esr));
++  return esr;
++}
++
++PRIVATE static inline
++Address
++Thread::get_fault_pfa(Arm_esr /*hsr*/, bool /*insn_abt*/, bool /*ext_vcpu*/)
++{
++  Address a;
++  asm volatile ("mrs %0, FAR_EL1" : "=r"(a));
++  return a;
++}
++
++PRIVATE static inline
++bool
++Thread::is_syscall_pc(Address)
++{
++  return true; //Address(-0x0c) <= pc && pc <= Address(-0x08);
++}
++
++PRIVATE static inline
++Mword
++Thread::get_lr_for_mode(Return_frame const *rf)
++{
++  return rf->r[30];
++}
++
++PRIVATE static inline
++bool FIASCO_WARN_RESULT
++Thread::copy_utcb_to_ts(L4_msg_tag const &tag, Thread *snd, Thread *rcv,
++                        L4_fpage::Rights rights)
++{
++  // only a complete state will be used.
++  if (EXPECT_FALSE(tag.words() < (sizeof(Trex) / sizeof(Mword))))
++    return true;
++
++  Trap_state *ts = (Trap_state*)rcv->_utcb_handler;
++  Utcb *snd_utcb = snd->utcb().access();
++
++  Trex const *r = reinterpret_cast<Trex const *>(snd_utcb->values);
++  // this skips the eret/continuation work already
++  ts->copy_and_sanitize(&r->s);
++  rcv->set_tpidruro(r);
++
++  if (tag.transfer_fpu() && (rights & L4_fpage::Rights::W()))
++    snd->transfer_fpu(rcv);
++
++  bool ret = transfer_msg_items(tag, snd, snd_utcb,
++                                rcv, rcv->utcb().access(), rights);
++
++  return ret;
++}
++
++PRIVATE static inline NEEDS[Thread::save_fpu_state_to_utcb,
++                            Thread::store_tpidruro,
++                            "trap_state.h"]
++bool FIASCO_WARN_RESULT
++Thread::copy_ts_to_utcb(L4_msg_tag const &, Thread *snd, Thread *rcv,
++                        L4_fpage::Rights rights)
++{
++  Trap_state *ts = (Trap_state*)snd->_utcb_handler;
++
++  {
++    auto guard = lock_guard(cpu_lock);
++    Utcb *rcv_utcb = rcv->utcb().access();
++    Trex *r = reinterpret_cast<Trex *>(rcv_utcb->values);
++    r->s = *ts;
++    snd->store_tpidruro(r);
++
++    if (rcv_utcb->inherit_fpu() && (rights & L4_fpage::Rights::W()))
++      snd->transfer_fpu(rcv);
++
++    __asm__ __volatile__ ("" : : "m"(*r));
++  }
++  return true;
++}
++
+diff --git a/src/kern/arm/64/thread-jdb-64.cpp b/src/kern/arm/64/thread-jdb-64.cpp
+new file mode 100644
+index 0000000..c1ceb54
+--- /dev/null
++++ b/src/kern/arm/64/thread-jdb-64.cpp
+@@ -0,0 +1,39 @@
++IMPLEMENTATION [arm && 64bit && debug]:
++
++PRIVATE static inline int
++Thread::arm_enter_debugger(Trap_state *ts, Cpu_number log_cpu,
++                           unsigned long *ntr, void *stack)
++{
++  Mword dummy1, tmp;
++  register Mword _ts asm("x0") = (Mword)ts;
++  register Cpu_number _lcpu asm("x1") = log_cpu;
++
++  asm volatile(
++      "mov    %[origstack], sp         \n"
++      "ldr    %[tmp], [%[ntr]]         \n"
++      "cbnz   %[tmp], 1f               \n"
++      "mov    sp, %[stack]             \n"
++      "1:                              \n"
++      "add    %[tmp], %[tmp], #1       \n"
++      "str    %[tmp], [%[ntr]]         \n"
++      "str    %[origstack], [sp, #-8]! \n"
++      "str    %[ntr], [sp, #-8]!       \n"
++      "adr    x30, 1f                  \n"
++      "br     %[handler]               \n"
++      "1:                              \n"
++      "ldr    %[ntr], [sp], #8         \n"
++      "ldr    %[origstack], [sp]       \n"
++      "mov    sp, %[origstack]         \n"
++      "ldr    %[tmp], [%[ntr]]         \n"
++      "sub    %[tmp], %[tmp], #1       \n"
++      "str    %[tmp], [%[ntr]]         \n"
++      : [origstack] "=&r" (dummy1), [tmp] "=&r" (tmp),
++      "=r" (_ts), "=r" (_lcpu)
++      : [ntr] "r" (ntr), [stack] "r" (stack),
++      [handler] "r" (*nested_trap_handler),
++      "2" (_ts), "3" (_lcpu)
++      : "memory", "x2", "x3", "x4");
++
++  return _ts;
++}
++
+diff --git a/src/kern/arm/64/tramp-mp.S b/src/kern/arm/64/tramp-mp.S
+new file mode 100644
+index 0000000..e1f7e2d
+--- /dev/null
++++ b/src/kern/arm/64/tramp-mp.S
+@@ -0,0 +1,225 @@
++#include "globalconfig.h"
++#include "tcboffset.h"
++
++#include TRAMP_MP_ASM_INCLUDE
++
++#ifndef HAVE_MACRO_BSP_EARLY_INIT
++.macro bsp_early_init tmp1, tmp2
++.endm
++#endif
++
++.macro defvar name
++.global \name
++\name: .8byte 0
++.endm
++
++	.section .mp_tramp, "awx"
++	.p2align 12
++
++#ifdef CONFIG_ARM_V8
++cache_invalidate_v8:
++	// B2.2.7
++	mrs     x0, CLIDR_EL1
++	ands    x3, x0, #0x07000000
++	orr     x3, xzr, x3, lsr #23
++	b.eq    finished
++	mov     x10, #0
++loop1:
++	add     x2, x10, x10, lsr #1
++	lsrv    x1, x0, x2
++	and     x1, x1, #7
++	cmp     x1, #2
++	b.lt    skip
++	msr     CSSELR_EL1, x10
++	isb
++	mrs     x1, CCSIDR_EL1
++	and     x2, x1, #7
++	add     x2, x2, #4
++	movz    w4, #0x3ff
++	ands    w4, w4, w1, lsr #3
++	clz     w5, w4
++	mov     x9, x4
++loop2:
++	movz    w7, #0x7fff
++	ands    w7, w7, w1, lsr #13
++loop3:
++	lslv    x17, x9, x5
++	orr     x11, x10, x17
++	lslv    x18, x7, x2
++	orr     x11, x11, x18
++	dc      isw, x11
++	subs    x7, x7, #1
++	b.ge    loop3
++	subs    x9, x9, #1
++	b.ge    loop2
++skip:
++	add     x10, x10, #2
++	cmp     x3, x10
++	b.gt    loop1
++	dsb     sy
++finished:
++	msr     CSSELR_EL1, xzr
++	dsb     sy
++	isb     sy
++	ret
++#endif
++
++	.global _tramp_mp_entry
++_tramp_mp_entry:
++        bsp_early_init x0, x1
++        mrs   x17, CurrentEL
++        cmp   x17, #0x8 // hyp mode
++#ifndef CONFIG_CPU_VIRT
++        b.ne  2f
++
++	movz	x17, #((0xf << 6) | 0x5) // DAIF + EL1 / SPSEL
++	msr	SPSR_EL2, x17
++	adr	x18, 2f
++	msr	ELR_EL2, x18
++	eret
++#else
++	beq   2f
++	switch_to_hyp
++#endif
++2:
++	msr	DAIFSet, #0xf
++
++	// enable SMP
++#ifndef CONFIG_ARM_EM_NS
++	adr   x0, .Lmpcore_phys_base
++	ldr   x0, [x0]
++	ldr   x1, [x0]
++	orr   x1, x1, #1
++	str   x1, [x0]
++
++	DC	cvac, x0
++	dsb	sy
++
++#endif
++
++#ifdef CONFIG_ARM_V8
++	bl    cache_invalidate_v8
++#endif
++
++	ic	iallu
++	isb	sy
++	dsb	sy
++#if 0
++#ifdef CONFIG_ARM_V7
++	// ACTRL is implementation defined
++	mrc   p15, 0, r0, c0, c0, 0  // read MIDR
++	adr   r3, .Lactrl_cpuid      // load addr
++	ldm   r3, {r1, r2}           // load mask + val
++	and   r3, r0, r1             // apply mask
++	teq   r3, r2                 // check value
++	bne   2f                     // only do mcr on this CPU
++#endif
++
++	mrc   p15, 0, r1, c1, c0, 1
++#ifdef CONFIG_ARM_V7
++	tst   r1, #0x40
++	bne   2f
++	lsr   r0, r0, #8
++	and   r0, r0, #7
++	cmp   r0, #7
++	orrne r1, r1, #0x41
++	orreq r1, r1, #0x40
++#else
++	orr   r1, r1, #0x20
++#endif
++	mcr   p15, 0, r1, c1, c0, 1
++
++2:
++#endif
++#ifdef CONFIG_CPU_VIRT
++        // TLB flush
++        tlbi	alle2
++        tlbi	alle1
++
++        // init TTBCR
++        adr	x0, _tramp_mp_startup_ttbcr
++        ldr	x1, [x0]
++	msr	TTBCR_EL2, x1
++
++        adr	x0, _tramp_mp_startup_pdbr
++        ldr	x0, [x0]
++	msr	TTBR0_EL2, x0
++	movz	x0, #(1 | 2 | 4 | 16 | 32 | 0x1000)
++	msr	SCTLR_EL2, x0
++
++#else
++	tlbi	alle1
++
++	// reset ASID and PROCID
++	mov	x0, #0
++	msr	CONTEXTIDR_EL1, x0
++
++	// init TTBCR
++	adr	x0, _tramp_mp_startup_ttbcr
++	ldr	x1, [x0]
++	msr	TCR_EL1, x1
++
++	mov x0, #0
++	tlbi	alle1
++
++	adr	x0, _tramp_mp_startup_pdbr
++	ldr	x0, [x0]
++	msr	TTBR0_EL1, x0
++#endif
++
++	adr x0, _tramp_mp_startup_sctlr
++	ldr x0, [x0]
++	msr SCTLR_EL1, x0
++
++	// barrier
++	isb sy
++	ldr x0, 1f
++	br x0
++1:
++	.8byte _tramp_mp_virt
++
++.Lmpcore_phys_base:
++	.8byte MPCORE_PHYS_BASE
++
++.Lactrl_cpuid:
++	.long 0xff0fff00
++	.long 0x410fc000
++
++.global _tramp_mp_boot_info
++_tramp_mp_boot_info:
++defvar _tramp_mp_startup_sctlr
++defvar _tramp_mp_startup_pdbr
++defvar _tramp_mp_startup_ttbcr
++
++	// we run paged now
++_tramp_mp_virt:
++	// spinlock on cpu-init
++	adr	x0, _tramp_mp_spinlock
++1:	ldr	x1, [x0]
++	cbz	x1, 2f
++	wfe
++	b	1b
++
++2:	ldxr	x1, [x0]
++	cbnz	x1, 1b
++	mov	x1, #2
++	stxr	w2, x1, [x0]
++	cbnz	w2, 1b
++
++	// TLB flush
++	tlbi	alle1
++
++	adr	x8, _tramp_mp_init_stack_top
++	mov	sp, x8
++	ldr	x9, 3f
++	br	x9
++3:
++	.8byte BOOT_AP_CPU
++
++.8byte 0
++defvar _tramp_mp_spinlock
++
++_tramp_mp_init_stack:
++	.space 2048
++_tramp_mp_init_stack_top:
++
+diff --git a/src/kern/arm/64/trap_state.cpp b/src/kern/arm/64/trap_state.cpp
+new file mode 100644
+index 0000000..881a81b
+--- /dev/null
++++ b/src/kern/arm/64/trap_state.cpp
+@@ -0,0 +1,86 @@
++INTERFACE:
++
++#include "entry_frame.h"
++
++class Trap_state : public Entry_frame
++{
++public:
++  typedef int (*Handler)(Mword cause, Trap_state *);
++
++  // no exception traps to the kernel debugger on mips
++  bool is_debug_exception() const { return false; }
++
++  // generally MIPS encodes the error code and trapno into the cause
++  // register, so we return status ess error code however
++  Mword trapno() const { return esr.ec(); }
++  Mword error() const { return esr.raw(); }
++
++  void set_pagefault(Mword pfa, Mword esr)
++  {
++    this->pf_address = pfa;
++    this->esr = Arm_esr(esr);
++  }
++
++  bool exclude_logging() { return false; }
++};
++
++struct Trex
++{
++  Trap_state s;
++  Mword tpidruro;
++
++  void set_ipc_upcall()
++  { s.esr.ec() = 0x3f; }
++
++  void dump() { s.dump(); }
++};
++
++IMPLEMENTATION:
++
++#include <cstdio>
++
++PUBLIC
++void
++Trap_state::dump()
++{
++  char const *excpts[] =
++    {/*  0 */ "undef insn",  "WFx",        0,            "MCR (CP15)",
++     /*  4 */ "MCRR (CP15)", "MCR (CP14)", "LDC (CP14)", "coproc trap",
++     /*  8 */ "MRC (CP10)",  0,            "BXJ",        0,
++     /*  C */ "MRRC (CP14)", 0,            0,            0,
++     /* 10 */ 0,             "SVC",        "HVC",        "SMC",
++     /* 14 */ 0, 0, 0, 0,
++     /* 18 */ 0, 0, 0, 0,
++     /* 1C */ 0, 0, 0, 0,
++     /* 20 */ "prefetch abt (usr)", "prefetch abt (kernel)", 0, 0,
++     /* 24 */ "data abt (user)",    "data abt (kernel)",     0, 0,
++     /* 28 */ 0, 0, 0, 0,
++     /* 2C */ 0, 0, 0, 0,
++     /* 30 */ 0, 0, 0, 0,
++     /* 34 */ 0, 0, 0, 0,
++     /* 38 */ 0, 0, 0, 0,
++     /* 3C */ 0, 0, "<TrExc>", "<IPC>"};
++
++  printf("EXCEPTION: (%02x) %s pfa=%08lx, error=%08lx pstate=%08lx\n",
++         (unsigned)esr.ec(), excpts[esr.ec()] ? excpts[esr.ec()] : "",
++         pf_address, esr.raw(), pstate);
++
++  printf("R[ 0]: %016lx %016lx %016lx %016lx\n"
++         "R[ 4]: %016lx %016lx %016lx %016lx\n"
++         "R[ 8]: %016lx %016lx %016lx %016lx\n"
++         "R[12]: %016lx %016lx %016lx %016lx\n"
++         "R[16]: %016lx %016lx %016lx %016lx\n"
++         "R[20]: %016lx %016lx %016lx %016lx\n"
++         "R[24]: %016lx %016lx %016lx %016lx\n"
++         "R[28]: %016lx %016lx %016lx\n"
++         "SP: %016lx  PC: %016lx\n",
++         r[0], r[1], r[2], r[3],
++         r[4], r[5], r[6], r[7],
++         r[8], r[9], r[10], r[11],
++         r[12], r[13], r[14], r[15],
++         r[16], r[17], r[18], r[19],
++         r[20], r[21], r[22], r[23],
++         r[24], r[25], r[26], r[27],
++         r[28], r[29], r[30],
++         usp, pc);
++}
+diff --git a/src/kern/arm/Kconfig b/src/kern/arm/Kconfig
+index 66a241c..88761fb 100644
+--- a/src/kern/arm/Kconfig
++++ b/src/kern/arm/Kconfig
+@@ -1,10 +1,11 @@
+ # ARCH:           ARM arm
+ # ARCHDESCR:      ARM processor family
+ #
+-# ARCHSELECT:     BIT32
++# ARCHSELECT:     BIT32 if !ARM_V8
++# ARCHSELECT:     BIT64 if ARM_V8
+ # ARCHSELECT:     HAS_FPU_OPTION
+ # ARCHSELECT:     FPU if CPU_VIRT
+-# ARCHSELECT:     ARM_LPAE if CPU_VIRT
++# ARCHSELECT:     ARM_LPAE if CPU_VIRT || BIT64
+ # ARCHSELECT:     HAS_SERIAL_OPTION
+ # ARCHSELECT:     HAS_VIRT_OBJ_SPACE_OPTION if ARM_V6PLUS && !CPU_VIRT && !ARM_1176_CACHE_ALIAS_FIX
+ #
+@@ -51,6 +52,15 @@ config CAN_ARM_CPU_CORTEX_A15
+ config CAN_ARM_CACHE_L2CXX0
+ 	bool
+ 
++config CAN_ARM_CPU_CORTEX_A53
++	bool
++
++config CAN_ARM_CPU_CORTEX_A57
++	bool
++
++config CAN_ARM_CPU_CORTEX_A72
++	bool
++
+ config DEFAULT_ARM_EM_TZ
+         bool
+ 
+@@ -65,7 +75,10 @@ config ARM_V7
+ 	              || ARM_CORTEX_A5 || ARM_CORTEX_A7 || ARM_CORTEX_A15
+ 
+ config ARM_V6PLUS
+-	def_bool y if ARM_V6 || ARM_V7
++	def_bool y if ARM_V6 || ARM_V7 || ARM_V8
++
++config ARM_V8
++	bool
+ 
+ # SECTION: CPU
+ 
+@@ -126,6 +139,27 @@ config ARM_CORTEX_A15
+ 	select HAS_MP_OPTION
+ 	select HAS_CPU_VIRT
+ 
++config ARM_CORTEX_A53
++	bool "ARM Cortex-A53 CPU"
++	depends on CAN_ARM_CPU_CORTEX_A53
++	select ARM_V8
++	select HAS_MP_OPTION
++	select HAS_CPU_VIRT
++
++config ARM_CORTEX_A57
++	bool "ARM Cortex-A57 CPU"
++	depends on CAN_ARM_CPU_CORTEX_A57
++	select ARM_V8
++	select HAS_MP_OPTION
++	select HAS_CPU_VIRT
++
++config ARM_CORTEX_A72
++	bool "ARM Cortex-A72 CPU"
++	depends on CAN_ARM_CPU_CORTEX_A72
++	select ARM_V8
++	select HAS_MP_OPTION
++	select HAS_CPU_VIRT
++
+ endchoice
+ 
+ # SECTION: TARGET
+diff --git a/src/kern/arm/bootstrap.cpp b/src/kern/arm/bootstrap.cpp
+index a1edc3f..ec45d9f 100644
+--- a/src/kern/arm/bootstrap.cpp
++++ b/src/kern/arm/bootstrap.cpp
+@@ -162,7 +162,7 @@ extern char bootstrap_bss_start[];
+ extern char bootstrap_bss_end[];
+ extern char __bss_start[];
+ extern char __bss_end[];
+-extern char kernel_page_directory[];
++extern char kernel_page_directory[] __attribute__((weak));
+ 
+ extern "C" void _start_kernel(void);
+ extern "C" void bootstrap_main()
+diff --git a/src/kern/arm/mapping-arm.cpp b/src/kern/arm/mapping-arm.cpp
+index ff8d324..5f16bfa 100644
+--- a/src/kern/arm/mapping-arm.cpp
++++ b/src/kern/arm/mapping-arm.cpp
+@@ -1,6 +1,7 @@
+-INTERFACE [arm]:
++INTERFACE [arm && 32bit]:
+ 
+ #include "types.h"
++
+ class Treemap;
+ class Space;
+ 
+@@ -23,3 +24,29 @@ public:
+   Space *space() const { return (Space *)data._space; }
+ };
+ 
++INTERFACE [arm && 64bit]:
++
++#include "types.h"
++
++class Treemap;
++class Space;
++
++class Mapping_entry
++{
++public:
++  enum { Alignment = 8 };
++  union
++  {
++    struct
++    {
++      unsigned long _space:64;	///< Address-space number
++/*      unsigned long _pad:1; */
++      unsigned long address:48;	///< Virtual address in address space
++    } data;
++    Treemap *_submap;
++  };
++  Unsigned8 _depth;
++  void set_space(Space *s) { data._space = (unsigned long)s; }
++  Space *space() const { return (Space *)data._space; }
++};
++
+diff --git a/src/kern/arm/mem_space-arm.cpp b/src/kern/arm/mem_space-arm.cpp
+index e31bba5..cf95bea 100644
+--- a/src/kern/arm/mem_space-arm.cpp
++++ b/src/kern/arm/mem_space-arm.cpp
+@@ -347,7 +347,7 @@ Mem_space::init_page_sizes()
+ }
+ 
+ //----------------------------------------------------------------------------
+-IMPLEMENTATION [armv5 || armv6 || armv7]:
++IMPLEMENTATION [armv5 || armv6 || armv7 || armv8]:
+ 
+ IMPLEMENT inline
+ void
+@@ -390,7 +390,7 @@ void Mem_space::make_current()
+ }
+ 
+ //----------------------------------------------------------------------------
+-INTERFACE [armv6 || armca8]:
++INTERFACE [armv6 || armca8 || armv8]:
+ 
+ EXTENSION class Mem_space
+ {
+@@ -414,7 +414,7 @@ EXTENSION class Mem_space
+ };
+ 
+ //----------------------------------------------------------------------------
+-INTERFACE [armv6 || armv7]:
++INTERFACE [armv6 || armv7 || armv8]:
+ 
+ #include "id_alloc.h"
+ #include "types.h"
+@@ -459,7 +459,7 @@ private:
+ };
+ 
+ //----------------------------------------------------------------------------
+-INTERFACE [!(armv6 || armv7)]:
++INTERFACE [!(armv6 || armv7 || armv8)]:
+ 
+ EXTENSION class Mem_space
+ {
+@@ -468,7 +468,7 @@ public:
+ };
+ 
+ //----------------------------------------------------------------------------
+-IMPLEMENTATION [armv6 || armv7]:
++IMPLEMENTATION [armv6 || armv7 || armv8]:
+ 
+ DEFINE_PER_CPU Per_cpu<Mem_space::Asid_alloc> Mem_space::_asid_alloc;
+ 
+diff --git a/src/kern/arm/paging-arm.cpp b/src/kern/arm/paging-arm.cpp
+index 468db4b..5f991de 100644
+--- a/src/kern/arm/paging-arm.cpp
++++ b/src/kern/arm/paging-arm.cpp
+@@ -387,7 +387,7 @@ K_pte_ptr::write_back(void *start, void *end)
+ { Mem_unit::clean_dcache(start, end); }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && armca9]:
++IMPLEMENTATION [arm && (armca9 || armv7 || armv8)]:
+ 
+ PUBLIC static inline
+ bool
+@@ -692,7 +692,7 @@ K_pte_ptr::del_rights(L4_fpage::Rights r)
+ }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && arm_lpae && armv7]:
++IMPLEMENTATION [arm && arm_lpae && (armv7 || armv8)]:
+ 
+ PRIVATE inline
+ K_pte_ptr::Entry
+@@ -828,7 +828,7 @@ INTERFACE [arm && !hyp]:
+ typedef K_pte_ptr Pte_ptr;
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && arm_lpae && (armv6 || armv7) && hyp]:
++IMPLEMENTATION [arm && arm_lpae && (armv6 || armv7 || armv8) && hyp]:
+ 
+ PRIVATE inline
+ Pte_ptr::Entry
+@@ -937,14 +937,14 @@ Mword PF::is_alignment_error(Mword error)
+ { return ((error >> 26) == 0x24) && ((error & 0x40f) == 0x001); }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (armv6 || armv7) && arm_lpae]:
++IMPLEMENTATION [arm && arm_lpae]:
+ 
+ PUBLIC static inline
+ Mword PF::is_alignment_error(Mword error)
+ { return ((error >> 26) == 0x24) && ((error & 0x3f) == 0x21); }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (armv6 || armv7)]:
++IMPLEMENTATION [arm && (armv6 || armv7 || armv8)]:
+ 
+ PUBLIC inline NEEDS[K_pte_ptr::_attribs, K_pte_ptr::_attribs_mask]
+ void
+diff --git a/src/kern/arm/thread-arm.cpp b/src/kern/arm/thread-arm.cpp
+index 61b0242..cf0e03f 100644
+--- a/src/kern/arm/thread-arm.cpp
++++ b/src/kern/arm/thread-arm.cpp
+@@ -624,7 +624,7 @@ public:
+ static Arm_ipis _arm_ipis;
+ 
+ //-----------------------------------------------------------------------------
+-IMPLEMENTATION [arm && !fpu]:
++IMPLEMENTATION [arm && (armv8 || !fpu)]:
+ 
+ PUBLIC inline
+ bool
+diff --git a/src/kern/tcboffset_in.h b/src/kern/tcboffset_in.h
+index a86c614..83cbc92 100644
+--- a/src/kern/tcboffset_in.h
++++ b/src/kern/tcboffset_in.h
+@@ -13,7 +13,7 @@
+   DUMP_MEMBER1 (THREAD, Thread, _space,		SPACE)
+   DUMP_MEMBER1 (THREAD, Thread, _pager,			PAGER)
+   DUMP_MEMBER1 (THREAD, Thread, _recover_jmpbuf,	RECOVER_JMPBUF)
+-#if defined(CONFIG_ARM)
++#if defined(CONFIG_ARM) && defined(CONFIG_BIT32)
+   DUMP_MEMBER1 (THREAD, Thread, _exc_cont._ip,          EXCEPTION_IP)
+   DUMP_MEMBER1 (THREAD, Thread, _exc_cont._psr,         EXCEPTION_PSR)
+ #endif
+diff --git a/src/kernel.arm.ld b/src/kernel.arm.ld
+index 256083a..1c034ad 100644
+--- a/src/kernel.arm.ld
++++ b/src/kernel.arm.ld
+@@ -7,15 +7,30 @@
+    space */
+ #ifdef CONFIG_CPU_VIRT
+ virt_address       = kernel_load_addr;
+-#else
++#elif defined CONFIG_BIT32
+ virt_address       = 0xf0000000;
++#elif defined CONFIG_BIT64
++virt_address       = 0xffff000040000000;
+ #endif
+ phys_offset        = virt_address - kernel_load_addr;
+ 
+-
++#if defined CONFIG_BIT32
+ OUTPUT_FORMAT("elf32-littlearm", "elf32-bigarm",
+               "elf32-littlearm")
++
+ OUTPUT_ARCH(arm)
++#define WORD_SIZE 4
++#elif defined CONFIG_BIT64
++OUTPUT_FORMAT("elf64-littleaarch64", "elf64-bigaarch64",
++              "elf64-littleaarch64")
++
++OUTPUT_ARCH(aarch64)
++#define WORD_SIZE 8
++#else
++# error Either CONFIG_BIT32 or CONFIG_BIT64 must be set
++#endif
++
++
+ ENTRY(_start)
+ 
+ PHDRS {
+@@ -101,9 +116,9 @@ SECTIONS {
+ 
+     *(.rodata .rodata.* .gnu.linkonce.r.* .rodata1)
+ 
+-    . = ALIGN(4);
++    . = ALIGN(WORD_SIZE);
+     JDB_TABLE(log);
+-    . = ALIGN(4);
++    . = ALIGN(WORD_SIZE);
+     JDB_TABLE(typeinfo);
+ 
+     . = ALIGN(0x40);
+diff --git a/src/lib/libk/arm/64/atomic-arm-64.cpp b/src/lib/libk/arm/64/atomic-arm-64.cpp
+new file mode 100644
+index 0000000..fb5d219
+--- /dev/null
++++ b/src/lib/libk/arm/64/atomic-arm-64.cpp
+@@ -0,0 +1,81 @@
++IMPLEMENTATION[arm]:
++
++inline
++void
++atomic_mp_add(Mword *l, Mword value)
++{
++  Mword tmp, ret;
++
++  asm volatile (
++      "1:                                 \n"
++      "ldxr    %[v], [%[mem]]             \n"
++      "add     %[v], %[v], %[addval]      \n"
++      "stxr    %w[ret], %[v], [%[mem]]    \n"
++      "cbnz    %w[ret], 1b                \n"
++      : [v] "=&r" (tmp), [ret] "=&r" (ret), "+m" (*l)
++      :  [mem] "r" (l), [addval] "r" (value)
++      : "cc");
++}
++
++inline
++void
++atomic_mp_and(Mword *l, Mword value)
++{
++  Mword tmp, ret;
++
++  asm volatile (
++      "1:                                 \n"
++      "ldxr    %[v], [%[mem]]             \n"
++      "and     %[v], %[v], %[andval]      \n"
++      "stxr    %w[ret], %[v], [%[mem]]    \n"
++      "cbnz    %w[ret], 1b                \n"
++      : [v] "=&r" (tmp), [ret] "=&r" (ret), "+m" (*l)
++      :  [mem] "r" (l), [andval] "r" (value)
++      : "cc");
++}
++
++inline
++void
++atomic_mp_or(Mword *l, Mword value)
++{
++  Mword tmp, ret;
++
++  asm volatile (
++      "1:                                 \n"
++      "ldxr    %[v], [%[mem]]             \n"
++      "orr     %[v], %[v], %[orval]       \n"
++      "stxr    %w[ret], %[v], [%[mem]]    \n"
++      "cbnz    %w[ret], 1b                \n"
++      : [v] "=&r" (tmp), [ret] "=&r" (ret), "+m" (*l)
++      :  [mem] "r" (l), [orval] "r" (value)
++      : "cc");
++}
++
++inline
++bool
++mp_cas_arch(Mword *m, Mword o, Mword n)
++{
++  Mword tmp, res;
++
++  asm volatile
++    ("mov     %[res], #1           \n"
++     "1:                           \n"
++     "ldr     %[tmp], [%[m]]       \n"
++     "cmp     %[tmp], %[o]         \n"
++     "b.ne    2f                   \n"
++     "ldxr    %[tmp], [%[m]]       \n"
++     "cmp     %[tmp], %[o]         \n"
++     "b.ne    2f                   \n"
++     "stxr    %w[res], %[n], [%[m]]\n"
++     "cbnz    %w[res], 1b          \n"
++     "2:                           \n"
++     : [tmp] "=&r" (tmp), [res] "=&r" (res), "+m" (*m)
++     : [n] "r" (n), [m] "r" (m), [o] "r" (o)
++     : "cc");
++
++  // res == 0 is ok
++  // res == 1 is failed
++
++  return !res;
++}
++
+diff --git a/src/lib/minilibc/arm/64/include/setjmp.h b/src/lib/minilibc/arm/64/include/setjmp.h
+new file mode 100644
+index 0000000..d596be9
+--- /dev/null
++++ b/src/lib/minilibc/arm/64/include/setjmp.h
+@@ -0,0 +1,19 @@
++/*
++ * (c) ...
++ *
++ * Author: alexander.warg@kernkonzept.com
++ */
++#pragma once
++
++#include <cdefs.h>
++
++typedef long int jmp_buf[13];
++
++__BEGIN_DECLS
++
++void longjmp (jmp_buf __env, int __val)
++     __attribute__ ((__noreturn__));
++
++int setjmp(jmp_buf env);
++
++__END_DECLS
+diff --git a/src/lib/minilibc/arm/64/setjmp.S b/src/lib/minilibc/arm/64/setjmp.S
+new file mode 100644
+index 0000000..b85e759
+--- /dev/null
++++ b/src/lib/minilibc/arm/64/setjmp.S
+@@ -0,0 +1,27 @@
++.type setjmp,function
++.global setjmp
++setjmp:
++	stp	x19, x20, [x0, #(0<<4)]
++	stp	x21, x22, [x0, #(1<<4)]
++	stp	x23, x24, [x0, #(2<<4)]
++	stp	x25, x26, [x0, #(3<<4)]
++	stp	x27, x28, [x0, #(4<<4)]
++	stp	x29, x30, [x0, #(5<<4)]
++	mov	x2, sp
++	str	x2, [x0, #(6<<4)]
++	mov	x0, #0
++	ret	x30
++
++.type longjmp,function
++.global longjmp
++longjmp:
++	ldp	x19, x20, [x0, #(0<<4)]
++	ldp	x21, x22, [x0, #(1<<4)]
++	ldp	x23, x24, [x0, #(2<<4)]
++	ldp	x25, x26, [x0, #(3<<4)]
++	ldp	x27, x28, [x0, #(4<<4)]
++	ldp	x29, x30, [x0, #(5<<4)]
++	ldr	x2, [x0, #(6<<4)]
++	mov	sp, x2
++	mov	x0, #1
++	br	x30
+diff --git a/src/types/arm/64/types-arch.h b/src/types/arm/64/types-arch.h
+new file mode 100644
+index 0000000..f719bcc
+--- /dev/null
++++ b/src/types/arm/64/types-arch.h
+@@ -0,0 +1,56 @@
++/* -*- c++ -*- */
++#ifndef TYPES_ARCH_H__
++#define TYPES_ARCH_H__
++
++#define L4_PTR_ARG(a) ((Address)(a))
++
++#define L4_PTR_FMT              "%016lx"
++#define L4_MWORD_FMT            "%016lx"
++#define L4_X64_FMT              "%016llx"
++#define L4_ADDR_INPUT_FMT       "%16lx"
++#define L4_FRAME_INPUT_FMT      "%13lx"
++
++/// standard fixed-width types
++typedef unsigned char          Unsigned8;
++typedef signed char            Signed8;
++typedef unsigned short         Unsigned16;
++typedef signed short           Signed16;
++typedef unsigned int           Unsigned32;
++typedef signed int             Signed32;
++typedef unsigned long long int Unsigned64;
++typedef signed long long int   Signed64;
++
++/// machine word
++typedef signed   long          Smword;
++typedef unsigned long          Mword;
++typedef __INTPTR_TYPE__ intptr_t;
++typedef __UINTPTR_TYPE__ uintptr_t;
++
++enum {
++  MWORD_BITS = 64,
++  ARCH_PAGE_SHIFT = 12,
++};
++
++typedef signed char Small_atomic_int;
++
++/// (virtual or physical address) should be addr_t or something
++typedef unsigned long          Address;
++enum Address_vals
++#ifdef __cplusplus
++: Address
++#endif
++{
++  Invalid_address = ~0UL
++};
++
++typedef Unsigned64             Cpu_time;
++
++#ifdef __cplusplus
++
++#include <cxx/cxx_int>
++
++typedef cxx::int_type<unsigned char, struct Cpu_phys_id_t> Cpu_phys_id;
++
++#endif
++
++#endif // TYPES_ARCH_H__

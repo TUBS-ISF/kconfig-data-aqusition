@@ -1,0 +1,92 @@
+"2006-07-20 17:36:18 +0000"
+diff --git a/modutils/Config.in b/modutils/Config.in
+index cf46b0863..8974fb795 100644
+--- a/modutils/Config.in
++++ b/modutils/Config.in
+@@ -91,7 +91,8 @@ config CONFIG_MODPROBE
+ 	  module options from the configuration file. See option below.
+ 
+ config CONFIG_FEATURE_MODPROBE_MULTIPLE_OPTIONS
+-	bool "Multiple options parsing"
++	bool
++	prompt "Multiple options parsing" if CONFIG_NITPICK
+ 	default y
+ 	depends on CONFIG_MODPROBE
+ 	help
+@@ -106,6 +107,16 @@ config CONFIG_FEATURE_MODPROBE_MULTIPLE_OPTIONS
+ 	  Saying Y here is not a bad idea if you're not that short
+ 	  on storage capacity.
+ 
++config CONFIG_FEATURE_MODPROBE_FANCY_ALIAS
++	bool
++	prompt "Fancy alias parsing" if CONFIG_NITPICK
++	default y
++	depends on CONFIG_MODPROBE && CONFIG_FEATURE_2_6_MODULES
++	help
++	  Say 'y' here to enable parsing of aliases with underscore/dash
++	  mismatch between module name and file name, along with bus-specific
++	  aliases (such as pci:... or usb:... aliases).
++
+ comment "Options common to multiple modutils"
+ 	depends on CONFIG_INSMOD || CONFIG_RMMOD || CONFIG_MODPROBE || CONFIG_LSMOD
+ 
+diff --git a/modutils/modprobe.c b/modutils/modprobe.c
+index a04377180..b11e58d55 100644
+--- a/modutils/modprobe.c
++++ b/modutils/modprobe.c
+@@ -712,6 +712,37 @@ static int mod_process ( struct mod_list_t *list, int do_insert )
+ 	return (show_only) ? 0 : rc;
+ }
+ 
++/*
++ * Check the matching between a pattern and a module name.
++ * We need this as *_* is equivalent to *-*, even in pattern matching.
++ */
++static int check_pattern( const char* pat_src, const char* mod_src ) {
++	int ret;
++
++	if (ENABLE_FEATURE_MODPROBE_FANCY_ALIAS) {
++		char* pat;
++		char* mod;
++		char* p;
++
++		pat = bb_xstrdup (pat_src);
++		mod = bb_xstrdup (mod_src);
++
++		for (p = pat; (p = strchr(p, '-')); *p++ = '_' );
++		for (p = mod; (p = strchr(p, '-')); *p++ = '_' );
++
++		ret = fnmatch ( pat, mod, 0 );
++
++		if (ENABLE_FEATURE_CLEAN_UP) {
++			free (pat);
++			free (mod);
++		}
++
++		return ret;
++	} else {
++		return fnmatch ( pat_src, mod_src, 0 );
++	}
++}
++
+ /*
+  * Builds the dependency list (aka stack) of a module.
+  * head: the highest module in the stack (last to insmod, first to rmmod)
+@@ -730,7 +761,7 @@ static void check_dep ( char *mod, struct mod_list_t **head, struct mod_list_t *
+ 	 * Of course if the name in the dependency rule is a plain string,
+ 	 * then we consider it a pattern, and matching will still work. */
+ 	for ( dt = depend; dt; dt = dt-> m_next ) {
+-		if ( fnmatch ( dt-> m_name, mod, 0 ) == 0) {
++		if ( check_pattern ( dt-> m_name, mod ) == 0) {
+ 			break;
+ 		}
+ 	}
+@@ -746,7 +777,7 @@ static void check_dep ( char *mod, struct mod_list_t **head, struct mod_list_t *
+ 			struct dep_t *adt;
+ 
+ 			for ( adt = depend; adt; adt = adt-> m_next ) {
+-				if ( strcmp ( adt-> m_name, dt-> m_deparr [0] ) == 0 )
++				if ( check_pattern ( adt-> m_name, dt-> m_deparr [0] ) == 0 )
+ 					break;
+ 			}
+ 			if ( adt ) {

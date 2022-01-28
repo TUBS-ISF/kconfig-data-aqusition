@@ -1,0 +1,417 @@
+"2016-03-08 14:08:57 -0300"
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 5ebd2569..824bd9d0 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -272,12 +272,18 @@
+         "<contiki.h>"
+       ]
+     },
++    {
++      "dependency": "zephyr_micro",
++      "type": "ccode",
++      "fragment": "#ifndef CONFIG_MICROKERNEL\n#error \"Microkernel not supported\"\n#endif\n"
++    },
+     {
+       "dependency": "zephyr",
+       "type": "ccode",
+       "headers": [
+-        "<microkernel.h>"
+-      ]
++        "<nanokernel.h>"
++      ],
++      "fragment": "#if !defined(CONFIG_MICROKERNEL) && !defined(CONFIG_NANO_TIMEOUTS)\n#error \"Nanokernel build requires CONFIG_NANO_TIMEOUTS to be enabled\"\n#endif\n"
+     },
+     {
+       "dependency": "dlfcn_h",
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index eec6e563..6df44e9b 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -160,6 +160,12 @@ config SOL_BUS
+ 
+ source "src/modules/linux-micro/Kconfig"
+ 
++config MAINLOOP_ZEPHYR_NANO
++	bool
++
++config MAINLOOP_ZEPHYR_MICRO
++	bool
++
+ choice
+ 	prompt "Mainloop"
+ 	default MAINLOOP_POSIX if LINUX
+@@ -243,6 +249,8 @@ config MAINLOOP_CONTIKI
+ config MAINLOOP_ZEPHYR
+ 	bool "zephyr"
+ 	depends on ZEPHYR
++	select MAINLOOP_ZEPHYR_NANO if !FEATURE_ZEPHYR_MICROKERNEL
++	select MAINLOOP_ZEPHYR_MICRO if FEATURE_ZEPHYR_MICROKERNEL
+ 	help
+             The mainloop to be used in Zephyr platform.
+ 
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index 98e54f7d..96df083e 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -54,7 +54,13 @@ obj-core-$(MAINLOOP_CONTIKI) += \
+ 
+ obj-core-$(MAINLOOP_ZEPHYR) += \
+     sol-mainloop-common.o \
+-    sol-mainloop-impl-zephyr.o
++    sol-mainloop-impl-zephyr-common.o
++
++obj-core-$(MAINLOOP_ZEPHYR_NANO) += \
++    sol-mainloop-impl-zephyr-nano.o
++
++obj-core-$(MAINLOOP_ZEPHYR_MICRO) += \
++    sol-mainloop-impl-zephyr-micro.o
+ 
+ obj-core-$(PLATFORM_LINUX_MICRO) += \
+     sol-platform-impl-linux-micro.o
+diff --git a/src/lib/common/sol-mainloop-impl-zephyr.c b/src/lib/common/sol-mainloop-impl-zephyr-common.c
+similarity index 75%
+rename from src/lib/common/sol-mainloop-impl-zephyr.c
+rename to src/lib/common/sol-mainloop-impl-zephyr-common.c
+index 5c4eed3c..26831d4c 100644
+--- a/src/lib/common/sol-mainloop-impl-zephyr.c
++++ b/src/lib/common/sol-mainloop-impl-zephyr-common.c
+@@ -31,19 +31,22 @@
+  */
+ 
+ #include <stdbool.h>
+-#include <stdlib.h>
+-#include <unistd.h>
+ 
+-/* Zephyr headers */
+-#include <microkernel.h>
++#include <nanokernel.h>
+ 
+ #include "sol-mainloop-common.h"
+ #include "sol-mainloop-impl.h"
+ #include "sol-mainloop-zephyr.h"
+-#include "sol-vector.h"
+ 
+-#define PIPE_BUFFER_SIZE 32
+-DEFINE_PIPE(_sol_mainloop_pipe, PIPE_BUFFER_SIZE)
++static nano_thread_id_t main_thread_id;
++
++int
++sol_mainloop_zephyr_common_init(void)
++{
++    main_thread_id = sys_thread_self_get();
++
++    return 0;
++}
+ 
+ void
+ sol_mainloop_impl_lock(void)
+@@ -58,18 +61,18 @@ sol_mainloop_impl_unlock(void)
+ bool
+ sol_mainloop_impl_main_thread_check(void)
+ {
+-    return true;
++    return main_thread_id == sys_thread_self_get();
+ }
+ 
+ void
+ sol_mainloop_impl_main_thread_notify(void)
+ {
+-}
++    static const struct mainloop_event me = {
++        .cb = NULL,
++        .data = NULL
++    };
+ 
+-int
+-sol_mainloop_impl_platform_init(void)
+-{
+-    return 0;
++    sol_mainloop_event_post(&me);
+ }
+ 
+ void
+@@ -96,33 +99,12 @@ ticks_until_next_timeout(void)
+ void
+ sol_mainloop_impl_iter(void)
+ {
+-    char buf[PIPE_BUFFER_SIZE];
+-    struct mainloop_wake_data *p;
+     int32_t sleeptime;
+-    int bytes_read, count, ret;
+ 
+     sol_mainloop_common_timeout_process();
+ 
+     sleeptime = ticks_until_next_timeout();
+-    ret = task_pipe_get(_sol_mainloop_pipe, buf, PIPE_BUFFER_SIZE, &bytes_read,
+-            0, sleeptime);
+-
+-    if (ret == RC_OK) {
+-        p = (struct mainloop_wake_data *)buf;
+-        count = bytes_read / sizeof(*p);
+-        while (count) {
+-            p->cb((void *)p->data);
+-            count--;
+-            p++;
+-        }
+-    }
++    sol_mainloop_events_process(sleeptime);
+ 
+     sol_mainloop_common_idler_process();
+ }
+-
+-int
+-sol_mainloop_wakeup(const struct mainloop_wake_data *mwd)
+-{
+-    int bytes_written;
+-    return task_pipe_put(_sol_mainloop_pipe, (void *)mwd, sizeof(*mwd), &bytes_written, 0, TICKS_NONE);
+-}
+diff --git a/src/lib/common/sol-mainloop-impl-zephyr-micro.c b/src/lib/common/sol-mainloop-impl-zephyr-micro.c
+new file mode 100644
+index 00000000..1a0bd34c
+--- /dev/null
++++ b/src/lib/common/sol-mainloop-impl-zephyr-micro.c
+@@ -0,0 +1,81 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2016 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++
++#include <microkernel.h>
++
++#include "sol-log.h"
++#include "sol-mainloop-zephyr.h"
++
++#define MAX_QUEUED_EVENTS 8
++#define PIPE_BUFFER_SIZE (MAX_QUEUED_EVENTS * sizeof(struct mainloop_event))
++DEFINE_PIPE(_sol_mainloop_pipe, PIPE_BUFFER_SIZE)
++
++int
++sol_mainloop_impl_platform_init(void)
++{
++    return sol_mainloop_zephyr_common_init();
++}
++
++int
++sol_mainloop_event_post(const struct mainloop_event *me)
++{
++    int bytes_written, ret;
++
++    ret = task_pipe_put(_sol_mainloop_pipe, (void *)me, sizeof(*me), &bytes_written, 0, TICKS_NONE);
++    SOL_INT_CHECK(ret, != RC_OK, -ENOMEM);
++
++    return 0;
++}
++
++void
++sol_mainloop_events_process(int32_t sleeptime)
++{
++    char buf[PIPE_BUFFER_SIZE];
++    struct mainloop_event *p;
++    int bytes_read, count, ret;
++
++    ret = task_pipe_get(_sol_mainloop_pipe, buf, PIPE_BUFFER_SIZE, &bytes_read,
++        0, sleeptime);
++
++    if (ret == RC_OK) {
++        p = (struct mainloop_event *)buf;
++        count = bytes_read / sizeof(*p);
++        while (count) {
++            if (p->cb)
++                p->cb((void *)p->data);
++            count--;
++            p++;
++        }
++    }
++}
+diff --git a/src/lib/common/sol-mainloop-impl-zephyr-nano.c b/src/lib/common/sol-mainloop-impl-zephyr-nano.c
+new file mode 100644
+index 00000000..6585d463
+--- /dev/null
++++ b/src/lib/common/sol-mainloop-impl-zephyr-nano.c
+@@ -0,0 +1,98 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2016 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <nanokernel.h>
++
++#include "sol-log.h"
++#include "sol-mainloop-zephyr.h"
++#include "sol-util.h"
++
++struct me_fifo_entry {
++    void *reserved_for_fifo;
++    struct mainloop_event me;
++};
++
++static struct nano_fifo _sol_mainloop_pending_events;
++static struct nano_fifo _sol_mainloop_free_events;
++
++#define MAX_QUEUED_EVENTS 8
++#define EVENTS_BUF_SIZE (MAX_QUEUED_EVENTS * sizeof(struct me_fifo_entry))
++static struct me_fifo_entry _events[EVENTS_BUF_SIZE];
++
++int
++sol_mainloop_impl_platform_init(void)
++{
++    int i;
++
++    sol_mainloop_zephyr_common_init();
++
++    nano_fifo_init(&_sol_mainloop_pending_events);
++    nano_fifo_init(&_sol_mainloop_free_events);
++    for (i = 0; i < SOL_UTIL_ARRAY_SIZE(_events); i++) {
++        struct me_fifo_entry *mfe;
++
++        mfe = &_events[i];
++        nano_fifo_put(&_sol_mainloop_free_events, mfe);
++    }
++
++    return 0;
++}
++
++int
++sol_mainloop_event_post(const struct mainloop_event *me)
++{
++    struct me_fifo_entry *mfe;
++
++    mfe = nano_fifo_get(&_sol_mainloop_free_events, TICKS_NONE);
++    SOL_NULL_CHECK(mfe, -ENOMEM);
++
++    mfe->me = *me;
++    nano_fifo_put(&_sol_mainloop_pending_events, mfe);
++
++    return 0;
++}
++
++void
++sol_mainloop_events_process(int32_t sleeptime)
++{
++    struct me_fifo_entry *mfe;
++
++    mfe = nano_task_fifo_get(&_sol_mainloop_pending_events, sleeptime);
++    if (!mfe)
++        return;
++
++    do {
++        if (mfe->me.cb)
++            mfe->me.cb((void *)mfe->me.data);
++        nano_task_fifo_put(&_sol_mainloop_free_events, mfe);
++    } while ((mfe = nano_task_fifo_get(&_sol_mainloop_pending_events, TICKS_NONE)));
++}
+diff --git a/src/lib/common/sol-mainloop-zephyr.h b/src/lib/common/sol-mainloop-zephyr.h
+index 520aeb9c..2e22cda5 100644
+--- a/src/lib/common/sol-mainloop-zephyr.h
++++ b/src/lib/common/sol-mainloop-zephyr.h
+@@ -32,11 +32,11 @@
+ 
+ #pragma once
+ 
+-#include <microkernel.h>
+-
+-struct mainloop_wake_data {
++struct mainloop_event {
+     void (*cb)(void *data);
+     const void *data;
+ };
+ 
+-int sol_mainloop_wakeup(const struct mainloop_wake_data *mwd);
++int sol_mainloop_zephyr_common_init(void);
++int sol_mainloop_event_post(const struct mainloop_event *me);
++void sol_mainloop_events_process(int32_t sleeptime);
+diff --git a/src/lib/io/sol-gpio-impl-zephyr.c b/src/lib/io/sol-gpio-impl-zephyr.c
+index a0e892ba..69637b12 100644
+--- a/src/lib/io/sol-gpio-impl-zephyr.c
++++ b/src/lib/io/sol-gpio-impl-zephyr.c
+@@ -87,7 +87,7 @@ sol_gpio_interrupt_process(void *data)
+ static void
+ gpio_isr_cb(struct device *port, uint32_t pin)
+ {
+-    struct mainloop_wake_data w = {
++    struct mainloop_event w = {
+         .cb = sol_gpio_interrupt_process,
+         .data = NULL
+     };
+@@ -97,7 +97,7 @@ gpio_isr_cb(struct device *port, uint32_t pin)
+     if (!atomic_cas(&int_flag, 0, 1))
+         return;
+ 
+-    sol_mainloop_wakeup(&w);
++    sol_mainloop_event_post(&w);
+ }
+ 
+ SOL_API struct sol_gpio *
+diff --git a/tools/build/Kconfig.zephyr b/tools/build/Kconfig.zephyr
+index 2e767b02..c135c188 100644
+--- a/tools/build/Kconfig.zephyr
++++ b/tools/build/Kconfig.zephyr
+@@ -1,3 +1,6 @@
++config FEATURE_ZEPHYR_MICROKERNEL
++    bool
++
+ config ZEPHYR
+     def_bool y
+     select FEATURE_HW_AIO
+@@ -6,3 +9,4 @@ config ZEPHYR
+     select FEATURE_HW_PWM
+     select FEATURE_HW_SPI
+     select FEATURE_FLOW
++    select FEATURE_ZEPHYR_MICROKERNEL if HAVE_ZEPHYR_MICRO

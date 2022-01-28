@@ -1,0 +1,646 @@
+"2010-09-15 12:31:22 +0200"
+diff --git a/Makefile.in b/Makefile.in
+index fe8e98398..348bc0c3f 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -48,6 +48,7 @@ include $(top_srcdir)libresolv/Makefile.in
+ include $(top_srcdir)libutil/Makefile.in
+ include $(top_srcdir)libpthread/Makefile.in
+ include $(top_srcdir)librt/Makefile.in
++include $(top_srcdir)libubacktrace/Makefile.in
+ include $(top_srcdir)extra/locale/Makefile.in
+ 
+ # last included to catch all the objects added by others (locales/threads)
+@@ -272,6 +273,7 @@ HEADERS_RM-$(UCLIBC_HAS_GLIBC_CUSTOM_PRINTF) += printf.h
+ HEADERS_RM-$(UCLIBC_HAS_GLOB)                += glob.h
+ HEADERS_RM-$(UCLIBC_HAS_GNU_ERROR)           += error.h
+ HEADERS_RM-$(UCLIBC_HAS_IPV6)                += netinet/ip6.h netinet/icmp6.h
++HEADERS_RM-$(UCLIBC_HAS_BACKTRACE)           += execinfo.h
+ HEADERS_RM-$(UCLIBC_HAS_LOCALE)              += iconv.h
+ HEADERS_RM-$(UCLIBC_HAS_PTY)                 += pty.h
+ HEADERS_RM-$(UCLIBC_HAS_REGEX)               += regex.h regexp.h
+@@ -330,6 +332,12 @@ ifeq ($(HARDWIRED_ABSPATH),y)
+ else
+ 	-$(INSTALL) -m 755 $(top_builddir)lib/libc.so $(PREFIX)$(DEVEL_PREFIX)$(MULTILIB_DIR)/
+ endif
++ifeq ($(UCLIBC_HAS_BACKTRACE),y)
++# Add the AS_NEEDED entry for libubacktrace.so
++	if [ -f $(top_builddir)lib/libc.so -a -f $(PREFIX)$(RUNTIME_PREFIX)lib/$(SHARED_MAJORNAME) ] ; then \
++		echo "GROUP ( $(UBACKTRACE_ASNEEDED) )" >> $(PREFIX)$(DEVEL_PREFIX)lib/libc.so; \
++	fi
++endif
+ ifeq ($(UCLIBC_HAS_THREADS),y)
+ ifneq ($(LINUXTHREADS_OLD),y)
+ ifeq ($(HARDWIRED_ABSPATH),y)
+diff --git a/Makerules b/Makerules
+index cb1c554bc..2e9ca05bf 100644
+--- a/Makerules
++++ b/Makerules
+@@ -32,12 +32,12 @@ shared_objs = $(libc-y:.o=.os) $(libc-shared-y) $(libc-nonshared-y) \
+ 	$(libpthread-so-y) $(libpthread-nonshared-y) $(libthread_db-so-y) \
+ 	$(libresolv-so-y) $(librt-so-y) \
+ 	$(ldso-y) \
+-	$(libutil-so-y)
++	$(libutil-so-y) $(libubacktrace-so-y)
+ 
+ ar_objs =  $(libc-y) $(libc-static-y) $(libcrypt-a-y) \
+ 	$(libdl-a-y) $(libintl-a-y) $(libm-a-y) $(libnsl-a-y) \
+ 	$(libpthread-a-y) $(libthread_db-a-y) \
+-	$(libresolv-a-y) $(librt-a-y) $(libutil-a-y)
++	$(libresolv-a-y) $(librt-a-y) $(libutil-a-y) $(libubacktrace-a-y)
+ ifeq ($(DOPIC),y)
+ ar_objs := $(ar_objs:.o=.os)
+ endif
+@@ -455,7 +455,8 @@ files.dep := $(libc-a-y) $(libc-so-y) $(libc-nonshared-y) \
+ 	$(libthread_db-a-y) $(libthread_db-so-y) $(libpthread-generated-y) \
+ 	$(librt-a-y) $(librt-so-y)  $(libresolv-a-y) $(libresolv-so-y) \
+ 	$(libcrypt-a-y) $(libcrypt-so-y) $(libutil-a-y) $(libutil-so-y) \
+-	$(libnsl-a-y) $(libnsl-so-y) $(ldso-y) $(libdl-a-y) $(libdl-so-y)
++	$(libnsl-a-y) $(libnsl-so-y) $(ldso-y) $(libdl-a-y) $(libdl-so-y) \
++	$(libubacktrace-a-y) $(libubacktrace-so-y)
+ .depends.dep := \
+ 	$(patsubst %.s,%.s.dep,$(filter %.s,$(files.dep))) \
+ 	$(patsubst %.o,%.o.dep,$(filter %.o,$(files.dep))) \
+diff --git a/Rules.mak b/Rules.mak
+index 89127043c..ade86c6ac 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -118,7 +118,7 @@ export MAJOR_VERSION MINOR_VERSION SUBLEVEL VERSION ABI_VERSION LC_ALL
+ 
+ LIBC := libc
+ SHARED_LIBNAME := $(LIBC).so.$(ABI_VERSION)
+-
++UBACKTRACE_DSO := libubacktrace.so.$(MAJOR_VERSION)
+ ifneq ($(findstring  $(TARGET_ARCH) , hppa64 ia64 mips64 powerpc64 s390x sparc64 x86_64 ),)
+ UCLIBC_LDSO_NAME := ld64-uClibc
+ ARCH_NATIVE_BIT := 64
+@@ -528,6 +528,13 @@ link.asneeded = $(if $(and $(CC_FLAG_ASNEEDED),$(CC_FLAG_NO_ASNEEDED)),$(CC_FLAG
+ # Check for AS_NEEDED support in linker script (binutils>=2.16.1 has it)
+ ifndef ASNEEDED
+ export ASNEEDED:=$(shell $(LD) --help 2>/dev/null | grep -q -- --as-needed && echo "AS_NEEDED ( $(UCLIBC_LDSO) )" || echo "$(UCLIBC_LDSO)")
++ifeq ($(UCLIBC_HAS_BACKTRACE),y)
++# Only used in installed libc.so linker script
++UBACKTRACE_FULL_NAME := $(RUNTIME_PREFIX)lib/$(UBACKTRACE_DSO)
++export UBACKTRACE_ASNEEDED:=$(shell $(LD) --help 2>/dev/null | grep -q -- --as-needed && echo "AS_NEEDED ( $(UBACKTRACE_FULL_NAME) )" || echo "$(UBACKTRACE_FULL_NAME)")
++else
++export UBACKTRACE_ASNEEDED:=""
++endif
+ endif
+ 
+ # Add a bunch of extra pedantic annoyingly strict checks
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 7f0ac9db6..e8d522d71 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -2308,6 +2308,25 @@ config UCLIBC_MALLOC_DEBUGGING
+ 	  Because this increases the size of malloc appreciably (due to strings
+ 	  etc), you should say N unless you need to debug a malloc problem.
+ 
++config UCLIBC_HAS_BACKTRACE
++	bool "Add support for application self-debugging"
++	depends on HAVE_SHARED && TARGET_sh
++	default n
++	help
++	  Answer Y here to compile support for application self-debugging, by adding
++	  a new shared object "libubacktrace.so" that provides the following new
++	  functions:
++	  backtrace, backtrace_symbols, backtrace_symbols_fd
++
++	  The backtrace functionality is currently supported on SH platform, and it
++	  based on dwarf2 informations to properly work, so any application that
++	  want to use backtrace needs to be built with -fexceptions flag.
++
++	  The symbol names may be unavailable without the use of special linker
++	  options. For systems using the GNU linker, it is necessary to use the
++	  -rdynamic linker option too. Note that names of "static" functions are not
++	  exposed, and won't be available in the backtrace.
++
+ config WARNINGS
+ 	string "Compiler Warnings"
+ 	default "-Wall"
+diff --git a/include/execinfo.h b/include/execinfo.h
+new file mode 100644
+index 000000000..c1614cc1f
+--- /dev/null
++++ b/include/execinfo.h
+@@ -0,0 +1,44 @@
++/* Copyright (C) 1998, 1999, 2004, 2005 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _EXECINFO_H
++#define _EXECINFO_H 1
++
++#include <features.h>
++
++__BEGIN_DECLS
++
++/* Store up to SIZE return address of the current program state in
++   ARRAY and return the exact number of values stored.  */
++extern int backtrace (void **__array, int __size) __nonnull ((1));
++
++
++/* Return names of functions from the backtrace list in ARRAY in a newly
++   malloc()ed memory block.  */
++extern char **backtrace_symbols (void *__const *__array, int __size)
++     __THROW __nonnull ((1));
++
++
++/* This function is similar to backtrace_symbols() but it writes the result
++   immediately to a file.  */
++extern void backtrace_symbols_fd (void *__const *__array, int __size, int __fd)
++     __THROW __nonnull ((1));
++
++__END_DECLS
++
++#endif /* execinfo.h  */
+diff --git a/libubacktrace/Makefile b/libubacktrace/Makefile
+new file mode 100644
+index 000000000..0f746383c
+--- /dev/null
++++ b/libubacktrace/Makefile
+@@ -0,0 +1,14 @@
++# Makefile for uClibc (libubacktrace)
++#
++# Copyright (C) 2010 STMicroelectronics Ltd
++# Author(s): Carmelo Amoroso <carmelo.amoroso@st.com>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir=../
++top_builddir=../
++include $(top_builddir)Rules.mak
++all: libs
++include Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libubacktrace/Makefile.in b/libubacktrace/Makefile.in
+new file mode 100644
+index 000000000..c1dd5d7ab
+--- /dev/null
++++ b/libubacktrace/Makefile.in
+@@ -0,0 +1,84 @@
++# Makefile for uClibc (libubacktrace)
++#
++# Copyright (C) 2010 STMicroelectronics Ltd
++# Author: Carmelo Amoroso <carmelo.amoroso@st.com>
++
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++subdirs += libubacktrace
++
++CFLAGS-libubacktrace := -DNOT_IN_libc -DIS_IN_libubacktrace $(SSP_ALL_CFLAGS)
++
++LDFLAGS-libubacktrace.so := $(LDFLAGS) $(top_builddir)lib/libdl-$(VERSION).so
++
++LIBS-libubacktrace.so := $(LIBS)
++
++libubacktrace_FULL_NAME := libubacktrace-$(VERSION).so
++
++libubacktrace_DIR := $(top_srcdir)libubacktrace
++libubacktrace_OUT := $(top_builddir)libubacktrace
++libubacktrace_ARCH_DIR := $(libubacktrace_DIR)/sysdeps/$(TARGET_ARCH)
++libubacktrace_ARCH_OUT := $(libubacktrace_OUT)/sysdeps/$(TARGET_ARCH)
++
++-include $(libubacktrace_ARCH_DIR)/Makefile.arch
++
++libubacktrace_SRC-y :=
++libubacktrace_SRC-$(UCLIBC_HAS_BACKTRACE) := backtrace.c backtracesyms.c backtracesymsfd.c
++
++CFLAGS-libubacktrace/sysdeps/$(TARGET_ARCH)/ := $(CFLAGS-libubacktrace)
++
++# remove generic sources, if arch specific version is present
++ifneq ($(strip $(libubacktrace_ARCH_SRC-y)),)
++libubacktrace_SRC-y := $(filter-out $(notdir $(libubacktrace_ARCH_SRC-y)),$(libubacktrace_SRC-y))
++libubacktrace_ARCH_SRC := $(addprefix $(libubacktrace_ARCH_DIR)/,$(libubacktrace_ARCH_SRC-y))
++libubacktrace_ARCH_OBJ := $(patsubst $(libubacktrace_ARCH_DIR)/%.c,$(libubacktrace_ARCH_OUT)/%.o,$(libubacktrace_ARCH_SRC))
++endif
++
++
++libubacktrace_SRC := $(addprefix $(libubacktrace_DIR)/,$(libubacktrace_SRC-y))
++libubacktrace_OBJ := $(patsubst $(libubacktrace_DIR)/%.c,$(libubacktrace_OUT)/%.o,$(libubacktrace_SRC))
++
++libubacktrace_SRCS := $(libubacktrace_SRC) $(libubacktrace_ARCH_SRC)
++libubacktrace_OBJS := $(libubacktrace_OBJ) $(libubacktrace_ARCH_OBJ)
++
++ifeq ($(DOPIC),y)
++libubacktrace-a-y := $(libubacktrace_OBJS:.o=.os)
++else
++libubacktrace-a-y := $(libubacktrace_OBJS)
++endif
++libubacktrace-so-y := $(libubacktrace_OBJS:.o=.os)
++
++lib-a-$(UCLIBC_HAS_BACKTRACE) += $(top_builddir)lib/libubacktrace.a
++lib-so-$(UCLIBC_HAS_BACKTRACE) += $(top_builddir)lib/libubacktrace.so
++
++objclean-y += CLEAN_libubacktrace
++
++ifeq ($(DOMULTI),n)
++ifeq ($(DOPIC),y)
++$(top_builddir)lib/libubacktrace.so: $(top_builddir)lib/libubacktrace.a $(libdl.depend)
++else
++$(top_builddir)lib/libubacktrace.so: $(libubacktrace_OUT)/libubacktrace_so.a $(libdl.depend)
++endif
++	$(call link.so,$(libubacktrace_FULL_NAME),$(ABI_VERSION))
++else
++$(top_builddir)lib/libubacktrace.so: $(libubacktrace_OUT)/libubacktrace.oS | $(libdl.depend)
++	$(call linkm.so,$(libubacktrace_FULL_NAME),$(ABI_VERSION))
++endif
++
++$(libubacktrace_OUT)/libubacktrace_so.a: $(libubacktrace-so-y)
++	$(Q)$(RM) $@
++	$(do_ar)
++
++$(libubacktrace_OUT)/libubacktrace.oS: $(libubacktrace_SRCS)
++	$(Q)$(RM) $@
++	$(compile-m)
++
++$(top_builddir)lib/libubacktrace.a: $(libubacktrace-a-y)
++	$(Q)$(INSTALL) -d $(dir $@)
++	$(Q)$(RM) $@
++	$(do_ar)
++
++CLEAN_libubacktrace:
++	$(do_rm) $(addprefix $(libubacktrace_OUT)/*., o os oS a) \
++	 $(addprefix $(libubacktrace_ARCH_OUT)/*., o os oS a)
+diff --git a/libubacktrace/backtrace.c b/libubacktrace/backtrace.c
+new file mode 100644
+index 000000000..872180028
+--- /dev/null
++++ b/libubacktrace/backtrace.c
+@@ -0,0 +1,19 @@
++/*
++ * Perform stack unwinding by using the _Unwind_Backtrace.
++ *
++ * User application that wants to use backtrace needs to be
++ * compiled with -fexceptions option and -rdynamic to get full
++ * symbols printed.
++
++ * Copyright (C) 2010 STMicroelectronics Ltd
++ * Author(s): Carmelo Amoroso <carmelo.amoroso@st.com>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ *
++ */
++#error "Arch specific implementation must be provided to properly work"
++int backtrace (void **array, int size)
++{
++	return -1;
++}
++
+diff --git a/libubacktrace/backtracesyms.c b/libubacktrace/backtracesyms.c
+new file mode 100644
+index 000000000..4486fee94
+--- /dev/null
++++ b/libubacktrace/backtracesyms.c
+@@ -0,0 +1,105 @@
++/* Return list with names for address in backtrace.
++   Copyright (C) 1998,1999,2000,2001,2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.
++
++   Based on glibc/sysdeps/generic/elf/backtracesyms.c
++
++   Copyright (C) 2010 STMicroelectronics Ltd
++   Author(s): Carmelo Amoroso <carmelo.amoroso@st.com>
++   * Modified to work with uClibc
++     - updated headers inclusion
++     - updated formatting and style
++     - updated to use dladdr from libdl */
++
++#include <execinfo.h>
++#include <assert.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <dlfcn.h>
++#include <link.h>	/* required for __ELF_NATIVE_CLASS */
++
++#if __ELF_NATIVE_CLASS == 32
++# define WORD_WIDTH 8
++#else
++/* We assyme 64bits.  */
++# define WORD_WIDTH 16
++#endif
++
++
++char ** backtrace_symbols (void *const *array,  int size)
++{
++	Dl_info info[size];
++	int status[size];
++	int cnt;
++	size_t total = 0;
++	char **result;
++
++	/* Fill in the information we can get from `dladdr'.  */
++	for (cnt = 0; cnt < size; ++cnt) {
++		status[cnt] = dladdr (array[cnt], &info[cnt]);
++		if (status[cnt] && info[cnt].dli_fname &&
++			info[cnt].dli_fname[0] != '\0')
++		/*
++		 * We have some info, compute the length of the string which will be
++		 * "<file-name>(<sym-name>) [+offset].
++		 */
++		total += (strlen (info[cnt].dli_fname ?: "") +
++				  (info[cnt].dli_sname ?
++				  strlen (info[cnt].dli_sname) + 3 + WORD_WIDTH + 3 : 1)
++				  + WORD_WIDTH + 5);
++		else
++			total += 5 + WORD_WIDTH;
++	}
++
++	/* Allocate memory for the result.  */
++	result = (char **) malloc (size * sizeof (char *) + total);
++	if (result != NULL) {
++		char *last = (char *) (result + size);
++		for (cnt = 0; cnt < size; ++cnt) {
++			result[cnt] = last;
++
++			if (status[cnt] && info[cnt].dli_fname
++				&& info[cnt].dli_fname[0] != '\0') {
++
++				char buf[20];
++
++				if (array[cnt] >= (void *) info[cnt].dli_saddr)
++					sprintf (buf, "+%#lx",
++							(unsigned long)(array[cnt] - info[cnt].dli_saddr));
++				else
++					sprintf (buf, "-%#lx",
++					(unsigned long)(info[cnt].dli_saddr - array[cnt]));
++
++				last += 1 + sprintf (last, "%s%s%s%s%s[%p]",
++				info[cnt].dli_fname ?: "",
++				info[cnt].dli_sname ? "(" : "",
++				info[cnt].dli_sname ?: "",
++				info[cnt].dli_sname ? buf : "",
++				info[cnt].dli_sname ? ") " : " ",
++				array[cnt]);
++			} else
++				last += 1 + sprintf (last, "[%p]", array[cnt]);
++		}
++		assert (last <= (char *) result + size * sizeof (char *) + total);
++	}
++
++	return result;
++}
+diff --git a/libubacktrace/backtracesymsfd.c b/libubacktrace/backtracesymsfd.c
+new file mode 100644
+index 000000000..66d7687ca
+--- /dev/null
++++ b/libubacktrace/backtracesymsfd.c
+@@ -0,0 +1,116 @@
++/* Write formatted list with names for addresses in backtrace to a file.
++   Copyright (C) 1998, 2000, 2003, 2005 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1998.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.
++
++   Based on glibc/sysdeps/generic/elf/backtracesymsfd.c
++
++   Copyright (C) 2010 STMicroelectronics Ltd
++   Author(s): Carmelo Amoroso <carmelo.amoroso@st.com>
++   * Modified to work with uClibc
++     - updated headers inclusion
++     - updated formatting and style
++     - updated to use dladdr from libdl
++     - updated to use snprintf instead of _itoa_word */
++
++#include <execinfo.h>
++#include <string.h>
++#include <sys/uio.h>
++#include <dlfcn.h>
++#include <stdio.h>
++#include <link.h>	/* required for __ELF_NATIVE_CLASS */
++
++#if __ELF_NATIVE_CLASS == 32
++# define WORD_WIDTH 8
++#else
++/* We assyme 64bits.  */
++# define WORD_WIDTH 16
++#endif
++
++#define BUF_SIZE (WORD_WIDTH + 1)
++
++void backtrace_symbols_fd (void *const *array, int size, int fd)
++{
++	struct iovec iov[9];
++	int cnt;
++
++	for (cnt = 0; cnt < size; ++cnt) {
++		char buf[BUF_SIZE];
++		Dl_info info;
++		size_t last = 0;
++		size_t len = 0;
++
++		memset(buf, 0, sizeof(buf));
++		if (dladdr (array[cnt], &info)
++			&& info.dli_fname && info.dli_fname[0] != '\0')	{
++			/* Name of the file.  */
++			iov[0].iov_base = (void *) info.dli_fname;
++			iov[0].iov_len = strlen (info.dli_fname);
++			last = 1;
++
++			/* Symbol name.  */
++			if (info.dli_sname != NULL) {
++				char buf2[BUF_SIZE];
++				memset(buf2, 0, sizeof(buf2));
++				size_t diff;
++
++				iov[1].iov_base = (void *) "(";
++				iov[1].iov_len = 1;
++				iov[2].iov_base = (void *) info.dli_sname;
++				iov[2].iov_len = strlen (info.dli_sname);
++
++				if (array[cnt] >= (void *) info.dli_saddr) {
++					iov[3].iov_base = (void *) "+0x";
++					diff = array[cnt] - info.dli_saddr;
++				} else {
++					iov[3].iov_base = (void *) "-0x";
++					diff = info.dli_saddr - array[cnt];
++				}
++
++				iov[3].iov_len = 3;
++
++				/* convert diff to a string in hex format */
++				len = snprintf(buf2, sizeof(buf2), "%lx", (unsigned long) diff);
++				iov[4].iov_base = buf2;
++				iov[4].iov_len = len;
++
++				iov[5].iov_base = (void *) ")";
++				iov[5].iov_len = 1;
++
++				last = 6;
++			}
++		}
++
++		iov[last].iov_base = (void *) "[0x";
++		iov[last].iov_len = 3;
++		++last;
++
++		/* convert array[cnt] to a string in hex format */
++		len = snprintf(buf, sizeof(buf), "%lx", (unsigned long) array[cnt]);
++		iov[last].iov_base = buf;
++		iov[last].iov_len = len;
++
++		++last;
++
++		iov[last].iov_base = (void *) "]\n";
++		iov[last].iov_len = 2;
++		++last;
++
++		writev (fd, iov, last);
++	}
++}
+diff --git a/libubacktrace/sysdeps/sh/Makefile.arch b/libubacktrace/sysdeps/sh/Makefile.arch
+new file mode 100644
+index 000000000..9b0de385b
+--- /dev/null
++++ b/libubacktrace/sysdeps/sh/Makefile.arch
+@@ -0,0 +1,12 @@
++# Makefile for uClibc (sh/libubacktrace)
++#
++# Copyright (C) 2010 STMicroelectronics Ltd
++# Author: Carmelo Amoroso <carmelo.amoroso@st.com>
++
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++libubacktrace_ARCH_SRC-y := backtrace.c
++
++# -fexections is required for backtrace to work using dwarf2
++CFLAGS-backtrace.c := -fexceptions
+diff --git a/libubacktrace/sysdeps/sh/backtrace.c b/libubacktrace/sysdeps/sh/backtrace.c
+new file mode 100644
+index 000000000..18b91b1bb
+--- /dev/null
++++ b/libubacktrace/sysdeps/sh/backtrace.c
+@@ -0,0 +1,84 @@
++/*
++ * Perform stack unwinding by using the _Unwind_Backtrace.
++ *
++ * User application that wants to use backtrace needs to be
++ * compiled with -fexceptions option and -rdynamic to get full
++ * symbols printed.
++ *
++ * Copyright (C) 2009, 2010 STMicroelectronics Ltd.
++ *
++ * Author(s): Giuseppe Cavallaro <peppe.cavallaro@st.com>
++ * - Initial implementation for glibc
++ *
++ * Author(s): Carmelo Amoroso <carmelo.amoroso@st.com>
++ * - Reworked for uClibc
++ *   - use dlsym/dlopen from libdl
++ *   - rewrite initialisation to not use libc_once
++ *   - make it available in static link too
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ *
++ */
++
++#include <execinfo.h>
++#include <dlfcn.h>
++#include <stdlib.h>
++#include <unwind.h>
++#include <assert.h>
++#include <stdio.h>
++
++struct trace_arg
++{
++  void **array;
++  int cnt, size;
++};
++
++static _Unwind_Reason_Code (*unwind_backtrace) (_Unwind_Trace_Fn, void *);
++static _Unwind_Ptr (*unwind_getip) (struct _Unwind_Context *);
++
++static void backtrace_init (void)
++{
++	void *handle = dlopen ("libgcc_s.so.1", RTLD_LAZY);
++
++	if (handle == NULL
++		|| ((unwind_backtrace = dlsym (handle, "_Unwind_Backtrace")) == NULL)
++		|| ((unwind_getip = dlsym (handle, "_Unwind_GetIP")) == NULL)) {
++		printf("libgcc_s.so.1 must be installed for backtrace to work\n");
++		abort();
++	}
++}
++
++static _Unwind_Reason_Code
++backtrace_helper (struct _Unwind_Context *ctx, void *a)
++{
++	struct trace_arg *arg = a;
++
++	assert (unwind_getip != NULL);
++
++	/* We are first called with address in the __backtrace function. Skip it. */
++	if (arg->cnt != -1)
++		arg->array[arg->cnt] = (void *) unwind_getip (ctx);
++	if (++arg->cnt == arg->size)
++		return _URC_END_OF_STACK;
++	return _URC_NO_REASON;
++}
++
++/*
++ * Perform stack unwinding by using the _Unwind_Backtrace.
++ *
++ * User application that wants to use backtrace needs to be
++ * compiled with -fexceptions option and -rdynamic to get full
++ * symbols printed.
++ */
++int backtrace (void **array, int size)
++{
++	struct trace_arg arg = { .array = array, .size = size, .cnt = -1 };
++
++	if (unwind_backtrace == NULL)
++		backtrace_init();
++
++	if (size >= 1)
++		unwind_backtrace (backtrace_helper, &arg);
++
++	return arg.cnt != -1 ? arg.cnt : 0;
++}

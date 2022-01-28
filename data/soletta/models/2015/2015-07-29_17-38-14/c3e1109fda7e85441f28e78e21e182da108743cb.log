@@ -1,0 +1,165 @@
+"2015-07-29 17:38:14 -0300"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 87edf933..d5a915f7 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -309,6 +309,13 @@ config SOL_BUS
+           Systemd's sd-bus support.
+ 	default n
+ 
++menu "Hardware Options"
++config USE_PWM
++	bool "PWM Support"
++	default y
++endmenu
++
++
+ config SOCKET_LINUX
+ 	bool "Linux sockets"
+ 	depends on SOL_PLATFORM_LINUX && NETWORK
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index 21e0f61d..798fd5e8 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -2,16 +2,24 @@ obj-$(IO) += io.mod
+ 
+ obj-io-$(IO) := \
+     sol-gpio-common.o \
+-    sol-i2c-common.o \
+-    sol-pwm-common.o \
++    sol-i2c-common.o
++
++ifeq (y, $(USE_PWM))
++obj-io-$(IO) += \
++    sol-pwm-common.o
++endif
+ 
+ ifeq (y,$(PLATFORM_RIOTOS))
+ obj-io-$(IO) += \
+     sol-gpio-riot.o \
+     sol-i2c-riot.o \
+-    sol-pwm-riot.o \
+     sol-spi-riot.o \
+     sol-uart-riot.o
++
++ifeq (y, $(USE_PWM))
++obj-io-$(IO) += \
++    sol-pwm-riot.o
++endif # USE_PWM
+ endif
+ 
+ ifeq (y,$(PLATFORM_CONTIKI))
+@@ -23,14 +31,22 @@ ifeq (y,$(SOL_PLATFORM_LINUX))
+ obj-io-$(IO) += \
+     sol-gpio-linux.o \
+     sol-i2c-linux.o \
+-    sol-pwm-linux.o \
+     sol-spi-linux.o \
+     sol-uart-linux.o
++
++ifeq (y, $(USE_PWM))
++obj-io-$(IO) += \
++    sol-pwm-linux.o
++endif # USE_PWM
+ endif
+ 
+ headers-$(IO) := \
+     include/sol-gpio.h \
+     include/sol-i2c.h \
+-    include/sol-pwm.h \
+     include/sol-spi.h \
+     include/sol-uart.h
++
++ifeq (y, $(USE_PWM))
++headers-$(IO) += \
++    include/sol-pwm.h
++endif
+diff --git a/src/modules/flow/calamari/Kconfig b/src/modules/flow/calamari/Kconfig
+index cb72464a..68582d9c 100644
+--- a/src/modules/flow/calamari/Kconfig
++++ b/src/modules/flow/calamari/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_CALAMARI
+ 	tristate "Node type: calamari"
+-	depends on FLOW && (FLOW_NODE_TYPE_GPIO = y)
++	depends on FLOW && (FLOW_NODE_TYPE_GPIO = y) && USE_PWM
+ 	default m
+diff --git a/src/modules/flow/piezo-speaker/Kconfig b/src/modules/flow/piezo-speaker/Kconfig
+index 91a7b420..7e67669d 100644
+--- a/src/modules/flow/piezo-speaker/Kconfig
++++ b/src/modules/flow/piezo-speaker/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_PIEZO_SPEAKER
+ 	tristate "Node type: piezo-speaker"
+-	depends on FLOW
++	depends on FLOW && USE_PWM
+ 	default m
+diff --git a/src/modules/flow/pwm/Kconfig b/src/modules/flow/pwm/Kconfig
+index fa295d04..e4bd438a 100644
+--- a/src/modules/flow/pwm/Kconfig
++++ b/src/modules/flow/pwm/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_PWM
+ 	tristate "Node type: pwm"
+-	depends on FLOW
++	depends on FLOW && USE_PWM
+ 	default y
+diff --git a/src/modules/flow/servo-motor/Kconfig b/src/modules/flow/servo-motor/Kconfig
+index 09cbb1c7..9abf5bb7 100644
+--- a/src/modules/flow/servo-motor/Kconfig
++++ b/src/modules/flow/servo-motor/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_SERVO_MOTOR
+ 	tristate "Node type: servo-motor"
+-	depends on FLOW
++	depends on FLOW && USE_PWM
+ 	default m
+diff --git a/src/test/test-flow.c b/src/test/test-flow.c
+index c677fabe..d9aad567 100644
+--- a/src/test/test-flow.c
++++ b/src/test/test-flow.c
+@@ -40,7 +40,9 @@
+  * log_init() */
+ static void log_init(void) SOL_ATTR_UNUSED;
+ #include "console-gen.h"
++#ifdef USE_PWM
+ #include "pwm-gen.h"
++#endif
+ #include "timer-gen.h"
+ 
+ #include "test.h"
+@@ -1155,13 +1157,18 @@ node_options_from_strv(void)
+     const char *timer_strv[2] = { "interval=1000", NULL };
+     const char *timer_irange_strv[2] = { "interval=50|20|60|2", NULL };
+     const char *timer_irange_different_format_strv[2] = { "interval=val:100|min:10|max:200|step:5", NULL };
++
++#ifdef USE_PWM
+     const char *pwm_strv[6] = { "chip=2", "pin=7", "enabled=true", "period=42", "duty_cycle=88", NULL };
++#endif
+     const char *console_strv[4] = { "prefix=console prefix:", "suffix=. suffix!", "output_on_stdout=true", NULL };
+     const char *timer_unknown_field_strv[2] = { "this_is_not_a_valid_field=100", NULL };
+     const char *timer_wrongly_formatted_strv[2] = { "interval = 1000", NULL };
+ 
+     struct sol_flow_node_type_timer_options *timer_opts;
++#ifdef USE_PWM
+     struct sol_flow_node_type_pwm_options *pwm_opts;
++#endif
+     struct sol_flow_node_type_console_options *console_opts;
+     struct sol_flow_node_options *opts;
+ 
+@@ -1172,6 +1179,7 @@ node_options_from_strv(void)
+     ASSERT_INT_EQ(timer_opts->interval.val, 1000);
+     sol_flow_node_options_del(SOL_FLOW_NODE_TYPE_TIMER, (struct sol_flow_node_options *)timer_opts);
+ 
++#ifdef USE_PWM
+     /* Multiple options */
+     pwm_opts = (struct sol_flow_node_type_pwm_options *)
+         sol_flow_node_options_new_from_strv(SOL_FLOW_NODE_TYPE_PWM, pwm_strv);
+@@ -1182,6 +1190,7 @@ node_options_from_strv(void)
+     ASSERT_INT_EQ(pwm_opts->period.val, 42);
+     ASSERT_INT_EQ(pwm_opts->duty_cycle.val, 88);
+     sol_flow_node_options_del(SOL_FLOW_NODE_TYPE_PWM, (struct sol_flow_node_options *)pwm_opts);
++#endif
+ 
+     /* String options */
+     console_opts = (struct sol_flow_node_type_console_options *)

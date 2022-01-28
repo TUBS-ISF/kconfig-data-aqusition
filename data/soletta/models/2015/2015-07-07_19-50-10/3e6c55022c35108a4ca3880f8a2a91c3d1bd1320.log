@@ -1,0 +1,54 @@
+"2015-07-07 19:50:10 -0300"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 10b33474..b55acb3f 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -11,10 +11,12 @@ config PLATFORM_NAME
+             behavior. Namely Pin Multiplexer will load modules based
+             on the platform name.
+ 
+-            Usually the platform name is detected using rules defined
+-            at $PREFIX/share/soletta/platform_detect.json, but some
+-            platforms such as RIOT may not provide it, then this
+-            string is used as a fallback.
++            Usually the platform name is detected using either
++            SOL_PLATFORM_NAME environment variable or the rules defined in
++            'platform_detect.json'. Soletta searches for 'platform_detect.json'
++            first at PKGSYSCONFDIR ('/etc/soletta' in most cases) and then at
++            '$PREFIX/share/soletta/', but some platforms such as RIOT may not
++            provide it, then this string is used as a fallback.
+ 
+ config SOL_PLATFORM_LINUX
+ 	bool
+diff --git a/src/lib/common/sol-platform-detect.c b/src/lib/common/sol-platform-detect.c
+index b90af433..b83369df 100644
+--- a/src/lib/common/sol-platform-detect.c
++++ b/src/lib/common/sol-platform-detect.c
+@@ -46,6 +46,8 @@ SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "platform-detect");
+ #include "sol-util.h"
+ #include "sol-vector.h"
+ 
++#define PLATFORM_JSON "/platform_detect.json"
++
+ static bool
+ _check_rule(const char *path, const struct sol_vector *match, const struct sol_vector *dont_match)
+ {
+@@ -215,9 +217,15 @@ sol_platform_detect(void)
+     struct sol_json_token token, key, value, platform_name = { NULL };
+     enum sol_json_loop_reason reason;
+ 
+-    json_doc = _json_open_doc(DATADIR "/platform_detect.json", &scanner);
+-    if (!json_doc)
+-        return NULL;
++    json_doc = _json_open_doc(PKGSYSCONFDIR PLATFORM_JSON, &scanner);
++    if (!json_doc) {
++        json_doc = _json_open_doc(DATADIR PLATFORM_JSON, &scanner);
++        if (!json_doc) {
++            SOL_INF(PLATFORM_JSON " could not be found. Searched paths:\n.%s\n%s",
++                PKGSYSCONFDIR, DATADIR);
++            return NULL;
++        }
++    }
+ 
+     SOL_JSON_SCANNER_OBJECT_LOOP (&scanner, &token, &key, &value, reason) {
+         if (SOL_JSON_TOKEN_STR_LITERAL_EQ(&token, "platforms")) {

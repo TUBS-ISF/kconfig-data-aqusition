@@ -1,0 +1,166 @@
+"2007-01-21 00:41:04 +0000"
+diff --git a/Config.in b/Config.in
+index acdecccab..2066e42f9 100644
+--- a/Config.in
++++ b/Config.in
+@@ -231,6 +231,14 @@ config SELINUX
+ 
+ 	  Most people will leave this set to 'N'.
+ 
++config FEATURE_EXEC_PREFER_APPLETS
++	bool "exec prefers applets"
++	default n
++	help
++	  This is an experimental option which directs applets about to
++	  call 'exec' to try and find an applicable busybox applet before
++	  searching the executable path for a binary or symlink to execute.
++
+ config BUSYBOX_EXEC_PATH
+ 	string "Path to BusyBox executable"
+ 	default "/proc/self/exe"
+@@ -439,7 +447,7 @@ config INSTALL_APPLET_HARDLINKS
+ config INSTALL_APPLET_DONT
+        bool
+        prompt "not installed"
+-       depends on FEATURE_INSTALLER || FEATURE_SH_STANDALONE_SHELL
++       depends on FEATURE_INSTALLER || FEATURE_SH_STANDALONE_SHELL || FEATURE_EXEC_PREFER_APPLETS
+        help
+          Do not install applet links. Useful when using the -install feature
+          or a standalone shell for rescue pruposes.
+diff --git a/init/init.c b/init/init.c
+index 6fc68afb1..7694b4448 100644
+--- a/init/init.c
++++ b/init/init.c
+@@ -389,6 +389,7 @@ static pid_t run(const struct init_action *a)
+ #include CUSTOMIZED_BANNER
+ #endif
+ 		"\nPlease press Enter to activate this console. ";
++	char *prog;
+ 
+ 	/* Block sigchild while forking.  */
+ 	sigemptyset(&nmask);
+@@ -560,7 +561,10 @@ static pid_t run(const struct init_action *a)
+ 
+ 		/* Now run it.  The new program will take over this PID,
+ 		 * so nothing further in init.c should be run. */
+-		execv(cmdpath, cmd);
++		prog = cmdpath;
++		if (ENABLE_FEATURE_EXEC_PREFER_APPLETS && find_applet_by_name(prog))
++			prog = CONFIG_BUSYBOX_EXEC_PATH;
++		execvp(prog, cmd);
+ 
+ 		/* We're still here?  Some error happened. */
+ 		message(LOG | CONSOLE, "Bummer, cannot run '%s': %m", cmdpath);
+@@ -678,6 +682,7 @@ static void exec_signal(int sig ATTRIBUTE_UNUSED)
+ {
+ 	struct init_action *a, *tmp;
+ 	sigset_t unblock_signals;
++	char *prog;
+ 
+ 	for (a = init_action_list; a; a = tmp) {
+ 		tmp = a->next;
+@@ -713,7 +718,10 @@ static void exec_signal(int sig ATTRIBUTE_UNUSED)
+ 			dup(0);
+ 
+ 			messageD(CONSOLE | LOG, "Trying to re-exec %s", a->command);
+-			execl(a->command, a->command, NULL);
++			prog = a->command;
++			if (ENABLE_FEATURE_EXEC_PREFER_APPLETS && find_applet_by_name(prog))
++				prog = CONFIG_BUSYBOX_EXEC_PATH;
++			execlp(prog, a->command, NULL);
+ 
+ 			message(CONSOLE | LOG, "exec of '%s' failed: %m",
+ 					a->command);
+@@ -852,13 +860,13 @@ static void parse_inittab(void)
+ 		/* No inittab file -- set up some default behavior */
+ #endif
+ 		/* Reboot on Ctrl-Alt-Del */
+-		new_init_action(CTRLALTDEL, "/sbin/reboot", "");
++		new_init_action(CTRLALTDEL, "reboot", "");
+ 		/* Umount all filesystems on halt/reboot */
+-		new_init_action(SHUTDOWN, "/bin/umount -a -r", "");
++		new_init_action(SHUTDOWN, "umount -a -r", "");
+ 		/* Swapoff on halt/reboot */
+-		if(ENABLE_SWAPONOFF) new_init_action(SHUTDOWN, "/sbin/swapoff -a", "");
++		if(ENABLE_SWAPONOFF) new_init_action(SHUTDOWN, "swapoff -a", "");
+ 		/* Prepare to restart init when a HUP is received */
+-		new_init_action(RESTART, "/sbin/init", "");
++		new_init_action(RESTART, "init", "");
+ 		/* Askfirst shell on tty1-4 */
+ 		new_init_action(ASKFIRST, bb_default_login_shell, "");
+ 		new_init_action(ASKFIRST, bb_default_login_shell, VC_2);
+@@ -1039,9 +1047,9 @@ int init_main(int argc, char **argv)
+ 		{
+ 			message(CONSOLE,"Low memory: forcing swapon.");
+ 			/* swapon -a requires /proc typically */
+-			new_init_action(SYSINIT, "/bin/mount -t proc proc /proc", "");
++			new_init_action(SYSINIT, "mount -t proc proc /proc", "");
+ 			/* Try to turn on swap */
+-			new_init_action(SYSINIT, "/sbin/swapon -a", "");
++			new_init_action(SYSINIT, "swapon -a", "");
+ 			run_actions(SYSINIT);   /* wait and removing */
+ 		}
+ 	}
+@@ -1068,7 +1076,10 @@ int init_main(int argc, char **argv)
+ 
+ 		putenv("SELINUX_INIT=YES");
+ 		if (selinux_init_load_policy(&enforce) == 0) {
+-			execv(argv[0], argv);
++			char *prog = argv[0];
++			if (ENABLE_FEATURE_EXEC_PREFER_APPLETS && find_applet_by_name(prog))
++				prog = CONFIG_BUSYBOX_EXEC_PATH;
++			execvp(prog, argv);
+ 		} else if (enforce > 0) {
+ 			/* SELinux in enforcing mode but load_policy failed */
+ 			/* At this point, we probably can't open /dev/console, so log() won't work */
+diff --git a/libbb/xfuncs.c b/libbb/xfuncs.c
+index 240ac5d3d..4252e7646 100644
+--- a/libbb/xfuncs.c
++++ b/libbb/xfuncs.c
+@@ -183,14 +183,17 @@ pid_t spawn(char **argv)
+ 	/* Why static? */
+ 	static int failed;
+ 	pid_t pid;
+-	void *app = ENABLE_FEATURE_SH_STANDALONE_SHELL ? find_applet_by_name(argv[0]) : 0;
++	char *prog;
+ 
+ 	// Be nice to nommu machines.
+ 	failed = 0;
+ 	pid = vfork();
+ 	if (pid < 0) return pid;
+ 	if (!pid) {
+-		execvp(app ? CONFIG_BUSYBOX_EXEC_PATH : *argv, argv);
++		prog = argv[0];
++		if (ENABLE_FEATURE_EXEC_PREFER_APPLETS && find_applet_by_name(prog))
++			prog = CONFIG_BUSYBOX_EXEC_PATH;
++		execvp(prog, argv);
+ 
+ 		// We're sharing a stack with blocked parent, let parent know we failed
+ 		// and then exit to unblock parent (but don't run atexit() stuff, which
+diff --git a/scripts/defconfig b/scripts/defconfig
+index 2c82ed474..fc43deb2d 100644
+--- a/scripts/defconfig
++++ b/scripts/defconfig
+@@ -27,6 +27,7 @@ CONFIG_FEATURE_SYSLOG=y
+ CONFIG_FEATURE_SUID_CONFIG=y
+ CONFIG_FEATURE_SUID_CONFIG_QUIET=y
+ # CONFIG_SELINUX is not set
++#CONFIG_FEATURE_EXEC_PREFER_APPLETS is not set
+ CONFIG_BUSYBOX_EXEC_PATH="/proc/self/exe"
+ 
+ #
+diff --git a/shell/ash.c b/shell/ash.c
+index 8ef8c465c..2db3302c7 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -6528,6 +6528,10 @@ setjobctl(int on)
+ 		int ofd;
+ 		ofd = fd = open(_PATH_TTY, O_RDWR);
+ 		if (fd < 0) {
++	/* BTW, bash will try to open(ttyname(0)) if open("/dev/tty") fails.
++	 * That sometimes helps to acquire controlling tty.
++	 * Obviously, a workaround for bugs when someone
++	 * failed to provide a controlling tty to bash! :) */
+ 			fd += 3;
+ 			while (!isatty(fd) && --fd >= 0)
+ 				;

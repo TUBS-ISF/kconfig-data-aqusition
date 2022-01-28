@@ -1,0 +1,120 @@
+"2018-11-01 09:46:44 +0100"
+diff --git a/src/kern/arm/bsp/bcm283x/Kconfig b/src/kern/arm/bsp/bcm283x/Kconfig
+index dd9998a..0165048 100644
+--- a/src/kern/arm/bsp/bcm283x/Kconfig
++++ b/src/kern/arm/bsp/bcm283x/Kconfig
+@@ -21,4 +21,9 @@ config PF_BCM283X_RPI3
+         depends on PF_BCM283X
+         select CAN_ARM_CPU_CORTEX_A53
+ 
++config PF_BCM283X_RPIZW
++        bool "rpizw"
++        depends on PF_BCM283X
++        select CAN_ARM_CPU_1176
++
+ endchoice
+diff --git a/src/kern/arm/bsp/bcm283x/Modules b/src/kern/arm/bsp/bcm283x/Modules
+index e029a3c..35555e0 100644
+--- a/src/kern/arm/bsp/bcm283x/Modules
++++ b/src/kern/arm/bsp/bcm283x/Modules
+@@ -1,10 +1,10 @@
+ # vim:set ft=make:
+ 
+ SUBSYSTEMS              += LIBUART
+-OBJECTS_LIBUART         += $(if $(CONFIG_PF_BCM283X_RPI3),uart_16550.o,uart_pl011.o)
+ PREPROCESS_PARTS        += libuart generic_tickless_idle arm_single_ipi_irq
+ PREPROCESS_PARTS        += $(if $(CONFIG_ARM_V7PLUS),arm_generic_timer)
+ PREPROCESS_PARTS        += $(if $(CONFIG_PF_BCM283X_RPI3),16550)
++PREPROCESS_PARTS        += $(if $(CONFIG_PF_BCM283X_RPIZW),16550)
+ INTERFACES_KERNEL       += $(if $(CONFIG_ARM_V7PLUS),generic_timer)
+ INTERFACES_KERNEL       += arm_control irq_handler
+ RAM_PHYS_BASE           := 0
+@@ -12,9 +12,15 @@ RAM_PHYS_BASE           := 0
+ ifeq ($(CONFIG_PF_BCM283X_RPI3),y)
+   uart_IMPL              = uart uart-16550
+   kernel_uart_IMPL      += kernel_uart-libuart
++  OBJECTS_LIBUART       += uart_16550.o
++else ifeq ($(CONFIG_PF_BCM283X_RPIZW),y)
++  uart_IMPL              = uart uart-16550
++  kernel_uart_IMPL      += kernel_uart-libuart
++  OBJECTS_LIBUART       += uart_16550.o
+ else
+   uart_IMPL             += uart-arm-bcm283x
+   kernel_uart_IMPL      += kernel_uart-arm-bcm283x
++  OBJECTS_LIBUART       += uart_pl011.o
+ endif
+ arm_control_IMPL      += arm_control-arm-bcm283x
+ config_IMPL           += config-arm-bcm283x
+diff --git a/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp
+index 46962c5..560c585 100644
+--- a/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/bcm283x/config-arm-bcm283x.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [arm && pf_bcm283x && pf_bcm283x_rpi1]:
++INTERFACE [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
+ 
+ #define TARGET_NAME "Broadcom 2835"
+ 
+diff --git a/src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp
+index 4ee0f38..bde9ac8 100644
+--- a/src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/bcm283x/irq_handler-arm-bcm283x.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [arm && pf_bcm283x && pf_bcm283x_rpi1]:
++IMPLEMENTATION [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
+ 
+ #include "pic.h"
+ 
+diff --git a/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp
+index 6d2adb6..f827084 100644
+--- a/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/bcm283x/mem_layout-arm-bcm283x.cpp
+@@ -1,4 +1,4 @@
+-INTERFACE [arm && pf_bcm283x_rpi1]: //-------------------------------------
++INTERFACE [arm && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]: //-------------------------------------
+ 
+ EXTENSION class Mem_layout
+ {
+diff --git a/src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp
+index 9a237cd..61f821b 100644
+--- a/src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/bcm283x/pic-arm-bcm283x.cpp
+@@ -118,7 +118,7 @@ Pic::handle_irq()
+ }
+ 
+ // ------------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && pf_bcm283x_rpi1]:
++IMPLEMENTATION [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
+ 
+ PUBLIC static FIASCO_INIT
+ void Pic::init()
+diff --git a/src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp
+index cc23305..ca14dc6 100644
+--- a/src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/bcm283x/timer-arm-bcm283x.cpp
+@@ -1,5 +1,5 @@
+ // --------------------------------------------------------------------------
+-INTERFACE [arm && pf_bcm283x && pf_bcm283x_rpi1]:
++INTERFACE [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
+ 
+ // HINT: This is drivers/clocksource/bcm2835_timer.c
+ 
+@@ -60,7 +60,7 @@ unsigned Timer::irq()
+ }
+ 
+ // ----------------------------------------------------------------------
+-IMPLEMENTATION [arm && pf_bcm283x && pf_bcm283x_rpi1]:
++IMPLEMENTATION [arm && pf_bcm283x && (pf_bcm283x_rpi1 || pf_bcm283x_rpizw)]:
+ 
+ #include "config.h"
+ #include "kip.h"
+diff --git a/src/kern/arm/bsp/bcm283x/uart-arm-bcm283x.cpp b/src/kern/arm/bsp/bcm283x/uart-arm-bcm283x.cpp
+index 19143d1..6378817 100644
+--- a/src/kern/arm/bsp/bcm283x/uart-arm-bcm283x.cpp
++++ b/src/kern/arm/bsp/bcm283x/uart-arm-bcm283x.cpp
+@@ -1,4 +1,4 @@
+-IMPLEMENTATION [pf_bcm283x && !pf_bcm283x_rpi3]:
++IMPLEMENTATION [pf_bcm283x && !(pf_bcm283x_rpi3 || pf_bcm283x_rpizw)]:
+ 
+ #include "koptions.h"
+ #include "uart_pl011.h"

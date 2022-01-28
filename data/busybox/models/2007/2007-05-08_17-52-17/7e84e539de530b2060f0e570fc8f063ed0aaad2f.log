@@ -1,0 +1,309 @@
+"2007-05-08 17:52:17 +0000"
+diff --git a/docs/new-applet-HOWTO.txt b/docs/new-applet-HOWTO.txt
+index b1e103572..5d8fbe78a 100644
+--- a/docs/new-applet-HOWTO.txt
++++ b/docs/new-applet-HOWTO.txt
+@@ -6,7 +6,10 @@ This document details the steps you must take to add a new applet to BusyBox.
+ Credits:
+ Matt Kraai - initial writeup
+ Mark Whitley - the remix
+-Thomas Lundquist - Added stuff for the new directory layout.
++Thomas Lundquist - Trying to keep it updated.
++
++When doing this you should consider using the latest svn trunk.
++This is a good thing if you plan to getting it commited into mainline.
+ 
+ Initial Write
+ -------------
+@@ -21,6 +24,10 @@ the bb_config.h and appropriate platform specific files are included properly.
+ 
+ For a new applet mu, here is the code that would go in mu.c:
+ 
++(busybox.h already includes most usual header files. You do not need
++#include <stdio.h> etc...)
++
++
+ ----begin example code------
+ 
+ /* vi: set sw=4 ts=4: */
+@@ -33,7 +40,7 @@ For a new applet mu, here is the code that would go in mu.c:
+  */
+ 
+ #include "busybox.h"
+-#include <other.h>
++#include "other.h"
+ 
+ int mu_main(int argc, char **argv);
+ int mu_main(int argc, char **argv)
+@@ -69,6 +76,38 @@ useful functions in libbb. Use these instead of reinventing the wheel.
+ Additionally, if you have any useful, general-purpose functions in your
+ applet that could be useful in other applets, consider putting them in libbb.
+ 
++And it may be possible that some of the other applets uses functions you
++could use. If so, you have to rip the function out of the applet and make
++a libbb function out of it.
++
++Adding a libbb function:
++------------------------
++
++Make a new file named <function_name>.c
++
++----start example code------
++
++#include "libbb.h"
++#include "other.h"
++
++int function(char *a)
++{
++	return *a;
++}
++
++----end example code------
++
++Add <function_name>.o in the right alphabetically sorted place 
++in libbb/Kbuild. You should look at the conditional part of 
++libbb/Kbuild aswell.
++
++You should also try to find a suitable place in include/libbb.h for 
++the function declaration. If not, add it somewhere anyway, with or without
++ifdefs to include or not.
++
++You can look at libbb/Config.in and try to find out if the function is 
++tuneable and add it there if it is.
++
+ 
+ Placement / Directory
+ ---------------------
+@@ -78,9 +117,9 @@ Find the appropriate directory for your new applet.
+ Make sure you find the appropriate places in the files, the applets are
+ sorted alphabetically.
+ 
+-Add the applet to Makefile.in in the chosen directory:
++Add the applet to Kbuild in the chosen directory:
+ 
+-obj-$(CONFIG_MU)               += mu.o
++lib-$(CONFIG_MU)               += mu.o
+ 
+ Add the applet to Config.in in the chosen directory:
+ 
+@@ -119,31 +158,22 @@ Next, add an entry to include/applets.h.  Be *sure* to keep the list
+ in alphabetical order, or else it will break the binary-search lookup
+ algorithm in busybox.c and the Gods of BusyBox smite you. Yea, verily:
+ 
++Be sure to read the top of applets.h before adding your applet.
++
+ 	/* all programs above here are alphabetically "less than" 'mu' */
+-	#ifdef CONFIG_MU
+-		APPLET("mu", mu_main, _BB_DIR_USR_BIN, mu_usage)
+-	#endif
++	USE_MU(APPLET(mu, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ 	/* all programs below here are alphabetically "greater than" 'mu' */
+ 
+ 
+-Documentation
+--------------
+-
+-If you're feeling especially nice, you should also document your applet in the
+-docs directory (but nobody ever does that).
+-
+-Adding some text to docs/Configure.help is a nice start.
+-
+-
+ The Grand Announcement
+ ----------------------
+ 
+-Then create a diff -urN of the files you added and/or modified. Typically:
+-	<appletdir>/<applet>.c
+-	include/usage.c
+-	include/applets.h
+-	<appletdir>/Makefile.in
+-	<appletdir>/config.in
++Then create a diff by adding the new files with svn (remember your libbb files)
++	svn add <where you put it>/mu.c
++eventually also: 
++	svn add libbb/function.c
++then
++	svn diff 
+ and send it to the mailing list:
+ 	busybox@busybox.net
+ 	http://busybox.net/mailman/listinfo/busybox
+diff --git a/include/applets.h b/include/applets.h
+index 67f7db4a6..a7aee3a1d 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -101,6 +101,7 @@ USE_CP(APPLET_NOEXEC(cp, cp, _BB_DIR_BIN, _BB_SUID_NEVER, cp))
+ USE_CPIO(APPLET(cpio, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_CROND(APPLET(crond, _BB_DIR_USR_SBIN, _BB_SUID_NEVER))
+ USE_CRONTAB(APPLET(crontab, _BB_DIR_USR_BIN, _BB_SUID_ALWAYS))
++USE_CRYPTPW(APPLET(cryptpw, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_CUT(APPLET_NOEXEC(cut, cut, _BB_DIR_USR_BIN, _BB_SUID_NEVER, cut))
+ USE_DATE(APPLET(date, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_DC(APPLET(dc, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+diff --git a/include/libbb.h b/include/libbb.h
+index be51f2520..32bb3113d 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -718,6 +718,7 @@ extern int bb_parse_mode(const char* s, mode_t* theMode);
+ 
+ char *concat_path_file(const char *path, const char *filename);
+ char *concat_subpath_file(const char *path, const char *filename);
++/* NB: can violate const-ness (similarly to strchr) */
+ char *last_char_is(const char *s, int c);
+ 
+ 
+@@ -755,6 +756,7 @@ extern int index_in_substr_array(const char * const string_array[], const char *
+ extern void print_login_issue(const char *issue_file, const char *tty);
+ extern void print_login_prompt(void);
+ 
++extern void crypt_make_salt(char *p, int cnt);
+ 
+ int get_terminal_width_height(const int fd, int *width, int *height);
+ 
+diff --git a/include/usage.h b/include/usage.h
+index afcc4b3d7..eab96011e 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -474,6 +474,13 @@
+        "	-d [user]    delete crontab for user\n" \
+        "	-c dir       specify crontab directory"
+ 
++#define cryptpw_trivial_usage \
++       "[-a des|md5] [string]"
++#define cryptpw_full_usage \
++       "Outputs crypted string.\n" \
++       "If string isn't supplied on cmdline, reads it from stdin.\n" \
++       "\nOptions:" \
++       "\n	-a	Algorithm to use (default: md5)"
+ 
+ #define cut_trivial_usage \
+        "[OPTION]... [FILE]..."
+diff --git a/libbb/Kbuild b/libbb/Kbuild
+index 4e6eec38b..eeca7d536 100644
+--- a/libbb/Kbuild
++++ b/libbb/Kbuild
+@@ -21,6 +21,7 @@ lib-y += copyfd.o
+ lib-y += crc32.o
+ lib-y += create_icmp6_socket.o
+ lib-y += create_icmp_socket.o
++lib-y += crypt_make_salt.o
+ lib-y += default_error_retval.o
+ lib-y += device_open.o
+ lib-y += dump.o
+@@ -103,6 +104,9 @@ lib-$(CONFIG_FEATURE_MOUNT_LOOP) += loop.o
+ lib-$(CONFIG_LOSETUP) += loop.o
+ lib-$(CONFIG_FEATURE_MTAB_SUPPORT) += mtab.o
+ lib-$(CONFIG_PASSWD) += pw_encrypt.o
++lib-$(CONFIG_PASSWD) += crypt_make_salt.o
++lib-$(CONFIG_CRYPTPW) += pw_encrypt.o
++lib-$(CONFIG_CRYPTPW) += crypt_make_salt.o
+ lib-$(CONFIG_SULOGIN) += pw_encrypt.o
+ lib-$(CONFIG_FEATURE_HTTPD_AUTH_MD5) += pw_encrypt.o
+ lib-$(CONFIG_VLOCK) += correct_password.o
+diff --git a/libbb/chomp.c b/libbb/chomp.c
+index eab770760..8ffaff518 100644
+--- a/libbb/chomp.c
++++ b/libbb/chomp.c
+@@ -15,5 +15,5 @@ void chomp(char *s)
+ 	char *lc = last_char_is(s, '\n');
+ 
+ 	if (lc)
+-		*lc = 0;
++		*lc = '\0';
+ }
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index e8ab9ec3c..919091ec6 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -166,6 +166,12 @@ config FEATURE_PASSWD_WEAK_CHECK
+ 	help
+ 	  With this option passwd will refuse new passwords which are "weak".
+ 
++config CRYPTPW
++	bool "cryptpw"
++	default n
++	help
++	  Applet for crypting a string.
++
+ config SU
+ 	bool "su"
+ 	default n
+diff --git a/loginutils/Kbuild b/loginutils/Kbuild
+index 6c9d193e1..1b1165a6e 100644
+--- a/loginutils/Kbuild
++++ b/loginutils/Kbuild
+@@ -7,6 +7,7 @@
+ lib-y:=
+ lib-$(CONFIG_ADDGROUP)	+= addgroup.o
+ lib-$(CONFIG_ADDUSER)	+= adduser.o
++lib-$(CONFIG_CRYPTPW)	+= cryptpw.o
+ lib-$(CONFIG_GETTY)	+= getty.o
+ lib-$(CONFIG_LOGIN)	+= login.o
+ lib-$(CONFIG_PASSWD)	+= passwd.o
+diff --git a/loginutils/passwd.c b/loginutils/passwd.c
+index b937ce45e..a323c0a40 100644
+--- a/loginutils/passwd.c
++++ b/loginutils/passwd.c
+@@ -12,44 +12,6 @@ static void nuke_str(char *str)
+ 	if (str) memset(str, 0, strlen(str));
+ }
+ 
+-
+-static int i64c(int i)
+-{
+-	i &= 0x3f;
+-	if (i == 0)
+-		return '.';
+-	if (i == 1)
+-		return '/';
+-	if (i < 12)
+-		return ('0' - 2 + i);
+-	if (i < 38)
+-		return ('A' - 12 + i);
+-	return ('a' - 38 + i);
+-}
+-
+-
+-static void crypt_make_salt(char *p, int cnt)
+-{
+-	unsigned x = x; /* it's pointless to initialize it anyway :) */
+-
+-	x += getpid() + time(NULL) + clock();
+-	do {
+-		/* x = (x*1664525 + 1013904223) % 2^32 generator is lame
+-		 * (low-order bit is not "random", etc...),
+-		 * but for our purposes it is good enough */
+-		x = x*1664525 + 1013904223;
+-		/* BTW, Park and Miller's "minimal standard generator" is
+-		 * x = x*16807 % ((2^31)-1)
+-		 * It has no problem with visibly alternating lowest bit
+-		 * but is also weak in cryptographic sense + needs div,
+-		 * which needs more code (and slower) on many CPUs */
+-		*p++ = i64c(x >> 16);
+-		*p++ = i64c(x >> 22);
+-	} while (--cnt);
+-	*p = '\0';
+-}
+-
+-
+ static char* new_password(const struct passwd *pw, uid_t myuid, int algo)
+ {
+ 	char salt[sizeof("$N$XXXXXXXX")]; /* "$N$XXXXXXXX" or "XX" */
+@@ -109,18 +71,6 @@ static char* new_password(const struct passwd *pw, uid_t myuid, int algo)
+ }
+ 
+ 
+-#if 0
+-static int get_algo(char *a)
+-{
+-	/* standard: MD5 */
+-	int x = 1;
+-	if (strcasecmp(a, "des") == 0)
+-		x = 0;
+-	return x;
+-}
+-#endif
+-
+-
+ static int update_passwd(const char *filename, const char *username,
+ 			const char *new_pw)
+ {

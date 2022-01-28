@@ -1,0 +1,118 @@
+"2005-06-11 01:14:09 +0000"
+diff --git a/e2fsprogs/Config.in b/e2fsprogs/Config.in
+index a2d9fe8a5..0ffd51746 100644
+--- a/e2fsprogs/Config.in
++++ b/e2fsprogs/Config.in
+@@ -17,4 +17,17 @@ config CONFIG_LSATTR
+ 	help
+ 	  lsattr lists the file attributes on a second extended file system.
+ 
++config CONFIG_TUNE2FS
++	bool "tune2fs (and e2label/findfs)"
++	default n
++	help
++	  tune2fs allows the system administrator to adjust various tunable 
++	  filesystem parameters on Linux ext2/ext3 filesystems.
++
++	  e2label will display or change the filesystem label on the ext2 
++	  filesystem located on device.
++
++	  findfs will search the disks in the system looking for a filesystem 
++	  which has a label matching label or a UUID equal to uuid.
++
+ endmenu
+diff --git a/e2fsprogs/Makefile.in b/e2fsprogs/Makefile.in
+index 5c69fbeef..196172bcf 100644
+--- a/e2fsprogs/Makefile.in
++++ b/e2fsprogs/Makefile.in
+@@ -25,13 +25,32 @@ srcdir=$(top_srcdir)/e2fsprogs
+ 
+ E2FSPROGS_CFLAGS := -I$(E2FSPROGS_DIR) -include $(E2FSPROGS_DIR)e2fsbb.h
+ 
+-E2P_SRC     := fgetsetflags.c fgetsetversion.c pf.c iod.c
++BLKID_SRC   := cache.c dev.c devname.c devno.c getsize.c llseek.c probe.c \
++               read.c resolve.c save.c tag.c
++BLKID_SRCS  := $(patsubst %,blkid/%, $(BLKID_SRC))
++BLKID_OBJS  := $(patsubst %.c,%.o, $(BLKID_SRCS))
++
++E2P_SRC     := fgetsetflags.c fgetsetversion.c pf.c iod.c mntopts.c \
++               feature.c ls.c uuid.c pe.c ostype.c ps.c hashstr.c
+ E2P_SRCS    := $(patsubst %,e2p/%, $(E2P_SRC))
+ E2P_OBJS    := $(patsubst %.c,%.o, $(E2P_SRCS))
+ 
++EXT2FS_SRC  := gen_bitmap.c bitops.c ismounted.c mkjournal.c unix_io.c \
++               llseek.c rw_bitmaps.c initialize.c bitmaps.c block.c \
++               ind_block.c inode.c freefs.c alloc_stats.c closefs.c \
++               openfs.c io_manager.c finddev.c read_bb.c alloc.c badblocks.c
++EXT2FS_SRCS := $(patsubst %,ext2fs/%, $(EXT2FS_SRC))
++EXT2FS_OBJS := $(patsubst %.c,%.o, $(EXT2FS_SRCS))
++
++UUID_SRC    := compare.c gen_uuid.c pack.c parse.c unpack.c unparse.c \
++               uuid_time.c
++UUID_SRCS   := $(patsubst %,uuid/%, $(UUID_SRC))
++UUID_OBJS   := $(patsubst %.c,%.o, $(UUID_SRCS))
++
+ E2FSPROGS-:=
+-E2FSPROGS-$(CONFIG_CHATTR)      += chattr.o $(E2P_OBJS)
+-E2FSPROGS-$(CONFIG_LSATTR)      += lsattr.o $(E2P_OBJS)
++E2FSPROGS-$(CONFIG_CHATTR)     += chattr.o $(E2P_OBJS)
++E2FSPROGS-$(CONFIG_LSATTR)     += lsattr.o $(E2P_OBJS)
++E2FSPROGS-$(CONFIG_TUNE2FS)    += tune2fs.o util.o $(E2P_OBJS) $(BLKID_OBJS) $(EXT2FS_OBJS) $(UUID_OBJS)
+ 
+ libraries-y+=$(E2FSPROGS_DIR)$(E2FSPROGS_AR)
+ 
+diff --git a/include/applets.h b/include/applets.h
+index 6aa67f527..d6e767dbf 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -179,6 +179,9 @@
+ #ifdef CONFIG_DUMPLEASES
+ 	APPLET(dumpleases, dumpleases_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_TUNE2FS
++	APPLET_NOUSAGE("e2label", tune2fs_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_ECHO
+ 	APPLET(echo, echo_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+@@ -221,6 +224,9 @@
+ #ifdef CONFIG_FIND
+ 	APPLET(find, find_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_TUNE2FS
++	APPLET_NOUSAGE("findfs", tune2fs_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_FOLD
+ 	APPLET(fold, fold_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+@@ -629,6 +635,9 @@
+ #ifdef CONFIG_TTY
+ 	APPLET(tty, tty_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_TUNE2FS
++	APPLET(tune2fs, tune2fs_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_UDHCPC
+ 	APPLET(udhcpc, udhcpc_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 484c01591..1ab728f26 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2828,6 +2828,16 @@
+ 	"$ tty\n" \
+ 	"/dev/tty2\n"
+ 
++#define tune2fs_trivial_usage \
++	"[-c max-mounts-count] [-e errors-behavior] [-g group] " \
++	"[-i interval[d|m|w]] [-j] [-J journal-options] [-l] [-s sparse-flag] " \
++	"[-m reserved-blocks-percent] [-o [^]mount-options[,...]] " \
++	"[-r reserved-blocks-count] [-u user] [-C mount-count] " \
++	"[-L volume-label] [-M last-mounted-dir] [-O [^]feature[,...]] " \
++	"[-T last-check-time] [-U UUID] device"
++#define tune2fs_full_usage \
++	"Adjust filesystem options on ext[23] filesystems.\n\n"
++
+ #define udhcpc_trivial_usage \
+ 	"[-fbnqv] [-c CLIENTID] [-H HOSTNAME] [-i INTERFACE]\n[-p pidfile] [-r IP] [-s script]"
+ #define udhcpc_full_usage \

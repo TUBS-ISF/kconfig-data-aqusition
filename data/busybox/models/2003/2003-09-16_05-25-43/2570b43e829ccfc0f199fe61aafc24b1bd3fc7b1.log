@@ -1,0 +1,228 @@
+"2003-09-16 05:25:43 +0000"
+diff --git a/editors/Config.in b/editors/Config.in
+index 14b698f5d..bced12cb1 100644
+--- a/editors/Config.in
++++ b/editors/Config.in
+@@ -42,6 +42,19 @@ config CONFIG_FEATURE_SED_EMBEDED_NEWLINE
+ 	  It works by translating '\n' to "\n" and back.
+ 	  It may introduce unexpected results if you use "\n" in your text.
+ 
++config CONFIG_FEATURE_SED_GNU_COMPATABILITY
++	bool " Behave consistent with GNU sed"
++	default y
++	depends on CONFIG_SED
++	help
++	  Where GNU sed doesnt follow the posix standard, do as GNU sed does.
++	  Current difference are in
++	    - N command with odd number of lines (see GNU sed info page)
++	    - Blanks before substitution flags eg.
++	        GNU sed interprets 's/a/b/ g' as 's/a/b/g'
++		Standard says 's/a/b/ g' should be 's/a/b/;g'
++	    - GNU sed allows blanks between a '!' and the function.
++
+ config CONFIG_VI
+ 	bool "vi"
+ 	default n
+diff --git a/editors/sed.c b/editors/sed.c
+index a5a9d41a0..8b98a3182 100644
+--- a/editors/sed.c
++++ b/editors/sed.c
+@@ -45,9 +45,11 @@
+ 	 - GNU extensions
+ 	 - and more.
+ 
+-	Bugs:
+-	
+-	 - lots
++	Todo:
++
++	 - Create a wrapper around regex to make libc's regex conform with sed
++	 - Fix bugs
++
+ 
+ 	Reference http://www.opengroup.org/onlinepubs/007904975/utilities/sed.html
+ */
+@@ -298,7 +300,15 @@ static int parse_subst_cmd(sed_cmd_t * const sed_cmd, const char *substr)
+ 	}
+ 
+ 	/* process the flags */
+-	while (substr[++idx]) {
++#ifndef CONFIG_FEATURE_SED_GNU_COMPATABILITY
++	idx++;
++#else
++	/* GNU sed allows blanks before the flag, this can lead to an incosistent
++	 * interpretation of 's/a/b/ g' as being either 's/a/b/g' or 's/a/b/;g'.
++	 * which results in very different behaviour.
++	 */
++	while (substr[++idx])
++#endif
+ 		switch (substr[idx]) {
+ 		case 'g':
+ 			if (match[0] != '^') {
+@@ -312,16 +322,20 @@ static int parse_subst_cmd(sed_cmd_t * const sed_cmd, const char *substr)
+ 		case 'p':
+ 			sed_cmd->sub_p = 1;
+ 			break;
++#ifdef CONFIG_FEATURE_SED_GNU_COMPATABILITY
+ 		default:
+ 			/* any whitespace or semicolon trailing after a s/// is ok */
+ 			if (strchr(semicolon_whitespace, substr[idx]))
+ 				goto out;
+-			/* else */
+ 			bb_error_msg_and_die("bad option in substitution expression");
++#endif
+ 		}
+-	}
+ 
+-  out:
++#ifndef CONFIG_FEATURE_SED_GNU_COMPATABILITY
++		idx++;
++#else
++out:
++#endif
+ 	/* compile the match string into a regex */
+ 	if (*match != '\0') {
+ 		/* If match is empty, we use last regex used at runtime */
+@@ -556,15 +570,12 @@ static char *add_cmd(char *cmdstr)
+ 		sed_cmd->invert = 1;
+ 		cmdstr++;
+ 
+-#ifdef SED_FEATURE_STRICT_CHECKING
++#ifdef CONFIG_FEATURE_SED_GNU_COMPATABILITY
+ 		/* According to the spec
+ 		 * It is unspecified whether <blank>s can follow a '!' character,
+ 		 * and conforming applications shall not follow a '!' character
+ 		 * with <blank>s.
+ 		 */
+-		if (isblank(cmdstr[idx]) {
+-			bb_error_msg_and_die("blank follows '!'");}
+-#else
+ 		/* skip whitespace before the command */
+ 		while (isspace(*cmdstr)) {
+ 			cmdstr++;
+@@ -931,7 +942,6 @@ static void process_file(FILE * file)
+ 					}
+ 					/* we also print the line if we were given the 'p' flag
+ 					 * (this is quite possibly the second printing) */
+-//					if ((sed_cmd->sub_p) && (!altered || substituted)) {
+ 					if ((sed_cmd->sub_p) && (altered || substituted)) {
+ 						puts(pattern_space);
+ 					}
+@@ -1007,20 +1017,25 @@ static void process_file(FILE * file)
+ 					}
+ 					break;
+ 				case 'N':	/* Append the next line to the current line */
+-					if (next_line) {
+-						pattern_space =
+-							realloc(pattern_space,
+-							strlen(pattern_space) + strlen(next_line) + 2);
+-						strcat(pattern_space, "\n");
+-						strcat(pattern_space, next_line);
+-						next_line = bb_get_chomped_line_from_file(file);
+-						linenum++;
+-					} else {
++					if (next_line == NULL) {
+ 						/* Jump to end of script and exist */
+ 						deleted = 1;
+ 						free(next_line);
++#ifdef CONFIG_FEATURE_SED_GNU_COMPATABILITY
++						/* GNU sed will add the newline character 
++						 * The GNU sed info page labels this as a bug that wont be fixed 
++						 */
++						next_line = calloc(1,1);
++#else
+ 						next_line = NULL;
++						break;
++#endif
+ 					}
++					pattern_space = realloc(pattern_space, strlen(pattern_space) + strlen(next_line) + 2);
++					strcat(pattern_space, "\n");
++					strcat(pattern_space, next_line);
++					next_line = bb_get_chomped_line_from_file(file);
++					linenum++;
+ 					break;
+ 				case 't':
+ 					if (substituted)
+@@ -1164,12 +1179,10 @@ extern int sed_main(int argc, char **argv)
+ {
+ 	int opt, status = EXIT_SUCCESS;
+ 
+-#if 0 /* This doesnt seem to be working */
+ #ifdef CONFIG_FEATURE_CLEAN_UP
+ 	/* destroy command strings on exit */
+ 	if (atexit(destroy_cmd_strs) == -1)
+ 		bb_perror_msg_and_die("atexit");
+-#endif
+ #endif
+ 
+ 	/* do normal option parsing */
+@@ -1223,8 +1236,5 @@ extern int sed_main(int argc, char **argv)
+ 		}
+ 	}
+ 
+-#ifdef CONFIG_FEATURE_CLEAN_UP
+-	destroy_cmd_strs();
+-#endif	
+ 	return status;
+ }
+diff --git a/libbb/get_line_from_file.c b/libbb/get_line_from_file.c
+index 3b6e1e778..9a831f184 100644
+--- a/libbb/get_line_from_file.c
++++ b/libbb/get_line_from_file.c
+@@ -40,7 +40,7 @@ static char *private_get_line_from_file(FILE *file, int c)
+ 
+ 	while ((ch = getc(file)) != EOF) {
+ 		/* grow the line buffer as necessary */
+-		if (idx > linebufsz-2) {
++		if (idx > linebufsz - 2) {
+ 			linebuf = xrealloc(linebuf, linebufsz += GROWBY);
+ 		}
+ 		linebuf[idx++] = (char)ch;
+@@ -51,7 +51,6 @@ static char *private_get_line_from_file(FILE *file, int c)
+ 			break;
+ 		}
+ 	}
+-
+ 	if (linebuf) {
+ 		if (ferror(file)) {
+ 			free(linebuf);
+diff --git a/testsuite/sed/sed-append-next-line b/testsuite/sed/sed-append-next-line
+index 380b7935d..e7f72f476 100644
+--- a/testsuite/sed/sed-append-next-line
++++ b/testsuite/sed/sed-append-next-line
+@@ -1,4 +1,6 @@
+-busybox sed -n 'N;p'>output <<EOF
++# XFAIL
++# This will fail if CONFIG_FEATURE_SED_GNU_COMPATABILITY is defined
++busybox sed 'N;p'>output <<EOF
+ a
+ b
+ c
+@@ -6,4 +8,7 @@ EOF
+ cmp -s output - <<EOF
+ a
+ b
++a
++b
++c
+ EOF
+diff --git a/testsuite/sed/sed-append-next-line-gnu b/testsuite/sed/sed-append-next-line-gnu
+new file mode 100644
+index 000000000..d7aba8c2c
+--- /dev/null
++++ b/testsuite/sed/sed-append-next-line-gnu
+@@ -0,0 +1,14 @@
++# FEATURE: CONFIG_FEATURE_SED_GNU_COMPATABILITY
++busybox sed 'N;p'>output <<EOF
++a
++b
++c
++EOF
++cmp -s output - <<EOF
++a
++b
++a
++b
++c
++
++EOF

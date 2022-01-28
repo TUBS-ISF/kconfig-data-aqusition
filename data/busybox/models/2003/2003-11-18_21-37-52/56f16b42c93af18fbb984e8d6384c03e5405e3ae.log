@@ -1,0 +1,127 @@
+"2003-11-18 21:37:52 +0000"
+diff --git a/archival/Config.in b/archival/Config.in
+index 8859bb137..2eab5abfa 100644
+--- a/archival/Config.in
++++ b/archival/Config.in
+@@ -193,6 +193,14 @@ config CONFIG_FEATURE_TAR_GZIP
+ 	  If you enable this option tar will be able to call gzip,
+ 	  when creating or extracting tar gziped archives.
+ 
++config CONFIG_FEATURE_TAR_COMPRESS
++	bool "  Enable -Z option"
++	default n
++	depends on CONFIG_TAR
++	help
++	  If you enable this option tar will be able to call uncompress,
++	  when extracting .tar.Z archives.
++
+ config CONFIG_FEATURE_TAR_OLDGNU_COMPATABILITY
+ 	bool "  Enable support for old tar header format"
+ 	default N
+diff --git a/archival/libunarchive/Makefile.in b/archival/libunarchive/Makefile.in
+index d449c193e..14ceea110 100644
+--- a/archival/libunarchive/Makefile.in
++++ b/archival/libunarchive/Makefile.in
+@@ -73,6 +73,7 @@ LIBUNARCHIVE-$(CONFIG_RPM) += $(GUNZIP_FILES) get_header_cpio.o
+ LIBUNARCHIVE-$(CONFIG_TAR) += get_header_tar.o
+ LIBUNARCHIVE-$(CONFIG_FEATURE_TAR_BZIP2) += decompress_bunzip2.o get_header_tar_bz2.o
+ LIBUNARCHIVE-$(CONFIG_FEATURE_TAR_GZIP) += $(GUNZIP_FILES) get_header_tar_gz.o
++LIBUNARCHIVE-$(CONFIG_FEATURE_TAR_COMPRESS) += uncompress.o
+ LIBUNARCHIVE-$(CONFIG_UNCOMPRESS) += uncompress.o
+ LIBUNARCHIVE-$(CONFIG_UNZIP) += $(GUNZIP_FILES)
+ 
+diff --git a/archival/libunarchive/decompress_uncompress.c b/archival/libunarchive/decompress_uncompress.c
+index 9851ca39d..5046e8a26 100644
+--- a/archival/libunarchive/decompress_uncompress.c
++++ b/archival/libunarchive/decompress_uncompress.c
+@@ -1,8 +1,6 @@
+ #include "config.h"
+ #include "libbb.h"
+ 
+-#if defined CONFIG_UNCOMPRESS || defined CONFIG_FEATURE_GUNZIP_UNCOMPRESS
+-
+ /* uncompress for busybox -- (c) 2002 Robert Griebl
+  *
+  * based on the original compress42.c source 
+@@ -293,6 +291,3 @@ extern int uncompress(int fd_in, int fd_out)
+ 
+ 	return 0;
+ }
+-
+-
+-#endif
+diff --git a/archival/libunarchive/uncompress.c b/archival/libunarchive/uncompress.c
+index 9851ca39d..5046e8a26 100644
+--- a/archival/libunarchive/uncompress.c
++++ b/archival/libunarchive/uncompress.c
+@@ -1,8 +1,6 @@
+ #include "config.h"
+ #include "libbb.h"
+ 
+-#if defined CONFIG_UNCOMPRESS || defined CONFIG_FEATURE_GUNZIP_UNCOMPRESS
+-
+ /* uncompress for busybox -- (c) 2002 Robert Griebl
+  *
+  * based on the original compress42.c source 
+@@ -293,6 +291,3 @@ extern int uncompress(int fd_in, int fd_out)
+ 
+ 	return 0;
+ }
+-
+-
+-#endif
+diff --git a/archival/tar.c b/archival/tar.c
+index 7516b5752..4e763a404 100644
+--- a/archival/tar.c
++++ b/archival/tar.c
+@@ -594,8 +594,27 @@ static llist_t *append_file_list_to_list(llist_t *list)
+ }
+ #endif
+ 
++#ifdef CONFIG_FEATURE_TAR_COMPRESS
++static char get_header_tar_Z(archive_handle_t *archive_handle)
++{
++	/* Cant lseek over pipe's */
++	archive_handle->seek = seek_by_char;
++
++	/* do the decompression, and cleanup */
++	if ((bb_xread_char(archive_handle->src_fd) != 0x1f) || (bb_xread_char(archive_handle->src_fd) != 0x9d)) {
++		bb_error_msg_and_die("Invalid magic");
++	}
+ 
+-static const char tar_options[]="ctxjT:X:C:f:Opvzk";
++	archive_handle->src_fd = open_transformer(archive_handle->src_fd, uncompress);
++	archive_handle->offset = 0;
++	while (get_header_tar(archive_handle) == EXIT_SUCCESS);
++
++	/* Can only do one file at a time */
++	return(EXIT_FAILURE);
++}
++#endif
++
++static const char tar_options[]="ctxjT:X:C:f:OpvzkZ";
+ 
+ #define CTX_CREATE	1
+ #define CTX_TEST	2
+@@ -610,6 +629,7 @@ static const char tar_options[]="ctxjT:X:C:f:Opvzk";
+ #define TAR_OPT_VERBOSE  1024
+ #define TAR_OPT_GZIP     2048
+ #define TAR_OPT_KEEP_OLD	4096
++#define TAR_OPT_UNCOMPRESS	8192
+ 
+ int tar_main(int argc, char **argv)
+ {
+@@ -688,6 +708,13 @@ int tar_main(int argc, char **argv)
+ 		get_header_ptr = get_header_tar_bz2;
+ #else
+ 		bb_show_usage();
++#endif
++	}
++	if(opt & TAR_OPT_UNCOMPRESS) {
++#ifdef CONFIG_FEATURE_TAR_COMPRESS
++		get_header_ptr = get_header_tar_Z;
++#else
++		bb_show_usage();
+ #endif
+ 	}
+ 	if(opt & TAR_OPT_EXCLUDE) {

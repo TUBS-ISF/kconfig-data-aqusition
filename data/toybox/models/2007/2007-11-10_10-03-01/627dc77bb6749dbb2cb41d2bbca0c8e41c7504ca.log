@@ -1,0 +1,107 @@
+"2007-11-10 10:03:01 +0000"
+diff --git a/toys/Config.in b/toys/Config.in
+index 8108a92b..84b3f28f 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -261,9 +261,9 @@ config TOUCH
+ 	bool "touch"
+ 	default y
+ 	help
+-	  usage: touch [-acmrt] FILE...
++	  usage: touch [-acmrtl] FILE...
+ 
+-	  Change file timestamps and ensure file existance.
++	  Change file timestamps, ensure file existance and change file length.
+ 
+ 	  -a	Only change the access time.
+ 	  -c	Do not create the file if it doesn't exist.
+diff --git a/toys/touch.c b/toys/touch.c
+index b4e3d971..514ee1be 100644
+--- a/toys/touch.c
++++ b/toys/touch.c
+@@ -5,7 +5,9 @@
+  * Copyright (C) 2007 Charlie Shepherd <masterdriverz@gentoo.org>
+  */
+ 
+-#define _XOPEN_SOURCE
++#define _XOPEN_SOURCE 600
++#include <unistd.h>
++#include <sys/types.h>
+ #include <sys/stat.h>
+ #include <utime.h>
+ #include <time.h>
+@@ -16,17 +18,24 @@
+ #define ATIME		0x04
+ #define REFERENCE	0x08
+ #define TIME		0x10
++#define LENGTH		0x20
+ 
+ int touch_main(void)
+ {
+ 	char *arg;
+ 	int i, set_a, set_m, create;
+ 	time_t curr_a, curr_m;
++	off_t length;
+ 
+ 	set_a = !!(toys.optflags & ATIME);
+ 	set_m = !!(toys.optflags & MTIME);
+ 	create = !(toys.optflags & NO_CREATE);
+ 
++	if (toys.optflags & LENGTH)
++		length = toy.touch.length;
++	else
++		length = -1;
++
+ 	if (toys.optflags & REFERENCE) {
+ 		struct stat sb;
+ 		if (toys.optflags & TIME)
+@@ -40,13 +49,13 @@ int touch_main(void)
+ 		char *c;
+ 		curr = time(NULL);
+ 		if (!localtime_r(&curr, &t))
+-			goto err;
++			goto time_error;
+ 		c = strptime(toy.touch.time, "%m%d%H%M", &t);
+ 		if (!c || *c)
+-			goto err;
++			goto time_error;
+ 		curr_a = curr_m = mktime(&t);
+ 		if (curr_a == -1)
+-err:
++time_error:
+ 			error_exit("Error converting time %s to internal format",
+ 				toy.touch.time);
+ 	} else {
+@@ -77,7 +86,11 @@ err:
+ 				buf.actime = sb.st_atime;
+ 		}
+ 
++		if (length != -1)
++			if (truncate(arg, length))
++				goto error;
+ 		if (utime(arg, &buf))
++error:
+ 			perror_exit(arg);
+ 	}
+ 
+diff --git a/toys/toylist.h b/toys/toylist.h
+index 2c308ef7..97838ce9 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -55,6 +55,7 @@ struct sleep_data {
+ struct touch_data {
+ 	char *ref_file;
+ 	char *time;
++	long length;
+ };
+ 
+ struct toysh_data {
+@@ -116,7 +117,7 @@ USE_READLINK(NEWTOY(readlink, "<1f", TOYFLAG_BIN))
+ USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
+ USE_SLEEP(NEWTOY(sleep, "<1", TOYFLAG_BIN))
+ USE_SYNC(NEWTOY(sync, NULL, TOYFLAG_BIN))
+-USE_TOUCH(NEWTOY(touch, "t:r:mca", TOYFLAG_BIN))
++USE_TOUCH(NEWTOY(touch, "l#t:r:mca", TOYFLAG_BIN))
+ USE_TOYSH(NEWTOY(toysh, "c:i", TOYFLAG_BIN))
+ USE_TRUE(NEWTOY(true, NULL, TOYFLAG_BIN))
+ USE_WHICH(NEWTOY(which, "a", TOYFLAG_USR|TOYFLAG_BIN))

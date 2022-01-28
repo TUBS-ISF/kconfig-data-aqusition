@@ -1,0 +1,402 @@
+"2004-01-02 23:34:13 +0000"
+diff --git a/debian/config b/debian/config
+index 487198a72..1177443ec 100644
+--- a/debian/config
++++ b/debian/config
+@@ -36,11 +36,16 @@ HAVE_DOT_CONFIG=y
+ #
+ # HAVE_NO_PIC is not set
+ DOPIC=y
++# HAVE_NO_SHARED is not set
+ HAVE_SHARED=y
++# ARCH_HAS_NO_LDSO is not set
+ BUILD_UCLIBC_LDSO=y
++# UCLIBC_PIE_SUPPORT is not set
+ LDSO_LDD_SUPPORT=y
+ UCLIBC_CTOR_DTOR=y
++# UCLIBC_PROPOLICE is not set
+ # UCLIBC_PROFILING is not set
++# HAS_NO_THREADS is not set
+ UCLIBC_HAS_THREADS=y
+ PTHREADS_DEBUG_SUPPORT=y
+ UCLIBC_HAS_LFS=y
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 8f5eee439..e175a5909 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -177,6 +177,20 @@ config FORCE_SHAREABLE_TEXT_SEGMENTS
+ 	  little bit smaller and guarantee that no memory will be wasted by badly
+ 	  coded shared libraries.
+ 
++config UCLIBC_PIE_SUPPORT
++	bool "Support ET_DYN in shared library loader"
++	select FORCE_SHAREABLE_TEXT_SEGMENTS
++	default n
++	help
++	  If you answer Y here, the uClibc native shared library loader will
++	  support ET_DYN/PIE executables.
++	  It requires binutils-2.14.90.0.6 or later and the usage of the
++	  -pie option.
++	  More about ET_DYN/PIE binaries on <http://pageexec.virtualave.net/> .
++	  WARNING: This option also enables FORCE_SHAREABLE_TEXT_SEGMENTS, so all
++		libraries have to be built with -fPIC or -fpic, and all assembler
++		functions must be written as position independent code (PIC).
++
+ config LDSO_LDD_SUPPORT
+ 	bool "Native shared library loader 'ldd' support"
+ 	depends on BUILD_UCLIBC_LDSO
+@@ -204,6 +218,17 @@ config UCLIBC_CTOR_DTOR
+ 	  then you definitely want to answer Y here.  If you don't need ctors
+ 	  or dtors and want your binaries to be as small as possible, then
+ 	  answer N.
++	  
++config UCLIBC_PROPOLICE
++	bool "Support for propolice stack protection"
++	default n
++	help
++	  Propolice stack protection.
++	  More about it on <http://www.research.ibm.com/trl/projects/security/ssp> .
++	  To be able to use it, you'll also need a propolice patched gcc,
++	  supporting the -fstack-protector[-all] options. It is a specially patched
++	  gcc version, were __guard and __stack_smash_handler are removed from libgcc.
++	  Most people will answer N.
+ 
+ config UCLIBC_PROFILING
+ 	bool "Support gprof profiling"
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index 768ff241c..0f89d70e8 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -371,6 +371,28 @@ LD_BOOT(unsigned long args)
+ 	app_tpnt = LD_MALLOC(sizeof(struct elf_resolve));
+ 	_dl_memset(app_tpnt, 0, sizeof(struct elf_resolve));
+ 
++#ifdef __UCLIBC_PIE_SUPPORT__
++	/* Find the runtime load address of the main executable, this may be
++         * different from what the ELF header says for ET_DYN/PIE executables.
++	 */
++	{
++		ElfW(Phdr) *ppnt;
++		int i;
++
++		ppnt = (ElfW(Phdr) *) auxvt[AT_PHDR].a_un.a_ptr;
++		for (i = 0; i < auxvt[AT_PHNUM].a_un.a_val; i++, ppnt++)
++			if (ppnt->p_type == PT_PHDR) {
++				app_tpnt->loadaddr = (ElfW(Addr)) (auxvt[AT_PHDR].a_un.a_val - ppnt->p_vaddr);
++				break;
++			}
++	}
++
++#ifdef __SUPPORT_LD_DEBUG_EARLY__
++	SEND_STDERR("app_tpnt->loadaddr=");
++	SEND_ADDRESS_STDERR(app_tpnt->loadaddr, 1);
++#endif
++#endif
++
+ 	/*
+ 	 * This is used by gdb to locate the chain of shared libraries that are currently loaded.
+ 	 */
+@@ -407,7 +429,11 @@ LD_BOOT(unsigned long args)
+ 		ppnt = (ElfW(Phdr) *) auxvt[AT_PHDR].a_un.a_ptr;
+ 		for (i = 0; i < auxvt[AT_PHNUM].a_un.a_val; i++, ppnt++)
+ 			if (ppnt->p_type == PT_DYNAMIC) {
++#ifndef __UCLIBC_PIE_SUPPORT__
+ 				dpnt = (Elf32_Dyn *) ppnt->p_vaddr;
++#else
++				dpnt = (Elf32_Dyn *) (ppnt->p_vaddr + app_tpnt->loadaddr);
++#endif
+ 				while (dpnt->d_tag) {
+ #if defined(__mips__)
+ 					if (dpnt->d_tag == DT_MIPS_GOTSYM)
+@@ -501,8 +527,13 @@ LD_BOOT(unsigned long args)
+ 			ppnt = (ElfW(Phdr) *) auxvt[AT_PHDR].a_un.a_ptr;
+ 			for (i = 0; i < auxvt[AT_PHNUM].a_un.a_val; i++, ppnt++) {
+ 				if (ppnt->p_type == PT_LOAD && !(ppnt->p_flags & PF_W))
++#ifndef __UCLIBC_PIE_SUPPORT__
+ 					_dl_mprotect((void *) (ppnt->p_vaddr & PAGE_ALIGN),
+ 								 (ppnt->p_vaddr & ADDR_ALIGN) +
++#else
++					_dl_mprotect((void *) ((ppnt->p_vaddr + app_tpnt->loadaddr) & PAGE_ALIGN),
++								 ((ppnt->p_vaddr + app_tpnt->loadaddr) & ADDR_ALIGN) +
++#endif
+ 								 (unsigned long) ppnt->p_filesz,
+ 								 PROT_READ | PROT_WRITE | PROT_EXEC);
+ 			}
+@@ -717,8 +748,13 @@ static void _dl_get_ready_to_run(struct elf_resolve *tpnt, struct elf_resolve *a
+ 	ppnt = (ElfW(Phdr) *) auxvt[AT_PHDR].a_un.a_ptr;
+ 	for (i = 0; i < auxvt[AT_PHNUM].a_un.a_val; i++, ppnt++) {
+ 		if (ppnt->p_type == PT_LOAD) {
++#ifndef __UCLIBC_PIE_SUPPORT__
+ 			if (ppnt->p_vaddr + ppnt->p_memsz > brk_addr)
+ 				brk_addr = ppnt->p_vaddr + ppnt->p_memsz;
++#else
++			if (ppnt->p_vaddr + app_tpnt->loadaddr + ppnt->p_memsz > brk_addr)
++				brk_addr = ppnt->p_vaddr + app_tpnt->loadaddr + ppnt->p_memsz;
++#endif
+ 		}
+ 		if (ppnt->p_type == PT_DYNAMIC) {
+ #ifndef ALLOW_ZERO_PLTGOT
+@@ -727,8 +763,13 @@ static void _dl_get_ready_to_run(struct elf_resolve *tpnt, struct elf_resolve *a
+ 				continue;
+ #endif
+ 			/* OK, we have what we need - slip this one into the list. */
++#ifndef __UCLIBC_PIE_SUPPORT__
+ 			app_tpnt = _dl_add_elf_hash_table("", 0, 
+ 					app_tpnt->dynamic_info, ppnt->p_vaddr, ppnt->p_filesz);
++#else
++			app_tpnt = _dl_add_elf_hash_table("", (char *)app_tpnt->loadaddr,
++					app_tpnt->dynamic_info, ppnt->p_vaddr + app_tpnt->loadaddr, ppnt->p_filesz);
++#endif
+ 			_dl_loaded_modules->libtype = elf_executable;
+ 			_dl_loaded_modules->ppnt = (ElfW(Phdr) *) auxvt[AT_PHDR].a_un.a_ptr;
+ 			_dl_loaded_modules->n_phent = auxvt[AT_PHNUM].a_un.a_val;
+@@ -737,7 +778,11 @@ static void _dl_get_ready_to_run(struct elf_resolve *tpnt, struct elf_resolve *a
+ 			rpnt->dyn = _dl_loaded_modules;
+ 			app_tpnt->usage_count++;
+ 			app_tpnt->symbol_scope = _dl_symbol_tables;
++#ifndef __UCLIBC_PIE_SUPPORT__
+ 			lpnt = (unsigned long *) (app_tpnt->dynamic_info[DT_PLTGOT]);
++#else
++			lpnt = (unsigned long *) (app_tpnt->dynamic_info[DT_PLTGOT] + app_tpnt->loadaddr);
++#endif
+ #ifdef ALLOW_ZERO_PLTGOT
+ 			if (lpnt)
+ #endif
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 5f85b5928..842e99500 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -15,6 +15,9 @@
+ #include <features.h>
+ #include <unistd.h>
+ #include <stdlib.h>
++#ifdef __UCLIBC_PROPOLICE__
++extern void __guard_setup(void);
++#endif
+ 
+ 
+ /*
+@@ -139,6 +142,10 @@ __uClibc_start_main(int argc, char **argv, char **envp,
+     }
+ #endif
+ 
++#ifdef __UCLIBC_PROPOLICE__
++     __guard_setup ();
++#endif
++
+     /* Note: It is possible that any initialization done above could
+      * have resulted in errno being set nonzero, so set it to 0 before
+      * we call main.
+diff --git a/libc/sysdeps/linux/common/Makefile b/libc/sysdeps/linux/common/Makefile
+index cfd95300f..5b5034095 100644
+--- a/libc/sysdeps/linux/common/Makefile
++++ b/libc/sysdeps/linux/common/Makefile
+@@ -33,6 +33,9 @@ endif
+ ifeq ($(strip $(UCLIBC_PROFILING)),y)
+ CSRC+=gmon.c
+ endif
++ifeq ($(strip $(UCLIBC_PROPOLICE)),y)
++CSRC+=ssp.c
++endif
+ COBJS=$(patsubst %.c,%.o, $(CSRC))
+ 
+ MSRC=syscalls.c
+diff --git a/libc/sysdeps/linux/common/ssp.c b/libc/sysdeps/linux/common/ssp.c
+new file mode 100644
+index 000000000..135892c37
+--- /dev/null
++++ b/libc/sysdeps/linux/common/ssp.c
+@@ -0,0 +1,97 @@
++#include <stdio.h>
++#include <string.h>
++#include <fcntl.h>
++#include <unistd.h>
++
++#ifdef _POSIX_SOURCE
++#include <signal.h>
++#endif
++
++#if defined(HAVE_SYSLOG)
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <sys/un.h>
++
++#include <sys/syslog.h>
++#ifndef _PATH_LOG
++#define _PATH_LOG "/dev/log"
++#endif
++#endif
++
++long __guard[8] = {0, 0, 0, 0, 0, 0, 0, 0};
++
++void __guard_setup (void)
++{
++  int fd;
++  if (__guard[0]!=0) return;
++  fd = open ("/dev/urandom", 0);
++  if (fd != -1) {
++    ssize_t size = read (fd, (char*)&__guard, sizeof(__guard));
++    close (fd) ;
++    if (size == sizeof(__guard)) return;
++  }
++  /* If a random generator can't be used, the protector switches the guard
++     to the "terminator canary" */
++  ((char*)__guard)[0] = 0; ((char*)__guard)[1] = 0;
++  ((char*)__guard)[2] = '\n'; ((char*)__guard)[3] = 255;
++}
++
++void __stack_smash_handler (char func[], int damaged)
++{
++#if defined (__GNU_LIBRARY__)
++  extern char * __progname;
++#endif
++  const char message[] = ": stack smashing attack in function ";
++  int bufsz = 512, len;
++  char buf[bufsz];
++#if defined(HAVE_SYSLOG)
++  int LogFile;
++  struct sockaddr_un SyslogAddr;  /* AF_UNIX address of local logger */
++#endif
++#ifdef _POSIX_SOURCE
++  {
++    sigset_t mask;
++    sigfillset(&mask);
++    sigdelset(&mask, SIGABRT);  /* Block all signal handlers */
++    sigprocmask(SIG_BLOCK, &mask, NULL); /* except SIGABRT */
++  }
++#endif
++
++  strcpy(buf, "<2>"); len=3;    /* send LOG_CRIT */
++#if defined (__GNU_LIBRARY__)
++  strncat(buf, __progname, bufsz-len-1); len = strlen(buf);
++#endif
++  if (bufsz>len) {strncat(buf, message, bufsz-len-1); len = strlen(buf);}
++  if (bufsz>len) {strncat(buf, func, bufsz-len-1); len = strlen(buf);}
++  /* print error message */
++  write (STDERR_FILENO, buf+3, len-3);
++#if defined(HAVE_SYSLOG)
++  if ((LogFile = socket(AF_UNIX, SOCK_DGRAM, 0)) != -1) {
++                                                                                                                     
++    /*                                                                                                               
++     * Send "found" message to the "/dev/log" path
++     */
++    SyslogAddr.sun_family = AF_UNIX;
++    (void)strncpy(SyslogAddr.sun_path, _PATH_LOG,
++          sizeof(SyslogAddr.sun_path) - 1);
++    SyslogAddr.sun_path[sizeof(SyslogAddr.sun_path) - 1] = '\0';
++    sendto(LogFile, buf, len, 0, (struct sockaddr *)&SyslogAddr,
++       sizeof(SyslogAddr));
++  }
++#endif
++
++#ifdef _POSIX_SOURCE
++  { /* Make sure the default handler is associated with SIGABRT */
++    struct sigaction sa;
++
++    memset(&sa, 0, sizeof(struct sigaction));
++    sigfillset(&sa.sa_mask);    /* Block all signals */
++    sa.sa_flags = 0;
++    sa.sa_handler = SIG_DFL;
++    sigaction(SIGABRT, &sa, NULL);
++    (void)kill(getpid(), SIGABRT);
++  }
++#endif
++  _exit(127);
++}
++
+diff --git a/libc/sysdeps/linux/i386/Makefile b/libc/sysdeps/linux/i386/Makefile
+index 9ba60f59e..c7f88b681 100644
+--- a/libc/sysdeps/linux/i386/Makefile
++++ b/libc/sysdeps/linux/i386/Makefile
+@@ -22,6 +22,9 @@ ASFLAGS=$(CFLAGS)
+ 
+ CRT0_SRC = crt0.S
+ CRT0_OBJ = crt0.o crt1.o gcrt1.o
++ifeq ($(strip $(UCLIBC_PIE_SUPPORT)),y)
++CRT0_OBJ += Scrt0.o Scrt1.o
++endif
+ CRT0_DEPS=gmon-start.S
+ CTOR_TARGETS=$(TOPDIR)lib/crti.o $(TOPDIR)lib/crtn.o
+ 
+@@ -44,6 +47,13 @@ $(LIBC): ar-target
+ ar-target: $(OBJS) $(CRT0_OBJ) $(CTOR_TARGETS)
+ 	$(AR) $(ARFLAGS) $(LIBC) $(OBJS)
+ 	cp $(CRT0_OBJ) $(TOPDIR)lib/
++ifeq ($(strip $(UCLIBC_PIE_SUPPORT)),y)
++ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
++	$(RM) $(TOPDIR)lib/Scrt0.o
++else
++	mv $(TOPDIR)lib/Scrt0.o $(TOPDIR)lib/Scrt1.o
++endif
++endif
+ 
+ $(CRT0_OBJ): $(CRT0_SRC)
+ 	$(CC) $(CFLAGS) -DL_$* $< -c -o $*.o
+diff --git a/libc/sysdeps/linux/i386/crt0.S b/libc/sysdeps/linux/i386/crt0.S
+index a488d6508..e7df6992b 100644
+--- a/libc/sysdeps/linux/i386/crt0.S
++++ b/libc/sysdeps/linux/i386/crt0.S
+@@ -18,6 +18,7 @@ Cambridge, MA 02139, USA.  */
+ 
+ 
+ /*  Based on the code from GNU libc, but hacked up by John Beppu and Erik Andersen */
++/*  adapted by PaX Team for ET_DYN/PIE binaries */
+ 
+ /*
+     When we enter this piece of code, the program stack looks like this:
+@@ -37,7 +38,7 @@ Cambridge, MA 02139, USA.  */
+ 
+ 	.global	_start
+ 	.type	_start,%function
+-#if defined L_crt0 || ! defined __UCLIBC_CTOR_DTOR__
++#if defined L_crt0 || defined L_Scrt0 || ! defined __UCLIBC_CTOR_DTOR__
+ 	.type	__uClibc_main,%function
+ #else
+ 	.weak	_init
+@@ -74,10 +75,22 @@ _start:
+ 	pushl %ebp      /* callers %ebp (frame pointer) */
+ 	movl %esp,%ebp  /* mark callers stack frame as invalid */
+ 
+-#if (defined L_crt1 || defined L_gcrt1 ) && defined __UCLIBC_CTOR_DTOR__
++#if defined L_Scrt0 || defined L_Scrt1
++	call .L0
++.L0:
++	pop %edx
++	addl $_GLOBAL_OFFSET_TABLE_+[.-.L0],%edx
++#endif
++
++#if (defined L_crt1 || defined L_Scrt1 || defined L_gcrt1 ) && defined __UCLIBC_CTOR_DTOR__
+ 	/* Push .init and .fini arguments to __uClibc_start_main() on the stack */
++#ifdef L_Scrt1
++	pushl _fini@GOT(%edx)
++	pushl _init@GOT(%edx)
++#else
+ 	pushl $_fini
+ 	pushl $_init
++#endif
+ 
+ 	/* Push envp, argc, and argc arguments to __uClibc_start_main() on the stack */ 
+ 	pushl %eax	/* Environment pointer */
+@@ -85,14 +98,22 @@ _start:
+ 	pushl %ecx	/* And the argument count */
+ 
+ 	/* Ok, now run uClibc's main() -- shouldn't return */
++#ifdef L_Scrt1
++	call *__uClibc_start_main@GOT(%edx)
++#else
+ 	call __uClibc_start_main
++#endif
+ #else
+ 	/* Push envp, argc, and argc arguments to __uClibc_start_main() on the stack */ 
+ 	pushl %eax	/* Environment pointer */
+ 	pushl %ebx	/* Argument pointer */
+ 	pushl %ecx	/* And the argument count */
+ 
++#ifdef L_Scrt0
++	call *__uClibc_main@GOT(%edx)
++#else
+ 	call __uClibc_main
++#endif
+ #endif
+ 
+ 	/* Crash if somehow `exit' returns anyways.  */

@@ -1,0 +1,130 @@
+"2009-10-08 16:56:33 +0200"
+diff --git a/Makefile.in b/Makefile.in
+index b84ed15f5..2e9645846 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -258,7 +258,7 @@ HEADERS_RM-$(UCLIBC_HAS_BSD_ERR)             += err.h
+ HEADERS_RM-$(UCLIBC_HAS_CRYPT)               += crypt.h
+ HEADERS_RM-$(UCLIBC_HAS_EPOLL)               += sys/epoll.h
+ HEADERS_RM-$(UCLIBC_HAS_FENV)                += fenv.h bits/fenv.h bits/fenvinline.h
+-HEADERS_RM-$(UCLIBC_HAS_FTW)                 += ftw.h
++HEADERS_RM-$(findstring y,$(UCLIBC_HAS_FTW)$(UCLIBC_HAS_NFTW))  += ftw.h
+ HEADERS_RM-$(UCLIBC_HAS_GETTEXT_AWARENESS)   += libintl.h
+ HEADERS_RM-$(UCLIBC_HAS_GLIBC_CUSTOM_PRINTF) += printf.h
+ HEADERS_RM-$(UCLIBC_HAS_GLOB)                += glob.h
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 3d1a92953..8fa9a47ae 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1754,15 +1754,27 @@ config UCLIBC_HAS_WORDEXP
+ 	  This interface is rarely used, and very large.  Unless you have a
+ 	  pressing need for wordexp(), you should probably answer N.
+ 
++config UCLIBC_HAS_NFTW
++	bool "Support the nftw() interface"
++	default n
++	help
++	  The SuSv3 nftw() interface is used to recursively descend
++	  directory paths while repeatedly calling a function.
++
++	  This interface is rarely used, and adds around 4.5k.  Unless you have
++	  a pressing need for nftw(), you should probably answer N.
++
+ config UCLIBC_HAS_FTW
+-	bool "Support the ftw() and nftw() interfaces"
++	bool "Support the ftw() interface"
+ 	default n
++	depends on UCLIBC_SUSV4_LEGACY
+ 	help
+-	  The SuSv3 ftw() and nftw() interfaces are used to recursively descend
++	  The SuSv3 ftw() interface is used to recursively descend
+ 	  directory paths while repeatedly calling a function.
+ 
+ 	  This interface is rarely used, and adds around 4.5k.  Unless you have
+-	  a pressing need for ftw() or nftw(), you should probably answer N.
++	  a pressing need for ftw(), you should probably answer N.
++
+ 
+ config UCLIBC_HAS_GLOB
+ 	bool "Support the glob() interface"
+diff --git a/include/ftw.h b/include/ftw.h
+index 4bdff88c6..84f3e14a8 100644
+--- a/include/ftw.h
++++ b/include/ftw.h
+@@ -129,27 +129,29 @@ typedef int (*__nftw64_func_t) (__const char *__filename,
+ # endif
+ #endif
+ 
++#if __UCLIBC_HAS_FTW__
+ /* Call a function on every element in a directory tree.
+ 
+    This function is a possible cancellation point and therefore not
+    marked with __THROW.  */
+-#ifndef __USE_FILE_OFFSET64
++# ifndef __USE_FILE_OFFSET64
+ extern int ftw (__const char *__dir, __ftw_func_t __func, int __descriptors)
+      __nonnull ((1, 2));
+-#else
+-# ifdef __REDIRECT
++# else
++#  ifdef __REDIRECT
+ extern int __REDIRECT (ftw, (__const char *__dir, __ftw_func_t __func,
+ 			     int __descriptors), ftw64) __nonnull ((1, 2));
+-# else
+-#  define ftw ftw64
++#  else
++#   define ftw ftw64
++#  endif
+ # endif
+-#endif
+-#ifdef __USE_LARGEFILE64
++# ifdef __USE_LARGEFILE64
+ extern int ftw64 (__const char *__dir, __ftw64_func_t __func,
+ 		  int __descriptors) __nonnull ((1, 2));
++# endif
+ #endif
+ 
+-#ifdef __USE_XOPEN_EXTENDED
++#if __UCLIBC_HAS_NFTW__ && defined __USE_XOPEN_EXTENDED
+ /* Call a function on every element in a directory tree.  FLAG allows
+    to specify the behaviour more detailed.
+ 
+diff --git a/libc/misc/ftw/Makefile.in b/libc/misc/ftw/Makefile.in
+index 389ad792d..e326d6696 100644
+--- a/libc/misc/ftw/Makefile.in
++++ b/libc/misc/ftw/Makefile.in
+@@ -18,7 +18,7 @@ MISC_FTW_OUT := $(top_builddir)libc/misc/ftw
+ MISC_FTW_SRC := $(patsubst %.c,$(MISC_FTW_DIR)/%.c,$(CSRC))
+ MISC_FTW_OBJ := $(patsubst %.c,$(MISC_FTW_OUT)/%.o,$(CSRC))
+ 
+-libc-$(UCLIBC_HAS_FTW) += $(MISC_FTW_OBJ)
++libc-$(findstring y,$(UCLIBC_HAS_FTW)$(UCLIBC_HAS_NFTW)) += $(MISC_FTW_OBJ)
+ 
+ objclean-y += misc_ftw_clean
+ 
+diff --git a/libc/misc/ftw/ftw.c b/libc/misc/ftw/ftw.c
+index 70607fd4e..4a62e388a 100644
+--- a/libc/misc/ftw/ftw.c
++++ b/libc/misc/ftw/ftw.c
+@@ -752,13 +752,15 @@ ftw_startup (const char *dir, int is_nftw, void *func, int descriptors,
+ 
+ 
+ /* Entry points.  */
+-
++#if __UCLIBC_HAS_FTW__
+ int
+ FTW_NAME (const char *path, FTW_FUNC_T func, int descriptors)
+ {
+   return ftw_startup (path, 0, func, descriptors, 0);
+ }
++#endif
+ 
++#if __UCLIBC_HAS_NFTW__
+ #ifndef _LIBC
+ int
+ NFTW_NAME (const char *path, NFTW_FUNC_T func, int descriptors, int flags)
+@@ -802,3 +804,4 @@ NFTW_OLD_NAME (const char *path, NFTW_FUNC_T func, int descriptors, int flags)
+ compat_symbol (libc, NFTW_OLD_NAME, NFTW_NAME, GLIBC_2_1);
+ #endif
+ #endif
++#endif

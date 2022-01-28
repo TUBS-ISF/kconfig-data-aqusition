@@ -1,0 +1,640 @@
+"2015-07-14 15:43:36 -0300"
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 31cd5a10..558d7889 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -151,6 +151,13 @@
+ 		"<riotos/cpu.h>"
+ 	    ]
+ 	},
++	{
++	    "dependency": "contiki",
++	    "type": "ccode",
++	    "headers": [
++		"<contiki.h>"
++	    ]
++	},
+ 	{
+ 	    "dependency": "dlfcn_h",
+ 	    "type": "ccode",
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index b55acb3f..6c9f94d9 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -121,6 +121,19 @@ config PLATFORM_RIOTOS
+             Soletta will do its best to offer the same experience on
+             all platforms, including RIOt.
+ 
++config PLATFORM_CONTIKI
++	bool "contiki"
++	depends on HAVE_CONTIKI
++	help
++            This platform is to be used with Contiki Small OS.
++
++            Contiki (http://contiki-os.org/) is an open source operating
++            system for the Internet of Things. Contiki connects tiny low-cost,
++            low-power microcontrollers to the Internet.
++
++            Soletta aims to do its best to offer the same experience on
++            all platforms, including Contiki.
++
+ endchoice
+ 
+ source "src/modules/linux-micro/Kconfig"
+@@ -195,6 +208,12 @@ config MAINLOOP_RIOTOS
+ 	help
+             The mainloop to be used in RIOT platform.
+ 
++config MAINLOOP_CONTIKI
++	bool "contiki"
++	depends on PLATFORM_CONTIKI
++	help
++            The mainloop to be used in Contiki platform.
++
+ endchoice
+ 
+ config PTHREAD
+diff --git a/src/lib/common/Makefile b/src/lib/common/Makefile
+index 4a4bbe11..c9387cc7 100644
+--- a/src/lib/common/Makefile
++++ b/src/lib/common/Makefile
+@@ -13,6 +13,8 @@ obj-core-$(SOL_PLATFORM_LINUX) += \
+     sol-log-impl-linux.o
+ obj-core-$(PLATFORM_RIOTOS) += \
+     sol-log-impl-riot.o
++obj-core-$(PLATFORM_CONTIKI) += \
++    sol-log-impl-contiki.o
+ endif
+ 
+ obj-core-$(KDBUS) += \
+@@ -33,6 +35,11 @@ obj-core-$(MAINLOOP_RIOTOS) += \
+     sol-interrupt_scheduler_riot.o  \
+     sol-mainloop-common.o \
+     sol-mainloop-impl-riot.o
++
++obj-core-$(MAINLOOP_CONTIKI) += \
++    sol-mainloop-common.o \
++    sol-mainloop-impl-contiki.o
++
+ obj-core-$(PLATFORM_LINUX_MICRO) += \
+     sol-platform-impl-linux-micro.o
+ obj-core-$(SOCKET_LINUX) += \
+@@ -41,6 +48,8 @@ obj-core-$(PLATFORM_RIOTOS) += \
+     sol-platform-impl-riot.o
+ obj-core-$(PLATFORM_DUMMY) += \
+     sol-platform-impl-dummy.o
++obj-core-$(PLATFORM_CONTIKI) += \
++    sol-platform-impl-contiki.o
+ 
+ obj-core-$(SOL_PLATFORM_LINUX) += \
+     sol-platform-linux-common.o \
+@@ -78,3 +87,6 @@ headers-$(HAVE_PIN_MUX) += \
+ 
+ headers-$(PTHREAD) += \
+     include/sol-worker-thread.h
++
++headers-$(MAINLOOP_CONTIKI) += \
++    include/sol-mainloop-contiki.h
+diff --git a/src/lib/common/include/sol-mainloop-contiki.h b/src/lib/common/include/sol-mainloop-contiki.h
+new file mode 100644
+index 00000000..4d181f85
+--- /dev/null
++++ b/src/lib/common/include/sol-mainloop-contiki.h
+@@ -0,0 +1,47 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <contiki.h>
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++void sol_mainloop_contiki_event_set(process_event_t ev, process_data_t data);
++bool sol_mainloop_contiki_iter(void);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/src/lib/common/include/sol-mainloop.h b/src/lib/common/include/sol-mainloop.h
+index 2619dc65..4c00292b 100644
+--- a/src/lib/common/include/sol-mainloop.h
++++ b/src/lib/common/include/sol-mainloop.h
+@@ -32,6 +32,8 @@
+ 
+ #pragma once
+ 
++#include "sol-common-buildopts.h"
++
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+@@ -160,6 +162,27 @@ struct sol_main_callbacks {
+     void (*shutdown)(void);
+ };
+ 
++#ifdef SOL_PLATFORM_CONTIKI
++#include "sol-mainloop-contiki.h"
++
++#define SOL_MAIN_DEFAULT(STARTUP, SHUTDOWN)               \
++    PROCESS(soletta_app_process, "soletta app process");  \
++    AUTOSTART_PROCESSES(&soletta_app_process);            \
++    PROCESS_THREAD(soletta_app_process, ev, data)         \
++    {                                                     \
++        sol_mainloop_contiki_event_set(ev, data);         \
++        PROCESS_BEGIN();                                  \
++        if (sol_init() < 0)                               \
++            return EXIT_FAILURE;                          \
++        STARTUP();                                        \
++        sol_run();                                        \
++        while (sol_mainloop_contiki_iter())               \
++            PROCESS_WAIT_EVENT();                         \
++        SHUTDOWN();                                       \
++        sol_shutdown();                                   \
++        PROCESS_END();                                    \
++    }
++#else
+ #define SOL_MAIN(CALLBACKS)                                          \
+     int main(int argc, char *argv[]) {                              \
+         return sol_mainloop_default_main(&(CALLBACKS), argc, argv);  \
+@@ -172,6 +195,7 @@ struct sol_main_callbacks {
+         .shutdown = (SHUTDOWN),                                         \
+     };                                                                  \
+     SOL_MAIN(sol_main_callbacks_instance)
++#endif
+ 
+ /* Internal. */
+ int sol_mainloop_default_main(const struct sol_main_callbacks *callbacks, int argc, char *argv[]);
+diff --git a/src/lib/common/sol-common-buildopts.h.in b/src/lib/common/sol-common-buildopts.h.in
+index b17238b3..32dd1035 100644
+--- a/src/lib/common/sol-common-buildopts.h.in
++++ b/src/lib/common/sol-common-buildopts.h.in
+@@ -35,6 +35,7 @@
+ {{
+ st.on_value("SOL_PLATFORM_LINUX", "y", "#define SOL_PLATFORM_LINUX 1", "")
+ st.on_value("PLATFORM_RIOTOS", "y", "#define SOL_PLATFORM_RIOT 1", "")
++st.on_value("PLATFORM_CONTIKI", "y", "#define SOL_PLATFORM_CONTIKI 1", "")
+ }}
+ 
+ {{
+diff --git a/src/lib/common/sol-log-impl-contiki.c b/src/lib/common/sol-log-impl-contiki.c
+new file mode 100644
+index 00000000..840f4886
+--- /dev/null
++++ b/src/lib/common/sol-log-impl-contiki.c
+@@ -0,0 +1,104 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "sol-log-impl.h"
++
++int
++sol_log_impl_init(void)
++{
++    return 0;
++}
++
++void
++sol_log_impl_shutdown(void)
++{
++}
++
++bool
++sol_log_impl_lock(void)
++{
++    return true;
++}
++
++void
++sol_log_impl_unlock(void)
++{
++}
++
++void
++sol_log_impl_domain_init_level(struct sol_log_domain *domain)
++{
++    domain->level = _global_domain.level;
++}
++
++void
++sol_log_impl_print_function_stderr(void *data, const struct sol_log_domain *domain, uint8_t message_level, const char *file, const char *function, int line, const char *format, va_list args)
++{
++    const char *name = domain->name ? domain->name : "";
++    char level_str[4];
++    size_t len;
++    int errno_bkp = errno;
++
++    sol_log_level_to_str(message_level, level_str, sizeof(level_str));
++
++    if (_show_file && _show_function && _show_line) {
++        fprintf(stderr, "%s:%s %s:%d %s() ",
++            level_str, name, file, line, function);
++    } else {
++        fprintf(stderr, "%s:%s ", level_str, name);
++
++        if (_show_file)
++            fputs(file, stderr);
++        if (_show_file && _show_line)
++            fputc(':', stderr);
++        if (_show_line)
++            fprintf(stderr, "%d", line);
++
++        if (_show_file || _show_line)
++            fputc(' ', stderr);
++
++        if (_show_function)
++            fprintf(stderr, "%s() ", function);
++    }
++
++    errno = errno_bkp;
++    vfprintf(stderr, format, args);
++
++    len = strlen(format);
++    if (len > 0 && format[len - 1] != '\n')
++        fputc('\n', stderr);
++    fflush(stderr);
++}
+diff --git a/src/lib/common/sol-mainloop-common.c b/src/lib/common/sol-mainloop-common.c
+index a3da76db..2b1a0b7e 100644
+--- a/src/lib/common/sol-mainloop-common.c
++++ b/src/lib/common/sol-mainloop-common.c
+@@ -294,6 +294,7 @@ sol_mainloop_common_idler_first(void)
+     return NULL;
+ }
+ 
++#ifndef SOL_PLATFORM_CONTIKI
+ void
+ sol_mainloop_impl_run(void)
+ {
+@@ -306,6 +307,7 @@ sol_mainloop_impl_run(void)
+     while (sol_mainloop_common_loop_check())
+         sol_mainloop_impl_iter();
+ }
++#endif
+ 
+ void
+ sol_mainloop_impl_quit(void)
+diff --git a/src/lib/common/sol-mainloop-impl-contiki.c b/src/lib/common/sol-mainloop-impl-contiki.c
+new file mode 100644
+index 00000000..003cf5fc
+--- /dev/null
++++ b/src/lib/common/sol-mainloop-impl-contiki.c
+@@ -0,0 +1,141 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <contiki.h>
++#include <lib/sensors.h>
++
++#include "sol-mainloop-common.h"
++#include "sol-mainloop-contiki.h"
++#include "sol-mainloop-impl.h"
++#include "sol-vector.h"
++
++#define DEFAULT_USLEEP_TIME 10000
++#define DEFAULT_USLEEP_TIME_TICKS (CLOCK_SECOND * DEFAULT_USLEEP_TIME) / NSEC_PER_SEC
++
++static process_event_t event;
++static process_data_t event_data;
++static struct etimer et;
++
++void
++sol_mainloop_impl_lock(void)
++{
++}
++
++void
++sol_mainloop_impl_unlock(void)
++{
++}
++
++bool
++sol_mainloop_impl_main_thread_check(void)
++{
++    return true;
++}
++
++void
++sol_mainloop_impl_main_thread_notify(void)
++{
++}
++
++int
++sol_mainloop_impl_init(void)
++{
++    sol_mainloop_common_init();
++    return 0;
++}
++
++void
++sol_mainloop_impl_shutdown(void)
++{
++    sol_mainloop_common_shutdown();
++}
++
++static inline clock_time_t
++ticks_until_next_timeout(void)
++{
++    struct sol_timeout_common *timeout;
++    struct timespec now, diff;
++
++    timeout = sol_mainloop_common_timeout_first();
++    if (!timeout)
++        return DEFAULT_USLEEP_TIME_TICKS;
++
++    now = sol_util_timespec_get_current();
++    sol_util_timespec_sub(&timeout->expire, &now, &diff);
++
++    if (diff.tv_sec < 0)
++        return 0;
++
++    return diff.tv_sec * CLOCK_SECOND +
++                (CLOCK_SECOND / NSEC_PER_SEC) * diff.tv_nsec;
++}
++
++void
++sol_mainloop_impl_run(void)
++{
++    if (!sol_mainloop_impl_main_thread_check()) {
++        SOL_ERR("sol_run() called on different thread than sol_init()");
++        return;
++    }
++
++    sol_mainloop_common_loop_set(true);
++}
++
++bool
++sol_mainloop_contiki_iter(void)
++{
++    // Another event could make process wakeup
++    etimer_stop(&et);
++
++    // TODO: check event
++
++    sol_mainloop_common_timeout_process();
++    sol_mainloop_common_idler_process();
++    sol_mainloop_common_timeout_process();
++
++    if (!sol_mainloop_common_loop_check())
++        return false;
++
++    etimer_set(&et, ticks_until_next_timeout());
++    return true;
++}
++
++void
++sol_mainloop_impl_iter(void)
++{
++    // empty
++}
++
++void
++sol_mainloop_contiki_event_set(process_event_t ev, process_data_t data)
++{
++}
+diff --git a/src/lib/common/sol-platform-impl-contiki.c b/src/lib/common/sol-platform-impl-contiki.c
+new file mode 100644
+index 00000000..37e4da84
+--- /dev/null
++++ b/src/lib/common/sol-platform-impl-contiki.c
+@@ -0,0 +1,97 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++#include <stdlib.h>
++
++#include "sol-platform.h"
++#include "sol-platform-impl.h"
++
++int
++sol_platform_impl_init(void)
++{
++    return 0;
++}
++
++void
++sol_platform_impl_shutdown(void)
++{
++}
++
++int
++sol_platform_impl_get_state(void)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_add_service_monitor(const char *service)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_del_service_monitor(const char *service)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_start_service(const char *service)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_stop_service(const char *service)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_restart_service(const char *service)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
++
++int
++sol_platform_impl_set_target(const char *target)
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
+diff --git a/src/shared/sol-util.c b/src/shared/sol-util.c
+index af1c84e8..3a79b86b 100644
+--- a/src/shared/sol-util.c
++++ b/src/shared/sol-util.c
+@@ -50,6 +50,22 @@ sol_util_memdup(const void *data, size_t len)
+     return ptr;
+ }
+ 
++#ifdef SOL_PLATFORM_CONTIKI
++#include <contiki.h>
++
++struct timespec
++sol_util_timespec_get_current(void)
++{
++    struct timespec ret;
++    clock_time_t ticks;
++
++    ticks = clock_time();
++    ret.tv_sec = ticks / CLOCK_SECOND;
++    ticks -= ret.tv_sec * CLOCK_SECOND;
++    ret.tv_nsec = (ticks * NSEC_PER_SEC) / CLOCK_SECOND;
++    return ret;
++}
++#else
+ struct timespec
+ sol_util_timespec_get_current(void)
+ {
+@@ -58,6 +74,7 @@ sol_util_timespec_get_current(void)
+     clock_gettime(CLOCK_MONOTONIC, &t);
+     return t;
+ }
++#endif
+ 
+ char *
+ sol_util_strerror(int errnum, char *buf, size_t buflen)
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index cb8fe042..32d0f89d 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -176,6 +176,9 @@ endif
+ ifeq (y,$(PLATFORM_RIOTOS))
+ PLATFORM_NAME = riotos
+ endif
++ifeq (y,$(PLATFORM_CONTIKI))
++PLATFORM_NAME = contiki
++endif
+ endif #!PLATFORM_NAME
+ 
+ ifneq (,$(PLATFORM_NAME))

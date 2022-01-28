@@ -1,0 +1,209 @@
+"2016-11-27 16:35:32 +0100"
+diff --git a/Makefile.in b/Makefile.in
+index 98c6d6d68..b79314f34 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -34,7 +34,6 @@ include $(top_srcdir)ldso/Makefile.in
+ include $(top_srcdir)libcrypt/Makefile.in
+ include $(top_srcdir)libintl/Makefile.in
+ include $(top_srcdir)libm/Makefile.in
+-include $(top_srcdir)libnsl/Makefile.in
+ include $(top_srcdir)libresolv/Makefile.in
+ include $(top_srcdir)libutil/Makefile.in
+ include $(top_srcdir)libpthread/Makefile.in
+@@ -363,7 +362,7 @@ else
+ 	$(Q)cd $(PREFIX)$(DEVEL_PREFIX)include && $(RM) -f wchar-stub.h
+ endif
+ 
+-EMPTY_LIB_NAMES = dl
++EMPTY_LIB_NAMES = dl nsl
+ ifeq ($(DO_C99_MATH),y)
+ EMPTY_LIB_NAMES += m
+ endif
+@@ -382,9 +381,6 @@ endif
+ ifeq ($(UCLIBC_HAS_LIBRESOLV_STUB),y)
+ EMPTY_LIB_NAMES += resolv
+ endif
+-ifeq ($(UCLIBC_HAS_LIBNSL_STUB),y)
+-EMPTY_LIB_NAMES += nsl
+-endif
+ ifeq ($(UCLIBC_HAS_GETTEXT_AWARENESS),y)
+ EMPTY_LIB_NAMES += intl
+ endif
+diff --git a/Makerules b/Makerules
+index e0784e1d0..b169439b0 100644
+--- a/Makerules
++++ b/Makerules
+@@ -41,7 +41,6 @@ $(eval $(call add_IS_IN_lib,libcrypt,$(libcrypt-a-y) $(libcrypt-so-y)))
+ $(eval $(call add_IS_IN_lib,libdl,$(libdl-a-y) $(libdl-so-y)))
+ $(eval $(call add_IS_IN_lib,libintl,$(libintl-a-y) $(libintl-so-y)))
+ $(eval $(call add_IS_IN_lib,libm,$(libm-a-y) $(libm-so-y)))
+-$(eval $(call add_IS_IN_lib,libnsl,$(libnsl-a-y) $(libnsl-so-y)))
+ $(eval $(call add_IS_IN_lib,libpthread/$(PTNAME),$(libpthread-a-y) $(libpthread-so-y) $(libpthread-nonshared-y)))
+ $(eval $(call add_IS_IN_lib,libpthread/$(PTNAME)_db,$(libthread_db-a-y) $(libthread_db-so-y)))
+ $(eval $(call add_IS_IN_lib,libresolv,$(libresolv-a-y) $(libresolv-so-y)))
+@@ -52,14 +51,14 @@ $(eval $(call add_IS_IN_lib,libuargp,$(libuargp-a-y) $(libuargp-so-y)))
+ 
+ shared_objs = $(libc-y:.o=.os) $(libc-shared-y) $(libc-nonshared-y) \
+ 	$(libcrypt-so-y) $(libdl-so-y) \
+-	$(libintl-so-y) $(libm-so-y) $(libnsl-so-y) \
++	$(libintl-so-y) $(libm-so-y) \
+ 	$(libpthread-so-y) $(libpthread-nonshared-y) $(libthread_db-so-y) \
+ 	$(libresolv-so-y) $(librt-so-y) \
+ 	$(ldso-y) \
+ 	$(libutil-so-y) $(libubacktrace-so-y) $(libuargp-so-y)
+ 
+ ar_objs =  $(libc-y) $(libc-static-y) $(libcrypt-a-y) \
+-	$(libdl-a-y) $(libintl-a-y) $(libm-a-y) $(libnsl-a-y) \
++	$(libdl-a-y) $(libintl-a-y) $(libm-a-y) \
+ 	$(libpthread-a-y) $(libthread_db-a-y) \
+ 	$(libresolv-a-y) $(librt-a-y) $(libutil-a-y) $(libubacktrace-a-y) $(libuargp-a-y)
+ ifeq ($(DOPIC),y)
+@@ -480,7 +479,7 @@ files.dep := $(libc-a-y) $(libc-so-y) $(libc-nonshared-y) \
+ 	$(PTHREAD_INITFINI:.c=.s) \
+ 	$(librt-a-y) $(librt-so-y)  $(libresolv-a-y) $(libresolv-so-y) \
+ 	$(libcrypt-a-y) $(libcrypt-so-y) $(libutil-a-y) $(libutil-so-y) \
+-	$(libnsl-a-y) $(libnsl-so-y) $(ldso-y) $(libdl-a-y) $(libdl-so-y) \
++	$(ldso-y) $(libdl-a-y) $(libdl-so-y) \
+ 	$(libubacktrace-a-y) $(libubacktrace-so-y) $(libuargp-so-y) $(libuargp-a-y)
+ .depends.dep := \
+ 	$(patsubst %.s,%.s.dep,$(filter %.s,$(files.dep))) \
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 719218fd8..3315c7d5a 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1381,11 +1381,6 @@ config UCLIBC_HAS_LIBRESOLV_STUB
+ 	help
+ 	  Provide a dummy resolv library.
+ 
+-config UCLIBC_HAS_LIBNSL_STUB
+-	bool "Provide libnsl stub"
+-	help
+-	  Provide a dummy nsl library.
+-
+ endif
+ 
+ 
+diff --git a/include/libc-symbols.h b/include/libc-symbols.h
+index fc129db5d..21c4ee001 100644
+--- a/include/libc-symbols.h
++++ b/include/libc-symbols.h
+@@ -618,24 +618,6 @@ FIXME! - ?
+ # define libintl_hidden_data_ver(local, name)
+ #endif
+ 
+-#if defined NOT_IN_libc && defined IS_IN_libnsl
+-# define libnsl_hidden_proto(name, attrs...) hidden_proto (name, ##attrs)
+-# define libnsl_hidden_def(name) hidden_def (name)
+-# define libnsl_hidden_weak(name) hidden_weak (name)
+-# define libnsl_hidden_ver(local, name) hidden_ver (local, name)
+-# define libnsl_hidden_data_def(name) hidden_data_def (name)
+-# define libnsl_hidden_data_weak(name) hidden_data_weak (name)
+-# define libnsl_hidden_data_ver(local, name) hidden_data_ver (local, name)
+-#else
+-# define libnsl_hidden_proto(name, attrs...)
+-# define libnsl_hidden_def(name)
+-# define libnsl_hidden_weak(name)
+-# define libnsl_hidden_ver(local, name)
+-# define libnsl_hidden_data_def(name)
+-# define libnsl_hidden_data_weak(name)
+-# define libnsl_hidden_data_ver(local, name)
+-#endif
+-
+ #if defined NOT_IN_libc && defined IS_IN_libutil
+ # define libutil_hidden_proto(name, attrs...) hidden_proto (name, ##attrs)
+ # define libutil_hidden_def(name) hidden_def (name)
+diff --git a/libc/Makefile.in b/libc/Makefile.in
+index 3d6ef13ce..ef7bade56 100644
+--- a/libc/Makefile.in
++++ b/libc/Makefile.in
+@@ -44,7 +44,6 @@ endif
+ 
+ libc-a-$(HAVE_SHARED) += $(libdl-a-y)
+ libc-a-$(DO_C99_MATH) += $(libm-a-y)
+-libc-a-$(UCLIBC_HAS_LIBNSL_STUB) += $(libnsl-a-y)
+ libc-a-$(UCLIBC_HAS_LIBRESOLV_STUB) += $(libresolv-a-y)
+ libc-a-$(UCLIBC_HAS_LIBUTIL) += $(libutil-a-y)
+ libc-a-$(UCLIBC_HAS_CRYPT) += $(libcrypt-a-y)
+@@ -58,7 +57,6 @@ libc-so-y = $(libc-y:.o=.os) $(libc-shared-y)
+ 
+ libc-so-y += $(libdl-so-y)
+ libc-so-$(DO_C99_MATH) += $(libm-so-y)
+-libc-so-$(UCLIBC_HAS_LIBNSL_STUB) += $(libnsl-so-y)
+ libc-so-$(UCLIBC_HAS_LIBRESOLV_STUB) += $(libresolv-so-y)
+ libc-so-$(UCLIBC_HAS_LIBUTIL) += $(libutil-so-y)
+ libc-so-$(UCLIBC_HAS_CRYPT) += $(libcrypt-so-y)
+diff --git a/libnsl/Makefile b/libnsl/Makefile
+deleted file mode 100644
+index c8dc9b466..000000000
+--- a/libnsl/Makefile
++++ /dev/null
+@@ -1,13 +0,0 @@
+-# Makefile for uClibc
+-#
+-# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
+-#
+-# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+-#
+-
+-top_srcdir=../
+-top_builddir=../
+-include $(top_builddir)Rules.mak
+-all: libs
+-include Makefile.in
+-include $(top_srcdir)Makerules
+diff --git a/libnsl/Makefile.in b/libnsl/Makefile.in
+deleted file mode 100644
+index d6ee95601..000000000
+--- a/libnsl/Makefile.in
++++ /dev/null
+@@ -1,28 +0,0 @@
+-# Makefile for uClibc
+-#
+-# Copyright (C) 2000-2008 Erik Andersen <andersen@uclibc.org>
+-#
+-# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+-#
+-
+-subdirs += libnsl
+-
+-CFLAGS-libnsl := -DNOT_IN_libc -DIS_IN_libnsl $(SSP_ALL_CFLAGS)
+-
+-libnsl_DIR := $(top_srcdir)libnsl
+-libnsl_OUT := $(top_builddir)libnsl
+-
+-libnsl_SRC := $(libnsl_DIR)/nsl.c
+-libnsl_OBJ := $(patsubst $(libnsl_DIR)/%.c,$(libnsl_OUT)/%.o,$(libnsl_SRC))
+-
+-ifeq ($(DOPIC),y)
+-libnsl-a-y := $(libnsl_OBJ:.o=.os)
+-else
+-libnsl-a-y := $(libnsl_OBJ)
+-endif
+-libnsl-so-y := $(libnsl_OBJ:.o=.os)
+-
+-objclean-y += CLEAN_libnsl
+-
+-CLEAN_libnsl:
+-	$(do_rm) $(addprefix $(libnsl_OUT)/*., o os a)
+diff --git a/libnsl/nsl.c b/libnsl/nsl.c
+deleted file mode 100644
+index a91ec93a7..000000000
+--- a/libnsl/nsl.c
++++ /dev/null
+@@ -1,15 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * libnsl for uClibc
+- *
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-void __stub2(void);
+-void __stub2(void)
+-{
+-	return;
+-}
+-link_warning (__stub2, "the `libnsl' library is a stub.  Do you really need it?")

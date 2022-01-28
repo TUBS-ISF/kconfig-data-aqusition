@@ -1,0 +1,72 @@
+"2008-07-08 02:41:21 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 884a59e8b..1759586db 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -515,6 +515,23 @@ config UCLIBC_SUSV3_LEGACY_MACROS
+ 	  Currently applies to bcopy/bzero/bcmp/index/rindex et al.
+ 	  WARNING! ABI incompatibility.
+ 
++config UCLIBC_HAS_STUBS
++	bool "Provide stubs for unavailable functionality"
++	default n
++	help
++	  With this option uClibc provides non-functional stubs for
++	  functions which are impossible to implement on the target
++	  architecture. Otherwise, such functions are simply omitted.
++
++	  As of 2008-07, this option makes uClibc provide fork() stub
++	  on NOMMU targets. It always sets errno to ENOSYS and returns -1.
++
++	  This may be useful if you port a lot of software and cannot
++	  audit all of it and replace or disable fork() usage.
++	  With this option, a program which uses fork() will build
++	  successfully. Of course, it may be useless if fork()
++	  is essential for its operation.
++
+ config UCLIBC_HAS_SHADOW
+ 	bool "Shadow Password Support"
+ 	default y
+diff --git a/include/unistd.h b/include/unistd.h
+index 58021a5e2..164f28909 100644
+--- a/include/unistd.h
++++ b/include/unistd.h
+@@ -717,7 +717,7 @@ extern int setresgid (__gid_t __rgid, __gid_t __egid, __gid_t __sgid)
+ #endif
+ 
+ 
+-#ifdef __ARCH_USE_MMU__
++#if defined __UCLIBC_HAS_STUBS__ || defined __ARCH_USE_MMU__
+ /* Clone the calling process, creating an exact copy.
+    Return -1 for errors, 0 to the new process,
+    and the process ID of the new process to the old process.  */
+diff --git a/libc/sysdeps/linux/common/fork.c b/libc/sysdeps/linux/common/fork.c
+index b67cba05a..b4fa3686d 100644
+--- a/libc/sysdeps/linux/common/fork.c
++++ b/libc/sysdeps/linux/common/fork.c
+@@ -11,6 +11,7 @@
+ #include <unistd.h>
+ 
+ #ifdef __ARCH_USE_MMU__
++
+ #ifdef __NR_fork
+ extern __typeof(fork) __libc_fork;
+ #define __NR___libc_fork __NR_fork
+@@ -19,4 +20,17 @@ libc_hidden_proto(fork)
+ weak_alias(__libc_fork,fork)
+ libc_hidden_weak(fork)
+ #endif
++
++#elif defined __UCLIBC_HAS_STUBS__
++
++pid_t __libc_fork(void)
++{
++	__set_errno(ENOSYS);
++	return -1;
++}
++libc_hidden_proto(fork)
++weak_alias(__libc_fork,fork)
++libc_hidden_weak(fork)
++link_warning(fork, "fork: this function is not implemented on no-mmu systems")
++
+ #endif

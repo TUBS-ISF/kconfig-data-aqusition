@@ -1,0 +1,291 @@
+"2018-02-09 09:07:48 +0100"
+diff --git a/src/Makeconf.arm b/src/Makeconf.arm
+index b7dbaf8..6866e87 100644
+--- a/src/Makeconf.arm
++++ b/src/Makeconf.arm
+@@ -17,8 +17,10 @@ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A7) += $(call CHECKCC,-mcpu=cortex-a7,-mcpu=cor
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A8) += $(call CHECKCC,-mcpu=cortex-a8)
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A9) += $(call CHECKCC,-mcpu=cortex-a9)
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A15) += $(call CHECKCC,-mcpu=cortex-a15,-mcpu=cortex-a9)
++SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A53) += $(call CHECKCC,-mcpu=cortex-a53)
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A57) += $(call CHECKCC,-mcpu=cortex-a57)
+ SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A72) += $(call CHECKCC,-mcpu=cortex-a72)
++SHARED_FLAGS-$(CONFIG_ARM_CORTEX_A73) += $(call CHECKCC,-mcpu=cortex-a73)
+ SHARED_FLAGS-$(CONFIG_BIT32)      += -msoft-float
+ SHARED_FLAGS-$(CONFIG_BIT32)      += $(call CHECKCC,-mno-thumb-interwork)
+ SHARED_FLAGS-$(CONFIG_BIT32)      += -marm -mabi=aapcs
+diff --git a/src/drivers/arm/mmu-arm.cpp b/src/drivers/arm/mmu-arm.cpp
+index 89946ad..9a0ffca 100644
+--- a/src/drivers/arm/mmu-arm.cpp
++++ b/src/drivers/arm/mmu-arm.cpp
+@@ -37,6 +37,19 @@ template < unsigned long Flush_area, bool Ram >
+ void Mmu<Flush_area, Ram>::btc_inv()
+ { asm volatile ("mcr p15, 0, %0, c7, c5, 0" : : "r" (0) : "memory"); }
+ 
++// -----------------------------------------------------------------------
++IMPLEMENTATION [arm && arm_v8]:
++
++IMPLEMENT static inline
++template < unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::btc_flush()
++{}
++
++IMPLEMENT static inline
++template < unsigned long Flush_area, bool Ram >
++void Mmu<Flush_area, Ram>::btc_inv()
++{}
++
+ //-----------------------------------------------------------------------------
+ IMPLEMENTATION [arm && (arm_mpcore || arm_1136 || arm_1176 || arm_pxa
+                         || arm_sa || arm_926 || arm_920t)]:
+diff --git a/src/kern/arm/32/bootstrap-arm-32.cpp b/src/kern/arm/32/bootstrap-arm-32.cpp
+index 19b39b7..ebcd076 100644
+--- a/src/kern/arm/32/bootstrap-arm-32.cpp
++++ b/src/kern/arm/32/bootstrap-arm-32.cpp
+@@ -1,3 +1,22 @@
++IMPLEMENTATION [arm && arm_v6plus]:
++
++#include "kmem_space.h"
++
++static inline void
++Bootstrap::set_asid()
++{
++  asm volatile ("mcr p15, 0, %0, c13, c0, 1" : : "r" (0)); // ASID 0
++}
++
++static inline NEEDS["kmem_space.h"]
++void
++Bootstrap::set_ttbcr()
++{
++  asm volatile("mcr p15, 0, %[ttbcr], c2, c0, 2" // TTBCR
++               : : [ttbcr] "r" (Page::Ttbcr_bits));
++}
++
++//---------------------------------------------------------------------------
+ IMPLEMENTATION [arm && arm_lpae && !cpu_virt]:
+ 
+ #include "cpu.h"
+@@ -118,7 +137,7 @@ Bootstrap::do_arm_1176_cache_alias_workaround()
+ }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && !arm_lpae && (arm_v7 || arm_mpcore)]:
++IMPLEMENTATION [arm && !arm_lpae && (arm_v7 || arm_v8 || arm_mpcore)]:
+ 
+ #include "paging.h"
+ 
+diff --git a/src/kern/arm/32/mem_unit-arm-32.cpp b/src/kern/arm/32/mem_unit-arm-32.cpp
+index 0913c19..f715215 100644
+--- a/src/kern/arm/32/mem_unit-arm-32.cpp
++++ b/src/kern/arm/32/mem_unit-arm-32.cpp
+@@ -31,7 +31,7 @@ void Mem_unit::tlb_flush(unsigned long)
+ }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (arm_v6 || arm_v7) && !cpu_virt]:
++IMPLEMENTATION [arm && arm_v6plus && !cpu_virt]:
+ 
+ IMPLEMENT inline
+ void Mem_unit::tlb_flush(void *va, unsigned long asid)
+@@ -54,7 +54,7 @@ void Mem_unit::tlb_flush(unsigned long asid)
+ }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (arm_v6 || arm_v7) && cpu_virt]:
++IMPLEMENTATION [arm && arm_v6plus && cpu_virt]:
+ 
+ IMPLEMENT inline
+ void Mem_unit::tlb_flush(void *va, unsigned long asid)
+@@ -97,7 +97,7 @@ void Mem_unit::tlb_flush(unsigned long asid)
+ }
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && cpu_virt]:
++IMPLEMENTATION [arm && !arm_v8 && cpu_virt]:
+ 
+ IMPLEMENT_OVERRIDE inline
+ void Mem_unit::kernel_tlb_flush()
+diff --git a/src/kern/arm/32/thread-arm-32.cpp b/src/kern/arm/32/thread-arm-32.cpp
+index 115d9f5..5c9ce96 100644
+--- a/src/kern/arm/32/thread-arm-32.cpp
++++ b/src/kern/arm/32/thread-arm-32.cpp
+@@ -174,7 +174,7 @@ Thread::condition_valid(unsigned char cond, Unsigned32 psr)
+ }
+ 
+ //-----------------------------------------------------------------------------
+-IMPLEMENTATION [arm && 32bit && fpu]:
++IMPLEMENTATION [arm && 32bit && fpu && !arm_v8]:
+ 
+ PUBLIC static inline
+ bool
+@@ -197,7 +197,7 @@ Thread::check_for_kernel_mem_access_pf(Trap_state *ts, Thread *t)
+   return false;
+ }
+ 
+-PUBLIC inline
++IMPLEMENT_OVERRIDE inline
+ bool
+ Thread::check_and_handle_coproc_faults(Trap_state *ts)
+ {
+diff --git a/src/kern/arm/64/mmu-arm-64.cpp b/src/kern/arm/64/mmu-arm-64.cpp
+index 3ff046e..2d4165d 100644
+--- a/src/kern/arm/64/mmu-arm-64.cpp
++++ b/src/kern/arm/64/mmu-arm-64.cpp
+@@ -1,15 +1,5 @@
+ IMPLEMENTATION [arm && arm_v8]:
+ 
+-IMPLEMENT static inline
+-template < unsigned long Flush_area, bool Ram >
+-void Mmu<Flush_area, Ram>::btc_flush()
+-{}
+-
+-IMPLEMENT static inline
+-template < unsigned long Flush_area, bool Ram >
+-void Mmu<Flush_area, Ram>::btc_inv()
+-{}
+-
+ PUBLIC static inline
+ template< unsigned long Flush_area, bool Ram >
+ Mword Mmu<Flush_area, Ram>::dcache_line_size()
+diff --git a/src/kern/arm/Kconfig b/src/kern/arm/Kconfig
+index 5924af9..aba9095 100644
+--- a/src/kern/arm/Kconfig
++++ b/src/kern/arm/Kconfig
+@@ -1,8 +1,7 @@
+ # ARCH:           ARM arm
+ # ARCHDESCR:      ARM processor family
+ #
+-# ARCHSELECT:     BIT32 if !ARM_V8
+-# ARCHSELECT:     BIT64 if ARM_V8
++# ARCHSELECT:     BIT32 if !BIT64
+ # ARCHSELECT:     HAS_FPU_OPTION
+ # ARCHSELECT:     FPU if CPU_VIRT
+ # ARCHSELECT:     ARM_LPAE if CPU_VIRT || BIT64
+@@ -14,6 +13,9 @@
+ 
+ # SECTION: GLOBAL
+ 
++config HAS_64BIT
++	bool
++
+ config CAN_ARM_CPU_SA1100
+ 	bool
+ 
+@@ -81,6 +83,9 @@ config ARM_V6PLUS
+ config ARM_V8
+ 	bool
+ 
++config BIT64
++	def_bool y if HAS_64BIT
++
+ # SECTION: CPU
+ 
+ choice
+@@ -146,6 +151,7 @@ config ARM_CORTEX_A53
+ 	select ARM_V8
+ 	select HAS_MP_OPTION
+ 	select HAS_CPU_VIRT
++	select HAS_64BIT
+ 
+ config ARM_CORTEX_A57
+ 	bool "ARM Cortex-A57 CPU"
+@@ -153,6 +159,7 @@ config ARM_CORTEX_A57
+ 	select ARM_V8
+ 	select HAS_MP_OPTION
+ 	select HAS_CPU_VIRT
++	select HAS_64BIT
+ 
+ config ARM_CORTEX_A72
+ 	bool "ARM Cortex-A72 CPU"
+@@ -160,6 +167,7 @@ config ARM_CORTEX_A72
+ 	select ARM_V8
+ 	select HAS_MP_OPTION
+ 	select HAS_CPU_VIRT
++	select HAS_64BIT
+ 
+ endchoice
+ 
+@@ -224,6 +232,10 @@ config ARM_SECMONIF_MC
+ 
+ endchoice
+ 
++config BIT64
++	bool "Run Fiasco in 64bit processor mode"
++	depends on HAS_64BIT
++
+ config ARM_CACHE_L2CXX0
+ 	bool "Enable L2 Cache"
+ 	default y
+diff --git a/src/kern/arm/bootstrap.cpp b/src/kern/arm/bootstrap.cpp
+index 5925d19..6b2ecc6 100644
+--- a/src/kern/arm/bootstrap.cpp
++++ b/src/kern/arm/bootstrap.cpp
+@@ -1,6 +1,7 @@
+ INTERFACE [arm]:
+ 
+ #include "mem_layout.h"
++#include "paging.h"
+ 
+ class Bootstrap
+ {
+@@ -116,26 +117,6 @@ IMPLEMENTATION [arm && arm_v5]:
+ static inline void Bootstrap::set_asid() {}
+ static inline void Bootstrap::set_ttbcr() {}
+ 
+-//---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (arm_v6 || arm_v7)]:
+-
+-#include "kmem_space.h"
+-
+-static inline void
+-Bootstrap::set_asid()
+-{
+-  asm volatile ("mcr p15, 0, %0, c13, c0, 1" : : "r" (0)); // ASID 0
+-}
+-
+-static inline NEEDS["kmem_space.h"]
+-void
+-Bootstrap::set_ttbcr()
+-{
+-  asm volatile("mcr p15, 0, %[ttbcr], c2, c0, 2" // TTBCR
+-               : : [ttbcr] "r" (Page::Ttbcr_bits));
+-}
+-
+-
+ //---------------------------------------------------------------------------
+ IMPLEMENTATION [arm && !arm_1176_cache_alias_fix]:
+ 
+@@ -144,7 +125,7 @@ void
+ Bootstrap::do_arm_1176_cache_alias_workaround() {}
+ 
+ //---------------------------------------------------------------------------
+-IMPLEMENTATION [arm && !arm_lpae && !(arm_v7 || arm_mpcore)]:
++IMPLEMENTATION [arm && !arm_lpae && !(arm_v7 || arm_v8 || arm_mpcore)]:
+ 
+ PUBLIC static inline
+ Bootstrap::Phys_addr
+diff --git a/src/kern/arm/thread-arm.cpp b/src/kern/arm/thread-arm.cpp
+index 6bed50c..793bc35 100644
+--- a/src/kern/arm/thread-arm.cpp
++++ b/src/kern/arm/thread-arm.cpp
+@@ -6,6 +6,8 @@ EXTENSION class Thread
+ {
+ public:
+   static void init_per_cpu(Cpu_number cpu, bool resume);
++  bool check_and_handle_coproc_faults(Trap_state *);
++
+ private:
+   bool _in_exception;
+ };
+@@ -627,9 +629,9 @@ public:
+ static Arm_ipis _arm_ipis;
+ 
+ //-----------------------------------------------------------------------------
+-IMPLEMENTATION [arm && (arm_v8 || !fpu)]:
++IMPLEMENTATION [arm]:
+ 
+-PUBLIC inline
++IMPLEMENT_DEFAULT inline
+ bool
+ Thread::check_and_handle_coproc_faults(Trap_state *)
+ {

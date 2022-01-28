@@ -1,0 +1,1809 @@
+"2005-08-10 20:35:54 +0000"
+diff --git a/coreutils/df.c b/coreutils/df.c
+index ba2e7ccc9..9233fbbf1 100644
+--- a/coreutils/df.c
++++ b/coreutils/df.c
+@@ -130,7 +130,7 @@ extern int df_main(int argc, char **argv)
+ 			} else if (strcmp(device, "/dev/root") == 0) {
+ 				/* Adjusts device to be the real root device,
+ 				* or leaves device alone if it can't find it */
+-				if ((device = find_real_root_device_name()) == NULL) {
++				if ((device = find_block_device("/")) == NULL) {
+ 					goto SET_ERROR;
+ 				}
+ 			}
+diff --git a/include/libbb.h b/include/libbb.h
+index d12860ca9..14670f026 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -132,11 +132,9 @@ extern int get_kernel_revision(void);
+ 
+ extern int get_console_fd(void);
+ extern struct mntent *find_mount_point(const char *name, const char *table);
+-extern void write_mtab(char* blockDevice, char* directory,
+-					   char* filesystemType, long flags, char* string_flags);
+ extern void erase_mtab(const char * name);
+ extern long *find_pid_by_name( const char* pidName);
+-extern char *find_real_root_device_name(void);
++extern char *find_block_device(char *path);
+ extern char *bb_get_line_from_file(FILE *file);
+ extern char *bb_get_chomped_line_from_file(FILE *file);
+ extern char *bb_get_chunk_from_file(FILE *file);
+@@ -242,16 +240,14 @@ extern char *bb_askpass(int timeout, const char * prompt);
+ extern int device_open(const char *device, int mode);
+ 
+ extern int del_loop(const char *device);
+-extern int set_loop(const char *device, const char *file, int offset, int *loopro);
+-extern char *find_unused_loop_device (void);
+-
++extern int set_loop(char **device, const char *file, int offset);
+ 
+ #if (__GLIBC__ < 2)
+ extern int vdprintf(int d, const char *format, va_list ap);
+ #endif
+ 
+ int nfsmount(const char *spec, const char *node, int *flags,
+-	     char **extra_opts, char **mount_opts, int running_bg);
++	     char **mount_opts, int running_bg);
+ 
+ /* Include our own copy of struct sysinfo to avoid binary compatability
+  * problems with Linux 2.4, which changed things.  Grumble, grumble. */
+@@ -452,6 +448,7 @@ typedef struct {
+ 	int ppid;
+ #ifdef FEATURE_CPU_USAGE_PERCENTAGE
+ 	unsigned pcpu;
++	unsigned pscpu;
+ 	unsigned long stime, utime;
+ #endif
+ 	char *cmd;
+diff --git a/libbb/find_mount_point.c b/libbb/find_mount_point.c
+index 83824de9e..eec738aea 100644
+--- a/libbb/find_mount_point.c
++++ b/libbb/find_mount_point.c
+@@ -48,7 +48,7 @@ extern struct mntent *find_mount_point(const char *name, const char *table)
+ 		mountDevice = s.st_dev;
+ 
+ 
+-	if ((mountTable = setmntent(table, "r")) == 0)
++	if ((mountTable = setmntent(table ? : bb_path_mtab_file, "r")) == 0)
+ 		return 0;
+ 
+ 	while ((mountEntry = getmntent(mountTable)) != 0) {
+diff --git a/libbb/find_root_device.c b/libbb/find_root_device.c
+index 2600ce5e0..7ff65bb57 100644
+--- a/libbb/find_root_device.c
++++ b/libbb/find_root_device.c
+@@ -25,65 +25,25 @@
+ #include <stdlib.h>
+ #include "libbb.h"
+ 
+-
+-
+-extern char *find_real_root_device_name(void)
++extern char *find_block_device(char *path)
+ {
+ 	DIR *dir;
+ 	struct dirent *entry;
+-	struct stat statBuf, rootStat;
+-	char *fileName = NULL;
++	struct stat st;
+ 	dev_t dev;
+-
+-	if (stat("/", &rootStat) != 0)
+-		bb_perror_msg("could not stat '/'");
+-	else {
+-		/* This check is here in case they pass in /dev name */
+-		if ((rootStat.st_mode & S_IFMT) == S_IFBLK)
+-			dev = rootStat.st_rdev;
+-		else
+-			dev = rootStat.st_dev;
+-
+-		dir = opendir("/dev");
+-		if (!dir)
+-			bb_perror_msg("could not open '/dev'");
+-		else {
+-			while((entry = readdir(dir)) != NULL) {
+-				const char *myname = entry->d_name;
+-				/* Must skip ".." since that is "/", and so we
+-				 * would get a false positive on ".."  */
+-				if (myname[0] == '.' && myname[1] == '.' && !myname[2])
+-					continue;
+-#ifdef CONFIG_FEATURE_DEVFS
+-				/* if there is a link named /dev/root skip that too */
+-				if (strcmp(myname, "root")==0)
+-					continue;
+-#endif
+-				fileName = concat_path_file("/dev", myname);
+-
+-				/* Some char devices have the same dev_t as block
+-				 * devices, so make sure this is a block device */
+-				if (stat(fileName, &statBuf) == 0 &&
+-						S_ISBLK(statBuf.st_mode)!=0 &&
+-						statBuf.st_rdev == dev)
+-					break;
+-				free(fileName);
+-				fileName=NULL;
+-			}
+-			closedir(dir);
++	char *retpath=NULL;
++
++	if(stat(path, &st) || !(dir = opendir("/dev"))) return NULL;
++	dev = (st.st_mode & S_IFMT) == S_IFBLK ? st.st_rdev : st.st_dev;
++	while((entry = readdir(dir)) != NULL) {
++		char devpath[PATH_MAX];
++		sprintf(devpath,"/dev/%s", entry->d_name);
++		if(!stat(devpath, &st) && S_ISBLK(st.st_mode) && st.st_rdev == dev) {
++			retpath = bb_xstrdup(devpath);
++			break;
+ 		}
+ 	}
+-	if(fileName==NULL)
+-		fileName = bb_xstrdup("/dev/root");
+-	return fileName;
+-}
+-
++	closedir(dir);
+ 
+-/* END CODE */
+-/*
+-Local Variables:
+-c-file-style: "linux"
+-c-basic-offset: 4
+-tab-width: 4
+-End:
+-*/
++	return retpath;
++}
+diff --git a/libbb/loop.c b/libbb/loop.c
+index c4c3da4b1..25f66fcea 100644
+--- a/libbb/loop.c
++++ b/libbb/loop.c
+@@ -19,10 +19,8 @@
+  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+  */
+ 
++
+ #include <features.h>
+-#if defined (__GLIBC__) && !defined(__UCLIBC__)
+-#include <linux/posix_types.h>
+-#endif
+ #include <stdio.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -30,127 +28,108 @@
+ #include <unistd.h>
+ #include <sys/ioctl.h>
+ #include "libbb.h"
+-#ifdef CONFIG_FEATURE_MOUNT_LOOP
+ 
+-/* Grumble...  The 2.6.x kernel breaks asm/posix_types.h
+- * so we get to try and cope as best we can... */
++/* For 2.6, use the cleaned up header to get the 64 bit API. */
+ #include <linux/version.h>
+-
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
+-#define __bb_kernel_dev_t   __kernel_old_dev_t
+-#elif LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
+-#define __bb_kernel_dev_t   __kernel_dev_t
+-#else
+-#define __bb_kernel_dev_t   unsigned short
+-#endif
++#include <linux/loop.h>
++typedef struct loop_info64 bb_loop_info;
++#define BB_LOOP_SET_STATUS LOOP_SET_STATUS64
++#define BB_LOOP_GET_STATUS LOOP_GET_STATUS64
+ 
+-/* Stuff stolen from linux/loop.h */
++/* For 2.4 and earlier, use the 32 bit API (and don't trust the headers) */
++#else
++/* Stuff stolen from linux/loop.h for 2.4 and earlier kernels*/
++#include <linux/posix_types.h>
+ #define LO_NAME_SIZE        64
+ #define LO_KEY_SIZE         32
+ #define LOOP_SET_FD         0x4C00
+ #define LOOP_CLR_FD         0x4C01
+-#define LOOP_SET_STATUS     0x4C02
+-#define LOOP_GET_STATUS     0x4C03
+-struct loop_info {
++#define BB_LOOP_SET_STATUS  0x4C02
++#define BB_LOOP_GET_STATUS  0x4C03
++typedef struct {
+ 	int                lo_number;
+-	__bb_kernel_dev_t  lo_device;
++	__kernel_dev_t     lo_device;
+ 	unsigned long      lo_inode;
+-	__bb_kernel_dev_t  lo_rdevice;
++	__kernel_dev_t     lo_rdevice;
+ 	int                lo_offset;
+ 	int                lo_encrypt_type;
+ 	int                lo_encrypt_key_size;
+ 	int                lo_flags;
+-	char               lo_name[LO_NAME_SIZE];
++	char               lo_file_name[LO_NAME_SIZE];
+ 	unsigned char      lo_encrypt_key[LO_KEY_SIZE];
+ 	unsigned long      lo_init[2];
+ 	char               reserved[4];
+-};
++} bb_loop_info;
++#endif
+ 
+ extern int del_loop(const char *device)
+ {
+-	int fd;
++	int fd,rc=0;
+ 
+-	if ((fd = open(device, O_RDONLY)) < 0) {
+-		bb_perror_msg("%s", device);
+-		return (FALSE);
+-	}
+-	if (ioctl(fd, LOOP_CLR_FD, 0) < 0) {
++	if ((fd = open(device, O_RDONLY)) < 0) rc=1;
++	else {
++		if (ioctl(fd, LOOP_CLR_FD, 0) < 0) rc=1;
+ 		close(fd);
+-		bb_perror_msg("ioctl: LOOP_CLR_FD");
+-		return (FALSE);
+ 	}
+-	close(fd);
+-	return (TRUE);
++	return rc;
+ }
+ 
+-extern int set_loop(const char *device, const char *file, int offset,
+-					int *loopro)
+-{
+-	struct loop_info loopinfo;
+-	int fd, ffd, mode;
+-
+-	mode = *loopro ? O_RDONLY : O_RDWR;
+-	if ((ffd = open(file, mode)) < 0 && !*loopro
+-		&& (errno != EROFS || (ffd = open(file, mode = O_RDONLY)) < 0)) {
+-		bb_perror_msg("%s", file);
+-		return 1;
+-	}
+-	if ((fd = open(device, mode)) < 0) {
+-		close(ffd);
+-		bb_perror_msg("%s", device);
+-		return 1;
+-	}
+-	*loopro = (mode == O_RDONLY);
+-
+-	memset(&loopinfo, 0, sizeof(loopinfo));
+-	safe_strncpy(loopinfo.lo_name, file, LO_NAME_SIZE);
+-
+-	loopinfo.lo_offset = offset;
+-
+-	loopinfo.lo_encrypt_key_size = 0;
+-	if (ioctl(fd, LOOP_SET_FD, ffd) < 0) {
+-		bb_perror_msg("ioctl: LOOP_SET_FD");
+-		close(fd);
+-		close(ffd);
+-		return 1;
+-	}
+-	if (ioctl(fd, LOOP_SET_STATUS, &loopinfo) < 0) {
+-		(void) ioctl(fd, LOOP_CLR_FD, 0);
+-		bb_perror_msg("ioctl: LOOP_SET_STATUS");
+-		close(fd);
+-		close(ffd);
+-		return 1;
+-	}
+-	close(fd);
+-	close(ffd);
+-	return 0;
+-}
+-
+-extern char *find_unused_loop_device(void)
++// Returns 0 if mounted RW, 1 if mounted read-only, <0 for error.
++// *device is loop device to use, or if *device==NULL finds a loop device to
++// mount it on and sets *device to a strdup of that loop device name.  This
++// search will re-use an existing loop device already bound to that
++// file/offset if it finds one.
++extern int set_loop(char **device, const char *file, int offset)
+ {
+ 	char dev[20];
+-	int i, fd;
++	bb_loop_info loopinfo;
+ 	struct stat statbuf;
+-	struct loop_info loopinfo;
++	int i, dfd, ffd, mode, rc=1;
+ 
+-	for (i = 0; i <= CONFIG_FEATURE_MOUNT_LOOP_MAX; i++) {
+-		sprintf(dev, LOOP_FORMAT, i);
+-		if (stat(dev, &statbuf) == 0 && S_ISBLK(statbuf.st_mode)) {
+-			if ((fd = open(dev, O_RDONLY)) >= 0) {
+-				if (ioctl(fd, LOOP_GET_STATUS, &loopinfo) != 0) {
+-					if (errno == ENXIO) {	/* probably free */
+-						close(fd);
+-						return strdup(dev);
+-					}
+-				}
+-				close(fd);
+-			}
++	// Open the file.  Barf if this doesn't work.
++	if((ffd = open(file, mode=O_RDWR))<0)
++		if(errno!=EROFS || (ffd=open(file,mode=O_RDONLY))<0)
++			return errno;
++
++	// Find a loop device
++	for(i=0;rc;i++) {
++		sprintf(dev, LOOP_FORMAT, i++);
++		// Ran out of block devices, return failure.
++		if(stat(*device ? : dev, &statbuf) || !S_ISBLK(statbuf.st_mode)) {
++			rc=ENOENT;
++			break;
+ 		}
++		// Open the sucker and check its loopiness.
++		if((dfd=open(dev, mode))<0 && errno==EROFS)
++			dfd=open(dev,mode=O_RDONLY);
++		if(dfd<0) continue;
++
++		rc=ioctl(dfd, BB_LOOP_GET_STATUS, &loopinfo);
++		// If device free, claim it.
++		if(rc && errno==ENXIO) {
++			memset(&loopinfo, 0, sizeof(loopinfo));
++			safe_strncpy(loopinfo.lo_file_name, file, LO_NAME_SIZE);
++			loopinfo.lo_offset = offset;
++			// Associate free loop device with file
++			if(!ioctl(dfd, LOOP_SET_FD, ffd) &&
++			   !ioctl(dfd, BB_LOOP_SET_STATUS, &loopinfo)) rc=0;
++			else ioctl(dfd, LOOP_CLR_FD, 0);
++		// If this block device already set up right, re-use it.
++		// (Yes this is racy, but associating two loop devices with the same
++		// file isn't pretty either.  In general, mounting the same file twice
++		// without using losetup manually is problematic.)
++		} else if(strcmp(file,loopinfo.lo_file_name)
++					|| offset!=loopinfo.lo_offset) rc=1;
++		close(dfd);
++		if(*device) break;
+ 	}
+-	return NULL;
++	close(ffd);
++	if(!rc) {
++		if(!*device) *device=strdup(dev);
++		return mode==O_RDONLY ? 1 : 0;
++	} else return rc;
+ }
+-#endif
+-
+ 
+ /* END CODE */
+ /*
+diff --git a/libbb/mtab.c b/libbb/mtab.c
+index b1f74c476..fa4958c26 100644
+--- a/libbb/mtab.c
++++ b/libbb/mtab.c
+@@ -28,8 +28,8 @@
+ #include "libbb.h"
+ 
+ #define MTAB_MAX_ENTRIES 40
+-static const int MS_RDONLY = 1;	/* Mount read-only.  */
+ 
++#ifdef CONFIG_FEATURE_MTAB_SUPPORT
+ void erase_mtab(const char *name)
+ {
+ 	struct mntent entries[MTAB_MAX_ENTRIES];
+@@ -72,45 +72,4 @@ void erase_mtab(const char *name)
+ 	} else if (errno != EROFS)
+ 		bb_perror_msg(bb_path_mtab_file);
+ }
+-
+-void write_mtab(char *blockDevice, char *directory,
+-				char *filesystemType, long flags, char *string_flags)
+-{
+-	FILE *mountTable = setmntent(bb_path_mtab_file, "a+");
+-	struct mntent m;
+-
+-	if (mountTable == 0) {
+-		bb_perror_msg(bb_path_mtab_file);
+-		return;
+-	}
+-	if (mountTable) {
+-		int length = strlen(directory);
+-
+-		if (length > 1 && directory[length - 1] == '/')
+-			directory[length - 1] = '\0';
+-
+-		if (filesystemType == 0) {
+-			struct mntent *p = find_mount_point(blockDevice, "/proc/mounts");
+-
+-			if (p && p->mnt_type)
+-				filesystemType = p->mnt_type;
+-		}
+-		m.mnt_fsname = blockDevice;
+-		m.mnt_dir = directory;
+-		m.mnt_type = filesystemType ? filesystemType : "default";
+-
+-		if (*string_flags) {
+-			m.mnt_opts = string_flags;
+-		} else {
+-			if ((flags | MS_RDONLY) == flags)
+-				m.mnt_opts = "ro";
+-			else
+-				m.mnt_opts = "rw";
+-		}
+-
+-		m.mnt_freq = 0;
+-		m.mnt_passno = 0;
+-		addmntent(mountTable, &m);
+-		endmntent(mountTable);
+-	}
+-}
++#endif
+diff --git a/miscutils/eject.c b/miscutils/eject.c
+index 8864687e4..3f1d6ab44 100644
+--- a/miscutils/eject.c
++++ b/miscutils/eject.c
+@@ -48,13 +48,9 @@ extern int eject_main(int argc, char **argv)
+ 	if((m = find_mount_point(device, bb_path_mtab_file))) {
+ 		if(umount(m->mnt_dir))
+ 			bb_error_msg_and_die("Can't umount");
+-#ifdef CONFIG_FEATURE_MTAB_SUPPORT
+-		else
+-			erase_mtab(m->mnt_fsname);	
+-#endif
++		else if(ENABLE_FEATURE_MTAB_SUPPORT) erase_mtab(m->mnt_fsname);	
+ 	}
+-	if (ioctl(bb_xopen( device, 
+-	                   (O_RDONLY | O_NONBLOCK)), 
++	if (ioctl(bb_xopen( device, (O_RDONLY | O_NONBLOCK)), 
+ 	          ( flags ? CDROMCLOSETRAY : CDROMEJECT)))
+ 	{
+ 		bb_perror_msg_and_die(device);
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 7007915ba..7fde01971 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -323,54 +323,43 @@ config CONFIG_UMOUNT
+ 	  the tool to use.  If you enabled the 'mount' utility, you almost certainly
+ 	  also want to enable 'umount'.
+ 
+-config CONFIG_FEATURE_MOUNT_FORCE
+-	bool "  Support forced filesystem unmounting"
+-	default n
+-	depends on CONFIG_UMOUNT
+-	help
+-	  This allows you to _force_ a filesystem to be umounted.  This is generally
+-	  only useful when you want to get rid of an unreachable NFS system.
+-
+ comment "Common options for mount/umount"
+ 	depends on CONFIG_MOUNT || CONFIG_UMOUNT
+ 
+ config CONFIG_FEATURE_MOUNT_LOOP
+-	bool "  Support for loop devices"
++	bool "  Support loopback mounts"
+ 	default n
+ 	depends on CONFIG_MOUNT || CONFIG_UMOUNT
+ 	help
+-	  Enabling this feature allows automatic loopback mounts, meaning you can mount
+-	  filesystems contained in normal files as well as in block devices.  The mount
+-	  and umount commands will detect you are trying to mount a file instead of a
+-	  block device, and transparently associate it with a loopback device (and free
+-	  the loopback device on unmount) for you.
++	  Enabling this feature allows automatic mounting of files (containing
++	  filesystem images) via the linux kernel's loopback devices.  The mount
++	  command will detect you are trying to mount a file instead of a block
++	  device, and transparently associate the file with a loopback device.
++	  The umount command will also free that loopback device.
+ 	  
+-	  You can still use the 'losetup' utility and mount the loopback device yourself
+-	  if you need to do something advanced, such as specify an offset or cryptographic
+-	  options to the loopback device.
+-
+-config CONFIG_FEATURE_MOUNT_LOOP_MAX
+-	int "    max number of loop devices"
+-	default 7
+-	depends on CONFIG_FEATURE_MOUNT_LOOP
+-	help
+-	  This option sets the highest numbered loop device to be used
+-	  automatically by the '-o loop' feature of mount.
++	  You can still use the 'losetup' utility (to manually associate files
++          with loop devices) if you need to do something advanced, such as
++	  specify an offset or cryptographic options to the loopback device.
++	  (If you don't want umount to free the loop device, use "umount -D".)
+ 
+ config CONFIG_FEATURE_MTAB_SUPPORT
+-	bool "  Support for a /etc/mtab file (instead of symlink to /proc/mounts)"
++	bool "  Support for the old /etc/mtab file"
+ 	default n
+ 	depends on CONFIG_MOUNT || CONFIG_UMOUNT
+ 	help
+-	  If your root filesystem is writable and you wish to have the 'mount'
+-	  utility create an mtab file listing the filesystems which have been
+-	  mounted then you should enable this option.  Most people that use
+-	  BusyBox have a read-only root filesystem, so they will leave this
+-	  option disabled and BusyBox will use the /proc/mounts file.
+-
+-	  Note that even non-embedded developers probably want to have /etc/mtab
+-	  be a symlink to /proc/mounts, since otherwise mtab can get out of sync
+-	  with the real kernel mount state in numerous ways.
++	  Historically, Unix systems kept track of the currently mounted
++	  partitions in the file "/etc/mtab".  These days, the kernel exports
++	  the list of currently mounted partitions in "/proc/mounts", rendering
++	  the old mtab file obsolete.  (In modern systems, /etc/mtab should be
++	  a symlink to /proc/mounts.)
++
++	  The only reason to have mount maintain an /etc/mtab file itself is if
++	  your stripped-down embedded system does not have a /proc directory.
++	  If you must use this, keep in mind it's inherently brittle (for
++	  example a mount under chroot won't update it), can't handle modern
++	  features like separate per-process filesystem namespaces, requires
++	  that your /etc directory be writeable, tends to get easily confused
++	  by --bind or --move mounts, and so on.  (In brief: avoid.)
+ 
+ config CONFIG_READPROFILE
+ 	bool "readprofile"
+diff --git a/util-linux/losetup.c b/util-linux/losetup.c
+index c94456522..11bd66ebf 100644
+--- a/util-linux/losetup.c
++++ b/util-linux/losetup.c
+@@ -27,33 +27,27 @@
+ int
+ losetup_main (int argc, char **argv)
+ {
+-  int delete = 0;
+   int offset = 0;
+-  int opt;
+ 
+-  while ((opt = getopt (argc, argv, "do:")) != -1)
+-    switch (opt)
+-      {
+-      case 'd':
+-	delete = 1;
+-	break;
+-
+-      case 'o':
+-	offset = bb_xparse_number (optarg, NULL);
+-	break;
+-
+-      default:
+-	bb_show_usage();
+-      }
+-
+-  if ((delete && (offset || optind + 1 != argc))
+-      || (!delete && optind + 2 != argc))
+-    bb_show_usage();
+-
+-  opt = 0;
+-  if (delete)
+-    return del_loop (argv[optind]) ? EXIT_SUCCESS : EXIT_FAILURE;
+-  else
+-    return set_loop (argv[optind], argv[optind + 1], offset, &opt)
+-      ? EXIT_FAILURE : EXIT_SUCCESS;
++  /* This will need a "while(getopt()!=-1)" loop when we can have more than
++     one option, but for now we can't. */
++  switch(getopt(argc,argv, "do:")) {
++    case 'd':
++      /* detach takes exactly one argument */
++      if(optind+1==argc)
++        return del_loop(argv[optind]) ? EXIT_SUCCESS : EXIT_FAILURE;
++      break;
++
++    case 'o':
++      offset = bb_xparse_number (optarg, NULL);
++      /* Fall through to do the losetup */
++    case -1:
++      /* losetup takes two argument:, loop_device and file */
++      if(optind+2==argc)
++        return set_loop(&argv[optind], argv[optind + 1], offset)<0
++	    ? EXIT_FAILURE : EXIT_SUCCESS;
++      break;
++  }
++  bb_show_usage();
++  return EXIT_FAILURE;
+ }
+diff --git a/util-linux/mount.c b/util-linux/mount.c
+index b059d7094..924d79d69 100644
+--- a/util-linux/mount.c
++++ b/util-linux/mount.c
+@@ -4,6 +4,7 @@
+  *
+  * Copyright (C) 1995, 1996 by Bruce Perens <bruce@pixar.com>.
+  * Copyright (C) 1999-2004 by Erik Andersen <andersen@codepoet.org>
++ * Copyright (C) 2005 by Rob Landley <rob@landley.net>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -19,29 +20,6 @@
+  * along with this program; if not, write to the Free Software
+  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+  *
+- * 3/21/1999	Charles P. Wright <cpwright@cpwright.com>
+- *		searches through fstab when -a is passed
+- *		will try mounting stuff with all fses when passed -t auto
+- *
+- * 1999-04-17	Dave Cinege...Rewrote -t auto. Fixed ro mtab.
+- *
+- * 1999-10-07	Erik Andersen <andersen@codepoet.org>.
+- *              Rewrite of a lot of code. Removed mtab usage (I plan on
+- *              putting it back as a compile-time option some time),
+- *              major adjustments to option parsing, and some serious
+- *              dieting all around.
+- *
+- * 1999-11-06	mtab support is back - andersee
+- *
+- * 2000-01-12   Ben Collins <bcollins@debian.org>, Borrowed utils-linux's
+- *              mount to add loop support.
+- *
+- * 2000-04-30	Dave Cinege <dcinege@psychosis.com>
+- *		Rewrote fstab while loop and lower mount section. Can now do
+- *		single mounts from fstab. Can override fstab options for single
+- *		mount. Common mount_one call for single mounts and 'all'. Fixed
+- *		mtab updating and stale entries. Removed 'remount' default.
+- *
+  */
+ 
+ #include <limits.h>
+@@ -52,351 +30,131 @@
+ #include <stdio.h>
+ #include <mntent.h>
+ #include <ctype.h>
++#include <sys/mount.h>
++#include <fcntl.h>		// for CONFIG_FEATURE_MOUNT_LOOP
++#include <sys/ioctl.h>  // for CONFIG_FEATURE_MOUNT_LOOP
+ #include "busybox.h"
+ 
+-#ifdef CONFIG_NFSMOUNT
+-#if defined(__UCLIBC__) && ! defined(__UCLIBC_HAS_RPC__)
++/* This is just a warning of a common mistake.  Possibly this should be a
++ * uclibc faq entry rather than in busybox... */
++#if ENABLE_NFSMOUNT && defined(__UCLIBC__) && ! defined(__UCLIBC_HAS_RPC__)
+ #error "You need to build uClibc with UCLIBC_HAS_RPC for busybox mount with NFS support to compile."
+ #endif
+-#endif
+-
+-enum {
+-	MS_MGC_VAL = 0xc0ed0000,	/* Magic number indicatng "new" flags */
+-	MS_RDONLY = 1,		/* Mount read-only */
+-	MS_NOSUID = 2,		/* Ignore suid and sgid bits */
+-	MS_NODEV = 4,		/* Disallow access to device special files */
+-	MS_NOEXEC = 8,		/* Disallow program execution */
+-	MS_SYNCHRONOUS = 16,	/* Writes are synced at once */
+-	MS_REMOUNT = 32,	/* Alter flags of a mounted FS */
+-	MS_MANDLOCK = 64,	/* Allow mandatory locks on an FS */
+-	S_QUOTA = 128,		/* Quota initialized for file/directory/symlink */
+-	S_APPEND = 256,		/* Append-only file */
+-	S_IMMUTABLE = 512,	/* Immutable file */
+-	MS_NOATIME = 1024,	/* Do not update access times. */
+-	MS_NODIRATIME = 2048,	/* Do not update directory access times */
+-	MS_BIND = 4096,		/* Use the new linux 2.4.x "mount --bind" feature */
+-	MS_MOVE = 8192,		/* Use the new linux 2.4.x "mount --move" feature */
+-};
+-
+ 
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-#include <fcntl.h>
+-#include <sys/ioctl.h>
+-static int use_loop = FALSE;
++// These two aren't always defined in old headers
++#ifndef MS_BIND
++#define MS_BIND		4096
++#endif
++#ifndef MS_MOVE
++#define MS_MOVE		8192
+ #endif
+ 
+-extern int mount(__const char *__special_file, __const char *__dir,
+-				 __const char *__fstype, unsigned long int __rwflag,
+-				 __const void *__data);
+-extern int umount(__const char *__special_file);
+-extern int umount2(__const char *__special_file, int __flags);
+-
+-extern int sysfs(int option, unsigned int fs_index, char *buf);
++/* Consume standard mount options (from -o options or --options).
++ * Set appropriate flags and collect unrecognized ones as a comma separated
++ * string to pass to kernel */ 
+ 
+-struct mount_options {
++struct {
+ 	const char *name;
+-	unsigned long and;
+-	unsigned long or;
++	long flags;
++} static const  mount_options[] = {
++	{"loop", 0},
++	{"defaults", 0},
++	{"noauto", 0},
++	{"ro", MS_RDONLY},
++	{"rw", ~MS_RDONLY},
++	{"nosuid", MS_NOSUID},
++	{"suid", ~MS_NOSUID},
++	{"dev", ~MS_NODEV},
++	{"nodev", MS_NODEV},
++	{"exec", ~MS_NOEXEC},
++	{"noexec", MS_NOEXEC},
++	{"sync", MS_SYNCHRONOUS},
++	{"async", ~MS_SYNCHRONOUS},
++	{"remount", MS_REMOUNT},
++	{"atime", MS_NOATIME},
++	{"noatime", MS_NOATIME},
++	{"diratime", MS_NODIRATIME},
++	{"nodiratime", MS_NODIRATIME},
++	{"bind", MS_BIND},
++	{"move", MS_MOVE}
+ };
+ 
+-static const struct mount_options mount_options[] = {
+-	{"async", ~MS_SYNCHRONOUS, 0},
+-	{"atime", ~0, ~MS_NOATIME},
+-	{"defaults", ~0, 0},
+-	{"noauto", ~0, 0},
+-	{"dev", ~MS_NODEV, 0},
+-	{"diratime", ~0, ~MS_NODIRATIME},
+-	{"exec", ~MS_NOEXEC, 0},
+-	{"noatime", ~0, MS_NOATIME},
+-	{"nodev", ~0, MS_NODEV},
+-	{"nodiratime", ~0, MS_NODIRATIME},
+-	{"noexec", ~0, MS_NOEXEC},
+-	{"nosuid", ~0, MS_NOSUID},
+-	{"remount", ~0, MS_REMOUNT},
+-	{"ro", ~0, MS_RDONLY},
+-	{"rw", ~MS_RDONLY, 0},
+-	{"suid", ~MS_NOSUID, 0},
+-	{"sync", ~0, MS_SYNCHRONOUS},
+-	{"bind", ~0, MS_BIND},
+-	{"move", ~0, MS_MOVE},
+-	{0, 0, 0}
+-};
+-
+-static int
+-do_mount(char *specialfile, char *dir, char *filesystemtype, long flags,
+-		 void *string_flags, int useMtab, int fakeIt, char *mtab_opts,
+-		 int mount_all)
+-{
+-	int status = 0;
+-
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-	char *lofile = NULL;
+-#endif
+-
+-	if (!fakeIt) {
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-		if (use_loop == TRUE) {
+-			int loro = flags & MS_RDONLY;
+-
+-			lofile = specialfile;
+-
+-			specialfile = find_unused_loop_device();
+-			if (specialfile == NULL) {
+-				bb_error_msg_and_die("Could not find a spare loop device");
+-			}
+-			if (set_loop(specialfile, lofile, 0, &loro)) {
+-				bb_error_msg_and_die("Could not setup loop device");
+-			}
+-			if (!(flags & MS_RDONLY) && loro) {	/* loop is ro, but wanted rw */
+-				bb_error_msg("WARNING: loop device is read-only");
+-				flags |= MS_RDONLY;
+-			}
+-		}
+-#endif
+-		status = mount(specialfile, dir, filesystemtype, flags, string_flags);
+-		if (status < 0 && errno == EROFS) {
+-			bb_error_msg("%s is write-protected, mounting read-only",
+-					  specialfile);
+-			status = mount(specialfile, dir, filesystemtype, flags |=
+-						   MS_RDONLY, string_flags);
+-		}
+-		/* Don't whine about already mounted filesystems when mounting all. */
+-		if (status < 0 && errno == EBUSY && mount_all) {
+-			return TRUE;
+-		}
+-	}
+-
+-
+-	/* If the mount was sucessful, do anything needed, then return TRUE */
+-	if (status == 0 || fakeIt == TRUE) {
+-
+-#if defined CONFIG_FEATURE_MTAB_SUPPORT
+-		if (useMtab) {
+-			erase_mtab(specialfile);	/* Clean any stale entries */
+-			write_mtab(specialfile, dir, filesystemtype, flags, mtab_opts);
+-		}
+-#endif
+-		return (TRUE);
+-	}
+-
+-	/* Bummer.  mount failed.  Clean up */
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-	if (lofile != NULL) {
+-		del_loop(specialfile);
+-	}
+-#endif
+-
+-	if (errno == EPERM) {
+-		bb_error_msg_and_die(bb_msg_perm_denied_are_you_root);
+-	}
+-
+-	return (FALSE);
+-}
+-
+-
+-static void paste_str(char **s1, const char *s2)
+-{
+-	*s1 = xrealloc(*s1, strlen(*s1) + strlen(s2) + 1);
+-	strcat(*s1, s2);
+-}
+-
+-/* Seperate standard mount options from the nonstandard string options */
++/* Uses the mount_options list above */
+ static void parse_mount_options(char *options, int *flags, char **strflags)
+ {
+-	while (options) {
+-		int gotone = FALSE;
++	// Loop through options
++	for(;;) {
++		int i;
+ 		char *comma = strchr(options, ',');
+-		const struct mount_options *f = mount_options;
+ 
+-		if (comma) {
+-			*comma = '\0';
+-		}
+-
+-		while (f->name != 0) {
+-			if (strcasecmp(f->name, options) == 0) {
++		if(comma) *comma = 0;
+ 
+-				*flags &= f->and;
+-				*flags |= f->or;
+-				gotone = TRUE;
++		// Find this option in mount_options
++		for(i = 0; i < (sizeof(mount_options) / sizeof(*mount_options)); i++) {
++			if(!strcasecmp(mount_options[i].name, options)) {
++				long fl = mount_options[i].flags;
++				if(fl < 0) *flags &= fl;
++				else *flags |= fl;
+ 				break;
+ 			}
+-			f++;
+-		}
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-		if (!strcasecmp("loop", options)) {	/* loop device support */
+-			use_loop = TRUE;
+-			gotone = TRUE;
+ 		}
+-#endif
+-		if (!gotone) {
+-			if (**strflags) {
+-				/* have previous parsed options */
+-				paste_str(strflags, ",");
+-			}
+-			paste_str(strflags, options);
++		// Unrecognized mount option?
++		if(i == sizeof(mount_options)) {
++			// Add it to strflags, to pass on to kernel
++			i = *strflags ? strlen(*strflags) : 0;
++			*strflags = xrealloc(*strflags, i+strlen(options)+2);
++			// Comma separated if it's not the first one
++			if(i) (*strflags)[i] = ',';
++			strcpy((*strflags)+i, options);
+ 		}
+-		if (comma) {
++		// Advance to next option, or finish
++		if(comma) {
+ 			*comma = ',';
+ 			options = ++comma;
+-		} else {
+-			break;
+-		}
++		} else break;
+ 	}
+ }
+ 
+-static int mount_one(char *blockDevice, char *directory, char *filesystemType,
+-					 unsigned long flags, char *string_flags, int useMtab,
+-					 int fakeIt, char *mtab_opts, int whineOnErrors,
+-					 int mount_all)
+-{
+-	int status = 0;
+-	if (strcmp(filesystemType, "auto") == 0) {
+-		char buf[255];
+-		FILE *f;
+-		int read_proc = 0;
+-
+-		f = fopen("/etc/filesystems", "r");
+-
+-		if (f) {
+-			while (fgets(buf, sizeof(buf), f)) {
+-				if (*buf == '*') {
+-					read_proc = 1;
+-				} else if (*buf == '#') {
+-					continue;
+-				} else {
+-					filesystemType = buf;
+-
+-					/* Add NULL termination to each line */
+-					while (*filesystemType && !isspace(*filesystemType)) {
+-						filesystemType++;
+-					}
+-					*filesystemType = '\0';
+-
+-					filesystemType = buf;
+-
+-					if (bb_strlen(filesystemType)) {
+-						status = do_mount(blockDevice, directory, filesystemType,
+-									 flags | MS_MGC_VAL, string_flags,
+-									 useMtab, fakeIt, mtab_opts, mount_all);
+-						if (status) {
+-							break;
+-						}
+-					}
+-
+-				}
+-			}
+-			fclose(f);
+-		} else {
+-			read_proc = 1;
+-		}
+-
+-		if (read_proc && !status) {
+-
+-			f = bb_xfopen("/proc/filesystems", "r");
++/* This does the work */
+ 
+-			while (fgets(buf, sizeof(buf), f) != NULL) {
+-				filesystemType = buf;
+-				if (*filesystemType == '\t') {	/* Not a nodev filesystem */
+-
+-					/* Add NULL termination to each line */
+-					while (*filesystemType && *filesystemType != '\n') {
+-						filesystemType++;
+-					}
+-					*filesystemType = '\0';
+-
+-					filesystemType = buf;
+-					filesystemType++;	/* hop past tab */
+-
+-					status = do_mount(blockDevice, directory, filesystemType,
+-								 flags | MS_MGC_VAL, string_flags, useMtab,
+-								 fakeIt, mtab_opts, mount_all);
+-					if (status) {
+-						break;
+-					}
+-				}
+-			}
+-			fclose(f);
+-		}
+-	} else {
+-		status = do_mount(blockDevice, directory, filesystemType,
+-					 flags | MS_MGC_VAL, string_flags, useMtab, fakeIt,
+-					 mtab_opts, mount_all);
+-	}
+-
+-	if (!status) {
+-		if (whineOnErrors) {
+-			bb_perror_msg("Mounting %s on %s failed", blockDevice, directory);
+-		}
+-		return (FALSE);
+-	}
+-	return (TRUE);
+-}
+-
+-static void show_mounts(char *onlytype)
++extern int mount_main(int argc, char **argv)
+ {
+-	FILE *mountTable = setmntent(bb_path_mtab_file, "r");
+-
+-	if (mountTable) {
+-		struct mntent *m;
++	char *string_flags = 0, *fsType = 0, *blockDevice = 0, *directory = 0,
++		 *loopFile = 0, *buf = 0,
++		 *files[] = {"/etc/filesystems", "/proc/filesystems", 0};
++	int i, opt, all = FALSE, fakeIt = FALSE, allowWrite = FALSE,
++	   	rc = EXIT_FAILURE, useMtab = ENABLE_FEATURE_MTAB_SUPPORT;
++	int flags=0xc0ed0000;	// Needed for linux 2.2, ignored by 2.4 and 2.6.
++	FILE *file = 0,*f = 0;
++	char path[PATH_MAX*2];
++	struct mntent m;
++	struct stat statbuf;
+ 
+-		while ((m = getmntent(mountTable)) != 0) {
+-			char *blockDevice = m->mnt_fsname;
++	/* parse long options, like --bind and --move.  Note that -o option
++	 * and --option are synonymous.  Yes, this means --remount,rw works. */
+ 
+-			if (strcmp(blockDevice, "rootfs") == 0) {
+-				continue;
+-			} else if (strcmp(blockDevice, "/dev/root") == 0) {
+-				blockDevice = find_real_root_device_name();
+-			}
+-			if (!onlytype || (strcmp(m->mnt_type, onlytype) == 0)) {
+-				printf("%s on %s type %s (%s)\n", blockDevice, m->mnt_dir,
+-					   m->mnt_type, m->mnt_opts);
+-			}
+-#ifdef CONFIG_FEATURE_CLEAN_UP
+-			if (blockDevice != m->mnt_fsname) {
+-				free(blockDevice);
+-			}
+-#endif
+-		}
+-		endmntent(mountTable);
+-	} else {
+-		bb_perror_msg_and_die(bb_path_mtab_file);
++	for(i = opt = 0; i < argc; i++) {
++		if(argv[i][0] == '-' && argv[i][1] == '-')
++			parse_mount_options(argv[i]+2, &flags, &string_flags);
++		else argv[opt++] = argv[i];
+ 	}
+-	exit(EXIT_SUCCESS);
+-}
++	argc = opt;
+ 
+-extern int mount_main(int argc, char **argv)
+-{
+-	struct stat statbuf;
+-	char *string_flags = bb_xstrdup("");
+-	char *extra_opts;
+-	int flags = 0;
+-	char *filesystemType = "auto";
+-	int got_filesystemType = 0;
+-	char *device = xmalloc(PATH_MAX);
+-	char *directory = xmalloc(PATH_MAX);
+-	struct mntent *m = NULL;
+-	int all = FALSE;
+-	int fakeIt = FALSE;
+-	int useMtab = TRUE;
+-	int rc = EXIT_FAILURE;
+-	FILE *f = 0;
+-	int opt;
+-
+-	/* Parse options */
+-	while ((opt = getopt(argc, argv, "o:rt:wafnv")) > 0) {
++	// Parse remaining options
++
++	while((opt = getopt(argc, argv, "o:t:rwafnv")) > 0) {
+ 		switch (opt) {
+ 		case 'o':
+ 			parse_mount_options(optarg, &flags, &string_flags);
+ 			break;
++		case 't':
++			fsType = optarg;
++			break;
+ 		case 'r':
+ 			flags |= MS_RDONLY;
+ 			break;
+-		case 't':
+-			filesystemType = optarg;
+-			got_filesystemType = 1;
+-			break;
+ 		case 'w':
+-			flags &= ~MS_RDONLY;
++			allowWrite=TRUE;
+ 			break;
+ 		case 'a':
+ 			all = TRUE;
+@@ -405,93 +163,238 @@ extern int mount_main(int argc, char **argv)
+ 			fakeIt = TRUE;
+ 			break;
+ 		case 'n':
+-#ifdef CONFIG_FEATURE_MTAB_SUPPORT
+ 			useMtab = FALSE;
+-#endif
+ 			break;
+ 		case 'v':
+-			break;		/* ignore -v */
++			break;		// ignore -v
++		default:
++			bb_show_usage();
+ 		}
+ 	}
+ 
+-	if (!all && (optind == argc)) {
+-		show_mounts(got_filesystemType ? filesystemType : NULL);
+-	}
++	// If we have no arguments, show currently mounted filesystems
+ 
+-	if (optind < argc) {
+-		/* if device is a filename get its real path */
+-		if (stat(argv[optind], &statbuf) == 0) {
+-			char *tmp = bb_simplify_path(argv[optind]);
++	if(!all && (optind == argc)) {
++		FILE *mountTable = setmntent(bb_path_mtab_file, "r");
+ 
+-			safe_strncpy(device, tmp, PATH_MAX);
+-		} else {
+-			safe_strncpy(device, argv[optind], PATH_MAX);
++		if(!mountTable) bb_perror_msg_and_die(bb_path_mtab_file);
++
++		while (getmntent_r(mountTable,&m,path,sizeof(path))) {
++			blockDevice = m.mnt_fsname;
++
++			// Clean up display a little bit regarding root devie
++			if(!strcmp(blockDevice, "rootfs")) continue;
++			if(!strcmp(blockDevice, "/dev/root"))
++				blockDevice = find_block_device("/");
++
++			if(!fsType || !strcmp(m.mnt_type, fsType))
++				printf("%s on %s type %s (%s)\n", blockDevice, m.mnt_dir,
++					   m.mnt_type, m.mnt_opts);
++			if(ENABLE_FEATURE_CLEAN_UP && blockDevice != m.mnt_fsname)
++				free(blockDevice);
+ 		}
++		endmntent(mountTable);
++		return EXIT_SUCCESS;
+ 	}
+ 
+-	if (optind + 1 < argc)
+-		directory = bb_simplify_path(argv[optind + 1]);
++	/* The next argument is what to mount.  if there's an argument after that
++	 * it's where to mount it.  If we're not mounting all, and we have both
++	 * of these arguments, jump straight to the actual mount. */
++
++	statbuf.st_mode=0;
++	if(optind < argc)
++		blockDevice = !stat(argv[optind], &statbuf) ?
++		  	 	bb_simplify_path(argv[optind]) :
++				(ENABLE_FEATURE_CLEAN_UP ? strdup(argv[optind]) : argv[optind]);
++	if(optind+1 < argc) directory = bb_simplify_path(argv[optind+1]);
++
++    // If we don't have to loop through fstab, skip ahead a bit.
++
++	if(!all && optind+1!=argc) goto singlemount;
++
++	// Loop through /etc/fstab entries to look up this entry.
+ 
+-	if (all || optind + 1 == argc) {
+-		f = setmntent("/etc/fstab", "r");
++	if(!(file=setmntent("/etc/fstab","r")))
++		bb_perror_msg_and_die("\nCannot read /etc/fstab");
++	for(;;) {
+ 
+-		if (f == NULL)
+-			bb_perror_msg_and_die("\nCannot read /etc/fstab");
++		// Get next fstab entry
+ 
+-		while ((m = getmntent(f)) != NULL) {
+-			if (!all && (optind + 1 == argc)
+-				&& ((strcmp(device, m->mnt_fsname) != 0)
+-					&& (strcmp(device, m->mnt_dir) != 0))) {
++		if(!getmntent_r(file,&m,path,sizeof(path))) {
++			if(!all)
++				bb_perror_msg("Can't find %s in /etc/fstab\n", blockDevice);
++			break;
++		}
++		
++		// If we're mounting all and all doesn't mount this one, skip it.
++
++		if(all) {
++			if(strstr(m.mnt_opts,"noauto") || strstr(m.mnt_type,"swap"))
+ 				continue;
++			flags=0;
++
++		/* If we're mounting something specific and this isn't it, skip it.
++		 * Note we must match both the exact text in fstab (ala "proc") or
++		 * a full path from root */
++
++		} else if(strcmp(blockDevice,m.mnt_fsname) &&
++				  strcmp(argv[optind],m.mnt_fsname) &&
++				  strcmp(blockDevice,m.mnt_dir) &&
++				  strcmp(argv[optind],m.mnt_dir)) continue;
++
++		/* Parse flags from /etc/fstab (unless this is a single mount
++		 * overriding fstab -- note the "all" test above zeroed the flags,
++		 * to prevent flags from previous entries affecting this one, so
++		 * the only way we could get here with nonzero flags is a single
++		 * mount). */
++
++		if(!flags) {
++			if(ENABLE_FEATURE_CLEAN_UP) free(string_flags);
++			string_flags=NULL;
++			parse_mount_options(m.mnt_opts, &flags, &string_flags);
++		}
++
++		/* Fill out remaining fields with info from mtab */
++
++		if(ENABLE_FEATURE_CLEAN_UP) {
++			free(blockDevice);
++			blockDevice=strdup(m.mnt_fsname);
++			free(directory);
++			directory=strdup(m.mnt_type);
++		} else {
++			blockDevice=m.mnt_fsname;
++			directory=m.mnt_dir;
++		}
++		fsType=m.mnt_type;
++
++		/* Ok, we're ready to actually mount a specific source on a specific
++		 * directory now. */
++
++singlemount:
++
++		// If they said -w, override fstab
++
++		if(allowWrite) flags&=~MS_RDONLY;
++
++		// Might this be an NFS filesystem?
++
++		if(ENABLE_NFSMOUNT && (!fsType || !strcmp(fsType,"nfs")) &&
++			strchr(blockDevice, ':') != NULL)
++		{
++			if(nfsmount(blockDevice, directory, &flags, &string_flags, 1))
++				bb_perror_msg("nfsmount failed");
++			else {
++				rc=EXIT_SUCCESS;
++				fsType="nfs";
+ 			}
++		} else {
++			
++			// Do we need to allocate a loopback device?
+ 
+-			if (all && (	/* If we're mounting 'all' */
+-						   (strstr(m->mnt_opts, "noauto")) ||	/* and the file system isn't noauto, */
+-						   (strstr(m->mnt_type, "swap")))) /* and isn't swap, then mount it */
++			if(ENABLE_FEATURE_MOUNT_LOOP && !fakeIt && S_ISREG(statbuf.st_mode))
+ 			{
+-				continue;
++				loopFile = blockDevice;
++				blockDevice = 0;
++				switch(set_loop(&blockDevice, loopFile, 0)) {
++					case 0:
++					case 1:
++						break;
++					default:
++						bb_error_msg_and_die(
++							errno == EPERM || errno == EACCES ?
++							bb_msg_perm_denied_are_you_root :
++							"Couldn't setup loop device");
++						break;
++				}
+ 			}
+ 
+-			if (all || flags == 0) {	/* Allow single mount to override fstab flags */
+-				flags = 0;
+-				string_flags[0] = 0;
+-				parse_mount_options(m->mnt_opts, &flags, &string_flags);
+-			}
++			/* If we know the fstype (or don't need to), jump straight
++			 * to the actual mount. */
+ 
+-			strcpy(device, m->mnt_fsname);
+-			strcpy(directory, m->mnt_dir);
+-			filesystemType = bb_xstrdup(m->mnt_type);
+-		  singlemount:
+-			extra_opts = string_flags;
+-			rc = EXIT_SUCCESS;
+-#ifdef CONFIG_NFSMOUNT
+-			if (strchr(device, ':') != NULL) {
+-				filesystemType = "nfs";
+-				if (nfsmount
+-					(device, directory, &flags, &extra_opts, &string_flags,
+-					 1)) {
+-					bb_perror_msg("nfsmount failed");
+-					rc = EXIT_FAILURE;
++			if(fsType || (flags & (MS_REMOUNT | MS_BIND | MS_MOVE)))
++				goto mount_it_now;
++		}
++		
++		// Loop through filesystem types until mount succeeds or we run out
++
++		for(i = 0; files[i] && rc; i++) {
++			f = fopen(files[i], "r");
++			if(!f) continue;
++			// Get next block device backed filesystem
++			for(buf = 0; (buf = fsType = bb_get_chomped_line_from_file(f));
++				   	free(buf))
++			{
++				// Skip funky entries in /proc
++				if(!strncmp(buf,"nodev",5) && isspace(buf[5])) continue;
++				
++				while(isspace(*fsType)) fsType++;
++				if(*buf=='#' || *buf=='*') continue;
++				if(!*fsType) continue;
++mount_it_now:
++				// Okay, try to mount
++
++				if (!fakeIt) {
++					for(;;) {
++						rc = mount(blockDevice, directory, fsType, flags, string_flags);
++						if(!rc || (flags&MS_RDONLY) || (errno!=EACCES && errno!=EROFS))
++							break;
++						bb_error_msg("%s is write-protected, mounting read-only", blockDevice);
++						flags|=MS_RDONLY;
++					}
+ 				}
++				if(!rc) break;
+ 			}
+-#endif
+-			if (!mount_one
+-				(device, directory, filesystemType, flags, string_flags,
+-				 useMtab, fakeIt, extra_opts, TRUE, all)) {
+-				rc = EXIT_FAILURE;
++			if(f) fclose(f);
++			if(!f || !rc) break;
++		}
++
++		/* If the mount was sucessful, and we're maintaining an old-style
++		 * mtab file by hand, add new entry to it now. */
++		if((!rc || fakeIt) && useMtab) {
++			FILE *mountTable = setmntent(bb_path_mtab_file, "a+");
++
++			if(!mountTable) bb_perror_msg(bb_path_mtab_file);
++			else {
++				// Remove trailing / (if any) from directory we mounted on
++				int length=strlen(directory);
++				if(length>1 && directory[length-1] == '/')
++					directory[length-1]=0;
++
++				// Fill out structure (should be ok to re-use existing one).
++				m.mnt_fsname=blockDevice;
++				m.mnt_dir=directory;
++				m.mnt_type=fsType ? : "--bind";
++				m.mnt_opts=string_flags ? :
++					((flags & MS_RDONLY) ? "ro" : "rw");
++				m.mnt_freq = 0;
++				m.mnt_passno = 0;
++
++				// Write and close
++				addmntent(mountTable, &m);
++				endmntent(mountTable);
+ 			}
+-			if (!all) {
+-				break;
++		} else {
++			// Mount failed.  Clean up
++			if(loopFile) {
++				del_loop(blockDevice);
++				if(ENABLE_FEATURE_CLEAN_UP) free(loopFile);
+ 			}
++			// Don't whine about already mounted fs when mounting all.
++			if(rc<0 && errno == EBUSY && all) rc=0;
++			else if (errno == EPERM)
++				bb_error_msg_and_die(bb_msg_perm_denied_are_you_root);
+ 		}
+-		if (f) {
+-			endmntent(f);
++		// We couldn't free this earlier becase fsType could be in buf.
++		if(ENABLE_FEATURE_CLEAN_UP) {
++			free(buf);
++			free(blockDevice);
++			free(directory);
+ 		}
+-		if (!all && f && m == NULL) {
+-			fprintf(stderr, "Can't find %s in /etc/fstab\n", device);
+-		}
+-		return rc;
++		if(!all) break;
+ 	}
+ 
+-	goto singlemount;
++	if(file) endmntent(file);
++	if(rc) bb_perror_msg("Mounting %s on %s failed", blockDevice, directory);
++
++	return rc ? : EXIT_FAILURE;
+ }
+diff --git a/util-linux/nfsmount.c b/util-linux/nfsmount.c
+index 0ebab80f6..11ca3268e 100644
+--- a/util-linux/nfsmount.c
++++ b/util-linux/nfsmount.c
+@@ -303,7 +303,7 @@ return &p;
+ }
+ 
+ int nfsmount(const char *spec, const char *node, int *flags,
+-	     char **extra_opts, char **mount_opts, int running_bg)
++	     char **mount_opts, int running_bg)
+ {
+ 	static char *prev_bg_host;
+ 	char hostdir[1024];
+@@ -399,7 +399,7 @@ int nfsmount(const char *spec, const char *node, int *flags,
+ 	/* add IP address to mtab options for use when unmounting */
+ 
+ 	s = inet_ntoa(server_addr.sin_addr);
+-	old_opts = *extra_opts;
++	old_opts = *mount_opts;
+ 	if (!old_opts)
+ 		old_opts = "";
+ 	if (strlen(old_opts) + strlen(s) + 10 >= sizeof(new_opts)) {
+@@ -408,7 +408,7 @@ int nfsmount(const char *spec, const char *node, int *flags,
+ 	}
+ 	sprintf(new_opts, "%s%saddr=%s",
+ 		old_opts, *old_opts ? "," : "", s);
+-	*extra_opts = bb_xstrdup(new_opts);
++	*mount_opts = bb_xstrdup(new_opts);
+ 
+ 	/* Set default options.
+ 	 * rsize/wsize (and bsize, for ver >= 3) are left 0 in order to
+diff --git a/util-linux/umount.c b/util-linux/umount.c
+index 21c2e6e4d..6de71b4ab 100644
+--- a/util-linux/umount.c
++++ b/util-linux/umount.c
+@@ -3,20 +3,11 @@
+  * Mini umount implementation for busybox
+  *
+  * Copyright (C) 1999-2004 by Erik Andersen <andersen@codepoet.org>
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation; either version 2 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+- * General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program; if not, write to the Free Software
+- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
++ * Copyright (C) 2005 by Rob Landley <rob@landley.net>
++ * 
++ * This program is licensed under the GNU General Public license (GPL)
++ * version 2 or later, see http://www.fsf.org/licensing/licenses/gpl.html
++ * or the file "LICENSE" in the busybox source tarball for the full text.
+  *
+  */
+ 
+@@ -26,273 +17,126 @@
+ #include <errno.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <sys/mount.h>
+ #include "busybox.h"
+ 
+-/* Teach libc5 about realpath -- it includes it but the
+- * prototype is missing... */
+-#if (__GLIBC__ <= 2) && (__GLIBC_MINOR__ < 1)
+-extern char *realpath(const char *path, char *resolved_path);
+-#endif
+-
+-static const int MNT_FORCE = 1;
+-static const int MS_MGC_VAL = 0xc0ed0000; /* Magic number indicatng "new" flags */
+-static const int MS_REMOUNT = 32;	/* Alter flags of a mounted FS.  */
+-static const int MS_RDONLY = 1;	/* Mount read-only.  */
+-
+-extern int mount (__const char *__special_file, __const char *__dir,
+-			__const char *__fstype, unsigned long int __rwflag,
+-			__const void *__data);
+-extern int umount (__const char *__special_file);
+-extern int umount2 (__const char *__special_file, int __flags);
+-
+-struct _mtab_entry_t {
+-	char *device;
+-	char *mountpt;
+-	struct _mtab_entry_t *next;
+-};
+-
+-static struct _mtab_entry_t *mtab_cache = NULL;
+-
+-
+-
+-#if defined CONFIG_FEATURE_MOUNT_FORCE
+-static int doForce = FALSE;
+-#endif
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-static int freeLoop = TRUE;
+-#endif
+-#if defined CONFIG_FEATURE_MTAB_SUPPORT
+-static int useMtab = TRUE;
+-#endif
+-static int umountAll = FALSE;
+-static int doRemount = FALSE;
+-
+-
+-
+-/* These functions are here because the getmntent functions do not appear
+- * to be re-entrant, which leads to all sorts of problems when we try to
+- * use them recursively - randolph
+- *
+- * TODO: Perhaps switch to using Glibc's getmntent_r
+- *        -Erik
+- */
+-static void mtab_read(void)
++extern int umount_main(int argc, char **argv)
+ {
+-	struct _mtab_entry_t *entry = NULL;
+-	struct mntent *e;
++	int doForce = 0;
++	int freeLoop = ENABLE_FEATURE_MOUNT_LOOP;
++	int useMtab = ENABLE_FEATURE_MTAB_SUPPORT;
++	int umountAll = FALSE;
++	int doRemount = FALSE;
++	char path[2*PATH_MAX];
++	struct mntent me;
+ 	FILE *fp;
+-
+-	if (mtab_cache != NULL)
+-		return;
+-
+-	if ((fp = setmntent(bb_path_mtab_file, "r")) == NULL) {
+-		bb_error_msg("Cannot open %s", bb_path_mtab_file);
+-		return;
+-	}
+-	while ((e = getmntent(fp))) {
+-		entry = xmalloc(sizeof(struct _mtab_entry_t));
+-		entry->device = strdup(e->mnt_fsname);
+-		entry->mountpt = strdup(e->mnt_dir);
+-		entry->next = mtab_cache;
+-		mtab_cache = entry;
+-	}
+-	endmntent(fp);
+-}
+-
+-static char *mtab_getinfo(const char *match, const char which)
+-{
+-	struct _mtab_entry_t *cur = mtab_cache;
+-
+-	while (cur) {
+-		if (strcmp(cur->mountpt, match) == 0 ||
+-			strcmp(cur->device, match) == 0) {
+-			if (which == MTAB_GETMOUNTPT) {
+-				return cur->mountpt;
+-			} else {
+-#if !defined CONFIG_FEATURE_MTAB_SUPPORT
+-				if (strcmp(cur->device, "rootfs") == 0) {
+-					continue;
+-				} else if (strcmp(cur->device, "/dev/root") == 0) {
+-					/* Adjusts device to be the real root device,
+-					 * or leaves device alone if it can't find it */
+-					cur->device = find_real_root_device_name();
+-				}
+-#endif
+-				return cur->device;
+-			}
++	int status=EXIT_SUCCESS;
++	struct mtab_list {
++		char *dir;
++		char *device;
++	   	struct mtab_list *next;
++	} *mtl, *m;
++
++	if(argc < 2) bb_show_usage();
++	
++	/* Parse any options */
++	while (--argc > 0 && **(++argv) == '-') {
++		while (*++(*argv)) {
++			if(**argv=='a') umountAll = TRUE;
++			else if(ENABLE_FEATURE_MOUNT_LOOP && **argv=='D') freeLoop = FALSE;
++			else if(ENABLE_FEATURE_MTAB_SUPPORT && **argv=='n') useMtab = FALSE;
++			else if(**argv=='f') doForce = 1;   // MNT_FORCE
++			else if(**argv=='l') doForce = 2;   // MNT_DETACH
++			else if(**argv=='r') doRemount = TRUE;
++			else if(**argv=='v');
++			else bb_show_usage();
+ 		}
+-		cur = cur->next;
+ 	}
+-	return NULL;
+-}
+-
+-static char *mtab_next(void **iter)
+-{
+-	char *mp;
+ 
+-	if (iter == NULL || *iter == NULL)
+-		return NULL;
+-	mp = ((struct _mtab_entry_t *) (*iter))->mountpt;
+-	*iter = (void *) ((struct _mtab_entry_t *) (*iter))->next;
+-	return mp;
+-}
+-
+-static char *mtab_first(void **iter)
+-{
+-	struct _mtab_entry_t *mtab_iter;
+-
+-	if (!iter)
+-		return NULL;
+-	mtab_iter = mtab_cache;
+-	*iter = (void *) mtab_iter;
+-	return mtab_next(iter);
+-}
+-
+-/* Don't bother to clean up, since exit() does that
+- * automagically, so we can save a few bytes */
+-#ifdef CONFIG_FEATURE_CLEAN_UP
+-static void mtab_free(void)
+-{
+-	struct _mtab_entry_t *this, *next;
+-
+-	this = mtab_cache;
+-	while (this) {
+-		next = this->next;
+-		free(this->device);
+-		free(this->mountpt);
+-		free(this);
+-		this = next;
++	/* Get a list of mount points from mtab.  We read them all in now mostly
++	 * for umount -a (so we don't have to worry about the list changing while
++	 * we iterate over it, or about getting stuck in a loop on the same failing
++	 * entry.  Notice that this also naturally reverses the list so that -a
++	 * umounts the most recent entries first. */
++	
++	m=mtl=0;
++	if(!(fp = setmntent(bb_path_mtab_file, "r")))
++		bb_error_msg_and_die("Cannot open %s", bb_path_mtab_file);
++	while (getmntent_r(fp,&me,path,sizeof(path))) {
++		m=xmalloc(sizeof(struct mtab_list));
++		m->next=mtl;
++		m->device=bb_xstrdup(me.mnt_fsname);
++		m->dir=bb_xstrdup(me.mnt_dir);
++		mtl=m;
+ 	}
+-}
+-#endif
+-
+-static int do_umount(const char *name)
+-{
+-	int status;
+-	char *blockDevice = mtab_getinfo(name, MTAB_GETDEVICE);
+-
+-	if (blockDevice && strcmp(blockDevice, name) == 0)
+-		name = mtab_getinfo(blockDevice, MTAB_GETMOUNTPT);
+-
+-	status = umount(name);
++	endmntent(fp);
+ 
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-	if (freeLoop && blockDevice != NULL && !strncmp("/dev/loop", blockDevice, 9))
+-		/* this was a loop device, delete it */
+-		del_loop(blockDevice);
+-#endif
+-#if defined CONFIG_FEATURE_MOUNT_FORCE
+-	if (status != 0 && doForce) {
+-		status = umount2(blockDevice, MNT_FORCE);
+-		if (status != 0) {
+-			bb_error_msg_and_die("forced umount of %s failed!", blockDevice);
+-		}
+-	}
+-#endif
+-	if (status != 0 && doRemount && errno == EBUSY) {
+-		status = mount(blockDevice, name, NULL,
+-					   MS_MGC_VAL | MS_REMOUNT | MS_RDONLY, NULL);
+-		if (status == 0) {
+-			bb_error_msg("%s busy - remounted read-only", blockDevice);
+-		} else {
+-			bb_error_msg("Cannot remount %s read-only", blockDevice);
++	/* If we're umounting all, then m points to the start of the list and
++	 * the argument list should be empty (which will match all). */
++	if(!umountAll) m=0;
++
++	// Loop through everything we're supposed to umount, and do so.
++	for(;;) {
++		int curstat;
++		
++		// Do we alrady know what to umount this time through the loop?
++		if(m) safe_strncpy(path,m->dir,PATH_MAX);
++		// For umountAll, end of mtab means time to exit.
++		else if(umountAll) break;
++		// Get next command line argument (and look it up in mtab list)
++		else if(!argc--) break;
++		else {
++			// Get next command line argument (and look it up in mtab list)
++			realpath(*argv++, path);
++			for(m = mtl; m; m = m->next)
++				if(!strcmp(path, m->dir) || !strcmp(path, m->device))
++					break;
+ 		}
+-	}
+-	if (status == 0) {
+-#if defined CONFIG_FEATURE_MTAB_SUPPORT
+-		if (useMtab)
+-			erase_mtab(name);
+-#endif
+-		return (TRUE);
+-	}
+-	return (FALSE);
+-}
+ 
+-static int umount_all(void)
+-{
+-	int status = TRUE;
+-	char *mountpt;
+-	void *iter;
++		// Let's ask the thing nicely to unmount.
++		curstat = umount(path);
+ 
+-	for (mountpt = mtab_first(&iter); mountpt; mountpt = mtab_next(&iter)) {
+-		/* Never umount /proc on a umount -a */
+-		if (strstr(mountpt, "proc")!= NULL)
+-			continue;
+-		if (!do_umount(mountpt)) {
+-			/* Don't bother retrying the umount on busy devices */
+-			if (errno == EBUSY) {
+-				bb_perror_msg("%s", mountpt);
+-				status = FALSE;
+-				continue;
+-			}
+-			if (!do_umount(mountpt)) {
+-				printf("Couldn't umount %s on %s: %s\n",
+-					   mountpt, mtab_getinfo(mountpt, MTAB_GETDEVICE),
+-					   strerror(errno));
+-				status = FALSE;
+-			}
++		// Force the unmount, if necessary.
++		if(curstat && doForce) {
++			curstat = umount2(path, doForce);
++			if(curstat)
++				bb_error_msg_and_die("forced umount of %s failed!", path);
+ 		}
+-	}
+-	return (status);
+-}
+ 
+-extern int umount_main(int argc, char **argv)
+-{
+-	char path[PATH_MAX], result = 0;
++		// If still can't umount, maybe remount read-only?	
++		if (curstat && doRemount && errno == EBUSY && m) {
++			curstat = mount(m->device, path, NULL, MS_REMOUNT|MS_RDONLY, NULL);
++			bb_error_msg(curstat ? "Cannot remount %s read-only" :
++						 "%s busy - remounted read-only", m->device);
++		}
+ 
+-	if (argc < 2) {
+-		bb_show_usage();
+-	}
+-#ifdef CONFIG_FEATURE_CLEAN_UP
+-	atexit(mtab_free);
+-#endif
++		/* De-allcate the loop device.  This ioctl should be ignored on any
++		 * non-loop block devices. */
++		if(ENABLE_FEATURE_MOUNT_LOOP && freeLoop && m)
++			del_loop(m->device);
+ 
+-	/* Parse any options */
+-	while (--argc > 0 && **(++argv) == '-') {
+-		while (*++(*argv))
+-			switch (**argv) {
+-			case 'a':
+-				umountAll = TRUE;
+-				break;
+-#if defined CONFIG_FEATURE_MOUNT_LOOP
+-			case 'l':
+-				freeLoop = FALSE;
+-				break;
+-#endif
+-#ifdef CONFIG_FEATURE_MTAB_SUPPORT
+-			case 'n':
+-				useMtab = FALSE;
+-				break;
+-#endif
+-#ifdef CONFIG_FEATURE_MOUNT_FORCE
+-			case 'f':
+-				doForce = TRUE;
+-				break;
+-#endif
+-			case 'r':
+-				doRemount = TRUE;
+-				break;
+-			case 'v':
+-				break; /* ignore -v */
+-			default:
+-				bb_show_usage();
+-			}
++		if(curstat) {
++			if(useMtab && m) erase_mtab(m->dir);
++			status = EXIT_FAILURE;
++			bb_perror_msg("Couldn't umount %s\n", path);
++		}
++		// Find next matching mtab entry for -a or umount /dev
++		while(m && (m = m->next)) 
++			if(umountAll || !strcmp(path,m->device))
++			   	break;
+ 	}
+ 
+-	mtab_read();
+-	if (umountAll) {
+-		if (umount_all())
+-			return EXIT_SUCCESS;
+-		else
+-			return EXIT_FAILURE;
++	// Free mtab list if necessary
++	
++	if(ENABLE_FEATURE_CLEAN_UP) {
++		while(mtl) {
++			m=mtl->next;
++			free(mtl->device);
++			free(mtl->dir);
++			free(mtl);
++			mtl=m;
++		}
+ 	}
+ 
+-	do {
+-		if (realpath(*argv, path) != NULL)
+-			if (do_umount(path))
+-				continue;
+-		bb_perror_msg("%s", path);
+-		result++;
+-	} while (--argc > 0 && ++argv);
+-	return result;
++	return status;
+ }

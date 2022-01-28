@@ -1,0 +1,329 @@
+"2015-09-10 16:45:56 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index 36965a5b..9b96e1da 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -52,6 +52,7 @@ source "src/modules/flow/gyroscope/Kconfig"
+ source "src/modules/flow/iio/Kconfig"
+ source "src/modules/flow/int/Kconfig"
+ source "src/modules/flow/keyboard/Kconfig"
++source "src/modules/flow/led-7seg/Kconfig"
+ source "src/modules/flow/led-strip/Kconfig"
+ source "src/modules/flow/magnetometer/Kconfig"
+ source "src/modules/flow/max31855/Kconfig"
+diff --git a/src/modules/flow/calamari/calamari.c b/src/modules/flow/calamari/calamari.c
+index c00fed18..2dde3808 100644
+--- a/src/modules/flow/calamari/calamari.c
++++ b/src/modules/flow/calamari/calamari.c
+@@ -178,7 +178,7 @@ value_set(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_i
+         sol_flow_send_error_packet(node, ERANGE,
+             "Range invalid, it should be between %d and %d but was %d",
+             RANGE_MIN, RANGE_MAX, value);
+-        return -ERANGE;
++        return 0;
+     }
+     _write_byte(node, font[value]);
+ 
+diff --git a/src/modules/flow/led-7seg/Kconfig b/src/modules/flow/led-7seg/Kconfig
+new file mode 100644
+index 00000000..e339adaf
+--- /dev/null
++++ b/src/modules/flow/led-7seg/Kconfig
+@@ -0,0 +1,3 @@
++config FLOW_NODE_TYPE_LED_7SEG
++	tristate "Node type: led 7 segments"
++	default y
+diff --git a/src/modules/flow/led-7seg/Makefile b/src/modules/flow/led-7seg/Makefile
+new file mode 100644
+index 00000000..66238dc4
+--- /dev/null
++++ b/src/modules/flow/led-7seg/Makefile
+@@ -0,0 +1,3 @@
++obj-$(FLOW_NODE_TYPE_LED_7SEG) += led-7seg.mod
++obj-led-7seg-$(FLOW_NODE_TYPE_LED_7SEG) := led-7seg.json led-7seg.o
++obj-led-7seg-$(FLOW_NODE_TYPE_LED_7SEG)-type := flow
+diff --git a/src/modules/flow/led-7seg/led-7seg.c b/src/modules/flow/led-7seg/led-7seg.c
+new file mode 100644
+index 00000000..d5a705b3
+--- /dev/null
++++ b/src/modules/flow/led-7seg/led-7seg.c
+@@ -0,0 +1,182 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "sol-flow/led-7seg.h"
++#include "sol-flow-internal.h"
++
++#include <sol-gpio.h>
++#include <sol-util.h>
++#include <errno.h>
++
++struct led_7seg_data {
++    struct sol_gpio *gpio[8];
++    bool common_cathode : 1;
++};
++
++/* Chars from 0-9 and A-F in format 'abcdefgX' */
++static const unsigned char font[] = {
++    0xfc,
++    0x60,
++    0xda,
++    0xf2,
++    0x66,
++    0xb6,
++    0xbe,
++    0xe0,
++    0xfe,
++    0xf6,
++    0xee,
++    0x3e,
++    0x9c,
++    0x7a,
++    0x9e,
++    0x8e
++};
++
++static int
++write_byte(struct led_7seg_data *mdata, struct sol_flow_node *node, unsigned char byte)
++{
++    int i;
++
++    if (!mdata->common_cathode)
++        byte = ~byte;
++
++    for (i = 0; i < 8; i++) {
++        bool val = (byte >> i) & 1;
++        if (!sol_gpio_write(mdata->gpio[i], val)) {
++            SOL_WRN("Failed to write on gpio %" PRId32 ".", i);
++            return -EIO;
++        }
++    }
++
++    return 0;
++}
++
++static int
++segments_set(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int r;
++    unsigned char in_value;
++
++    r = sol_flow_packet_get_byte(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    r = write_byte(data, node, in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++static int
++value_set(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    int32_t in_value;
++    int r;
++    const int array_size = ARRAY_SIZE(font);
++
++    r = sol_flow_packet_get_irange_value(packet, &in_value);
++    SOL_INT_CHECK(r, < 0, r);
++
++
++    if ((in_value < 0) || (in_value > array_size)) {
++        sol_flow_send_error_packet(node, ERANGE,
++            "Range invalid, it should be between %d and %d but was %d",
++            0, array_size, in_value);
++        return 0;
++    }
++
++    r = write_byte(data, node, font[in_value]);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return 0;
++}
++
++#define OPEN_GPIO(_pin, _option) \
++    do { \
++        mdata->gpio[_pin] = sol_gpio_open(opts->pin_ ## _option.val, \
++            &gpio_conf); \
++        if (!mdata->gpio[_pin]) { \
++            SOL_WRN("could not open gpio #%" PRId32, \
++                opts->pin_ ## _option.val); \
++            goto port_error; \
++        } \
++    } while (0)
++
++static int
++led_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    struct led_7seg_data *mdata = data;
++    const struct sol_flow_node_type_led_7seg_led_options *opts =
++        (const struct sol_flow_node_type_led_7seg_led_options *)options;
++    struct sol_gpio_config gpio_conf = { 0 };
++    int i;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options,
++        SOL_FLOW_NODE_TYPE_LED_7SEG_LED_OPTIONS_API_VERSION, -EINVAL);
++
++    gpio_conf.api_version = SOL_GPIO_CONFIG_API_VERSION;
++    gpio_conf.dir = SOL_GPIO_DIR_OUT;
++
++    OPEN_GPIO(0, dp);
++    OPEN_GPIO(1, g);
++    OPEN_GPIO(2, f);
++    OPEN_GPIO(3, e);
++    OPEN_GPIO(4, d);
++    OPEN_GPIO(5, c);
++    OPEN_GPIO(6, b);
++    OPEN_GPIO(7, a);
++
++    mdata->common_cathode = opts->common_cathode;
++
++    return 0;
++
++port_error:
++    for (i = 0; i < 8; i++) {
++        if (mdata->gpio[i])
++            sol_gpio_close(mdata->gpio[i]);
++    }
++    return -EIO;
++}
++
++#undef OPEN_GPIO
++
++static void
++led_close(struct sol_flow_node *node, void *data)
++{
++    struct led_7seg_data *mdata = data;
++    int i;
++
++    for (i = 0; i < 8; i++)
++        sol_gpio_close(mdata->gpio[i]);
++}
++
++#include "led-7seg-gen.c"
+diff --git a/src/modules/flow/led-7seg/led-7seg.json b/src/modules/flow/led-7seg/led-7seg.json
+new file mode 100644
+index 00000000..e9ca476c
+--- /dev/null
++++ b/src/modules/flow/led-7seg/led-7seg.json
+@@ -0,0 +1,91 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "led-7seg",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "BSD 3-Clause",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "output/hw",
++      "description": "Receives packages with values to be displayed on 7-segments display",
++      "in_ports": [
++        {
++          "data_type": "byte",
++          "description": "Define segments to be on and off. The order expected by the display for each bit is 'abcdefgX', where X is the DP, as described in http://en.wikipedia.org/wiki/Seven-segment_display_character_representations.",
++          "methods": {
++            "process": "segments_set"
++          },
++          "name": "SEGMENTS"
++        },
++        {
++          "data_type": "int",
++          "description": "Set value to be displayed.",
++          "methods": {
++            "process": "value_set"
++          },
++          "name": "VALUE"
++        }
++      ],
++      "methods": {
++        "close": "led_close",
++        "open": "led_open"
++      },
++      "name": "led-7seg/led",
++      "options": {
++        "members": [
++          {
++            "data_type": "boolean",
++            "default": true,
++            "description": "Set this option to true if type of led is common cathode or set it to false if it's common anode (it'll invert gpio low and high states).",
++            "name": "common_cathode"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'A' state.",
++            "name": "pin_a"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'B' state.",
++            "name": "pin_b"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'C' state.",
++            "name": "pin_c"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'D' state.",
++            "name": "pin_d"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'E' state.",
++            "name": "pin_e"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'F' state.",
++            "name": "pin_f"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'G' state.",
++            "name": "pin_g"
++          },
++          {
++            "data_type": "int",
++            "description": "Pin used to set segment 'DP' state.",
++            "name": "pin_dp"
++          }
++        ],
++        "version": 1
++      },
++      "private_data_type": "led_7seg_data",
++      "url": "http://solettaproject.org/doc/latest/node_types/led_7seg/led.html"
++    }
++  ]
++}

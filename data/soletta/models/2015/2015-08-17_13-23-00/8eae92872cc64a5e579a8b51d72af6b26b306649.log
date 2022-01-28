@@ -1,0 +1,811 @@
+"2015-08-17 13:23:00 -0300"
+diff --git a/src/lib/flow/Kconfig b/src/lib/flow/Kconfig
+index d0c3bb41..5c2e4ad9 100644
+--- a/src/lib/flow/Kconfig
++++ b/src/lib/flow/Kconfig
+@@ -30,6 +30,7 @@ menu "Node Types"
+ 	depends on FLOW_SUPPORT
+ source "src/modules/flow/accelerometer/Kconfig"
+ source "src/modules/flow/aio/Kconfig"
++source "src/modules/flow/am2315/Kconfig"
+ source "src/modules/flow/app/Kconfig"
+ source "src/modules/flow/boolean/Kconfig"
+ source "src/modules/flow/byte/Kconfig"
+diff --git a/src/modules/flow/am2315/Kconfig b/src/modules/flow/am2315/Kconfig
+new file mode 100644
+index 00000000..9d15e494
+--- /dev/null
++++ b/src/modules/flow/am2315/Kconfig
+@@ -0,0 +1,3 @@
++config FLOW_NODE_TYPE_AM2315
++	tristate "Node type: am2315"
++	default m
+diff --git a/src/modules/flow/am2315/Makefile b/src/modules/flow/am2315/Makefile
+new file mode 100644
+index 00000000..d89840f2
+--- /dev/null
++++ b/src/modules/flow/am2315/Makefile
+@@ -0,0 +1,4 @@
++obj-$(FLOW_NODE_TYPE_AM2315) += am2315.mod
++obj-am2315-$(FLOW_NODE_TYPE_AM2315) := am2315.json \
++	am2315.o \
++	nodes.o
+diff --git a/src/modules/flow/am2315/am2315.c b/src/modules/flow/am2315/am2315.c
+new file mode 100644
+index 00000000..8ebf6173
+--- /dev/null
++++ b/src/modules/flow/am2315/am2315.c
+@@ -0,0 +1,370 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <sol-i2c.h>
++#include <sol-log.h>
++#include <sol-mainloop.h>
++#include <sol-vector.h>
++
++#include <errno.h>
++#include <stdlib.h>
++#include <time.h>
++#include <unistd.h>
++
++#include "am2315.h"
++
++/* AM2315 humidity/temperature sensor.
++ * http://www.adafruit.com/datasheets/AM2315.pdf
++ */
++
++#define AM2315_INTERVAL_BETWEEN_READINGS 2
++#define AM2315_READ_REG 0x03
++#define AM2315_HUMIDITY_HIGH 0x00
++#define AM2315_READ_LEN 4
++#define AM2315_BUFFER_LEN 8
++#define AM2315_WRITE_MSG_LEN 3
++#define STEP_TIME 1
++
++#define READING_SCALE 10.0
++
++struct am2315 {
++    uint8_t buffer[AM2315_BUFFER_LEN];
++    struct sol_i2c *i2c;
++    void (*humidity_callback)(float humidity, bool success, void *data);
++    void (*temperature_callback)(float temperature, bool success, void *data);
++    void *humidity_callback_data;
++    void *temperature_callback_data;
++    struct sol_i2c_pending *i2c_pending;
++    struct sol_timeout *timer;
++    unsigned pending_temperature;
++    unsigned pending_humidity;
++    time_t last_reading;
++    uint16_t temperature;
++    uint16_t humidity;
++    uint8_t slave;
++    uint8_t refcount : 7;
++    uint8_t success : 1;
++};
++
++static struct sol_ptr_vector devices = SOL_PTR_VECTOR_INIT;
++
++static int
++timer_sched(struct am2315 *device, unsigned int timeout_ms, bool (*cb)(void *data))
++{
++    device->timer = sol_timeout_add(timeout_ms, cb, device);
++    SOL_NULL_CHECK(device->timer, -ENOMEM);
++
++    return 0;
++}
++
++struct am2315 *
++am2315_open(uint8_t bus, uint8_t slave)
++{
++    struct am2315 *device;
++    struct sol_i2c *i2c;
++    int i;
++
++    /* Is the requested device already open? */
++    SOL_PTR_VECTOR_FOREACH_IDX (&devices, device, i) {
++        if (sol_i2c_bus_get(device->i2c) == bus && device->slave == slave) {
++            device->refcount++;
++            return device;
++        }
++    }
++
++    i2c = sol_i2c_open(bus, SOL_I2C_SPEED_10KBIT);
++    if (!i2c) {
++        SOL_WRN("Failed to open i2c bus");
++        return NULL;
++    }
++
++    device = calloc(1, sizeof(struct am2315));
++    if (!device)
++        goto fail;
++
++    device->i2c = i2c;
++    device->slave = slave;
++    device->refcount++;
++
++    sol_ptr_vector_append(&devices, device);
++
++    return device;
++
++fail:
++    sol_i2c_close(i2c);
++
++    return NULL;
++}
++
++void
++am2315_close(struct am2315 *device)
++{
++    struct am2315 *itr;
++    int i;
++
++    device->refcount--;
++    if (device->refcount) return;
++
++    if (device->timer)
++        sol_timeout_del(device->timer);
++
++    if (device->i2c_pending)
++        sol_i2c_pending_cancel(device->i2c, device->i2c_pending);
++
++    sol_i2c_close(device->i2c);
++
++    SOL_PTR_VECTOR_FOREACH_IDX (&devices, itr, i) {
++        if (itr == device) {
++            sol_ptr_vector_del(&devices, i);
++            break;
++        }
++    }
++
++    free(device);
++}
++
++static uint16_t
++_crc16(uint8_t *ptr, uint8_t len)
++{
++    uint16_t crc = 0xffff;
++    uint8_t i;
++
++    while (len--) {
++        crc ^= *ptr++;
++        for (i = 0; i < 8; i++) {
++            if (crc & 0x01) {
++                crc >>= 1;
++                crc ^= 0xa001;
++            } else {
++                crc >>= 1;
++            }
++        }
++    }
++
++    return crc;
++}
++
++static bool
++_send_readings(void *data)
++{
++    struct am2315 *device = data;
++    float temperature, humidity;
++
++    temperature = device->temperature / READING_SCALE;
++    humidity = device->humidity / READING_SCALE;
++
++    if (device->temperature_callback) {
++        while (device->pending_temperature--) {
++            device->temperature_callback(temperature, device->success,
++                device->temperature_callback_data);
++        }
++    }
++
++    if (device->humidity_callback) {
++        while (device->pending_humidity--) {
++            device->humidity_callback(humidity, device->success,
++                device->humidity_callback_data);
++        }
++    }
++
++    return false;
++}
++
++static void
++read_data_cb(void *cb_data, struct sol_i2c *i2c, uint8_t *data, ssize_t status)
++{
++    struct am2315 *device = cb_data;
++    uint16_t crc;
++
++    device->i2c_pending = NULL;
++    if (status != AM2315_BUFFER_LEN) {
++        SOL_WRN("Could not read sensor data");
++        device->success = false;
++        goto end;
++    }
++
++    /* CRC from first byte to 6th. iow, do not calculate CRC of CRC bytes */
++    crc = _crc16(device->buffer, 6);
++    if (device->buffer[6] != (crc & 0xff) || device->buffer[7] != (crc >> 8)) {
++        SOL_WRN("Invalid sensor readings: CRC mismatch");
++        device->success = false;
++        goto end;
++    }
++
++    if (device->buffer[0] != AM2315_READ_REG || device->buffer[1] != AM2315_READ_LEN) {
++        SOL_WRN("Invalid sensor readings: unexpected data");
++        device->success = false;
++        goto end;
++    }
++
++    /* TODO datasheet is ambiguous about temperature format: it appears to not be
++     * complement of 2, but signal and magnitude. Indeed,
++     * https://github.com/adafruit/Adafruit_AM2315/blob/master/Adafruit_AM2315.cpp
++     * treats as so - but I couldn't confirm that. All other codes on internet
++     * do not seem to care about it. */
++    device->humidity = (device->buffer[2] << 8) | (device->buffer[3] & 0xff);
++    device->temperature = (device->buffer[4] << 8) | (device->buffer[5] & 0xff);
++
++    device->success = true;
++
++end:
++    _send_readings(device);
++}
++
++static bool
++_read_data(void *data)
++{
++    struct am2315 *device = data;
++
++    device->timer = NULL;
++    if (sol_i2c_busy(device->i2c)) {
++        timer_sched(device, STEP_TIME, _read_data);
++        return false;
++    }
++
++    if (!sol_i2c_set_slave_address(device->i2c, device->slave)) {
++        SOL_WRN("Failed to set slave at address 0x%02x", device->slave);
++        device->success = false;
++        goto error;
++    }
++
++    /* Read 8 bytes: 1st is the function code, 2nd is data lenght,
++     * 3rd and 4th are humidity hi/lo, 5th and 6th are temperature
++     * hi/lo, 7th and 8th are CRC code to validade data. */
++    device->i2c_pending = sol_i2c_read(device->i2c, device->buffer,
++        sizeof(device->buffer), read_data_cb, device);
++    if (!device->i2c_pending) {
++        SOL_WRN("Could not read sensor data");
++        device->success = false;
++        goto error;
++    }
++
++    return false;
++
++error:
++    _send_readings(device);
++
++    return false;
++}
++
++static void
++update_readings_cb(void *cb_data, struct sol_i2c *i2c, uint8_t *data, ssize_t status)
++{
++    struct am2315 *device = cb_data;
++
++    device->i2c_pending = NULL;
++    if (status < 0) {
++        SOL_WRN("Could not read sensor");
++        device->success = false;
++        _send_readings(device);
++        return;
++    }
++
++    /* Datasheet asks for some delay */
++    timer_sched(device, 2, _read_data);
++}
++
++static bool
++_update_readings(void *data)
++{
++    struct am2315 *device = data;
++    time_t current_time;
++
++    device->timer = NULL;
++    if (sol_i2c_busy(device->i2c)) {
++        timer_sched(device, STEP_TIME, _update_readings);
++        return false;
++    }
++
++    device->buffer[0] = AM2315_READ_REG;
++    device->buffer[1] = AM2315_HUMIDITY_HIGH;
++    device->buffer[2] = AM2315_READ_LEN;
++
++    current_time = time(NULL);
++    if (current_time == -1) {
++        SOL_WRN("Could not get current time");
++        return false;
++    }
++
++    // TODO Should we care if time is changed backwards?
++    if (current_time - device->last_reading <= AM2315_INTERVAL_BETWEEN_READINGS) {
++        return false;
++    }
++
++    device->last_reading = current_time;
++
++    if (!sol_i2c_set_slave_address(device->i2c, device->slave)) {
++        SOL_WRN("Failed to set slave at address 0x%02x", device->slave);
++        device->success = false;
++        _send_readings(device);
++        return false;
++    }
++
++    /* Write a message to read data */
++    device->i2c_pending = sol_i2c_write(device->i2c, device->buffer,
++        AM2315_WRITE_MSG_LEN, update_readings_cb, device);
++    if (!device->i2c_pending) {
++        SOL_WRN("Could not read sensor");
++        device->success = false;
++        _send_readings(device);
++    }
++
++    return false;
++}
++
++void
++am2315_temperature_callback_set(struct am2315 *device, void (*cb)(float temperature, bool success, void *data), void *data)
++{
++    device->temperature_callback = cb;
++    device->temperature_callback_data = data;
++}
++
++void
++am2315_read_temperature(struct am2315 *device)
++{
++    device->pending_temperature++;
++    _update_readings(device);
++}
++
++void
++am2315_humidity_callback_set(struct am2315 *device, void (*cb)(float temperature, bool success, void *data), void *data)
++{
++    device->humidity_callback = cb;
++    device->humidity_callback_data = data;
++}
++
++void
++am2315_read_humidity(struct am2315 *device)
++{
++    device->pending_humidity++;
++    _update_readings(device);
++}
+diff --git a/src/modules/flow/am2315/am2315.h b/src/modules/flow/am2315/am2315.h
+new file mode 100644
+index 00000000..6c8cbfd0
+--- /dev/null
++++ b/src/modules/flow/am2315/am2315.h
+@@ -0,0 +1,45 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++struct am2315;
++
++struct am2315 *am2315_open(uint8_t bus, uint8_t slave);
++
++void am2315_close(struct am2315 *device);
++
++void am2315_temperature_callback_set(struct am2315 *device, void (*cb)(float temperature, bool success, void *data), void *data);
++
++void am2315_read_temperature(struct am2315 *device);
++
++void am2315_humidity_callback_set(struct am2315 *device, void (*cb)(float humidity, bool success, void *data), void *data);
++
++void am2315_read_humidity(struct am2315 *device);
+diff --git a/src/modules/flow/am2315/am2315.json b/src/modules/flow/am2315/am2315.json
+new file mode 100644
+index 00000000..5424b242
+--- /dev/null
++++ b/src/modules/flow/am2315/am2315.json
+@@ -0,0 +1,97 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/node-type-genspec.schema",
++  "name": "am2315",
++  "meta": {
++    "author": "Intel Corporation",
++    "license": "BSD 3-Clause",
++    "version": "1"
++  },
++  "types": [
++    {
++      "category": "input/hw",
++      "description": "Gets AM2315 sensor temperature in Celsius, Fahrenheit and Kelvin. This device also reads humidity, check for its node",
++      "in_ports": [
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a temperature reading and produce packets on each of the the output ports. Note that AM2315 needs a 2 seconds interval between readings - any ticks sent before such interval will output data only at the end of the interval.",
++          "name": "TICK",
++          "methods": {
++            "process": "temperature_am2315_tick"
++          }
++        }
++      ],
++      "methods": {
++        "close": "temperature_am2315_close",
++        "open": "temperature_am2315_open"
++      },
++      "name": "am2315/temperature",
++      "options": {
++        "members": [
++          {
++            "data_type": "int",
++            "description": "I2C bus number",
++            "name": "i2c_bus"
++          },
++          {
++            "data_type": "int",
++            "description": "I2C bus slave on which the sensor answers.",
++            "name": "i2c_slave",
++            "default": 92
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "float",
++          "description": "Measured temperature in Kelvin.",
++          "name": "KELVIN"
++        }
++      ],
++      "private_data_type": "am2315_data"
++    },
++    {
++      "category": "input/hw",
++      "description": "Gets AM2315 sensor relative humidity in percentage. This device also reads temperature, check for its node",
++      "in_ports": [
++        {
++          "data_type": "any",
++          "description": "Packets sent in here will trigger a humidity reading and produce packets on the output ports. Note that AM2315 needs a 2 seconds interval between readings - any ticks sent before such interval will output data only at the end of the interval.",
++          "name": "TICK",
++          "methods": {
++            "process": "humidity_am2315_tick"
++          }
++        }
++      ],
++      "methods": {
++        "close": "humidity_am2315_close",
++        "open": "humidity_am2315_open"
++      },
++      "name": "am2315/humidity",
++      "options": {
++        "members": [
++          {
++            "data_type": "int",
++            "description": "I2C bus number",
++            "name": "i2c_bus"
++          },
++          {
++            "data_type": "int",
++            "description": "I2C bus slave on which the sensor answers.",
++            "name": "i2c_slave",
++            "default": 92
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "float",
++          "description": "Measured relative humidity in percentage.",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "am2315_data"
++    }
++  ]
++}
+diff --git a/src/modules/flow/am2315/nodes.c b/src/modules/flow/am2315/nodes.c
+new file mode 100644
+index 00000000..11b37e94
+--- /dev/null
++++ b/src/modules/flow/am2315/nodes.c
+@@ -0,0 +1,194 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "am2315-gen.h"
++#include "sol-flow-internal.h"
++
++#include <sol-util.h>
++#include <errno.h>
++
++#include "am2315.h"
++
++#define ZERO_K 273.15
++
++struct am2315_data {
++    struct am2315 *device;
++    struct sol_flow_node *node;
++};
++
++// Humidity Sensor node
++
++static struct sol_drange humidity_out = {
++    .min = 0.0,
++    .max = 100.0,
++    .step = 0.1
++};
++
++static void
++_send_humidity_error_packet(struct am2315_data *mdata)
++{
++    const char errmsg[] = "Could not read AM2315 humidity samples";
++
++    SOL_WRN(errmsg);
++    sol_flow_send_error_packet(mdata->node, EIO, errmsg);
++}
++
++static void
++_humidity_reading_callback(float humidity, bool success, void *data)
++{
++    struct am2315_data *mdata = data;
++
++    if (!success)
++        _send_humidity_error_packet(mdata);
++
++    humidity_out.val = humidity;
++
++    sol_flow_send_drange_packet(mdata->node,
++        SOL_FLOW_NODE_TYPE_AM2315_HUMIDITY__OUT__OUT, &humidity_out);
++}
++
++static int
++humidity_am2315_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    struct am2315_data *mdata = data;
++    const struct sol_flow_node_type_am2315_humidity_options *opts;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options, SOL_FLOW_NODE_TYPE_AM2315_HUMIDITY_OPTIONS_API_VERSION,
++        -EINVAL);
++    opts = (const struct sol_flow_node_type_am2315_humidity_options *)options;
++
++    mdata->device = am2315_open(opts->i2c_bus.val, opts->i2c_slave.val);
++    if (!mdata->device) {
++        return -EINVAL;
++    }
++
++    am2315_humidity_callback_set(mdata->device, _humidity_reading_callback,
++        mdata);
++
++    mdata->node = node;
++
++    return 0;
++}
++
++static void
++humidity_am2315_close(struct sol_flow_node *node, void *data)
++{
++    struct am2315_data *mdata = data;
++
++    if (mdata->device)
++        am2315_close(mdata->device);
++}
++
++static int
++humidity_am2315_tick(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct am2315_data *mdata = data;
++
++    am2315_read_humidity(mdata->device);
++
++    return 0;
++}
++
++// Temperature sensor node
++
++static struct sol_drange temperature_out = {
++    .min = -40.0 + ZERO_K,
++    .max = 140.0 + ZERO_K,
++    .step = 0.1
++};
++
++static void
++_send_temperature_error_packet(struct am2315_data *mdata)
++{
++    const char errmsg[] = "Could not read AM2315 temperature samples";
++
++    SOL_WRN(errmsg);
++    sol_flow_send_error_packet(mdata->node, EIO, errmsg);
++}
++
++static void
++_temperature_reading_callback(float temperature, bool success, void *data)
++{
++    struct am2315_data *mdata = data;
++
++    if (!success)
++        _send_temperature_error_packet(mdata);
++
++    temperature_out.val = temperature - ZERO_K;
++
++    sol_flow_send_drange_packet(mdata->node,
++        SOL_FLOW_NODE_TYPE_AM2315_TEMPERATURE__OUT__KELVIN, &temperature_out);
++}
++
++static int
++temperature_am2315_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
++{
++    struct am2315_data *mdata = data;
++    const struct sol_flow_node_type_am2315_temperature_options *opts;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK(options, SOL_FLOW_NODE_TYPE_AM2315_TEMPERATURE_OPTIONS_API_VERSION,
++        -EINVAL);
++    opts = (const struct sol_flow_node_type_am2315_temperature_options *)options;
++
++    mdata->device = am2315_open(opts->i2c_bus.val, opts->i2c_slave.val);
++    if (!mdata->device) {
++        return -EINVAL;
++    }
++
++    am2315_temperature_callback_set(mdata->device, _temperature_reading_callback,
++        mdata);
++
++    mdata->node = node;
++
++    return 0;
++}
++
++static void
++temperature_am2315_close(struct sol_flow_node *node, void *data)
++{
++    struct am2315_data *mdata = data;
++
++    if (mdata->device)
++        am2315_close(mdata->device);
++}
++
++static int
++temperature_am2315_tick(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet)
++{
++    struct am2315_data *mdata = data;
++
++    am2315_read_temperature(mdata->device);
++
++    return 0;
++}
++
++#include "am2315-gen.c"
+diff --git a/src/samples/flow/am2315/am2315.fbp b/src/samples/flow/am2315/am2315.fbp
+new file mode 100644
+index 00000000..9a3522fc
+--- /dev/null
++++ b/src/samples/flow/am2315/am2315.fbp
+@@ -0,0 +1,43 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Read temperature and humidity from an AM2315 device and prints them.
++# It's interesting to notice that this device needs at least two seconds
++# between two readings. As 'timer' ticks once each second, some readings
++# should return cached data - nodes behaviour when someone tries to read
++# before the two seconds interval.
++
++timer(timer)
++temp(am2315/temperature:i2c_bus=0,i2c_slave=1)
++humidity(am2315/humidity:i2c_bus=0,i2c_slave=1)
++
++timer OUT -> TICK temp CELSIUS -> IN _(console)
++timer OUT -> TICK humidity OUT -> IN _(console)

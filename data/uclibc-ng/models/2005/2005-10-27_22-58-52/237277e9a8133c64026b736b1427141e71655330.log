@@ -1,0 +1,1065 @@
+"2005-10-27 22:58:52 +0000"
+diff --git a/Makefile b/Makefile
+index d383cc111..fcee9755a 100644
+--- a/Makefile
++++ b/Makefile
+@@ -159,6 +159,7 @@ install_headers:
+ 	tar -chf - include --exclude .svn --exclude CVS $$extra_exclude \
+ 		| tar -xf - -C $(PREFIX)$(DEVEL_PREFIX)
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/ssp-internal.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/dl-osinfo.h
+ ifneq ($(UCLIBC_HAS_FLOATS),y)
+ 	# Remove floating point related headers since float support is disabled.
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/complex.h
+@@ -356,7 +357,7 @@ clean:
+ 	$(RM) libc/misc/locale/locale_data.c
+ 	$(RM) libc/misc/internals/interp.c
+ 	$(RM) ldso/libdl/*.a
+-	$(RM) include/fpu_control.h
++	$(RM) include/fpu_control.h include/dl-osinfo.h
+ 	$(MAKE) -C extra/locale clean
+ 	$(MAKE) -C ldso headers_clean
+ 	$(MAKE) -C libpthread headers_clean
+diff --git a/Makefile.in b/Makefile.in
+index d44e63e08..d80b1d8ef 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -148,6 +148,7 @@ install_headers:
+ 	tar -chf - include --exclude .svn --exclude CVS $$extra_exclude \
+ 		| tar -xf - -C $(PREFIX)$(DEVEL_PREFIX)
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/ssp-internal.h
++	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/dl-osinfo.h
+ ifneq ($(UCLIBC_HAS_FLOATS),y)
+ 	# Remove floating point related headers since float support is disabled.
+ 	$(RM) $(PREFIX)$(DEVEL_PREFIX)include/complex.h
+@@ -344,7 +345,7 @@ clean:
+ 	$(RM) lib*/*.a ldso/*/*.a libpthread/*/*.a
+ 	$(RM) libc/misc/locale/locale_data.c
+ 	$(RM) libc/misc/internals/interp.c
+-	$(RM) include/fpu_control.h
++	$(RM) include/fpu_control.h include/dl-osinfo.h
+ 	$(MAKE) -C extra/locale clean
+ 	$(MAKE) -C ldso headers_clean-y
+ 	$(MAKE) -C libpthread headers_clean-y
+diff --git a/Makerules b/Makerules
+index f71584c5d..1c9949448 100644
+--- a/Makerules
++++ b/Makerules
+@@ -4,13 +4,6 @@
+ 
+ .SUFFIXES: .c .S .o .os .oS .so .a .s .i
+ 
+-ifeq ($(DOPIC),y)
+-lib-a-y: $(lib-a-pic-y)
+-else
+-lib-a-y: $(lib-a-y)
+-endif
+-lib-so-y: $(lib-so-y)
+-
+ # order is important, the stripping uses STRIP_FLAGS for lib-so, but not for lib-a
+ ifeq ($(HAVE_SHARED),y)
+ .LIBPATTERNS: "lib%.so"
+@@ -20,46 +13,25 @@ else
+ libs: lib-a-y
+ endif
+ 
+-crt-y: $(crt-y)
+-other-y: $(other-y)
+-objclean-y: $(objclean-y)
+-
+-lib-multi-y: $(lib-multi-y)
+-ifeq ($(DOPIC),y)
+-lib-nomulti-y: $(lib-nomulti-y:.o=.os)
+-else
+-lib-nomulti-y: $(lib-nomulti-y) $(lib-nomulti-y:.o=.os)
+-endif
+-
+-libc-nonshared-y: $(libc-nonshared-y)
+-
+-$(top_builddir)lib/$(NONSHARED_LIBNAME): $(libc-nonshared-y)
+-	$(INSTALL) -d $(top_builddir)lib
+-	$(AR) $(ARFLAGS) $@ $^
++lib-a-y: $(lib-a-y)
++lib-so-y: $(lib-so-y)
+ 
+ compile.c=$(CC) -c $< -o $@ $(CPPFLAGS) $(CFLAGS) $(ARCH_CFLAGS) $(CFLAGS-$(suffix $@)) $(CFLAGS-$(notdir $@)) $(CFLAGS-$(notdir $<))
+ compile.S=$(compile.c) $(S_CPPFLAGS) $(ASFLAGS) $(ARCH_ASFLAGS) $(ASFLAGS-$(suffix $@)) $(ASFLAGS-$(notdir $@)) $(ASFLAGS-$(notdir $<))
+ compile.m=$(compile.c) -DL_$(patsubst %$(suffix $(notdir $@)),%,$(notdir $@))
+ 
+-#compile.i=$(compile.m) -E
+-
+-compile-m=$(CC) $^ -c -o $@ $(CPPFLAGS) $(CFLAGS) $(ARCH_CFLAGS) $(CFLAGS-$(suffix $@)) $(CFLAGS-$(notdir $@)) $(CFLAGS-$(notdir $<)) $(S_CPPFLAGS) $(ASFLAGS) $(ARCH_ASFLAGS) $(ASFLAGS-$(suffix $@)) $(ASFLAGS-$(notdir $@)) $(ASFLAGS-$(notdir $<)) $(CFLAGS-multi-y)
++compile-m=$(CC) $^ -c -o $@ $(CPPFLAGS) $(CFLAGS) $(ARCH_CFLAGS) $(CFLAGS-$(suffix $@)) $(CFLAGS-$(notdir $@)) $(CFLAGS-$(notdir $<)) $(CFLAGS-multi-y)
+ 
+ CFLAGS-.os+=$(PICFLAG)
++CFLAGS-.oS+=$(PICFLAG) -DSHARED
+ 
+-%.o: %.c
+-	$(compile.c)
+-
+-%.os: %.c
++%.o %.os: %.c
+ 	$(compile.c)
+ 
+ %.oS: %.c
+-	$(compile.c) -DSHARED
+-
+-%.o: %.S
+-	$(compile.S)
++	$(compile.c)
+ 
+-%.os: %.S
++%.o %.os: %.S
+ 	$(compile.S)
+ 
+ #ifeq ($(HAVE_ELF),y)
+@@ -68,7 +40,11 @@ CRT=crt1
+ #CRT=crt0.o
+ #endif
+ 
++ifeq ($(HAVE_SHARED),y)
+ CRTS=$(top_builddir)lib/$(CRT).o $(top_builddir)lib/S$(CRT).o
++else
++CRTS=$(top_builddir)lib/$(CRT).o
++endif
+ 
+ $(top_builddir)lib/$(CRT).o: $(top_srcdir)libc/sysdeps/linux/$(TARGET_ARCH)/$(CRT).S
+ 	$(INSTALL) -d $(dir $@)
+@@ -96,36 +72,44 @@ $(CTOR_TARGETS):
+ 	$(AR) $(ARFLAGS) $@
+ endif
+ 
++crt-y: $(crt-y)
+ $(crt-y): $(CRTS) $(CTOR_TARGETS)
+ 
+-.PHONY: clean headers dummy create
+-clean: objclean-y headers_clean-y
++other-y: $(other-y)
+ headers: $(headers-y)
+ 
++objclean-y: $(objclean-y)
+ headers_clean-y: $(headers_clean-y)
+ 
+-ifneq ($(strip $(LIB_NAME)),)
++$(top_builddir)lib/$(NONSHARED_LIBNAME): $(libc-nonshared-y)
++	$(INSTALL) -d $(dir $@)
++	$(AR) $(ARFLAGS) $@ $^
++
++.PHONY: dummy create
++clean: objclean-y headers_clean-y
++
++ifeq ($(strip $(LIB_NAME)),)
++LIB_NAME=libc
++endif
+ 
+ ifeq ($(strip $($(LIB_NAME)_FULL_NAME)),)
+ $(LIB_NAME)_FULL_NAME:=$(LIB_NAME)-$(MAJOR_VERSION).$(MINOR_VERSION).$(SUBLEVEL).so
+ endif
+ 
+-ifeq ($(DOPIC),y)
+-$(LIB_NAME)-a-y: $($(LIB_NAME)-a-pic-y)
++$(LIB_NAME)-SHARED_OBJS=$($(LIB_NAME)-so-y) $($(LIB_NAME)-shared-y)
++ifeq ($(HAVE_SHARED),y)
++shared: $($(LIB_NAME)-SHARED_OBJS)
+ else
+-$(LIB_NAME)-a-y: $($(LIB_NAME)-a-y)
++shared:
+ endif
+-$(LIB_NAME)-so-y: $($(LIB_NAME)-so-y)
+ 
+-ifeq ($(HAVE_SHARED),y)
+-objs: $(LIB_NAME)-a-y $(LIB_NAME)-so-y
++$(LIB_NAME)-ARCHIVE_OBJS=$($(LIB_NAME)-a-y) $($(LIB_NAME)-static-y)
++ifeq ($(DOPIC),y)
++objs: shared $($(LIB_NAME)-ARCHIVE_OBJS:.o=.os) $(crt-y) $(other-y)
+ else
+-objs: $(LIB_NAME)-a-y
++objs: shared $($(LIB_NAME)-ARCHIVE_OBJS) $(crt-y) $(other-y)
+ endif
+ 
+-$($(LIB_NAME)_OUT)/$(LIB_NAME).o $($(LIB_NAME)_OUT)/$(LIB_NAME).os: $($(LIB_NAME)-multi-y)
+-	$(compile-m)
+-
+ libc=$(top_builddir)lib/libc.so
+ interp=$(top_builddir)libc/misc/internals/interp.os
+ ifeq ($(strip $(EXTRA_LINK_LIBS)),)
+@@ -157,41 +141,31 @@ else
+ 	echo "/* GNU ld script" > $@
+ 	echo " * Use the shared library, but some functions are only in" >> $@
+ 	echo " * the static library, so try that secondarily. */" >> $@
++ifeq ($(UCLIBC_HAS_SSP),y)
+ ifeq ($(COMPAT_ATEXIT),y)
+-	echo "GROUP ( $(top_builddir)lib/$(NONSHARED_LIBNAME) $(top_builddir)lib/$(SHARED_MAJORNAME) )" >> $@
++	echo "GROUP ( $(top_builddir)lib/$(NONSHARED_LIBNAME) $(top_builddir)lib/$(SHARED_MAJORNAME) AS_NEEDED ($(top_builddir)lib/$(UCLIBC_LDSO) ) )" >> $@
+ else
+-	echo "GROUP ( $(top_builddir)lib/$(SHARED_MAJORNAME) $(top_builddir)lib/$(NONSHARED_LIBNAME) )" >> $@
++	echo "GROUP ( $(top_builddir)lib/$(SHARED_MAJORNAME) $(top_builddir)lib/$(NONSHARED_LIBNAME) AS_NEEDED ($(top_builddir)lib/$(UCLIBC_LDSO) ) )" >> $@
+ endif
+-endif
+-
+-$(top_builddir)lib/$(LIB_NAME).so.notused: $($(LIB_NAME)-so-y)
+-ifneq ($(strip $(STRIP_FLAGS)),)
+-	$(STRIPTOOL) $(STRIP_FLAGS) $^
+ else
+-	$(STRIPTOOL) -x -R .note -R .comment $^
+-endif
+-	$(INSTALL) -d $(dir $@)
+-	$(RM) $@ $@.$(MAJOR_VERSION) $(top_builddir)lib/$($(LIB_NAME)_FULL_NAME)
+-	$(LD) $(LDFLAGS) $(EXTRA_LINK_OPTS) -soname=$(notdir $@).$(MAJOR_VERSION) \
+-		-o $(top_builddir)lib/$($(LIB_NAME)_FULL_NAME) $(SHARED_START_FILES) $^ \
+-		$(EXTRA_LINK_LIBS) $(SHARED_END_FILES)
+-	$(LN) -sf $($(LIB_NAME)_FULL_NAME) $@.$(MAJOR_VERSION)
+-ifneq ($(strip $(LIB_NAME)),libc)
+-	$(LN) -sf $($(LIB_NAME)_FULL_NAME) $@
+-else
+-	echo "/* GNU ld script" > $@
+-	echo " * Use the shared library, but some functions are only in" >> $@
+-	echo " * the static library, so try that secondarily. */" >> $@
+ ifeq ($(COMPAT_ATEXIT),y)
+ 	echo "GROUP ( $(top_builddir)lib/$(NONSHARED_LIBNAME) $(top_builddir)lib/$(SHARED_MAJORNAME) )" >> $@
+ else
+ 	echo "GROUP ( $(top_builddir)lib/$(SHARED_MAJORNAME) $(top_builddir)lib/$(NONSHARED_LIBNAME) )" >> $@
+ endif
+ endif
++endif
++
++$($(LIB_NAME)_OUT)/$(LIB_NAME)_m.o $($(LIB_NAME)_OUT)/$(LIB_NAME)_m.os: $($(LIB_NAME)-multi-y)
++	$(compile-m)
++
++# local testing only until libc is multi-capable
++libc_m.os: $(libc-multi-y)
++	$(compile-m)
+ 
+ ifneq ($(DOMULTI),n)
+ 
+-$($(LIB_NAME)_OUT)/$(LIB_NAME)_so.a: $($(LIB_NAME)_OUT)/$(LIB_NAME).os $($(LIB_NAME)-nomulti-y:.o=.os)
++$($(LIB_NAME)_OUT)/$(LIB_NAME)_so.a: $($(LIB_NAME)_OUT)/$(LIB_NAME)_m.os $($(LIB_NAME)-nomulti-y:.o=.os) $($(LIB_NAME)-shared-y)
+ 	$(RM) $@
+ ifneq ($(strip $(STRIP_FLAGS)),)
+ 	$(STRIPTOOL) $(STRIP_FLAGS) $^
+@@ -201,9 +175,9 @@ endif
+ 	$(AR) $(ARFLAGS) $@ $^
+ 
+ ifeq ($(DOPIC),y)
+-$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)_OUT)/$(LIB_NAME).os $($(LIB_NAME)-nomulti-y:.o=.os)
++$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)_OUT)/$(LIB_NAME)_m.os $($(LIB_NAME)-nomulti-y:.o=.os) $($(LIB_NAME)-static-y:.o=.os)
+ else
+-$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)_OUT)/$(LIB_NAME).o $($(LIB_NAME)-nomulti-y)
++$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)_OUT)/$(LIB_NAME)_m.o $($(LIB_NAME)-nomulti-y) $($(LIB_NAME)-static-y)
+ endif
+ 	$(INSTALL) -d $(dir $@)
+ 	$(RM) $@
+@@ -212,7 +186,7 @@ endif
+ 
+ else # DOMULTI
+ 
+-$($(LIB_NAME)_OUT)/$(LIB_NAME)_so.a: $($(LIB_NAME)-so-y)
++$($(LIB_NAME)_OUT)/$(LIB_NAME)_so.a: $($(LIB_NAME)-SHARED_OBJS)
+ 	$(RM) $@
+ ifneq ($(strip $(STRIP_FLAGS)),)
+ 	$(STRIPTOOL) $(STRIP_FLAGS) $^
+@@ -222,9 +196,9 @@ endif
+ 	$(AR) $(ARFLAGS) $@ $^
+ 
+ ifeq ($(DOPIC),y)
+-$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)-a-pic-y)
++$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)-ARCHIVE_OBJS:.o=.os)
+ else
+-$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)-a-y)
++$(top_builddir)lib/$(LIB_NAME).a: $($(LIB_NAME)-ARCHIVE_OBJS)
+ endif
+ 	$(INSTALL) -d $(dir $@)
+ 	$(RM) $@
+@@ -235,29 +209,3 @@ endif # DOMULTI
+ 
+ $(LIB_NAME)_clean:
+ 	rm -f $($(LIB_NAME)_OUT)/*.{o,os,a}
+-
+-else # LIB_NAME
+-
+-ifeq ($(DOPIC),y)
+-libc-a-y: $(libc-a-pic-y)
+-libc-nomulti-y: $(libc-nomulti-y:.o=.os)
+-else
+-libc-a-y: $(libc-a-y)
+-libc-nomulti-y: $(libc-nomulti-y) $(libc-nomulti-y:.o=.os)
+-endif
+-libc-so-y: $(libc-so-y)
+-
+-libc-multi-y: $(libc-multi-y)
+-	$(compile-m)
+-
+-ifeq ($(HAVE_SHARED),y)
+-objs: libc-a-y libc-so-y crt-y other-y
+-else
+-objs: libc-a-y crt-y other-y
+-endif
+-
+-# only for local multi testing
+-libc.o libc.os: $(libc-multi-y)
+-	$(compile-m)
+-
+-endif # LIB_NAME
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index b883316cd..c4a2b95b4 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1152,10 +1152,12 @@ config UCLIBC_HAS_SSP
+ 	default n
+ 	help
+ 	  Add propolice smashing stack protector to the library.
+-	  This requires a patched version of GCC, supporting the
++	  This requires a patched version of GCC or GCC 4.1, supporting the
+ 	  -fstack-protector[-all] options, with the __guard and
+-	  __stack_smash_handler functions removed from libgcc.
++	  __stack_smash_handler, respectively __stack_chk_guard and
++	  __stack_chk_fail functions removed from libgcc.
+ 	  These functions are added to libc instead.
++	  Only binutils 2.16.1 and newer are supported.
+ 	  More information at:
+ 	  <http://www.research.ibm.com/trl/projects/security/ssp/>
+ 	  Most people will answer N.
+diff --git a/include/libc-internal.h b/include/libc-internal.h
+index f5bc9bb0c..b00a8775c 100644
+--- a/include/libc-internal.h
++++ b/include/libc-internal.h
+@@ -70,6 +70,10 @@
+ # define internal_function      /* empty */
+ #endif
+ 
++#ifndef NOT_IN_libc
++# define IS_IN_libc 1
++#endif
++
+ /* Prepare for the case that `__builtin_expect' is not available.  */
+ #if __GNUC__ == 2 && __GNUC_MINOR__ < 96
+ #define __builtin_expect(x, expected_value) (x)
+diff --git a/include/ssp-internal.h b/include/ssp-internal.h
+index bff304fe1..81a83f70c 100644
+--- a/include/ssp-internal.h
++++ b/include/ssp-internal.h
+@@ -23,8 +23,8 @@
+ 
+ #ifndef __SSP_QUICK_CANARY__
+ #define __NR___kernel_open		__NR_open
+-static __always_inline _syscall2(int,__kernel_open,const char *,path,int,flags);
+-#define OPEN(path, flags)		__kernel_open(path, flags)
++static __always_inline _syscall3(int,__kernel_open,const char *,path,int,flags,__kernel_mode_t,mode);
++#define OPEN(path, flags, mode)		__kernel_open(path, flags, mode)
+ 
+ /* void * = __ptr_t */
+ #define __NR___kernel_read		__NR_read
+diff --git a/ldso/include/dl-syscall.h b/ldso/include/dl-syscall.h
+index d4348afc0..70b79f6cf 100644
+--- a/ldso/include/dl-syscall.h
++++ b/ldso/include/dl-syscall.h
+@@ -105,6 +105,12 @@ static inline _syscall0(gid_t, _dl_getpid);
+ #define __NR__dl_readlink __NR_readlink
+ static inline _syscall3(int, _dl_readlink, const char *, path, char *, buf, size_t, bufsiz);
+ 
++#ifdef __UCLIBC_HAS_SSP__
++#include <sys/time.h>
++#define __NR__dl_gettimeofday __NR_gettimeofday
++static inline _syscall2(int, _dl_gettimeofday, struct timeval *, tv, struct timezone *, tz);
++#endif
++
+ #ifdef __NR_mmap
+ #ifdef MMAP_HAS_6_ARGS
+ #define __NR__dl_mmap __NR_mmap
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index fe356ea50..bdc4904f1 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -19,7 +19,7 @@
+ TOPDIR=../../
+ include $(TOPDIR)Rules.mak
+ 
+-XXFLAGS=$(XWARNINGS) $(SSP_DISABLE_FLAGS)
++XXFLAGS=$(XWARNINGS) $(SSP_DISABLE_FLAGS) -DNOT_IN_libc
+ 
+ ifeq ($(DODEBUG),y)
+ # Not really much point in including debugging info, since gdb
+diff --git a/ldso/ldso/Makefile.in b/ldso/ldso/Makefile.in
+index 30a6c4ec2..47ab64bca 100644
+--- a/ldso/ldso/Makefile.in
++++ b/ldso/ldso/Makefile.in
+@@ -19,6 +19,8 @@ ifeq ($(SUPPORT_LD_DEBUG_EARLY),y)
+ CFLAGS+=-D__SUPPORT_LD_DEBUG_EARLY__
+ endif
+ 
++CFLAGS+=-DNOT_IN_libc
++
+ ifeq ($(DODEBUG),y)
+ # Not really much point in including debugging info, since gdb
+ # can't really debug ldso, since gdb requires help from ldso to
+@@ -60,8 +62,6 @@ EXTRA_LINK_LIBS:=$(LIBGCC) # $(LDADD_LIBFLOAT)
+ 
+ ld-uClibc-so-$(HAVE_SHARED):=$(ld-uClibc_OBJS:.o=.os)
+ 
+-ld-uClibc-multi-$(HAVE_SHARED):=$(ld-uClibc_SRC) $(ld-uClibc_SSRC)
+-
+ objclean-y+=ld-uClibc_clean ld-uClibc_arch_clean
+ 
+ ld-uClibc_arch_clean:
+diff --git a/ldso/ldso/ldso.c b/ldso/ldso/ldso.c
+index 3b678588f..3d6884c0c 100644
+--- a/ldso/ldso/ldso.c
++++ b/ldso/ldso/ldso.c
+@@ -85,6 +85,16 @@ static struct elf_resolve **init_fini_list;
+ static int nlist; /* # items in init_fini_list */
+ extern void _start(void);
+ 
++#ifdef __UCLIBC_HAS_SSP__
++#include <dl-osinfo.h>
++#ifndef THREAD_SET_STACK_GUARD
++/* Only exported for architectures that don't store the stack guard canary
++ * in local thread area.  */
++uintptr_t __stack_chk_guard attribute_relro;
++strong_alias(__stack_chk_guard,__guard)
++#endif
++#endif
++
+ static void __attribute__ ((destructor)) __attribute_used__ _dl_fini(void)
+ {
+ 	int i;
+@@ -196,6 +206,17 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, unsigned long load_addr,
+ 		unlazy = RTLD_NOW;
+ 	}
+ 
++	/* sjhill: your TLS init should go before this */
++#ifdef __UCLIBC_HAS_SSP__
++	/* Set up the stack checker's canary.  */
++	uintptr_t stack_chk_guard = _dl_setup_stack_chk_guard ();
++# ifdef THREAD_SET_STACK_GUARD
++	THREAD_SET_STACK_GUARD (stack_chk_guard);
++# else
++	__stack_chk_guard = stack_chk_guard;
++# endif
++#endif
++
+ 	/* At this point we are now free to examine the user application,
+ 	 * and figure out which libraries are supposed to be called.  Until
+ 	 * we have this list, we will not be completely ready for dynamic
+@@ -705,6 +726,11 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, unsigned long load_addr,
+ 	if (_dl_symbol_tables)
+ 		goof += _dl_fixup(_dl_symbol_tables, unlazy);
+ 
++	for (tpnt = _dl_loaded_modules; tpnt; tpnt = tpnt->next) {
++		if (tpnt->relro_size)
++			_dl_protect_relro (tpnt);
++	}
++
+ 	/* OK, at this point things are pretty much ready to run.  Now we need
+ 	 * to touch up a few items that are required, and then we can let the
+ 	 * user application have at it.  Note that the dynamic linker itself
+@@ -756,11 +782,6 @@ void _dl_get_ready_to_run(struct elf_resolve *tpnt, unsigned long load_addr,
+ 		}
+ 	}
+ 
+-	for (tpnt = _dl_loaded_modules; tpnt; tpnt = tpnt->next) {
+-		if (tpnt->relro_size)
+-			_dl_protect_relro (tpnt);
+-	}
+-
+ 	/* Find the real malloc function and make ldso functions use that from now on */
+ 	 _dl_malloc_function = (void* (*)(size_t)) (intptr_t) _dl_find_hash("malloc",
+ 			 _dl_symbol_tables, NULL, ELF_RTYPE_CLASS_PLT);
+diff --git a/ldso/libdl/Makefile.in b/ldso/libdl/Makefile.in
+index 1e758e148..be1242f60 100644
+--- a/ldso/libdl/Makefile.in
++++ b/ldso/libdl/Makefile.in
+@@ -21,7 +21,7 @@ ifeq ($(TARGET_ARCH),mips)
+ CFLAGS:=$(CFLAGS:-O0=-O1)
+ endif
+ 
+-# we need special .oS file created, do not enable this
++# can't combine .c w/ .S
+ DOMULTI=n
+ 
+ LIB_NAME:=libdl
+@@ -36,18 +36,11 @@ libdl_OUT:=$(top_builddir)ldso/libdl
+ libdl_SRC:=$(libdl_DIR)/libdl.c
+ libdl_OBJ:=$(patsubst $(libdl_DIR)/%.c,$(libdl_OUT)/%.o,$(libdl_SRC))
+ 
+-# use other suffixes, so that it does not pick up the multi rule from Makerules
+-$(libdl_OUT)/libdl.oS: $(libdl_DIR)/libdl.c
+-	$(compile.c) -DSHARED
+-
+ resolve:=$(top_builddir)ldso/ldso/$(TARGET_ARCH)/resolve.o
+ 
+-libdl-a-$(HAVE_SHARED):=$(libdl_OBJ) $(resolve)
+-libdl-a-pic-$(HAVE_SHARED):=$(libdl_OBJ:.o=.os) $(resolve:.o=.os)
+-libdl-so-$(HAVE_SHARED):=$(libdl_OBJ:.o=.oS)
+-
+-# do not disable this
+-libdl-multi-$(HAVE_SHARED):=$(libdl_SRC)
++libdl-a-$(HAVE_SHARED):=$(libdl_OBJ)
++libdl-static-$(HAVE_SHARED):=$(resolve)
++libdl-shared-$(HAVE_SHARED):=$(libdl_OUT)/libdl.oS
+ 
+ objclean-y+=libdl_clean libdl_extra_clean
+ 
+@@ -55,5 +48,4 @@ libdl_extra_clean:
+ 	$(RM) $(libdl_OUT)/*.oS
+ 
+ lib-a-$(HAVE_SHARED)+=$(top_builddir)lib/libdl.a
+-lib-a-pic-$(HAVE_SHARED)+=$(top_builddir)lib/libdl.a
+ lib-so-$(HAVE_SHARED)+=$(top_builddir)lib/libdl.so
+diff --git a/ldso/libdl/libdl.c b/ldso/libdl/libdl.c
+index 12de25fd0..5efe36155 100644
+--- a/ldso/libdl/libdl.c
++++ b/ldso/libdl/libdl.c
+@@ -346,6 +346,15 @@ void *dlopen(const char *libname, int flag)
+ 	if (_dl_fixup(dyn_chain, now_flag))
+ 		goto oops;
+ 
++	if (relro_ptr) {
++		for (rpnt = relro_ptr->next; rpnt; rpnt = rpnt->next) {
++			if (rpnt->dyn->relro_size)
++				_dl_protect_relro(rpnt->dyn);
++		}
++	}
++	/* TODO:  Should we set the protections of all pages back to R/O now ? */
++
++
+ 	/* Notify the debugger we have added some objects. */
+ 	if (_dl_debug_addr) {
+ 		dl_brk = (void (*)(void)) _dl_debug_addr->r_brk;
+@@ -376,15 +385,7 @@ void *dlopen(const char *libname, int flag)
+ 			}
+ 		}
+ 	}
+-#endif
+-
+-	if (relro_ptr) {
+-		for (rpnt = relro_ptr->next; rpnt; rpnt = rpnt->next) {
+-			if (rpnt->dyn->relro_size)
+-				_dl_protect_relro(rpnt->dyn);
+-		}
+-	}
+-	/* TODO:  Should we set the protections of all pages back to R/O now ? */
++#endif /* SHARED */
+ 
+ 	_dl_unmap_cache();
+ 	return (void *) dyn_chain;
+diff --git a/libc/Makefile.in b/libc/Makefile.in
+index 33a1070d9..62a522066 100644
+--- a/libc/Makefile.in
++++ b/libc/Makefile.in
+@@ -39,19 +39,7 @@ VERSION_SCRIPT:=${shell if [ -f $(libc_DIR)/sysdeps/linux/$(TARGET_ARCH)/libc.ma
+ EXTRA_LINK_OPTS:=$(VERSION_SCRIPT) -init __uClibc_init
+ EXTRA_LINK_LIBS:=$(libc_OUT)/misc/internals/interp.os $(top_builddir)lib/$(UCLIBC_LDSO) $(LIBGCC) # $(LDADD_LIBFLOAT)
+ 
+-ifeq ($(DOPIC),y)
+-libc-a-y: $(libc-a-pic-y)
+-else
+-libc-a-y: $(libc-a-y)
+-endif
+-
+-libc-so-y: $(libc-so-y)
+-
+-crt-y: $(crt-y)
+-other-y: $(other-y)
+-
+ objclean-y+=libc_clean
+ 
+ lib-a-y+=$(top_builddir)lib/libc.a
+-lib-a-pic-y+=$(top_builddir)lib/libc.a
+-lib-so-y+=$(top_builddir)lib/libc.so $(top_builddir)lib/$(NONSHARED_LIBNAME) crt-y
++lib-so-y+=$(top_builddir)lib/libc.so $(top_builddir)lib/$(NONSHARED_LIBNAME) crt-y other-y
+diff --git a/libc/misc/file/Makefile.in b/libc/misc/file/Makefile.in
+index 76eff7868..58da3e2a3 100644
+--- a/libc/misc/file/Makefile.in
++++ b/libc/misc/file/Makefile.in
+@@ -19,7 +19,8 @@ libc-a-y+=$(MISC_FILE_OBJ)
+ libc-a-pic-y+=$(MISC_FILE_OBJ:.o=.os)
+ libc-so-y+=$(MISC_FILE_OBJ:.o=.os)
+ 
+-libc-multi-y+=$(MISC_FILE_SRC)
++libc-multi-y+=$(MISC_FILE_DIR)/lockf.c
++libc-nomulti-y+=$(MISC_FILE_OUT)/lockf64.o
+ 
+ objclean-y+=misc_file_objclean
+ 
+diff --git a/libc/misc/internals/Makefile.in b/libc/misc/internals/Makefile.in
+index de611323e..a9dc2634f 100644
+--- a/libc/misc/internals/Makefile.in
++++ b/libc/misc/internals/Makefile.in
+@@ -8,7 +8,7 @@
+ 
+ CFLAGS-__uClibc_main.c=$(SSP_DISABLE_FLAGS)
+ 
+-CSRC:=__uClibc_main.c tempname.c errno.c __errno_location.c __h_errno_location.c
++CSRC:=tempname.c errno.c __errno_location.c __h_errno_location.c
+ 
+ MISC_INTERNALS_DIR:=$(top_srcdir)libc/misc/internals
+ MISC_INTERNALS_OUT:=$(top_builddir)libc/misc/internals
+@@ -16,7 +16,7 @@ MISC_INTERNALS_OUT:=$(top_builddir)libc/misc/internals
+ MISC_INTERNALS_SRC:=$(patsubst %.c,$(MISC_INTERNALS_DIR)/%.c,$(CSRC))
+ MISC_INTERNALS_OBJ:=$(patsubst %.c,$(MISC_INTERNALS_OUT)/%.o,$(CSRC))
+ 
+-MISC_INTERNALS_OBJS:=$(MISC_INTERNALS_OBJ) $(MISC_INTERNALS_OUT)/static.o
++STATIC_SRC:=__uClibc_main.c static.c
+ 
+ $(MISC_INTERNALS_OUT)/interp.c: $(MISC_INTERNALS_DIR)/Makefile.in
+ 	echo "/* Force shared libraries to know about the correct library loader */" > $@
+@@ -26,16 +26,15 @@ $(MISC_INTERNALS_OUT)/interp.c: $(MISC_INTERNALS_DIR)/Makefile.in
+ 		"(\".interp\"))) =\""$(SHARED_LIB_LOADER_PREFIX)/$(UCLIBC_LDSO)"\";" >> $@
+ 	echo "#endif" >> $@
+ 
+-libc-a-y+=$(MISC_INTERNALS_OBJS)
+-libc-a-pic-y+=$(MISC_INTERNALS_OBJS:.o=.os)
+-# this is OBJ, not OBJS !!!, static does not go into .so
++libc-a-y+=$(MISC_INTERNALS_OBJ)
+ libc-so-y+=$(MISC_INTERNALS_OBJ:.o=.os)
++libc-shared-y+=$(MISC_INTERNALS_OUT)/__uClibc_main.oS
++libc-static-y+=$(patsubst %.c,$(MISC_INTERNALS_OUT)/%.o,$(STATIC_SRC))
+ other-y+=$(MISC_INTERNALS_OUT)/interp.os
+ 
+-libc-multi-y+=$(filter-out $(MISC_INTERNALS_DIR)/__uClibc_main.c,$(MISC_INTERNALS_SRC))
+-libc-nomulti-y+=$(MISC_INTERNALS_OUT)/__uClibc_main.o
++libc-multi-y+=$(MISC_INTERNALS_SRC)
+ 
+ objclean-y+=misc_internals_objclean
+ 
+ misc_internals_objclean:
+-	$(RM) $(MISC_INTERNALS_OUT)/{*.{o,os},interp.c}
++	$(RM) $(MISC_INTERNALS_OUT)/{*.{o,os,oS},interp.c}
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 1f2061e58..e7c2c4abf 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -25,15 +25,21 @@
+ #include <fcntl.h>
+ #include <sys/stat.h>
+ #include <sys/sysmacros.h>
++#ifndef SHARED
++/* probably all the weak_*function stuff below should be in here */
+ #ifdef __UCLIBC_HAS_SSP__
+-#include <ssp-internal.h>
++#include <dl-osinfo.h>
++#ifndef THREAD_SET_STACK_GUARD
++/* Only exported for architectures that don't store the stack guard canary
++ * in thread local area. */
+ #include <stdint.h>
+-
+ /* for gcc-4.1 non-TLS */
+ uintptr_t __stack_chk_guard attribute_relro;
+ /* for gcc-3.x + Etoh ssp */
+ strong_alias(__stack_chk_guard,__guard)
+ #endif
++#endif
++#endif
+ 
+ /*
+  * Prototypes.
+@@ -49,10 +55,6 @@ extern void weak_function _locale_init(void);
+ extern void weak_function __pthread_initialize_minimal(void);
+ #endif
+ 
+-
+-
+-
+-
+ /*
+  * Declare the __environ global variable and create a weak alias environ.
+  * Note: Apparently we must initialize __environ to ensure that the weak
+@@ -64,7 +66,6 @@ weak_alias(__environ, environ);
+ size_t __pagesize = 0;
+ const char *__progname = 0;
+ 
+-
+ #ifndef O_NOFOLLOW
+ # define O_NOFOLLOW	0
+ #endif
+@@ -110,36 +111,6 @@ static int __check_suid(void)
+     return 1;
+ }
+ 
+-#ifdef __UCLIBC_HAS_SSP__
+-static __always_inline uintptr_t _dl_guard_setup(void)
+-{
+-	uintptr_t ret;
+-#ifndef __SSP_QUICK_CANARY__
+-	{
+-		int fd = OPEN("/dev/urandom", O_RDONLY);
+-		if (fd >= 0) {
+-			size_t size = READ(fd, &ret, sizeof(ret));
+-			CLOSE(fd);
+-			if (size == (size_t) sizeof(ret))
+-				return ret;
+-		}
+-	}
+-#endif /* ifndef __SSP_QUICK_CANARY__ */
+-
+-	/* Start with the "terminator canary". */
+-	ret = 0xFF0A0D00UL;
+-
+-	/* Everything failed? Or we are using a weakened model of the 
+-	 * terminator canary */
+-	{
+-		struct timeval tv;
+-		if (GETTIMEOFDAY(&tv, NULL) != (-1))
+-			ret ^= tv.tv_usec ^ tv.tv_sec;
+-	}
+-	return ret;
+-}
+-#endif /* __UCLIBC_HAS_SSP__ */
+-
+ /* __uClibc_init completely initialize uClibc so it is ready to use.
+  *
+  * On ELF systems (with a dynamic loader) this function must be called
+@@ -174,10 +145,16 @@ void __uClibc_init(void)
+ 	__pthread_initialize_minimal();
+ #endif
+ 
+-#ifdef __UCLIBC_HAS_SSP__
+-    uintptr_t stack_chk_guard = _dl_guard_setup();
+-    /* for gcc-4.1 non-TLS */
++#ifndef SHARED
++# ifdef __UCLIBC_HAS_SSP__
++    /* Set up the stack checker's canary.  */
++    uintptr_t stack_chk_guard = _dl_setup_stack_chk_guard();
++#  ifdef THREAD_SET_STACK_GUARD
++    THREAD_SET_STACK_GUARD (stack_chk_guard);
++#  else
+     __stack_chk_guard = stack_chk_guard;
++#  endif
++# endif
+ #endif
+ 
+ #ifdef __UCLIBC_HAS_LOCALE__
+diff --git a/libc/stdlib/Makefile.in b/libc/stdlib/Makefile.in
+index 3b00c8115..236d20cda 100644
+--- a/libc/stdlib/Makefile.in
++++ b/libc/stdlib/Makefile.in
+@@ -106,15 +106,18 @@ $(STDLIB_MOBJ1x) $(STDLIB_MOBJ1x:.o=.os): $(STDLIB_MSRC1)
+ $(STDLIB_MOBJ2x) $(STDLIB_MOBJ2x:.o=.os): $(STDLIB_MSRC2)
+ 	$(compile.m) -D__UCLIBC_DO_XLOCALE
+ 
+-libc-a-y+=$(STDLIB_OBJS) $(STDLIB_OUT)/atexit.o
+-libc-a-pic-y+=$(STDLIB_OBJS:.o=.os) $(STDLIB_OUT)/atexit.os
++libc-a-y+=$(STDLIB_OBJS)
++libc-static-y+=$(STDLIB_OUT)/atexit.o
+ libc-so-y+=$(STDLIB_OBJS:.o=.os)
+ # this should always be the PIC version, because it could be used in shared libs
+ libc-nonshared-y+=$(STDLIB_OUT)/atexit.os
+ 
+-CFLAGS-multi-y+=$(STDLIB_DEF)
+-libc-multi-y+=$(STDLIB_SRC) $(STDLIB_MSRC)
+-libc-nomulti-y+=$(STDLIB_MOBJx)
++#CFLAGS-multi-y+=$(STDLIB_DEF)
++#libc-multi-y+=$(STDLIB_SRC) $(STDLIB_MSRC)
++#libc-nomulti-y+=$(STDLIB_MOBJx)
++#libc-multi-y+=$(STDLIB_MSRC)
++#libc-nomulti-y+=$(STDLIB_OBJ) $(STDLIB_MOBJx)
++libc-nomulti-y+=$(STDLIB_OBJS)
+ 
+ objclean-y+=stdlib_objclean
+ 
+diff --git a/libc/sysdeps/linux/common/Makefile b/libc/sysdeps/linux/common/Makefile
+index e45c58961..704f0350b 100644
+--- a/libc/sysdeps/linux/common/Makefile
++++ b/libc/sysdeps/linux/common/Makefile
+@@ -56,6 +56,7 @@ $(OBJS) $(NONSHARED_OBJS): %.o : %.c
+ 
+ headers:
+ 	$(LN) -fs ../libc/sysdeps/linux/common/fpu_control.h $(TOPDIR)/include/
++	$(LN) -fs ../libc/sysdeps/linux/common/dl-osinfo.h $(TOPDIR)/include/
+ 
+ clean:
+ 	$(RM) *.o *~ core
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 85826913e..ce7d8f90d 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -31,9 +31,7 @@ COMMON_SRC:=$(patsubst %.c,$(COMMON_DIR)/%.c,$(CSRC))
+ COMMON_OBJ:=$(patsubst %.c,$(COMMON_OUT)/%.o,$(CSRC))
+ 
+ libc-a-y+=$(COMMON_OBJ)
+-libc-a-$(UCLIBC_HAS_SSP)+=$(COMMON_OUT)/ssp-local.o
+-libc-a-pic-y+=$(COMMON_OBJ:.o=.os)
+-libc-a-pic-$(UCLIBC_HAS_SSP)+=$(COMMON_OUT)/ssp-local.os
++libc-a-static-$(UCLIBC_HAS_SSP)+=$(COMMON_OUT)/ssp-local.o
+ libc-so-y+=$(COMMON_OBJ:.o=.os)
+ libc-nonshared-$(UCLIBC_HAS_SSP)+=$(COMMON_OUT)/ssp-local.os
+ 
+@@ -50,3 +48,4 @@ headers-y+=common_headers
+ 
+ common_headers:
+ 	$(LN) -fs ../libc/sysdeps/linux/common/fpu_control.h $(top_builddir)include/
++	$(LN) -fs ../libc/sysdeps/linux/common/dl-osinfo.h $(top_builddir)include/
+diff --git a/libc/sysdeps/linux/common/dl-osinfo.h b/libc/sysdeps/linux/common/dl-osinfo.h
+new file mode 100644
+index 000000000..ee3e2ce99
+--- /dev/null
++++ b/libc/sysdeps/linux/common/dl-osinfo.h
+@@ -0,0 +1,64 @@
++/*
++ * Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#ifndef _DL_OSINFO_H
++#define _DL_OSINFO_H 1
++
++#include <features.h>
++
++#ifdef __UCLIBC_HAS_SSP__
++#include <stdint.h>
++#include <sys/time.h>
++
++#ifdef IS_IN_libc
++#include <ssp-internal.h>
++#if 0
++#ifndef __SSP_QUICK_CANARY__
++#define OPEN __libc_open
++#define READ __libc_read
++#define CLOSE __libc_close
++#endif
++#define GETTIMEOFDAY gettimeofday
++#endif
++#else
++#ifndef __SSP_QUICK_CANARY__
++#define OPEN _dl_open
++#define READ _dl_read
++#define CLOSE _dl_close
++#endif
++#define GETTIMEOFDAY _dl_gettimeofday
++#endif
++
++static __always_inline uintptr_t _dl_setup_stack_chk_guard(void)
++{
++	uintptr_t ret;
++#ifndef __SSP_QUICK_CANARY__
++	{
++		int fd = OPEN("/dev/urandom", O_RDONLY, 0);
++		if (fd >= 0) {
++			size_t size = READ(fd, &ret, sizeof(ret));
++			CLOSE(fd);
++			if (size == (size_t) sizeof(ret))
++				return ret;
++		}
++	}
++#endif /* !__SSP_QUICK_CANARY__ */
++
++	/* Start with the "terminator canary". */
++	ret = 0xFF0A0D00UL;
++
++	/* Everything failed? Or we are using a weakened model of the 
++	 * terminator canary */
++	{
++		struct timeval tv;
++		if (GETTIMEOFDAY(&tv, NULL) != (-1))
++			ret ^= tv.tv_usec ^ tv.tv_sec;
++	}
++	return ret;
++}
++#endif /* __UCLIBC_HAS_SSP__ */
++
++#endif /* _DL_OSINFO_H */
+diff --git a/libc/sysdeps/linux/common/ssp.c b/libc/sysdeps/linux/common/ssp.c
+index 7791a0104..2f3a28ba4 100644
+--- a/libc/sysdeps/linux/common/ssp.c
++++ b/libc/sysdeps/linux/common/ssp.c
+@@ -87,6 +87,7 @@ void __attribute__ ((noreturn)) __stack_chk_fail(void)
+ 		terminate();
+ }
+ 
++#if 0
+ void __attribute__ ((noreturn)) __chk_fail(void)
+ {
+ 	extern char *__progname;
+@@ -101,3 +102,4 @@ void __attribute__ ((noreturn)) __chk_fail(void)
+ 	while(1)
+ 		terminate();
+ }
++#endif
+diff --git a/libcrypt/Makefile.in b/libcrypt/Makefile.in
+index 4ab093b19..4e1466e72 100644
+--- a/libcrypt/Makefile.in
++++ b/libcrypt/Makefile.in
+@@ -17,7 +17,6 @@ libcrypt_SRC:=$(wildcard $(libcrypt_DIR)/*.c)
+ libcrypt_OBJ:=$(patsubst $(libcrypt_DIR)/%.c,$(libcrypt_OUT)/%.o,$(libcrypt_SRC))
+ 
+ libcrypt-a-y:=$(libcrypt_OBJ)
+-libcrypt-a-pic-y:=$(libcrypt_OBJ:.o=.os)
+ libcrypt-so-y:=$(libcrypt_OBJ:.o=.os)
+ 
+ libcrypt-multi-y:=$(libcrypt_SRC)
+@@ -25,5 +24,4 @@ libcrypt-multi-y:=$(libcrypt_SRC)
+ objclean-y+=libcrypt_clean
+ 
+ lib-a-y+=$(top_builddir)lib/libcrypt.a
+-lib-a-pic-y+=$(top_builddir)lib/libcrypt.a
+ lib-so-y+=$(top_builddir)lib/libcrypt.so
+diff --git a/libintl/Makefile.in b/libintl/Makefile.in
+index 1b901569e..5b309fc39 100644
+--- a/libintl/Makefile.in
++++ b/libintl/Makefile.in
+@@ -26,7 +26,6 @@ $(libintl_MOBJ) $(libintl_MOBJ:.o=.os): $(libintl_MSRC)
+ 	$(compile.m)
+ 
+ libintl-a-$(UCLIBC_HAS_GETTEXT_AWARENESS):=$(libintl_MOBJ)
+-libintl-a-pic-$(UCLIBC_HAS_GETTEXT_AWARENESS):=$(libintl_MOBJ:.o=.os)
+ libintl-so-$(UCLIBC_HAS_GETTEXT_AWARENESS):=$(libintl_MOBJ:.o=.os)
+ 
+ CFLAGS-multi-$(UCLIBC_HAS_GETTEXT_AWARENESS):=$(libintl_DEF)
+@@ -35,5 +34,4 @@ libintl-multi-$(UCLIBC_HAS_GETTEXT_AWARENESS):=$(libintl_MSRC)
+ objclean-y+=libintl_clean
+ 
+ lib-a-$(UCLIBC_HAS_GETTEXT_AWARENESS)+=$(top_builddir)lib/libintl.a
+-lib-a-pic-$(UCLIBC_HAS_GETTEXT_AWARENESS)+=$(top_builddir)lib/libintl.a
+ lib-so-$(UCLIBC_HAS_GETTEXT_AWARENESS)+=$(top_builddir)lib/libintl.so
+diff --git a/libm/Makefile.in b/libm/Makefile.in
+index 1d0852a30..b54b27f73 100644
+--- a/libm/Makefile.in
++++ b/libm/Makefile.in
+@@ -114,7 +114,6 @@ $(libm_MOBJ) $(libm_MOBJ:.o=.os): $(libm_MSRC)
+ 	$(compile.m)
+ 
+ libm-a-$(UCLIBC_HAS_FLOATS)+=$(libm_OBJS)
+-libm-a-pic-$(UCLIBC_HAS_FLOATS)+=$(libm_OBJS:.o=.os)
+ libm-so-$(UCLIBC_HAS_FLOATS)+=$(libm_OBJS:.o=.os)
+ 
+ CFLAGS-multi-$(UCLIBC_HAS_FLOATS)+=$(libm_DEF)
+@@ -126,5 +125,4 @@ endif
+ objclean-y+=libm_clean
+ 
+ lib-a-$(UCLIBC_HAS_FLOATS)+=$(top_builddir)lib/libm.a
+-lib-a-pic-$(UCLIBC_HAS_FLOATS)+=$(top_builddir)lib/libm.a
+ lib-so-$(UCLIBC_HAS_FLOATS)+=$(top_builddir)lib/libm.so
+diff --git a/libm/powerpc/Makefile.in b/libm/powerpc/Makefile.in
+index bb0dfc9d0..c6d39676a 100644
+--- a/libm/powerpc/Makefile.in
++++ b/libm/powerpc/Makefile.in
+@@ -14,7 +14,6 @@ libm_ARCH_OBJ:=$(patsubst $(libm_ARCH_DIR)/%.c,$(libm_ARCH_OUT)/%.o,$(libm_ARCH_
+ libm_ARCH_OBJS:=$(libm_ARCH_OBJ)
+ 
+ libm-a-$(DO_C99_MATH)+=$(libm_ARCH_OBJS)
+-libm-a-pic-$(DO_C99_MATH)+=$(libm_ARCH_OBJS:.o=.os)
+ libm-so-$(DO_C99_MATH)+=$(libm_ARCH_OBJS:.o=.os)
+ 
+ libm-multi-$(DO_C99_MATH)+=$(libm_ARCH_SRC)
+diff --git a/libnsl/Makefile.in b/libnsl/Makefile.in
+index ab3745382..b4dcefae2 100644
+--- a/libnsl/Makefile.in
++++ b/libnsl/Makefile.in
+@@ -16,7 +16,6 @@ libnsl_SRC:=$(libnsl_DIR)/nsl.c
+ libnsl_OBJ:=$(patsubst $(libnsl_DIR)/%.c,$(libnsl_OUT)/%.o,$(libnsl_SRC))
+ 
+ libnsl-a-y:=$(libnsl_OBJ)
+-libnsl-a-pic-y:=$(libnsl_OBJ:.o=.os)
+ libnsl-so-y:=$(libnsl_OBJ:.o=.os)
+ 
+ libnsl-multi-y:=$(libnsl_SRC)
+@@ -24,5 +23,4 @@ libnsl-multi-y:=$(libnsl_SRC)
+ objclean-y+=libnsl_clean
+ 
+ lib-a-y+=$(top_builddir)lib/libnsl.a
+-lib-a-pic-y+=$(top_builddir)lib/libnsl.a
+ lib-so-y+=$(top_builddir)lib/libnsl.so
+diff --git a/libpthread/linuxthreads/Makefile.in b/libpthread/linuxthreads/Makefile.in
+index b0537bb15..b6351725f 100644
+--- a/libpthread/linuxthreads/Makefile.in
++++ b/libpthread/linuxthreads/Makefile.in
+@@ -46,7 +46,6 @@ endif
+ libpthread_OBJ:=$(patsubst $(libpthread_DIR)/%.c,$(libpthread_OUT)/%.o,$(libpthread_SRC))
+ 
+ libpthread-a-$(UCLIBC_HAS_THREADS)+=$(libpthread_OBJ)
+-libpthread-a-pic-$(UCLIBC_HAS_THREADS)+=$(libpthread_OBJ:.o=.os)
+ libpthread-so-$(UCLIBC_HAS_THREADS)+=$(libpthread_OBJ:.o=.os)
+ 
+ libpthread-multi-$(UCLIBC_HAS_THREADS)+=$(libpthread_SRC)
+@@ -54,5 +53,4 @@ libpthread-multi-$(UCLIBC_HAS_THREADS)+=$(libpthread_SRC)
+ objclean-y+=libpthread_clean
+ 
+ lib-a-$(UCLIBC_HAS_THREADS)+=$(top_builddir)lib/libpthread.a
+-lib-a-pic-$(UCLIBC_HAS_THREADS)+=$(top_builddir)lib/libpthread.a
+ lib-so-$(UCLIBC_HAS_THREADS)+=$(top_builddir)lib/libpthread.so
+diff --git a/libpthread/linuxthreads/sysdeps/sh64/Makefile.in b/libpthread/linuxthreads/sysdeps/sh64/Makefile.in
+index 46ceeb1f8..38cd12db6 100644
+--- a/libpthread/linuxthreads/sysdeps/sh64/Makefile.in
++++ b/libpthread/linuxthreads/sysdeps/sh64/Makefile.in
+@@ -16,7 +16,6 @@ libpthread_ARCH_SRC:=$(wildcard $(libpthread_ARCH_DIR)/*.c)
+ libpthread_ARCH_OBJ:=$(patsubst $(libpthread_ARCH_DIR)/%.c,$(libpthread_ARCH_OUT)/%.o,$(libpthread_ARCH_SRC))
+ 
+ libpthread-a-$(UCLIBC_HAS_THREADS)+=$(libpthread_ARCH_OBJ)
+-libpthread-a-pic-$(UCLIBC_HAS_THREADS)+=$(libpthread_ARCH_OBJ:.o=.os)
+ libpthread-so-$(UCLIBC_HAS_THREADS)+=$(libpthread_ARCH_OBJ:.o=.os)
+ 
+ libpthread-multi-$(UCLIBC_HAS_THREADS)+=$(libpthread_ARCH_SRC)
+diff --git a/libpthread/linuxthreads_db/Makefile.in b/libpthread/linuxthreads_db/Makefile.in
+index 559a4ba91..0a5c5a578 100644
+--- a/libpthread/linuxthreads_db/Makefile.in
++++ b/libpthread/linuxthreads_db/Makefile.in
+@@ -31,7 +31,6 @@ libthread_db_SRC:=$(wildcard $(libthread_db_DIR)/*.c)
+ libthread_db_OBJ:=$(patsubst $(libthread_db_DIR)/%.c,$(libthread_db_OUT)/%.o,$(libthread_db_SRC))
+ 
+ libthread_db-a-$(PTHREADS_DEBUG_SUPPORT)+=$(libthread_db_OBJ)
+-libthread_db-a-pic-$(PTHREADS_DEBUG_SUPPORT)+=$(libthread_db_OBJ:.o=.os)
+ libthread_db-so-$(PTHREADS_DEBUG_SUPPORT)+=$(libthread_db_OBJ:.o=.os)
+ 
+ libthread_db-multi-$(PTHREADS_DEBUG_SUPPORT)+=$(libthread_db_SRC)
+@@ -39,5 +38,4 @@ libthread_db-multi-$(PTHREADS_DEBUG_SUPPORT)+=$(libthread_db_SRC)
+ objclean-y+=libthread_db_clean
+ 
+ lib-a-$(PTHREADS_DEBUG_SUPPORT)+=$(top_builddir)lib/libthread_db.a
+-lib-a-pic-$(PTHREADS_DEBUG_SUPPORT)+=$(top_builddir)lib/libthread_db.a
+ lib-so-$(PTHREADS_DEBUG_SUPPORT)+=$(top_builddir)lib/libthread_db.so
+diff --git a/libresolv/Makefile.in b/libresolv/Makefile.in
+index 644c96e86..06938da9b 100644
+--- a/libresolv/Makefile.in
++++ b/libresolv/Makefile.in
+@@ -16,7 +16,6 @@ libresolv_SRC:=$(libresolv_DIR)/resolv.c
+ libresolv_OBJ:=$(patsubst $(libresolv_DIR)/%.c,$(libresolv_OUT)/%.o,$(libresolv_SRC))
+ 
+ libresolv-a-y:=$(libresolv_OBJ)
+-libresolv-a-pic-y:=$(libresolv_OBJ:.o=.os)
+ libresolv-so-y:=$(libresolv_OBJ:.o=.os)
+ 
+ libresolv-multi-y:=$(libresolv_SRC)
+@@ -24,5 +23,4 @@ libresolv-multi-y:=$(libresolv_SRC)
+ objclean-y+=libresolv_clean
+ 
+ lib-a-y+=$(top_builddir)lib/libresolv.a
+-lib-a-pic-y+=$(top_builddir)lib/libresolv.a
+ lib-so-y+=$(top_builddir)lib/libresolv.so
+diff --git a/librt/Makefile.in b/librt/Makefile.in
+index aada591d9..4e9135b30 100644
+--- a/librt/Makefile.in
++++ b/librt/Makefile.in
+@@ -19,13 +19,11 @@ librt_SRC:=$(wildcard $(librt_DIR)/*.c)
+ librt_OBJ:=$(patsubst $(librt_DIR)/%.c,$(librt_OUT)/%.o,$(librt_SRC))
+ 
+ librt-a-y:=$(librt_OBJ)
+-librt-a-pic-y:=$(librt_OBJ:.o=.os)
+ librt-so-y:=$(librt_OBJ:.o=.os)
+ 
+-#librt-multi-y+=$(librt_SRC)
++librt-multi-y+=$(librt_SRC)
+ 
+ objclean-y+=librt_clean
+ 
+ lib-a-y+=$(top_builddir)lib/librt.a
+-lib-a-pic-y+=$(top_builddir)lib/librt.a
+ lib-so-y+=$(top_builddir)lib/librt.so
+diff --git a/libutil/Makefile.in b/libutil/Makefile.in
+index 32010b99c..6095bf405 100644
+--- a/libutil/Makefile.in
++++ b/libutil/Makefile.in
+@@ -19,7 +19,6 @@ endif
+ libutil_OBJ:=$(patsubst $(libutil_DIR)/%.c,$(libutil_OUT)/%.o,$(libutil_SRC))
+ 
+ libutil-a-y:=$(libutil_OBJ)
+-libutil-a-pic-y:=$(libutil_OBJ:.o=.os)
+ libutil-so-y:=$(libutil_OBJ:.o=.os)
+ 
+ libutil-multi-y:=$(libutil_SRC)
+@@ -27,5 +26,4 @@ libutil-multi-y:=$(libutil_SRC)
+ objclean-y+=libutil_clean
+ 
+ lib-a-y+=$(top_builddir)lib/libutil.a
+-lib-a-pic-y+=$(top_builddir)lib/libutil.a
+ lib-so-y+=$(top_builddir)lib/libutil.so

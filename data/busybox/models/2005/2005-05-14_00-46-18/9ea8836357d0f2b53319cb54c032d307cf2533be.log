@@ -1,0 +1,112 @@
+"2005-05-14 00:46:18 +0000"
+diff --git a/include/usage.h b/include/usage.h
+index f1ae92316..d63498553 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -565,18 +565,12 @@
+ 	"$ echo \"Erik\\nis\\ncool\"\n" \
+ 	"Erik\\nis\\ncool\n")
+ 
+-#ifdef CONFIG_FEATURE_EJECT_LONG_OPTIONS
+-# define USAGE_EJECT_TRAYCLOSE ",trayclose"
+-#else
+-# define USAGE_EJECT_TRAYCLOSE ""
+-#endif
+-
+ #define eject_trivial_usage \
+ 	"[-t] [DEVICE]"
+ #define eject_full_usage \
+ 	"Eject specified DEVICE (or default /dev/cdrom).\n\n" \
+ 	"Options:\n" \
+-	"\t-t" USAGE_EJECT_TRAYCLOSE "\tclose tray"
++	"\t-t\tclose tray"
+ 
+ #define env_trivial_usage \
+ 	"[-iu] [-] [name=value]... [command]"
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 710639aba..afa70a597 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -89,13 +89,6 @@ config CONFIG_EJECT
+ 	help
+ 	  Used to eject cdroms.  (defaults to /dev/cdrom)
+ 
+-config CONFIG_FEATURE_EJECT_LONG_OPTIONS
+-	bool "  Enable support for --trayclose long option (-t)"
+-	default n
+-	depends on CONFIG_EJECT
+-	help
+-	  Enable use of long options (like --trayclose for -t).
+-
+ config CONFIG_LAST
+ 	bool "last"
+ 	default n
+diff --git a/miscutils/eject.c b/miscutils/eject.c
+index cbfd115f7..df275d74b 100644
+--- a/miscutils/eject.c
++++ b/miscutils/eject.c
+@@ -24,41 +24,44 @@
+  * Most of the dirty work blatantly ripped off from cat.c =)
+  */
+ 
+-#include <stdio.h>
+-#include <string.h>
+-#include <sys/types.h>
+-#include <sys/stat.h>
+ #include <fcntl.h>
+ #include <sys/ioctl.h>
+-#include <getopt.h>
++#include <stdlib.h>
++#include <unistd.h>
+ #include "busybox.h"
+ 
+ /* various defines swiped from linux/cdrom.h */
+ #define CDROMCLOSETRAY            0x5319  /* pendant of CDROMEJECT  */
+ #define CDROMEJECT                0x5309  /* Ejects the cdrom media */
+ #define DEFAULT_CDROM             "/dev/cdrom"
+-/*#define CLOSE_TRAY              1*/
++
++#ifdef CONFIG_FEATURE_MTAB_SUPPORT
++#define MTAB  CONFIG_FEATURE_MTAB_FILENAME
++#else
++#define MTAB  "/proc/mounts"
++#endif
+ 
+ extern int eject_main(int argc, char **argv)
+ {
+ 	unsigned long flags;
++	char * command; 
++	char *device=argv[optind] ? : DEFAULT_CDROM;
+ 	
+-#ifdef CONFIG_FEATURE_EJECT_LONG_OPTIONS
+-	static const struct option eject_long_options[] = {
+-		{ "trayclose", 0, 0, 't' },
+-		{ 0,           0, 0, 0 }
+-	};
+-	bb_applet_long_options = eject_long_options;
+-#endif
+-
+ 	flags = bb_getopt_ulflags(argc, argv, "t");
+-
+-	if (ioctl(bb_xopen((argv[optind] ? argv[optind] : DEFAULT_CDROM), 
++	bb_xasprintf(&command, "umount '%s'", device);
++	
++	/* validate input before calling system */
++	if(find_mount_point(device, MTAB))
++		system(command);
++	
++	if (ioctl(bb_xopen( device, 
+ 	                   (O_RDONLY | O_NONBLOCK)), 
+-	          ( flags /*& CLOSE_TRAY*/ ? CDROMCLOSETRAY : CDROMEJECT)))
++	          ( flags ? CDROMCLOSETRAY : CDROMEJECT)))
+ 	{
+-		bb_perror_msg_and_die(bb_msg_unknown);
++		bb_perror_msg_and_die(device);
+ 	}
+-
+-	return EXIT_SUCCESS;
++#ifdef CONFIG_FEATURE_CLEAN_UP 
++	free(command);
++#endif
++	return(EXIT_SUCCESS);
+ }

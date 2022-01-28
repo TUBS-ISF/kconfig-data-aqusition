@@ -1,0 +1,203 @@
+"2003-12-19 11:32:14 +0000"
+diff --git a/docs/busybox.sgml b/docs/busybox.sgml
+index 1d2e9268a..ac400c7c8 100644
+--- a/docs/busybox.sgml
++++ b/docs/busybox.sgml
+@@ -1976,6 +1976,38 @@
+ 		</para>
+ 	</sect1>
+ 
++	<sect1 id="logread">
++	    <title>logread</title>
++
++		<para>
++		Usage: logread [OPTION]...
++		</para>
++
++		<para>
++		Shows the messages from syslogd (using circular buffer).
++		</para>
++
++		<para>
++		Options:
++		</para>
++
++		<para>
++		<screen>
++			-f	Output data as the log grows.
++		</screen>
++		</para>
++
++		<para>
++		Example:
++		</para>
++
++		<para>
++		<screen>
++			$ logread
++		</screen>
++		</para>
++	</sect1>
++
+ 	<sect1 id="ls">
+ 	    <title>ls</title>
+ 
+@@ -3110,7 +3142,7 @@
+ 			-O FILE	Use an alternate log file (default=/var/log/messages)
+ 			-R HOST[:PORT] Log remotely to IP or hostname on PORT (default PORT=514/UDP)
+ 			-L      Log locally as well as network logging (default is network only)
+-			-C      Log to a circular buffer. Read this buffer using 'logread'
++			-C [size(KiB)] Log to a circular buffer. Read this buffer using 'logread'
+ 		</screen>
+ 		</para>
+ 
+diff --git a/include/usage.h b/include/usage.h
+index 6db0385fb..ea1b5d5fe 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1458,10 +1458,12 @@
+ 	"root\n" 
+ 
+ #define logread_trivial_usage \
+-        ""
++	"[OPTION]..."
+ 
+ #define logread_full_usage \
+-        "Shows the messages from syslogd (using circular buffer)."
++        "Shows the messages from syslogd (using circular buffer).\n\n"
++	"Options:\n" \
++	"\t-f\t\toutput data as the log grows"
+ 
+ #define losetup_trivial_usage \
+ 	"[OPTION]... LOOPDEVICE FILE\n" \
+@@ -2280,7 +2282,7 @@
+ 	"\n\t-R HOST[:PORT]\tLog to IP or hostname on PORT (default PORT=514/UDP)\n" \
+ 	"\t-L\t\tLog locally and via network logging (default is network only)") \
+ 	USAGE_IPC_LOG( \
+-	"\n\t-C\t\tLog to a circular buffer (read the buffer using logread)")
++	"\n\t-C [size(KiB)]\tLog to a circular buffer (read the buffer using logread)")
+ #define syslogd_example_usage \
+ 	"$ syslogd -R masterlog:514\n" \
+ 	"$ syslogd -R 192.168.1.1:601\n"
+diff --git a/sysklogd/Config.in b/sysklogd/Config.in
+index cb2ee0865..a671f59f1 100644
+--- a/sysklogd/Config.in
++++ b/sysklogd/Config.in
+@@ -56,6 +56,14 @@ config CONFIG_FEATURE_IPC_SYSLOG
+ 	  entire filesystem, which may cause your system to
+ 	  break badly.
+ 
++config CONFIG_FEATURE_IPC_SYSLOG_BUFFER_SIZE
++	int "    Circular buffer size in Kbytes (minimum 4KB)"
++	default 16
++	depends on CONFIG_FEATURE_IPC_SYSLOG
++	help
++	  This option sets the size of the circular buffer
++	  used to record system log messages.
++
+ config CONFIG_LOGREAD
+ 	bool "  logread"
+ 	default y
+@@ -66,6 +74,17 @@ config CONFIG_LOGREAD
+ 	  utility will allow you to read the messages that are
+ 	  stored in the syslogd circular buffer.
+ 
++config CONFIG_FEATURE_LOGREAD_REDUCED_LOCKING
++	bool "    logread double buffering"
++	default n
++	depends on CONFIG_LOGREAD
++	help
++	  'logread' ouput to slow serial terminals can have 
++	  side effects on syslog because of the semaphore.
++	  This option make logread to double buffer copy 
++	  from circular buffer, minimizing semaphore 
++	  contention at some minor memory expense.
++
+ config CONFIG_KLOGD
+ 	bool "klogd"
+ 	default n
+diff --git a/sysklogd/logread.c b/sysklogd/logread.c
+index 524178fe8..207e78b57 100644
+--- a/sysklogd/logread.c
++++ b/sysklogd/logread.c
+@@ -108,8 +108,7 @@ extern int logread_main(int argc, char **argv)
+ 	i = follow ? buf->tail : buf->head;
+ 
+ 	do {
+-#undef RC_LOGREAD
+-#ifdef RC_LOGREAD
++#ifdef CONFIG_FEATURE_LOGREAD_REDUCED_LOCKING
+ 		char *buf_data;
+ 		int log_len,j;
+ #endif
+@@ -128,7 +127,7 @@ extern int logread_main(int argc, char **argv)
+ 		}
+ 	
+ 		// Read Memory 
+-#ifdef RC_LOGREAD
++#ifdef CONFIG_FEATURE_LOGREAD_REDUCED_LOCKING
+ 		log_len = buf->tail - i;
+ 		if (log_len < 0)
+ 			log_len += buf->size;
+@@ -155,7 +154,7 @@ extern int logread_main(int argc, char **argv)
+ 		// release the lock on the log chain
+ 		sem_up(log_semid);
+ 
+-#ifdef RC_LOGREAD
++#ifdef CONFIG_FEATURE_LOGREAD_REDUCED_LOCKING
+ 		for (j=0; j < log_len; j+=strlen(buf_data+j)+1) {
+ 			printf("%s", buf_data+j);
+ 			if (follow)
+diff --git a/sysklogd/syslogd.c b/sysklogd/syslogd.c
+index 622500e48..42426ed80 100644
+--- a/sysklogd/syslogd.c
++++ b/sysklogd/syslogd.c
+@@ -94,6 +94,12 @@ static int local_logging = FALSE;
+ 
+ /* circular buffer variables/structures */
+ #ifdef CONFIG_FEATURE_IPC_SYSLOG
++
++#if CONFIG_FEATURE_IPC_SYSLOG_BUFFER_SIZE < 4
++#error Sorry, you must set the syslogd buffer size to at least 4KB.
++#error Please check CONFIG_FEATURE_IPC_SYSLOG_BUFFER_SIZE
++#endif
++
+ #include <sys/ipc.h>
+ #include <sys/sem.h>
+ #include <sys/shm.h>
+@@ -114,7 +120,7 @@ static struct sembuf SMwdn[3] = { {0, 0}, {1, 0}, {1, +1} };	// set SMwdn
+ 
+ static int shmid = -1;	// ipc shared memory id
+ static int s_semid = -1;	// ipc semaphore id
+-static int data_size = 16000;	// default data size
++static int shm_size = ((CONFIG_FEATURE_IPC_SYSLOG_BUFFER_SIZE)*1024);	// default shm size
+ static int circular_logging = FALSE;
+ 
+ /*
+@@ -156,7 +162,7 @@ void ipcsyslog_cleanup(void)
+ void ipcsyslog_init(void)
+ {
+ 	if (buf == NULL) {
+-		if ((shmid = shmget(KEY_ID, data_size, IPC_CREAT | 1023)) == -1) {
++		if ((shmid = shmget(KEY_ID, shm_size, IPC_CREAT | 1023)) == -1) {
+ 			bb_perror_msg_and_die("shmget");
+ 		}
+ 
+@@ -164,7 +170,7 @@ void ipcsyslog_init(void)
+ 			bb_perror_msg_and_die("shmat");
+ 		}
+ 
+-		buf->size = data_size - sizeof(*buf);
++		buf->size = shm_size - sizeof(*buf);
+ 		buf->head = buf->tail = 0;
+ 
+ 		// we'll trust the OS to set initial semval to 0 (let's hope)
+@@ -654,7 +660,7 @@ extern int syslogd_main(int argc, char **argv)
+ 			if (optarg) {
+ 				int buf_size = atoi(optarg);
+ 				if (buf_size >= 4) {
+-					data_size = buf_size;
++					shm_size = buf_size;
+ 				}
+ 			}
+ 			circular_logging = TRUE;

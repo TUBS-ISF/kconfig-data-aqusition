@@ -1,0 +1,1183 @@
+"2003-09-08 20:33:10 +0000"
+diff --git a/Makefile b/Makefile
+index d6e46a812..d11908223 100644
+--- a/Makefile
++++ b/Makefile
+@@ -227,6 +227,10 @@ endif
+ ifneq ($(strip $(UCLIBC_HAS_GLOB)),y)
+ 	# Remove glob header since glob support is disabled.
+ 	rm $(PREFIX)$(DEVEL_PREFIX)/include/glob.h
++endif
++ifneq ($(strip $(UCLIBC_HAS_GNU_GETOPT)),y)
++	# Remove getopt header since gnu getopt support is disabled.
++	rm $(PREFIX)$(DEVEL_PREFIX)/include/getopt.h
+ endif
+ 	-@for i in `find  $(PREFIX)$(DEVEL_PREFIX) -type d` ; do \
+ 	    chmod -f 755 $$i; chmod -f 644 $$i/*.h; \
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 6d0479c43..7de210bf7 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -359,8 +359,19 @@ endmenu
+ 
+ menu "String and Stdio Support"
+ 
++config UCLIBC_HAS_CTYPE_TABLES
++	bool "Use Table Versions Of 'ctype.h' Functions."
++	default y
++	help
++	  Answer Y to use table versions of the 'ctype.h' functions.
++	  While the non-table versions are often smaller when building
++	  staticly linked apps, they work only in stub locale mode.
++	  
++	  Most people will answer Y.
++
+ config UCLIBC_HAS_CTYPE_SIGNED
+ 	bool "Support Signed Characters In 'ctype.h' Functions."
++	depends UCLIBC_HAS_CTYPE_TABLES
+ 	default y
+ 	help
+ 	  Answer Y to enable support for passing signed char values to
+@@ -373,6 +384,7 @@ config UCLIBC_HAS_CTYPE_SIGNED
+ 
+ choice
+ 	prompt "ctype argument checking"
++	depends UCLIBC_HAS_CTYPE_TABLES
+ 	default UCLIBC_HAS_CTYPE_UNSAFE
+ 	help
+ 	  Please select the invalid arg behavior you want for the 'ctype' functions.
+@@ -398,6 +410,7 @@ endchoice
+ 
+ config UCLIBC_HAS_WCHAR
+ 	bool "Wide Character Support"
++	select UCLIBC_HAS_CTYPE_TABLES
+ 	default n
+ 	help
+ 	  Answer Y to enable wide character support.  This will make uClibc 
+@@ -407,7 +420,7 @@ config UCLIBC_HAS_WCHAR
+ 
+ config UCLIBC_HAS_LOCALE
+ 	bool "Locale Support (experimental/incomplete)"
+-	depends on UCLIBC_HAS_WCHAR
++	select UCLIBC_HAS_WCHAR
+ 	default n
+ 	help
+ 	  Answer Y to enable locale support.  This will make uClibc much
+@@ -428,6 +441,7 @@ config UCLIBC_HAS_XLOCALE
+ 
+ config UCLIBC_HAS_HEXADECIMAL_FLOATS
+ 	bool "Support hexadecimal float notation"
++	depends UCLIBC_HAS_CTYPE_TABLES
+ 	depends on UCLIBC_HAS_FLOATS
+ 	default n
+ 	help
+@@ -479,6 +493,7 @@ config UCLIBC_HAS_GLIBC_CUSTOM_PRINTF
+ 
+ config USE_OLD_VFPRINTF
+ 	bool "Use the old vfprintf implementation"
++	depends on !UCLIBC_HAS_WCHAR
+ 	default n
+ 	help
+ 	  Set to true to use the old vfprintf instead of the new.  This is roughly
+@@ -717,6 +732,15 @@ config UCLIBC_HAS_GETTEXT_AWARENESS
+ 
+ 	  Most people will answer N.
+ 
++config UCLIBC_HAS_GNU_GETOPT
++	bool "Support gnu getopt"
++	default y
++	help
++	  Answer Y if you want to include full gnu getopt() instead of a
++	  (much smaller) SUSv3 compatible getopt().
++
++	  Most people will answer Y.
++
+ endmenu
+ 
+ 
+diff --git a/extra/locale/Makefile b/extra/locale/Makefile
+index f2ea39ee0..eed345d76 100644
+--- a/extra/locale/Makefile
++++ b/extra/locale/Makefile
+@@ -26,13 +26,13 @@ codesets.txt:
+ 	fi;
+ 
+ gen_wc8bit: gen_wc8bit.c
+-	$(HOSTCC) $(HOSTCFLAGS) $(NATIVE_LDFLAGS) $(CFLAGS_wc8bit) $^ -o $@
++	$(HOSTCC) $(HOSTCFLAGS) $(NATIVE_LDFLAGS) $(CFLAGS_wc8bit) -D__UCLIBC_GEN_LOCALE $^ -o $@
+ 
+ c8tables.h: gen_wc8bit codesets.txt
+ 	./gen_wc8bit `cat codesets.txt`
+ 
+ gen_wctype: gen_wctype.c
+-	$(HOSTCC) $(HOSTCFLAGS) $(NATIVE_LDFLAGS) $^ -o $@
++	$(HOSTCC) $(HOSTCFLAGS) $(NATIVE_LDFLAGS) -D__UCLIBC_GEN_LOCALE $^ -o $@
+ 
+ # Warning! Beware tr_TR toupper/tolower exceptions!
+ wctables.h: gen_wctype
+diff --git a/include/getopt.h b/include/getopt.h
+index fd1cb7b15..a682f9ca8 100644
+--- a/include/getopt.h
++++ b/include/getopt.h
+@@ -1,162 +1,4 @@
+-/* Declarations for getopt.
+-   Copyright (C) 1989-1994, 1996-1999, 2001 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
++/* This file will not be installed if not using gnu getopt. */
+ 
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
++#include <bits/getopt.h>
+ 
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#ifndef _GETOPT_H
+-
+-#ifndef __need_getopt
+-# define _GETOPT_H 1
+-#endif
+-
+-/* If __GNU_LIBRARY__ is not already defined, either we are being used
+-   standalone, or this is the first header included in the source file.
+-   If we are being used with glibc, we need to include <features.h>, but
+-   that does not exist if we are standalone.  So: if __GNU_LIBRARY__ is
+-   not defined, include <ctype.h>, which will pull in <features.h> for us
+-   if it's from glibc.  (Why ctype.h?  It's guaranteed to exist and it
+-   doesn't flood the namespace with stuff the way some other headers do.)  */
+-#if !defined __GNU_LIBRARY__
+-# include <ctype.h>
+-#endif
+-
+-#ifdef	__cplusplus
+-extern "C" {
+-#endif
+-
+-/* For communication from `getopt' to the caller.
+-   When `getopt' finds an option that takes an argument,
+-   the argument value is returned here.
+-   Also, when `ordering' is RETURN_IN_ORDER,
+-   each non-option ARGV-element is returned here.  */
+-
+-extern char *optarg;
+-
+-/* Index in ARGV of the next element to be scanned.
+-   This is used for communication to and from the caller
+-   and for communication between successive calls to `getopt'.
+-
+-   On entry to `getopt', zero means this is the first call; initialize.
+-
+-   When `getopt' returns -1, this is the index of the first of the
+-   non-option elements that the caller should itself scan.
+-
+-   Otherwise, `optind' communicates from one call to the next
+-   how much of ARGV has been scanned so far.  */
+-
+-extern int optind;
+-
+-/* Callers store zero here to inhibit the error message `getopt' prints
+-   for unrecognized options.  */
+-
+-extern int opterr;
+-
+-/* Set to an option character which was unrecognized.  */
+-
+-extern int optopt;
+-
+-#ifndef __need_getopt
+-/* Describe the long-named options requested by the application.
+-   The LONG_OPTIONS argument to getopt_long or getopt_long_only is a vector
+-   of `struct option' terminated by an element containing a name which is
+-   zero.
+-
+-   The field `has_arg' is:
+-   no_argument		(or 0) if the option does not take an argument,
+-   required_argument	(or 1) if the option requires an argument,
+-   optional_argument 	(or 2) if the option takes an optional argument.
+-
+-   If the field `flag' is not NULL, it points to a variable that is set
+-   to the value given in the field `val' when the option is found, but
+-   left unchanged if the option is not found.
+-
+-   To have a long-named option do something other than set an `int' to
+-   a compiled-in constant, such as set a value from `optarg', set the
+-   option's `flag' field to zero and its `val' field to a nonzero
+-   value (the equivalent single-letter option character, if there is
+-   one).  For long options that have a zero `flag' field, `getopt'
+-   returns the contents of the `val' field.  */
+-
+-struct option
+-{
+-  const char *name;
+-  /* has_arg can't be an enum because some compilers complain about
+-     type mismatches in all the code that assumes it is an int.  */
+-  int has_arg;
+-  int *flag;
+-  int val;
+-};
+-
+-/* Names for the values of the `has_arg' field of `struct option'.  */
+-
+-# define no_argument		0
+-# define required_argument	1
+-# define optional_argument	2
+-#endif	/* need getopt */
+-
+-
+-/* Get definitions and prototypes for functions to process the
+-   arguments in ARGV (ARGC of them, minus the program name) for
+-   options given in OPTS.
+-
+-   Return the option character from OPTS just read.  Return -1 when
+-   there are no more options.  For unrecognized options, or options
+-   missing arguments, `optopt' is set to the option letter, and '?' is
+-   returned.
+-
+-   The OPTS string is a list of characters which are recognized option
+-   letters, optionally followed by colons, specifying that that letter
+-   takes an argument, to be placed in `optarg'.
+-
+-   If a letter in OPTS is followed by two colons, its argument is
+-   optional.  This behavior is specific to the GNU `getopt'.
+-
+-   The argument `--' causes premature termination of argument
+-   scanning, explicitly telling `getopt' that there are no more
+-   options.
+-
+-   If OPTS begins with `--', then non-option arguments are treated as
+-   arguments to the option '\0'.  This behavior is specific to the GNU
+-   `getopt'.  */
+-
+-/* Many other libraries have conflicting prototypes for getopt, with
+-   differences in the consts, in stdlib.h.  To avoid compilation
+-   errors, only prototype getopt for the GNU C library.  */
+-extern int getopt (int __argc, char *const *__argv, const char *__shortopts);
+-
+-#ifndef __need_getopt
+-extern int getopt_long (int __argc, char *const *__argv, const char *__shortopts,
+-		        const struct option *__longopts, int *__longind);
+-extern int getopt_long_only (int __argc, char *const *__argv,
+-			     const char *__shortopts,
+-		             const struct option *__longopts, int *__longind);
+-
+-/* Internal only.  Users should not call this directly.  */
+-extern int _getopt_internal (int __argc, char *const *__argv,
+-			     const char *__shortopts,
+-		             const struct option *__longopts, int *__longind,
+-			     int __long_only);
+-#endif
+-
+-#ifdef	__cplusplus
+-}
+-#endif
+-
+-/* Make sure we later can get all the definitions and declarations.  */
+-#undef __need_getopt
+-
+-#endif /* getopt.h */
+diff --git a/include/stdio.h b/include/stdio.h
+index b11394da7..bc8e40b2c 100644
+--- a/include/stdio.h
++++ b/include/stdio.h
+@@ -637,7 +637,7 @@ extern void funlockfile (FILE *__stream) __THROW;
+    declared here which do not belong into this header.  But we have to
+    follow.  In GNU mode we don't do this nonsense.  */
+ # define __need_getopt
+-# include <getopt.h>
++# include <bits/getopt.h>
+ #endif	/* X/Open, but not issue 6 and not for GNU.  */
+ 
+ /* If we are compiling with optimizing read this file.  It contains
+diff --git a/include/unistd.h b/include/unistd.h
+index e5441c48e..6ef351eed 100644
+--- a/include/unistd.h
++++ b/include/unistd.h
+@@ -724,7 +724,7 @@ extern int setlogin (__const char *__name) __THROW;
+    arguments in ARGV (ARGC of them, minus the program name) for
+    options given in OPTS.  */
+ # define __need_getopt
+-# include <getopt.h>
++# include <bits/getopt.h>
+ #endif
+ 
+ 
+diff --git a/libc/misc/ctype/Makefile b/libc/misc/ctype/Makefile
+index 2f1dd65f0..dc73ba7e9 100644
+--- a/libc/misc/ctype/Makefile
++++ b/libc/misc/ctype/Makefile
+@@ -28,10 +28,13 @@ MSRC=ctype.c
+ MOBJ=	isalnum.o isalpha.o isascii.o iscntrl.o isdigit.o \
+ 	isgraph.o islower.o isprint.o ispunct.o isspace.o \
+ 	isupper.o isxdigit.o toascii.o tolower.o toupper.o \
+-	isblank.o isctype.o isxlower.o isxupper.o \
+-	__C_ctype_b.o __C_ctype_tolower.o __C_ctype_toupper.o \
++	isblank.o isxlower.o isxupper.o
++
++ifeq ($(UCLIBC_HAS_CTYPE_TABLES),y)
++MOBJ += __C_ctype_b.o __C_ctype_tolower.o __C_ctype_toupper.o \
+ 	__ctype_b_loc.o __ctype_tolower_loc.o __ctype_toupper_loc.o \
+-	__ctype_assert.o
++	__ctype_assert.o isctype.o
++endif
+ 
+ MOBJx=	isalnum_l.o isalpha_l.o isascii_l.o iscntrl_l.o isdigit_l.o \
+ 	isgraph_l.o islower_l.o isprint_l.o ispunct_l.o isspace_l.o \
+diff --git a/libc/misc/ctype/ctype.c b/libc/misc/ctype/ctype.c
+index 13095015d..65debd842 100644
+--- a/libc/misc/ctype/ctype.c
++++ b/libc/misc/ctype/ctype.c
+@@ -42,6 +42,7 @@
+ #endif /* __UCLIBC_HAS_XLOCALE__ */
+ 
+ /**********************************************************************/
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
+ 
+ #ifdef __UCLIBC_HAS_CTYPE_SIGNED__
+ 
+@@ -65,6 +66,7 @@
+ 
+ #endif /* __UCLIBC_HAS_CTYPE_SIGNED__ */
+ 
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
+ /**********************************************************************/
+ #ifdef __UCLIBC_MJN3_ONLY__
+ #ifdef L_isspace
+@@ -74,6 +76,11 @@
+ #warning TODO: Optimize the isx*() funcs.
+ #endif
+ #endif /* __UCLIBC_MJN3_ONLY__ */
++/**********************************************************************/
++#undef PASTE2
++#define PASTE2(X,Y)    X ## Y
++
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
+ 
+ #undef CTYPE_NAME
+ #undef ISCTYPE
+@@ -87,8 +94,6 @@
+ #define ISCTYPE(C,F)   __isctype( C, F )
+ #define CTYPE_ALIAS(NAME)
+ #endif
+-#undef PASTE2
+-#define PASTE2(X,Y)    X ## Y
+ 
+ 
+ #undef CTYPE_BODY
+@@ -135,6 +140,18 @@ int CTYPE_NAME(NAME) (int c  __LOCALE_PARAM ) \
+ CTYPE_ALIAS(NAME)
+ 
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++#define C_MACRO(X)		PASTE2(__C_is,X)(c)
++#define CTYPE_NAME(X)  is ## X
++
++#define IS_FUNC_BODY(NAME) \
++int CTYPE_NAME(NAME) (int c) \
++{ \
++	return C_MACRO(NAME); \
++}
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
+ /**********************************************************************/
+ #ifdef L___ctype_assert
+ #ifdef __UCLIBC_HAS_CTYPE_ENFORCED__
+@@ -176,6 +193,8 @@ IS_FUNC_BODY(cntrl);
+ /**********************************************************************/
+ #if defined(L_isdigit) || defined(L_isdigit_l)
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ /* The standards require EOF < 0. */
+ #if EOF >= CHAR_MIN
+ #define __isdigit_char_or_EOF(C)   __isdigit_char((C))
+@@ -197,6 +216,12 @@ int CTYPE_NAME(digit) (int C   __LOCALE_PARAM)
+ 
+ CTYPE_ALIAS(digit)
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++IS_FUNC_BODY(digit);
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ #if defined(L_isgraph) || defined(L_isgraph_l)
+@@ -243,6 +268,8 @@ IS_FUNC_BODY(xdigit);
+ /**********************************************************************/
+ #ifdef L_tolower
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int tolower(int c)
+ {
+ #if defined(__UCLIBC_HAS_CTYPE_ENFORCED__)
+@@ -251,6 +278,15 @@ int tolower(int c)
+ 	return __UCLIBC_CTYPE_IN_TO_DOMAIN(c) ? (__UCLIBC_CTYPE_TOLOWER)[c] : c;
+ }
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++int tolower(int c)
++{
++	return __C_tolower(c);
++}
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ #ifdef L_tolower_l
+@@ -272,6 +308,8 @@ weak_alias(__tolower_l, tolower_l)
+ /**********************************************************************/
+ #ifdef L_toupper
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int toupper(int c)
+ {
+ #if defined(__UCLIBC_HAS_CTYPE_ENFORCED__)
+@@ -280,6 +318,15 @@ int toupper(int c)
+ 	return __UCLIBC_CTYPE_IN_TO_DOMAIN(c) ? (__UCLIBC_CTYPE_TOUPPER)[c] : c;
+ }
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++int toupper(int c)
++{
++	return __C_toupper(c);
++}
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ #ifdef L_toupper_l
+@@ -301,6 +348,8 @@ weak_alias(__toupper_l, toupper_l)
+ /**********************************************************************/
+ #if defined(L_isascii) || defined(L_isascii_l)
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int __XL(isascii)(int c)
+ {
+ 	return __isascii(c);		/* locale-independent */
+@@ -308,10 +357,21 @@ int __XL(isascii)(int c)
+ 
+ __XL_ALIAS(isascii)
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++int isascii(int c)
++{
++	return __isascii(c);		/* locale-independent */
++}
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ #if defined(L_toascii) || defined(L_toascii_l)
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int __XL(toascii)(int c)
+ {
+ 	return __toascii(c);		/* locale-independent */
+@@ -319,12 +379,23 @@ int __XL(toascii)(int c)
+ 
+ __XL_ALIAS(toascii)
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++int toascii(int c)
++{
++	return __toascii(c);		/* locale-independent */
++}
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ /* old uClibc extensions */
+ /**********************************************************************/
+ #ifdef L_isxlower
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int isxlower(int C)
+ {
+ #if defined(__UCLIBC_HAS_CTYPE_ENFORCED__)
+@@ -341,10 +412,18 @@ int isxlower(int C)
+ #endif
+ }
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++IS_FUNC_BODY(xlower);
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ #ifdef L_isxupper
+ 
++#ifdef __UCLIBC_HAS_CTYPE_TABLES__
++
+ int isxupper(int C)
+ {
+ #if defined(__UCLIBC_HAS_CTYPE_ENFORCED__)
+@@ -361,6 +440,12 @@ int isxupper(int C)
+ #endif
+ }
+ 
++#else  /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
++IS_FUNC_BODY(xupper);
++
++#endif /* __UCLIBC_HAS_CTYPE_TABLES__ */
++
+ #endif
+ /**********************************************************************/
+ /* glibc extensions */
+diff --git a/libc/sysdeps/linux/common/bits/getopt.h b/libc/sysdeps/linux/common/bits/getopt.h
+new file mode 100644
+index 000000000..fd1cb7b15
+--- /dev/null
++++ b/libc/sysdeps/linux/common/bits/getopt.h
+@@ -0,0 +1,162 @@
++/* Declarations for getopt.
++   Copyright (C) 1989-1994, 1996-1999, 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _GETOPT_H
++
++#ifndef __need_getopt
++# define _GETOPT_H 1
++#endif
++
++/* If __GNU_LIBRARY__ is not already defined, either we are being used
++   standalone, or this is the first header included in the source file.
++   If we are being used with glibc, we need to include <features.h>, but
++   that does not exist if we are standalone.  So: if __GNU_LIBRARY__ is
++   not defined, include <ctype.h>, which will pull in <features.h> for us
++   if it's from glibc.  (Why ctype.h?  It's guaranteed to exist and it
++   doesn't flood the namespace with stuff the way some other headers do.)  */
++#if !defined __GNU_LIBRARY__
++# include <ctype.h>
++#endif
++
++#ifdef	__cplusplus
++extern "C" {
++#endif
++
++/* For communication from `getopt' to the caller.
++   When `getopt' finds an option that takes an argument,
++   the argument value is returned here.
++   Also, when `ordering' is RETURN_IN_ORDER,
++   each non-option ARGV-element is returned here.  */
++
++extern char *optarg;
++
++/* Index in ARGV of the next element to be scanned.
++   This is used for communication to and from the caller
++   and for communication between successive calls to `getopt'.
++
++   On entry to `getopt', zero means this is the first call; initialize.
++
++   When `getopt' returns -1, this is the index of the first of the
++   non-option elements that the caller should itself scan.
++
++   Otherwise, `optind' communicates from one call to the next
++   how much of ARGV has been scanned so far.  */
++
++extern int optind;
++
++/* Callers store zero here to inhibit the error message `getopt' prints
++   for unrecognized options.  */
++
++extern int opterr;
++
++/* Set to an option character which was unrecognized.  */
++
++extern int optopt;
++
++#ifndef __need_getopt
++/* Describe the long-named options requested by the application.
++   The LONG_OPTIONS argument to getopt_long or getopt_long_only is a vector
++   of `struct option' terminated by an element containing a name which is
++   zero.
++
++   The field `has_arg' is:
++   no_argument		(or 0) if the option does not take an argument,
++   required_argument	(or 1) if the option requires an argument,
++   optional_argument 	(or 2) if the option takes an optional argument.
++
++   If the field `flag' is not NULL, it points to a variable that is set
++   to the value given in the field `val' when the option is found, but
++   left unchanged if the option is not found.
++
++   To have a long-named option do something other than set an `int' to
++   a compiled-in constant, such as set a value from `optarg', set the
++   option's `flag' field to zero and its `val' field to a nonzero
++   value (the equivalent single-letter option character, if there is
++   one).  For long options that have a zero `flag' field, `getopt'
++   returns the contents of the `val' field.  */
++
++struct option
++{
++  const char *name;
++  /* has_arg can't be an enum because some compilers complain about
++     type mismatches in all the code that assumes it is an int.  */
++  int has_arg;
++  int *flag;
++  int val;
++};
++
++/* Names for the values of the `has_arg' field of `struct option'.  */
++
++# define no_argument		0
++# define required_argument	1
++# define optional_argument	2
++#endif	/* need getopt */
++
++
++/* Get definitions and prototypes for functions to process the
++   arguments in ARGV (ARGC of them, minus the program name) for
++   options given in OPTS.
++
++   Return the option character from OPTS just read.  Return -1 when
++   there are no more options.  For unrecognized options, or options
++   missing arguments, `optopt' is set to the option letter, and '?' is
++   returned.
++
++   The OPTS string is a list of characters which are recognized option
++   letters, optionally followed by colons, specifying that that letter
++   takes an argument, to be placed in `optarg'.
++
++   If a letter in OPTS is followed by two colons, its argument is
++   optional.  This behavior is specific to the GNU `getopt'.
++
++   The argument `--' causes premature termination of argument
++   scanning, explicitly telling `getopt' that there are no more
++   options.
++
++   If OPTS begins with `--', then non-option arguments are treated as
++   arguments to the option '\0'.  This behavior is specific to the GNU
++   `getopt'.  */
++
++/* Many other libraries have conflicting prototypes for getopt, with
++   differences in the consts, in stdlib.h.  To avoid compilation
++   errors, only prototype getopt for the GNU C library.  */
++extern int getopt (int __argc, char *const *__argv, const char *__shortopts);
++
++#ifndef __need_getopt
++extern int getopt_long (int __argc, char *const *__argv, const char *__shortopts,
++		        const struct option *__longopts, int *__longind);
++extern int getopt_long_only (int __argc, char *const *__argv,
++			     const char *__shortopts,
++		             const struct option *__longopts, int *__longind);
++
++/* Internal only.  Users should not call this directly.  */
++extern int _getopt_internal (int __argc, char *const *__argv,
++			     const char *__shortopts,
++		             const struct option *__longopts, int *__longind,
++			     int __long_only);
++#endif
++
++#ifdef	__cplusplus
++}
++#endif
++
++/* Make sure we later can get all the definitions and declarations.  */
++#undef __need_getopt
++
++#endif /* getopt.h */
+diff --git a/libc/sysdeps/linux/common/bits/uClibc_ctype.h b/libc/sysdeps/linux/common/bits/uClibc_ctype.h
+index 294997b74..f682d9762 100644
+--- a/libc/sysdeps/linux/common/bits/uClibc_ctype.h
++++ b/libc/sysdeps/linux/common/bits/uClibc_ctype.h
+@@ -33,7 +33,7 @@
+ #ifndef _BITS_CTYPE_H
+ #define _BITS_CTYPE_H
+ 
+-#warning uClibc_ctype.h is deprecated
++#ifdef __UCLIBC_GEN_LOCALE
+ 
+ /* Taking advantage of the C99 mutual-exclusion guarantees for the various
+  * (w)ctype classes, including the descriptions of printing and control
+@@ -80,72 +80,9 @@ enum {
+ /*  #define __CTYPE_isxdigit(D) -- isxdigit is untestable this way. 
+  *  But that's ok as isxdigit() (and isdigit() too) are locale-invariant. */
+ 
+-/* The values for wctype_t. */
+-enum {
+-	_CTYPE_unclassified = 0,
+-	_CTYPE_isalnum,
+-	_CTYPE_isalpha,
+-	_CTYPE_isblank,
+-	_CTYPE_iscntrl,
+-	_CTYPE_isdigit,
+-	_CTYPE_isgraph,
+-	_CTYPE_islower,
+-	_CTYPE_isprint,
+-	_CTYPE_ispunct,
+-	_CTYPE_isspace,
+-	_CTYPE_isupper,
+-	_CTYPE_isxdigit				/* _MUST_ be last of the standard classes! */
+-};
+-
+-
+-/* The following is used to implement wctype(), but it is defined
+- * here because the ordering must agree with that of the enumeration
+- * above (ignoring unclassified). */
+-#define __CTYPE_TYPESTRING \
+-	"\6alnum\0\6alpha\0\6blank\0\6cntrl\0\6digit\0\6graph\0\6lower\0" \
+-	"\6print\0\6punct\0\6space\0\6upper\0\7xdigit\0\0"
+-
+-/* Used in implementing iswctype(), but defined here as it must agree
+- * in ordering with the string above. */
+-#define __CTYPE_RANGES \
+-	0, -1,								/* unclassified */ \
+-	1, __CTYPE_digit - 1,				/* alnum */ \
+-	1, __CTYPE_alpha_upper - 1,			/* alpha */ \
+-	__CTYPE_print_space_blank, 5,		/* blank -- also must be odd! */ \
+-	__CTYPE_cntrl_space_nonblank, 2,	/* cntrl */ \
+-	__CTYPE_digit, 0,					/* digit */ \
+-	1, __CTYPE_graph - 1,				/* graph */ \
+-	__CTYPE_alpha_lower, 1,				/* lower */ \
+-	1, __CTYPE_print_space_blank - 1,	/* print */ \
+-	__CTYPE_punct, 0,					/* punct */ \
+-	__CTYPE_print_space_nonblank, 5, 	/* space */ \
+-	__CTYPE_alpha_upper_lower, 1,		/* upper */ \
+-	/* No entry for xdigit as it is handled specially. */
+-
+-#define _CTYPE_iswalnum		_CTYPE_isalnum
+-#define _CTYPE_iswalpha		_CTYPE_isalpha
+-#define _CTYPE_iswblank		_CTYPE_isblank
+-#define _CTYPE_iswcntrl		_CTYPE_iscntrl
+-#define _CTYPE_iswdigit		_CTYPE_isdigit
+-#define _CTYPE_iswgraph		_CTYPE_isgraph
+-#define _CTYPE_iswlower		_CTYPE_islower
+-#define _CTYPE_iswprint		_CTYPE_isprint
+-#define _CTYPE_iswpunct		_CTYPE_ispunct
+-#define _CTYPE_iswspace		_CTYPE_isspace
+-#define _CTYPE_iswupper		_CTYPE_isupper
+-#define _CTYPE_iswxdigit	_CTYPE_isxdigit
+-
+-/* The following is used to implement wctrans(). */
+-
+-enum {
+-	_CTYPE_tolower = 1,
+-	_CTYPE_toupper,
+-	_CTYPE_totitle
+-};
++#else  /* __UCLIBC_GEN_LOCALE *****************************************/
+ 
+-#define __CTYPE_TRANSTRING	"\10tolower\0\10toupper\0\10totitle\0\0"
+-
+-/* Now define some ctype macros valid for the C/POSIX locale. */
++/* Define some ctype macros valid for the C/POSIX locale. */
+ 
+ /* ASCII ords of \t, \f, \n, \r, and \v are 9, 12, 10, 13, 11 respectively. */
+ #define __C_isspace(c) \
+@@ -207,46 +144,173 @@ enum {
+ 		 ? (((unsigned char)(((c)) - 'A')) < 6) \
+ 		 : (((unsigned int)(((c)) - 'A')) < 6)))
+ 
+-/* TODO: Replace the above with expressions like the following? */
+-/*  #define __C_isdigit(c) ((sizeof(c) == sizeof(char)) \ */
+-/*  						? (((unsigned char)((c) - '0')) < 10) \ */
+-/*  						: (((unsigned int)((c) - '0')) < 10)) */
+-
+-/* Similarly, define some wctype macros valid for the C/POSIX locale. */
+-
+-/* First, we need some way to make sure the arg is in range. */
+-#define __C_classed(c) \
+-	((sizeof(c) <= sizeof(int)) || (c == ((unsigned char)c)))
+-
+-#define __C_iswspace(c)		(__C_classed(c) && __C_isspace(c))
+-#define __C_iswblank(c)		(__C_classed(c) && __C_isblank(c))
+-#define __C_iswdigit(c)		(__C_classed(c) && __C_isdigit(c))
+-#define __C_iswxdigit(c)	(__C_classed(c) && __C_isxdigit(c))
+-#define __C_iswcntrl(c)		(__C_classed(c) && __C_iscntrl(c))
+-#define __C_iswalpha(c)		(__C_classed(c) && __C_isalpha(c))
+-#define __C_iswalnum(c)		(__C_classed(c) && __C_isalnum(c))
+-#define __C_iswprint(c)		(__C_classed(c) && __C_isprint(c))
+-#define __C_iswlower(c)		(__C_classed(c) && __C_islower(c))
+-#define __C_iswupper(c)		(__C_classed(c) && __C_isupper(c))
+-#define __C_iswpunct(c)		(__C_classed(c) && __C_ispunct(c))
+-#define __C_iswgraph(c)		(__C_classed(c) && __C_isgraph(c))
+-#define __C_towlower(c) \
+-	((__C_classed(c) && __C_isupper(c)) ? ((c) | 0x20) : (c))
+-#define __C_towupper(c) \
+-	((__C_classed(c) && __C_islower(c)) ? ((c) ^ 0x20) : (c))
+-
+-/* Now define some macros to aviod the extra wrapper-function call. */
+-#define __iswalnum(c)		iswctype(c, _CTYPE_iswalnum)
+-#define __iswalpha(c)		iswctype(c, _CTYPE_iswalpha)
+-#define __iswblank(c)		iswctype(c, _CTYPE_iswblank)
+-#define __iswcntrl(c)		iswctype(c, _CTYPE_iswcntrl)
+-#define __iswgraph(c)		iswctype(c, _CTYPE_iswgraph)
+-#define __iswlower(c)		iswctype(c, _CTYPE_iswlower)
+-#define __iswprint(c)		iswctype(c, _CTYPE_iswprint)
+-#define __iswpunct(c)		iswctype(c, _CTYPE_iswpunct)
+-#define __iswspace(c)		iswctype(c, _CTYPE_iswspace)
+-#define __iswupper(c)		iswctype(c, _CTYPE_iswupper)
+-#define __iswdigit(c)		__C_iswdigit(c)
+-#define __iswxdigit(c)		__C_iswxdigit(c)
++/**********************************************************************/
++__BEGIN_DECLS
++
++extern int isalnum(int c) __THROW;
++extern int isalpha(int c) __THROW;
++#ifdef __USE_ISOC99
++extern int isblank(int c) __THROW;
++#endif
++extern int iscntrl(int c) __THROW;
++extern int isdigit(int c) __THROW;
++extern int isgraph(int c) __THROW;
++extern int islower(int c) __THROW;
++extern int isprint(int c) __THROW;
++extern int ispunct(int c) __THROW;
++extern int isspace(int c) __THROW;
++extern int isupper(int c) __THROW;
++extern int isxdigit(int c) __THROW;
++
++extern int tolower(int c) __THROW;
++extern int toupper(int c) __THROW;
++
++#if defined __USE_SVID || defined __USE_MISC || defined __USE_XOPEN
++extern int isascii(int c) __THROW;
++extern int toascii(int c) __THROW;
++#endif
++
++/* The following are included for compatibility with older versions of
++ * uClibc; but now they're only visible if MISC funcctionality is requested.
++ * However, as they are locale-independent, the hidden macro versions are
++ * always present. */
++#ifdef __USE_MISC
++extern int isxlower(int c) __THROW;	/* uClibc-specific. */
++extern int isxupper(int c) __THROW;	/* uClibc-specific. */
++
++/* isdigit() is really locale-invariant, so provide some small fast macros.
++ * These are uClibc-specific. */
++#define __isdigit_char(C)    (((unsigned char)((C) - '0')) <= 9)
++#define __isdigit_int(C)     (((unsigned int)((C) - '0')) <= 9)
++#endif
++
++/* Next, some ctype macros which are valid for all supported locales. */
++/* WARNING: isspace and isblank need to be reverified if more 8-bit codesets
++ * are added!!!  But isdigit and isxdigit are always valid. */
++
++/* #define __isspace(c)	__C_isspace(c) */
++/* #define __isblank(c)	__C_isblank(c) */
++
++/* #define __isdigit(c)	__C_isdigit(c) */
++/* #define __isxdigit(c)	__C_isxdigit(c) */
++
++/* Now some non-ansi/iso c99 macros. */
++
++#define __isascii(c) (((c) & ~0x7f) == 0)
++#define __toascii(c) ((c) & 0x7f)
++#define _toupper(c) ((c) ^ 0x20)
++#define _tolower(c) ((c) | 0x20)
++
++
++/* For compatibility with older versions of uClibc.  Are these ever used? */
++#if 0
++#define __isxlower(c)	__C_isxlower(c)	/* uClibc-specific. */
++#define __isxupper(c)	__C_isxupper(c)	/* uClibc-specific. */
++#endif
++
++/* Apparently, glibc implements things as macros if __NO_CTYPE isn't defined.
++ * If we don't have locale support, we'll do the same.  Otherwise, we'll
++ * only use macros for the supported-locale-invariant cases. */
++#ifndef __UCLIBC_HAS_LOCALE__
++
++#endif /*  __UCLIBC_HAS_LOCALE__ */
++
++__END_DECLS
++
++/**********************************************************************/
++#ifdef __GNUC__
++
++#define __isbody_C_macro(f,args)  __C_ ## f args
++
++#define __isbody(f,c) \
++	(__extension__ ({ \
++		int __res; \
++		if (sizeof(c) > sizeof(char)) { \
++			int __c = (c); \
++			__res = __isbody_C_macro(f,(__c)); \
++		} else { \
++			unsigned char __c = (c); \
++			__res = __isbody_C_macro(f,(__c)); \
++		} \
++		__res; \
++	}))
++
++#define __body_C_macro(f,args)  __C_ ## f args
++
++#define __body(f,c) \
++	(__extension__ ({ \
++		int __res; \
++		if (sizeof(c) > sizeof(char)) { \
++			int __c = (c); \
++			__res = __body_C_macro(f,(__c)); \
++		} else { \
++			unsigned char __c = (c); \
++			__res = __body_C_macro(f,(__c)); \
++		} \
++		__res; \
++	}))
++
++#define __isspace(c)		__body(isspace,c)
++#define __isblank(c)		__body(isblank,c)
++#define __isdigit(c)		__body(isdigit,c)
++#define __isxdigit(c)		__body(isxdigit,c)
++#define __iscntrl(c)		__body(iscntrl,c)
++#define __isalpha(c)		__body(isalpha,c)
++#define __isalnum(c)		__body(isalnum,c)
++#define __isprint(c)		__body(isprint,c)
++#define __islower(c)		__body(islower,c)
++#define __isupper(c)		__body(isupper,c)
++#define __ispunct(c)		__body(ispunct,c)
++#define __isgraph(c)		__body(isgraph,c)
++
++#define __isxlower(c)		__body(isxlower,c)
++#define __isxupper(c)		__body(isxupper,c)
++
++#define __tolower(c)		__body(tolower,c)
++#define __toupper(c)		__body(toupper,c)
++
++#if !defined __NO_CTYPE && !defined __cplusplus
++
++#define isspace(c)			__isspace(c)
++#define isblank(c)			__isblank(c)
++#define isdigit(c)			__isdigit(c)
++#define isxdigit(c)			__isxdigit(c)
++#define iscntrl(c)			__iscntrl(c)
++#define isalpha(c)			__isalpha(c)
++#define isalnum(c)			__isalnum(c)
++#define isprint(c)			__isprint(c)
++#define islower(c)			__islower(c)
++#define isupper(c)			__isupper(c)
++#define ispunct(c)			__ispunct(c)
++#define isgraph(c)			__isgraph(c)
++
++#define isxlower(c)			__isxlower(c)
++#define isxupper(c)			__isxupper(c)
++
++#define tolower(c)			__tolower(c)
++#define toupper(c)			__toupper(c)
++
++
++#endif
++
++#else  /* _GNUC__   ***************************************************/
++
++#if !defined __NO_CTYPE && !defined __cplusplus
++
++/* These macros should be safe from side effects. */
++
++#define isdigit(c)			__C_isdigit(c)
++#define isalpha(c)			__C_isalpha(c)
++#define isprint(c)			__C_isprint(c)
++#define islower(c)			__C_islower(c)
++#define isupper(c)			__C_isupper(c)
++#define isgraph(c)			__C_isgraph(c)
++
++#endif
++
++#endif /* __GNUC__ */
++/**********************************************************************/
++
++#endif  /* __UCLIBC_GEN_LOCALE */
+ 
+ #endif /* _BITS_CTYPE_H */
+diff --git a/libc/unistd/Makefile b/libc/unistd/Makefile
+index 92f27e1a6..f30bfd3f1 100644
+--- a/libc/unistd/Makefile
++++ b/libc/unistd/Makefile
+@@ -28,10 +28,15 @@ DIRS:=
+ CSRC=execl.c execlp.c execv.c execvep.c execvp.c execle.c \
+ 	sleep.c usleep.c getpass.c sysconf_src.c getlogin.c \
+ 	fpathconf.c confstr.c pathconf.c swab.c usershell.c \
+-	getopt.c getsubopt.c
++	getsubopt.c
+ ifeq ($(strip $(UCLIBC_HAS_MMU)),y)
+     CSRC+=daemon.c
+ endif
++ifeq ($(strip $(UCLIBC_HAS_GNU_GETOPT)),y)
++	CSRC += getopt.c
++else
++	CSRC += getopt-susv3.c
++endif
+ 
+ # TESTING -- comment this out if it breaks for you
+ ifeq ($(TARGET_ARCH), $(HOST_ARCH))
+diff --git a/libc/unistd/getopt-susv3.c b/libc/unistd/getopt-susv3.c
+new file mode 100644
+index 000000000..c53e2b089
+--- /dev/null
++++ b/libc/unistd/getopt-susv3.c
+@@ -0,0 +1,133 @@
++/*  Copyright (C) 2003     Manuel Novoa III
++ *
++ *  This library is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU Library General Public
++ *  License as published by the Free Software Foundation; either
++ *  version 2 of the License, or (at your option) any later version.
++ *
++ *  This library is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ *  Library General Public License for more details.
++ *
++ *  You should have received a copy of the GNU Library General Public
++ *  License along with this library; if not, write to the Free
++ *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ */
++
++/*  ATTENTION!   ATTENTION!   ATTENTION!   ATTENTION!   ATTENTION!
++ *
++ *  Besides uClibc, I'm using this code in my libc for elks, which is
++ *  a 16-bit environment with a fairly limited compiler.  It would make
++ *  things much easier for me if this file isn't modified unnecessarily.
++ *  In particular, please put any new or replacement functions somewhere
++ *  else, and modify the makefile to use your version instead.
++ *  Thanks.  Manuel
++ *
++ *  ATTENTION!   ATTENTION!   ATTENTION!   ATTENTION!   ATTENTION! */
++
++/* Sep 7, 2003
++ *   Initial version of a SUSv3 compliant getopt().
++ */
++
++#define _GNU_SOURCE
++#include <unistd.h>
++#include <string.h>
++#include <stdio.h>
++
++#ifdef __UCLIBC_MJN3_ONLY__
++#warning TODO: Enable gettext awareness.
++#endif /* __UCLIBC_MJN3_ONLY__ */
++
++#undef _
++#define _(X)   X
++
++#ifdef __BCC__
++static const char missing[] = "option requires an argument";
++static const char illegal[] = "illegal option";
++#else
++static const char missing[] = "%s: option requires an argument -- %c\n";
++static const char illegal[] = "%s: illegal option -- %c\n";
++#endif
++
++int opterr = 1;
++int optind = 1;
++int optopt = 0;
++char *optarg = NULL;
++
++int getopt(int argc, char * const argv[], const char *optstring)
++{
++	static const char *o;		/* multi opt position */
++	register const char *p;
++	register const char *s;
++	int retval = -1;
++
++	optopt = 0;
++	optarg = NULL;
++
++	if (!o) {				/* Not in a multi-option arg. */
++		if ((optind >= argc)	/* No more args? */
++			|| ((p = argv[optind]) == NULL) /* Missing? */
++			|| (*p != '-')		/* Not an option? */
++			|| (!*++p)			/* "-" case? */
++			) {
++			goto DONE;
++		}
++		if ((*p == '-') && (p[1] == 0)) { /* "--" case. */
++/* 			++optind; */
++/* 			goto DONE; */
++			goto NEXTOPT;		/* Less code generated... */
++		}
++		o = p;
++	}
++
++#ifdef __BCC__
++	p = o;						/* Sigh... Help out bcc. */
++#define o p
++#endif
++	retval = (unsigned char) *o; /* Avoid problems for char val of -1. */
++
++	if ((*o == ':') || !(s = strchr(optstring, *o))) { /* Illegal option? */
++		s = illegal;
++		retval = '?';
++		goto BAD;
++	}
++	
++	if (s[1] == ':') {			/* Option takes an arg? */
++		if (o[1]) {					/* No space between option and arg? */
++			optarg = (char *)(o + 1);
++			goto NEXTOPT;
++		}
++
++		if (optind + 1 < argc) {	/* Space between option and arg? */
++			optarg = argv[++optind];
++		} else {				/* Out of args! */
++			s = missing;
++			retval = ':';
++		BAD:
++			optopt = *o;
++			if (*optstring != ':') {
++				retval = '?';
++				if (opterr) {
++#ifdef __BCC__
++					fprintf(stderr, "%s: %s -- %c\n", argv[0], s, *o);
++#else
++					fprintf(stderr, _(s), argv[0], *o);
++#endif
++				}
++			}
++		}
++	}
++
++#ifdef __BCC__
++#undef o
++#endif
++
++	if (!*++o) {
++	NEXTOPT:
++		o = NULL;
++		++optind;
++	}
++ DONE:
++	return retval;
++}

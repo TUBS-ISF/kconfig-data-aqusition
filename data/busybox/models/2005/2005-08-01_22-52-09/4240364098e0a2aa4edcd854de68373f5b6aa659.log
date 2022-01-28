@@ -1,0 +1,113 @@
+"2005-08-01 22:52:09 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index d6aee5599..e2fe25167 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -558,6 +558,9 @@
+ #ifdef CONFIG_SETKEYCODES
+ 	APPLET(setkeycodes, setkeycodes_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_SETSID
++	APPLET(setsid, setsid_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
++#endif
+ #if defined(CONFIG_FEATURE_SH_IS_ASH) && defined(CONFIG_ASH)
+ 	APPLET_NOUSAGE("sh", ash_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #elif defined(CONFIG_FEATURE_SH_IS_HUSH) && defined(CONFIG_HUSH)
+diff --git a/include/usage.h b/include/usage.h
+index 5d7c36551..dc8058a20 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2375,6 +2375,12 @@
+ #define setkeycodes_example_usage \
+ 	"$ setkeycodes e030 127\n"
+ 
++#define setsid_trivial_usage \
++	"program [arg ...]"
++#define setsid_full_usage \
++	"Runs any program in a new session by calling setsid() before\n" \
++	"exec'ing the rest of its arguments.  See setsid(2) for details."
++
+ #define lash_trivial_usage \
+ 	"[FILE]...\n" \
+ 	"or: sh -c command [args]..."
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index 69a330058..6c68cd08e 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -215,6 +215,12 @@ config CONFIG_STRINGS
+ 	  strings prints the printable character sequences for each file
+ 	  specified.
+ 
++config CONFIG_SETSID
++	bool "setsid"
++	default n
++	help
++	  setsid runs a program in a new session
++
+ config CONFIG_TIME
+ 	bool "time"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index d4c5ff76b..8c53104ed 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -36,6 +36,7 @@ MISCUTILS-$(CONFIG_LAST)        += last.o
+ MISCUTILS-$(CONFIG_MAKEDEVS)    += makedevs.o
+ MISCUTILS-$(CONFIG_MT)          += mt.o
+ MISCUTILS-$(CONFIG_RX)          += rx.o
++MISCUTILS-$(CONFIG_SETSID)      += setsid.o
+ MISCUTILS-$(CONFIG_STRINGS)     += strings.o
+ MISCUTILS-$(CONFIG_TIME)        += time.o
+ MISCUTILS-$(CONFIG_WATCHDOG)    += watchdog.o
+diff --git a/miscutils/setsid.c b/miscutils/setsid.c
+new file mode 100644
+index 000000000..7df35be3b
+--- /dev/null
++++ b/miscutils/setsid.c
+@@ -0,0 +1,46 @@
++/*
++ * setsid.c -- execute a command in a new session
++ * Rick Sladkey <jrs@world.std.com>
++ * In the public domain.
++ *
++ * 1999-02-22 Arkadiusz Mikiewicz <misiek@pld.ORG.PL>
++ * - added Native Language Support
++ *
++ * 2001-01-18 John Fremlin <vii@penguinpowered.com>
++ * - fork in case we are process group leader
++ *
++ * 2004-11-12 Paul Fox
++ * - busyboxed
++ */
++
++#include <stdio.h>
++#include <unistd.h>
++#include <stdlib.h>
++#include "busybox.h"
++
++int
++setsid_main(int argc, char *argv[]) {
++	
++	if (argc < 2) {
++		bb_show_usage();
++	}
++
++	if (getpgrp() == getpid()) {
++		switch(fork()){
++		case -1:
++			bb_perror_msg_and_die("fork");
++		case 0:
++			break;
++		default:	/* parent */
++			exit(0);
++		}
++		/* child falls through */
++	}
++
++	setsid();  /* no error possible */
++
++	execvp(argv[1], argv + 1);
++
++	bb_perror_msg_and_die(argv[1]);
++
++}

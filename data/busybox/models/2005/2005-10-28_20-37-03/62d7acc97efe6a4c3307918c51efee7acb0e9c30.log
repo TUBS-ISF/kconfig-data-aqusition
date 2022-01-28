@@ -1,0 +1,119 @@
+"2005-10-28 20:37:03 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 2b2c45d67..ec3a892d0 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -565,6 +565,9 @@
+ #ifdef CONFIG_RUN_PARTS
+ 	APPLET_ODDNAME("run-parts", run_parts_main, _BB_DIR_BIN, _BB_SUID_NEVER, run_parts)
+ #endif
++#if BB_APPLET_RUNLEVEL
++	APPLET(runlevel, runlevel_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_RX
+ 	APPLET(rx, rx_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 79a61d20a..a82230e41 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2450,6 +2450,18 @@
+ 	"\t-a ARG\tPass ARG as an argument for every program invoked\n" \
+ 	"\t-u MASK\tSet the umask to MASK before executing every program"
+ 
++#if BB_APPLET_RUNLEVEL
++#define runlevel_trivial_usage \
++	"[utmp]"
++#define runlevel_full_usage \
++	"Find the current and previous system runlevel.\n\n" \
++	"If no utmp file exists or if no runlevel record can be found,\n" \
++	"runlevel prints \"unknown\""
++#define runlevel_example_usage \
++	"$ runlevel /var/run/utmp\n" \
++	"N 2"
++#endif
++
+ #define rx_trivial_usage \
+ 	"FILE"
+ #define rx_full_usage \
+diff --git a/miscutils/Config.in b/miscutils/Config.in
+index f07ca36b3..4d81dde0d 100644
+--- a/miscutils/Config.in
++++ b/miscutils/Config.in
+@@ -255,6 +255,15 @@ config CONFIG_MT
+ 	  to advance or rewind a tape past a specified number of archive
+ 	  files on the tape.
+ 
++config BB_APPLET_RUNLEVEL
++        bool "runlevel"
++	default n
++	help
++ 	  find the current and previous system runlevel.
++
++	  This applet uses utmp but does not rely on busybox supporing
++	  utmp on purpose. It is used by e.g. emdebian via /etc/init.d/rc.
++
+ config CONFIG_RX
+         bool "rx"
+ 	default n
+diff --git a/miscutils/Makefile.in b/miscutils/Makefile.in
+index 808ce36de..5bd522c11 100644
+--- a/miscutils/Makefile.in
++++ b/miscutils/Makefile.in
+@@ -24,6 +24,7 @@ MISCUTILS-${CONFIG_LESS}        += less.o
+ MISCUTILS-$(CONFIG_MAKEDEVS)    += makedevs.o
+ MISCUTILS-$(CONFIG_MOUNTPOINT)  += mountpoint.o
+ MISCUTILS-$(CONFIG_MT)          += mt.o
++MISCUTILS-$(BB_APPLET_RUNLEVEL) += runlevel.o
+ MISCUTILS-$(CONFIG_RX)          += rx.o
+ MISCUTILS-$(CONFIG_SETSID)      += setsid.o
+ MISCUTILS-$(CONFIG_STRINGS)     += strings.o
+diff --git a/miscutils/runlevel.c b/miscutils/runlevel.c
+new file mode 100644
+index 000000000..dfa846f81
+--- /dev/null
++++ b/miscutils/runlevel.c
+@@ -0,0 +1,43 @@
++/*
++ * runlevel	Prints out the previous and the current runlevel.
++ *
++ * Version:	@(#)runlevel  1.20  16-Apr-1997  MvS
++ *
++ *		This file is part of the sysvinit suite,
++ *		Copyright 1991-1997 Miquel van Smoorenburg.
++ *
++ * Licensed under the GPL v2 or later, see the file LICENSE in this tarball.
++ *
++ * initially busyboxified by Bernhard Fischer
++ */
++
++#include <stdio.h>
++#include <utmp.h>
++#include <time.h>
++#include <stdlib.h>
++
++#include "busybox.h"
++
++int runlevel_main(int argc, char *argv[])
++{
++  struct utmp *ut;
++  char prev;
++
++  if (argc > 1) utmpname(argv[1]);
++
++  setutent();
++  while ((ut = getutent()) != NULL) {
++	if (ut->ut_type == RUN_LVL) {
++		prev = ut->ut_pid / 256;
++		if (prev == 0) prev = 'N';
++		printf("%c %c\n", prev, ut->ut_pid % 256);
++		endutent();
++		return (0);
++	}
++  }
++
++  printf("unknown\n");
++  endutent();
++  return (1);
++}
++

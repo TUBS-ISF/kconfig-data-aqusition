@@ -1,0 +1,97 @@
+"2006-01-03 06:55:52 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index d6e57a846..4c7365e56 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -446,6 +446,20 @@ config HAS_SHADOW
+ 	  Answer N if you do not need shadow password support.
+ 	  Most people will answer Y.
+ 
++config UCLIBC_HAS_PROGRAM_INVOCATION_NAME
++	bool "Support for program_invocation_name"
++	default n
++	help
++	  Support for the GNU-specific program_invocation_name and
++	  program_invocation_short_name strings.  Some GNU packages
++	  (like tar and coreutils) utilize these for extra useful
++	  output, but in general are not required.
++
++	  At startup, these external strings are automatically set
++	  up based on the value of ARGV[0].
++
++	  If unsure, just answer N.
++
+ config UNIX98PTY_ONLY
+ 	bool "Support only Unix 98 PTYs"
+ 	default y
+diff --git a/include/errno.h b/include/errno.h
+index 203a62e3e..87b35b0bb 100644
+--- a/include/errno.h
++++ b/include/errno.h
+@@ -49,7 +49,7 @@ extern int errno;
+ # endif
+ #endif
+ 
+-#if 0 /*def __USE_GNU      uClibc note: not supported */
++#ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
+ 
+ /* The full and simple forms of the name with which the program was
+    invoked.  These variables are set up automatically at startup based on
+diff --git a/include/libc-internal.h b/include/libc-internal.h
+index 9b83d1b3f..d669d93f2 100644
+--- a/include/libc-internal.h
++++ b/include/libc-internal.h
+@@ -238,6 +238,7 @@ extern char *__strcat (char *__restrict __dest, __const char *__restrict __src)
+ extern char *__strncpy (char *__restrict __dest,
+ 		      __const char *__restrict __src, size_t __n) attribute_hidden;
+ extern char *__strchr (__const char *__s, int __c) attribute_hidden;
++extern char *__strrchr (__const char *__s, int __c) attribute_hidden;
+ extern int __strncmp (__const char *__s1, __const char *__s2, size_t __n) attribute_hidden;
+ extern char *__strdup (__const char *__s) attribute_hidden;
+ extern int __strcasecmp (__const char *__s1, __const char *__s2) attribute_hidden;
+diff --git a/libc/misc/internals/__uClibc_main.c b/libc/misc/internals/__uClibc_main.c
+index 68efad37f..6aa3fb386 100644
+--- a/libc/misc/internals/__uClibc_main.c
++++ b/libc/misc/internals/__uClibc_main.c
+@@ -63,6 +63,14 @@ extern void weak_function _locale_init(void) attribute_hidden;
+ #ifdef __UCLIBC_HAS_THREADS__
+ extern void weak_function __pthread_initialize_minimal(void);
+ #endif
++#ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
++char *program_invocation_name = (char *) "";
++char *program_invocation_short_name = (char *) "";
++hidden_strong_alias (program_invocation_name, __progname_full)
++hidden_strong_alias (program_invocation_short_name, __progname)
++#else
++attribute_hidden const char *__progname = NULL;
++#endif
+ 
+ /*
+  * Declare the __environ global variable and create a weak alias environ.
+@@ -73,7 +81,6 @@ char **__environ = 0;
+ weak_alias(__environ, environ)
+ 
+ size_t __pagesize = 0;
+-const char *__progname = 0;
+ 
+ #ifndef O_NOFOLLOW
+ # define O_NOFOLLOW	0
+@@ -253,7 +260,18 @@ __uClibc_main(int (*main)(int, char **, char **), int argc,
+     }
+ #endif
+ 
++#ifdef __UCLIBC_HAS_PROGRAM_INVOCATION_NAME__
++    if (argv && argv[0]) {
++	__progname_full = *argv;
++	__progname = __strrchr(*argv, '/');
++	if (likely(__progname != NULL))
++		++__progname;
++	else
++		__progname = __progname_full;
++    }
++#else
+     __progname = *argv;
++#endif
+ 
+ #ifdef __UCLIBC_CTOR_DTOR__
+     /* Arrange for the application's dtors to run before we exit.  */

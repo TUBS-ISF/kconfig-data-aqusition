@@ -1,0 +1,112 @@
+"2006-10-25 15:07:56 +0000"
+diff --git a/console-tools/Config.in b/console-tools/Config.in
+index f1dbac531..4a5710de6 100644
+--- a/console-tools/Config.in
++++ b/console-tools/Config.in
+@@ -58,6 +58,23 @@ config RESET
+ 	  This program is used to reset the terminal screen, if it
+ 	  gets messed up.
+ 
++config RESIZE
++	bool "resize"
++	default n
++	help
++	  This program is used to (re)set the width and height of your current
++	  terminal.
++
++config FEATURE_RESIZE_PRINT
++	bool "print environment variables"
++	default n
++	depends on RESIZE
++	help
++	  Prints the newly set size (number of columns and rows) of
++	  the terminal.
++	  E.g.:
++	  COLUMNS=80;LINES=44;export COLUMNS LINES;
++
+ config SETCONSOLE
+ 	bool "setconsole"
+ 	default n
+diff --git a/console-tools/Kbuild b/console-tools/Kbuild
+index 8e377c559..a55bc087c 100644
+--- a/console-tools/Kbuild
++++ b/console-tools/Kbuild
+@@ -14,5 +14,6 @@ lib-$(CONFIG_LOADFONT)		+= loadfont.o
+ lib-$(CONFIG_LOADKMAP)		+= loadkmap.o
+ lib-$(CONFIG_OPENVT)		+= openvt.o
+ lib-$(CONFIG_RESET)		+= reset.o
++lib-$(CONFIG_RESIZE)		+= resize.o
+ lib-$(CONFIG_SETKEYCODES)	+= setkeycodes.o
+ lib-$(CONFIG_SETLOGCONS)	+= setlogcons.o
+diff --git a/console-tools/resize.c b/console-tools/resize.c
+new file mode 100644
+index 000000000..c405629aa
+--- /dev/null
++++ b/console-tools/resize.c
+@@ -0,0 +1,38 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * resize - set terminal width and height.
++ *
++ * Copyright 2006 Bernhard Fischer
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++/* no options, no getopt */
++#include "busybox.h"
++
++int resize_main(int argc, char **argv)
++{
++	struct termios old, new;
++	struct winsize w = {0,0,0,0};
++	int ret;
++
++	tcgetattr(STDOUT_FILENO, &old); /* fiddle echo */
++	new = old;
++	new.c_cflag |= (CLOCAL | CREAD);
++	new.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
++	tcsetattr(STDOUT_FILENO, TCSANOW, &new);
++	/* save_cursor_pos 7
++	 * scroll_whole_screen [r
++	 * put_cursor_waaaay_off [$x;$yH
++	 * get_cursor_pos [6n
++	 * restore_cursor_pos 8
++	 */
++	printf("\0337\033[r\033[999;999H\033[6n");
++	scanf("\033[%hu;%huR", &w.ws_row, &w.ws_col);
++	ret = ioctl(STDOUT_FILENO, TIOCSWINSZ, &w);
++	printf("\0338");
++	tcsetattr(STDOUT_FILENO, TCSANOW, &old);
++	if (ENABLE_FEATURE_RESIZE_PRINT)
++		printf("COLUMNS=%d;LINES=%d;export COLUMNS LINES;\n",
++			w.ws_col, w.ws_row);
++	return ret;
++}
+diff --git a/include/applets.h b/include/applets.h
+index 14f6156af..0d0f56483 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -237,6 +237,7 @@ USE_REALPATH(APPLET(realpath, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_HALT(APPLET_ODDNAME(reboot, halt, _BB_DIR_SBIN, _BB_SUID_NEVER, reboot))
+ USE_RENICE(APPLET(renice, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_RESET(APPLET(reset, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
++USE_RESIZE(APPLET(resize, _BB_DIR_USR_BIN, _BB_SUID_NEVER))
+ USE_RM(APPLET(rm, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_RMDIR(APPLET(rmdir, _BB_DIR_BIN, _BB_SUID_NEVER))
+ USE_RMMOD(APPLET(rmmod, _BB_DIR_SBIN, _BB_SUID_NEVER))
+diff --git a/include/usage.h b/include/usage.h
+index 03e655a1e..ab0c1efed 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -2473,6 +2473,11 @@ USE_FEATURE_MDEV_CONFIG( \
+ #define reset_full_usage \
+ 	"Resets the screen."
+ 
++#define resize_trivial_usage \
++	""
++#define resize_full_usage \
++	"Resizes the screen."
++
+ #define rm_trivial_usage \
+ 	"[OPTION]... FILE..."
+ #define rm_full_usage \

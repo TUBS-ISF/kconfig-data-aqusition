@@ -1,0 +1,782 @@
+"2016-03-12 12:42:43 -0300"
+diff --git a/Kconfig b/Kconfig
+index dda970a5..f9f2b531 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -201,6 +201,7 @@ source "src/samples/flow/minnow-calamari/Kconfig"
+ source "src/samples/flow/misc/Kconfig"
+ source "src/samples/flow/oic/Kconfig"
+ source "src/samples/flow/oic/light-scan/Kconfig"
++source "src/samples/flow/oic-and-http-light/Kconfig"
+ source "src/samples/flow/power-supply/Kconfig"
+ source "src/samples/flow/trash-disposer/Kconfig"
+ source "src/samples/flow/unix-socket/Kconfig"
+diff --git a/src/samples/flow/oic-and-http-light/.gitignore b/src/samples/flow/oic-and-http-light/.gitignore
+new file mode 100644
+index 00000000..b4ee3d8d
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/.gitignore
+@@ -0,0 +1,2 @@
++power
++state
+diff --git a/src/samples/flow/oic-and-http-light/Kconfig b/src/samples/flow/oic-and-http-light/Kconfig
+new file mode 100644
+index 00000000..f2bc8b55
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_OIC_AND_HTTP_LIGHT_SAMPLE
++	bool
++	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_OIC && FLOW_NODE_TYPE_HTTP_CLIENT && FLOW_NODE_TYPE_HTTP_SERVER && FLOW_NODE_TYPE_CONSOLE && FLOW_NODE_TYPE_TIMER && FLOW_NODE_TYPE_APP && FLOW_NODE_TYPE_CONSTANT && FLOW_NODE_TYPE_CONVERTER && FLOW_NODE_TYPE_PLATFORM && FLOW_NODE_TYPE_PERSISTENCE
++	default y
+diff --git a/src/samples/flow/oic-and-http-light/Makefile b/src/samples/flow/oic-and-http-light/Makefile
+new file mode 100644
+index 00000000..0c56fd9d
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/Makefile
+@@ -0,0 +1,19 @@
++sample-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE) += \
++	oic-and-http-light-server \
++	http-controller \
++	oic-controller
++
++sample-oic-and-http-light-server-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE) := \
++	oic-and-http-light-server.fbp
++sample-oic-and-http-light-server-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE)-conffile := \
++	sol-flow.json
++
++sample-http-controller-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE) := \
++	http-controller.fbp
++sample-http-controller-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE)-conffile := \
++	sol-flow.json
++
++sample-oic-controller-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE) := \
++	oic-controller.fbp
++sample-oic-controller-$(FLOW_OIC_AND_HTTP_LIGHT_SAMPLE)-conffile := \
++	sol-flow.json
+diff --git a/src/samples/flow/oic-and-http-light/README.md b/src/samples/flow/oic-and-http-light/README.md
+new file mode 100644
+index 00000000..8ab460df
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/README.md
+@@ -0,0 +1,125 @@
++# Sample: OIC and HTTP light-server
++
++This sample provides a light-server that uses both OIC and HTTP to
++communicate with controllers, persisting data to disk so it can be
++restored on restart.
++
++It also provides two controllers, one via HTTP and the other via
++OIC. The OIC is very simple, since the resource is exposed as a single
++node with multiple ports and the protocol supports observing, thus no
++polling is required. HTTP uses individual nodes per sub-resource
++(power and state) and needs to poll in a timely manner to synchronize
++the controller status with the light-server. However both controllers
++share the same logic to read input and quit the application, so it is
++isolated in its own `controller.fbp`.
++
++The input and output are declared in `sol-flow.json` and the board
++variants. By default it will read from keyboard and print to console,
++in supported boards it will use GPIO and PWM to act on hardware.
++
++## Concepts
++
++ * running multiple network servers in the same application;
++ * splitting functionality into different FBP files;
++ * using per-board configuration of nodes, with reasonable fallback;
++ * how to use the integer accumulator;
++ * how to convert between packet types;
++ * synchronization using cross-link between node types;
++ * receiving command from command line;
++ * quitting the application;
++ * using the intrinsic ERROR port;
++ * persistence to file storage;
++ * HTTP server and client;
++ * OIC server and client.
++
++## Running
++
++To test the setup open 3 console terminals:
++
++### Server Terminal
++
++```sh
++user/host$ export SOL_MACHINE_ID="580a3d6a9d194a23b90a24573558d2f4"
++user/host$ sol-fbp-runner oic-and-http-light-server.fbp
++
++OIC device-id: 580a3d6a9d194a23b90a24573558d2f4 (string)
++note: http-light-server running on port 8002, paths: /state and /power (string)
++state: true (boolean)
++power: 100 (integer range)
++
++```
++
++Defining the `SOL_MACHINE_ID` is optional, but recommended to keep
++execution consistent. You'll need the machine ID since it is used to
++create the OIC Device ID, however this is printted to the console as
++displayed above.
++
++The server will save its state, thus it can be stopped (with `^C` or
++kill) and restarted.
++
++### HTTP Controller Terminal
++
++```sh
++user/host$  export no_proxy="localhost,$no_proxy"
++user/host$ sol-fbp-runner http-controller.fbp http://localhost:8002
++Hint: Press 'a' to change state, 'j' to increase power and 'k' to decrease it, 'q' to quit. (string)
++Server power level is: 0 (integer range)
++Power value changed: 0 (integer range)
++Server state is: true (boolean)
++State changed: true (boolean)
++Server power level is: 0 (integer range)
++Server state is: true (boolean)
++State changed: false (boolean)
++Server power level is: 0 (integer range)
++Server state is: false (boolean)
++Power value changed: 1 (integer range)
++Server power level is: 1 (integer range)
++Server state is: false (boolean)
++```
++
++Defining `no_proxy` is optional, but recommended to avoid incorrect
++proxy configurations.
++
++Upon start, the controller will query the server using HTTP `GET`
++requests and will update its internal state.
++
++The state can then be changed using the keyboard:
++ * `a` (keycode 97): change state
++ * `j` (keycode 106): increase power level
++ * `k` (keycode 107): decrease power level
++ * `q` (keycode 113): quit the application
++
++Once the state is changed, it will execute HTTP `POST` requests to the
++server, which will show the updated values.
++
++### OIC Controller Terminal
++
++```sh
++user/host$ sol-fbp-runner oic-controller.fbp 580a3d6a9d194a23b90a24573558d2f4
++Hint: Press 'a' to change state, 'j' to increase power and 'k' to decrease it, 'q' to quit. (string)
++Server state is: true (boolean)
++Server power level is: 1 (integer range)
++Power value changed: 1 (integer range)
++State changed: true (boolean)
++State changed: false (boolean)
++Power value changed: 2 (integer range)
++
++```
++
++Upon start, the controller will start a scan and if the given device
++ID is found, it will be observed.
++
++The state can then be changed using the keyboard:
++ * `a` (keycode 97): change state
++ * `j` (keycode 106): increase power level
++ * `k` (keycode 107): decrease power level
++ * `q` (keycode 113): quit the application
++
++Once the state is changed, it will execute CoAP `POST` requests to the
++server, which will show the updated values.
++
++### TODO
++
++ * create a second http-controller that reads the URL from form/string + grove/lcd-string and GPIO, and persist. Press and hold one button to reconfigure URL;
++ * create a second oic-controller that SCAN the DEVICE-ID and uses form/selector + grove/lcd-string to select, and persist. Press and hold one button to reconfigure DEVICE-ID;
++ * create a tutorial covering incremental steps on how to do the whole sample (could be in a sub-directory of it or in doc/tutorial), how to compile and run for multiple boards and OS.
+diff --git a/src/samples/flow/oic-and-http-light/controller.fbp b/src/samples/flow/oic-and-http-light/controller.fbp
+new file mode 100644
+index 00000000..3c3c82c1
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/controller.fbp
+@@ -0,0 +1,93 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Brief:
++#
++# Controller logic.
++#
++# This FBP handles input, stores the current value, emits value
++# changes on its output ports and take new values on input ports.
++#
++# It receives input from buttons defined in sol-flow*.json
++# (per-board), will load values from server at start and post to
++# server on changes.
++#
++#        .-------------.
++#  POWER>|             |>POWER
++#        |  controller |
++#  STATE>|             |>STATE
++#        `-------------'
++#
++
++OUTPORT=power_value.OUT:POWER
++OUTPORT=state_value.OUT:STATE
++
++INPORT=power_value.SET:POWER
++INPORT=state_value_from_boolean.IN:STATE
++
++_(StartupMessage) OUT -> IN _(console:prefix="Hint: ")
++
++# connect quit
++quit_button(QuitButton) OUT -> QUIT _(app/quit)
++
++# we use an accumulator from 0 to 100 to store the power value, it
++# should not send an initial packet as we're going to load the current
++# value from the server using get_power.
++power_value(int/accumulator:setup_value=min:0|max:100|step:1,initial_value=50,send_initial_packet=false)
++
++# connect increase/decrease buttons
++increase_button(IncreaseButton)
++decrease_button(DecreaseButton)
++
++# buttons emit true/false and if we connect directly to INC/DEC, then
++# it would act on both, which is not desired. Then we use
++# boolean-to-empty to filter
++increase_button OUT -> PULSE_IF_TRUE _(converter/boolean-to-empty) OUT -> INC power_value
++decrease_button OUT -> PULSE_IF_TRUE _(converter/boolean-to-empty) OUT -> DEC power_value
++
++power_value OUT -> IN _(console:prefix="Power value changed: ")
++
++# like for power, we use an accumulator from 0 to 1 to store the state
++# and we do not use an initial packet as we're going to load from the
++# server.  Since accumulator is an integer and state is boolean, we
++# must convert as required.
++state_value_as_int(int/accumulator:setup_value=min:0|max:1,send_initial_packet=false)
++
++# connect button
++state_button(StateButton)
++state_button OUT -> PULSE_IF_TRUE _(converter/boolean-to-empty) OUT -> INC state_value_as_int
++
++# offer an entry point in the correct type (INPORT=...)
++state_value_from_boolean(converter/boolean-to-int) OUT -> SET state_value_as_int
++
++# provide final value with the correct type (OUTPORT=...)
++state_value_as_int OUT -> IN state_value(converter/int-to-boolean)
++
++state_value OUT -> IN _(console:prefix="State changed: ")
+diff --git a/src/samples/flow/oic-and-http-light/http-controller.fbp b/src/samples/flow/oic-and-http-light/http-controller.fbp
+new file mode 100755
+index 00000000..1b5c2745
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/http-controller.fbp
+@@ -0,0 +1,89 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Brief:
++#
++# This file is a comprehensive controller to the light-server over HTTP.
++#
++# It uses the controller logic defined in its own FBP.
++
++DECLARE=controller:fbp:controller.fbp
++
++# expect an URL as the first command line parameter
++cmdline_arguments(app/argc-argv)
++cmdline_arguments ERROR -> IN cmdline_usage(converter/empty-to-string:output_value="Missing URL in the command line. Example: http://localhost:8002") OUT -> IN _(console:prefix="ERROR: ")
++cmdline_usage OUT -> IN _(converter/empty-to-int:output_value=1) OUT -> CODE _(app/quit)
++
++# Build URL for each resource
++_(constant/int:value=1) OUT -> IN cmdline_arguments
++
++state_url(string/concatenate:separator="/")
++cmdline_arguments OUT -> IN[0] state_url
++_(constant/string:value="state") OUT -> IN[1] state_url
++
++power_url(string/concatenate:separator="/")
++cmdline_arguments OUT -> IN[0] power_url
++_(constant/string:value="power") OUT -> IN[1] power_url
++
++# create a controller
++controller(controller)
++
++note(console:prefix="note: ")
++
++# HTTP provides no callback or observe, so trigger will keep polling
++# server for status
++trigger_get(timer:interval=1000)
++
++# define http client for 'power' property
++http_power(http-client/int)
++http_power ERROR -> IN _(converter/empty-to-string:output_value="Error communicating with HTTP server at /power. Check if the server is running.") OUT -> IN note
++power_url OUT -> URL http_power
++
++# load power level from server
++trigger_get OUT -> GET http_power
++http_power OUT -> POWER controller
++http_power OUT -> IN _(console:prefix="Server power level is: ")
++
++# notify server of power level change
++controller POWER -> POST http_power
++
++# define http client for 'state' property
++http_state(http-client/boolean)
++http_state ERROR -> IN _(converter/empty-to-string:output_value="Error communicating with HTTP server at /state. Check if the server is running.") OUT -> IN note
++state_url OUT -> URL http_state
++
++# load state from server
++trigger_get OUT -> GET http_state
++http_state OUT -> STATE controller
++http_state OUT -> IN _(console:prefix="Server state is: ")
++
++# notify server of state change
++controller STATE -> POST http_state
+diff --git a/src/samples/flow/oic-and-http-light/http-light-server.fbp b/src/samples/flow/oic-and-http-light/http-light-server.fbp
+new file mode 100644
+index 00000000..420aa51b
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/http-light-server.fbp
+@@ -0,0 +1,53 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Brief:
++#
++# This file wraps low-level primitive http-server nodes into
++# a high-level "http-light-server" that can be used as a single entity
++
++INPORT=power.IN:IN_POWER
++INPORT=state.IN:IN_STATE
++
++OUTPORT=power.OUT:OUT_POWER
++OUTPORT=state.OUT:OUT_STATE
++
++# Each node will register a path in a singleton server that is
++# maintained by Soletta for each port.
++#
++# This means one can have as many node of type http-server as desired,
++# and they can exist in the same or different ports.
++#
++# The server is built-in to Soletta and executes in-process, thus
++# whenever the application quits, the server stops.
++power(http-server/int:path="/power",port=8002)
++state(http-server/boolean:path="/state",port=8002)
++
++_(constant/string:value="http-light-server running on port 8002, paths: /state and /power") OUT -> IN _(console:prefix="note: ")
+diff --git a/src/samples/flow/oic-and-http-light/oic-and-http-light-server.fbp b/src/samples/flow/oic-and-http-light/oic-and-http-light-server.fbp
+new file mode 100755
+index 00000000..f5b82b43
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/oic-and-http-light-server.fbp
+@@ -0,0 +1,75 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Brief:
++#
++# This sensor will export oic/server-light resource and also listen
++# for HTTP requests on port 8002 using the http-light-server.
++#
++# values are persisted to filesystem storage and applied to
++# StateActuator and PowerActuator defined at sol-flow*.json
++
++DECLARE=http-light-server:fbp:http-light-server.fbp
++DECLARE=persistence-light-server:fbp:persistence-light-server.fbp
++
++# The servers may be declared in any order, they won't block execution
++# here, rather will all serve requests from the same event (main)
++# loop, the one that is also used to receive hardware events and
++# timers.
++oic_server(oic/server-light)
++http_server(http-light-server)
++
++persistence(persistence-light-server:default_state=true,default_power=100)
++
++# cross-link OIC and HTTP, acting on one should report to the other.
++oic_server OUT_POWER -> IN_POWER http_server
++oic_server OUT_STATE -> IN_STATE http_server
++
++http_server OUT_POWER -> IN_POWER oic_server
++http_server OUT_STATE -> IN_STATE oic_server
++
++# cross-link OIC and persistence, acting on one should report to the other.
++oic_server OUT_POWER -> IN_POWER persistence
++oic_server OUT_STATE -> IN_STATE persistence
++
++persistence OUT_POWER -> IN_POWER oic_server
++persistence OUT_STATE -> IN_STATE oic_server
++
++# act on hardware based on OIC values
++# TODO: sol-flow.json defines PowerActuator as calamari/led that uses
++# an input port INTENSITY instead of IN. There should be a way to
++# define a meta-type in the sol-flow.json, then we could create a
++# wrapper FBP that converts the port name.
++oic_server OUT_POWER -> IN power_actuator(PowerActuator)
++oic_server OUT_STATE -> IN state_actuator(StateActuator)
++
++# show machine-id as device-id
++_(platform/machine-id) OUT -> IN _(console:prefix="OIC device-id: ")
+diff --git a/src/samples/flow/oic-and-http-light/oic-controller.fbp b/src/samples/flow/oic-and-http-light/oic-controller.fbp
+new file mode 100755
+index 00000000..32a2e42e
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/oic-controller.fbp
+@@ -0,0 +1,64 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Brief:
++#
++# This file is a comprehensive controller to the light-server over OIC.
++#
++# It uses the controller logic defined in its own FBP.
++
++DECLARE=controller:fbp:controller.fbp
++
++# expect an device-id as the first command line parameter
++cmdline_arguments(app/argc-argv)
++cmdline_arguments ERROR -> IN cmdline_usage(converter/empty-to-string:output_value="Missing device ID in the command line. Example: 2f3089a1dbfb43d38cab64383bdf9380") OUT -> IN _(console:prefix="ERROR: ")
++cmdline_usage OUT -> IN _(converter/empty-to-int:output_value=1) OUT -> CODE _(app/quit)
++
++_(constant/int:value=1) OUT -> IN cmdline_arguments
++
++# create a controller
++controller(controller)
++
++note(console:prefix="note: ")
++
++oic(oic/client-light)
++cmdline_arguments OUT -> DEVICE_ID oic
++
++# cross-link OIC and controller
++oic OUT_STATE -> STATE controller
++oic OUT_POWER -> POWER controller
++
++controller STATE -> IN_STATE oic
++controller POWER -> IN_POWER oic
++
++# inform the user when server changed
++oic OUT_STATE -> IN _(console:prefix="Server state is: ")
++oic OUT_POWER -> IN _(console:prefix="Server power level is: ")
+diff --git a/src/samples/flow/oic-and-http-light/persistence-light-server.fbp b/src/samples/flow/oic-and-http-light/persistence-light-server.fbp
+new file mode 100644
+index 00000000..2da4926b
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/persistence-light-server.fbp
+@@ -0,0 +1,47 @@
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Brief:
++#
++# This file wraps low-level primitive persistence nodes into a
++# high-level "persist-light-server" that can be used as a single
++# entity
++
++INPORT=power.IN:IN_POWER
++INPORT=state.IN:IN_STATE
++
++OUTPORT=power.OUT:OUT_POWER
++OUTPORT=state.OUT:OUT_STATE
++
++OPTION=power.default_value:default_power
++OPTION=state.default_value:default_state
++
++power(persistence/int:name="power",storage=fs)
++state(persistence/boolean:name="state",storage=fs)
+diff --git a/src/samples/flow/oic-and-http-light/sol-flow-intel-minnow-max-linux_gt_3_17.json b/src/samples/flow/oic-and-http-light/sol-flow-intel-minnow-max-linux_gt_3_17.json
+new file mode 100644
+index 00000000..e981791b
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/sol-flow-intel-minnow-max-linux_gt_3_17.json
+@@ -0,0 +1,72 @@
++{
++    "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++    "nodetypes": [
++        {
++            "name": "StateActuator",
++            "options": {
++                "pin": "339",
++                "raw": true
++            },
++            "type": "gpio/writer"
++        },
++        {
++            "name": "PowerActuator",
++            "options": {
++                "address": 1,
++                "period": 10000,
++                "range": "min:0|max:10000|step:1"
++            },
++            "type": "calamari/led"
++        },
++        {
++            "name": "QuitButton",
++            "options": {
++                "binary_code": 113
++            },
++            "type": "keyboard/boolean"
++        },
++        {
++            "name": "IncreaseButton",
++            "options": {
++                "active_low": true,
++                "edge_falling": true,
++                "edge_rising": true,
++                "pin": 472,
++                "pull": "up",
++                "raw": true
++            },
++            "type": "gpio/reader"
++        },
++        {
++            "name": "DecreaseButton",
++            "options": {
++                "active_low": true,
++                "edge_falling": true,
++                "edge_rising": true,
++                "pin": 482,
++                "pull": "up",
++                "raw": true
++            },
++            "type": "gpio/reader"
++        },
++        {
++            "name": "StateButton",
++            "options": {
++                "active_low": true,
++                "edge_falling": true,
++                "edge_rising": true,
++                "pin": 483,
++                "pull": "up",
++                "raw": true
++            },
++            "type": "gpio/reader"
++        },
++        {
++            "name": "StartupMessage",
++            "options": {
++                "value": "This configuration uses Minnowboard and Calamari Lure. Press Button-3 to change state, Button-1 to increase power and Button-2 to decrease it, 'q' (keyboard) to quit."
++            },
++            "type": "constant/string"
++        }
++    ]
++}
+diff --git a/src/samples/flow/oic-and-http-light/sol-flow.json b/src/samples/flow/oic-and-http-light/sol-flow.json
+new file mode 100644
+index 00000000..dfb6d964
+--- /dev/null
++++ b/src/samples/flow/oic-and-http-light/sol-flow.json
+@@ -0,0 +1,54 @@
++{
++    "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++    "nodetypes": [
++        {
++            "name": "StateActuator",
++            "options": {
++                "prefix": "state: "
++            },
++            "type": "console"
++        },
++        {
++            "name": "PowerActuator",
++            "options": {
++                "prefix": "power: "
++            },
++            "type": "console"
++        },
++        {
++            "name": "QuitButton",
++            "options": {
++                "binary_code": 113
++            },
++            "type": "keyboard/boolean"
++        },
++        {
++            "name": "IncreaseButton",
++            "options": {
++                "binary_code": 106
++            },
++            "type": "keyboard/boolean"
++        },
++        {
++            "name": "DecreaseButton",
++            "options": {
++                "binary_code": 107
++            },
++            "type": "keyboard/boolean"
++        },
++        {
++            "name": "StateButton",
++            "options": {
++                "binary_code": 97
++            },
++            "type": "keyboard/boolean"
++        },
++        {
++            "name": "StartupMessage",
++            "options": {
++                "value": "Press 'a' to change state, 'j' to increase power and 'k' to decrease it, 'q' to quit."
++            },
++            "type": "constant/string"
++        }
++    ]
++}

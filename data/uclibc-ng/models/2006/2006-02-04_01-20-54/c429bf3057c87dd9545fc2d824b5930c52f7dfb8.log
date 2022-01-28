@@ -1,0 +1,5668 @@
+"2006-02-04 01:20:54 +0000"
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 33b859184..76315d3ff 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -62,6 +62,10 @@ HPPA
+ S:	Unmaintained
+ 
+ 
++IA64
++S:	Unmaintained
++
++
+ I386
+ N:	Erik Andersen
+ E:	andersen@codepoet.org
+diff --git a/extra/Configs/Config.ia64 b/extra/Configs/Config.ia64
+new file mode 100644
+index 000000000..fc2c7c190
+--- /dev/null
++++ b/extra/Configs/Config.ia64
+@@ -0,0 +1,28 @@
++#
++# For a description of the syntax of this configuration file,
++# see extra/config/Kconfig-language.txt
++#
++
++config TARGET_ARCH
++	default "ia64"
++
++config ARCH_SUPPORTS_BIG_ENDIAN
++	bool
++	default n
++
++config ARCH_SUPPORTS_LITTLE_ENDIAN
++	bool
++	default y
++
++config FORCE_OPTIONS_FOR_ARCH
++	bool
++	default y
++	select ARCH_HAS_MMU
++	select HAS_NO_THREADS
++	select ARCH_HAS_NO_LDSO
++
++config ARCH_CFLAGS
++	string
++
++config LIBGCC_CFLAGS
++	string
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index e2259d022..6a5f2d2ea 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -41,6 +41,9 @@ config TARGET_i386
+ config TARGET_i960
+ 	bool "i960 (BROKEN)"
+ 
++config TARGET_ia64
++	bool "ia64"
++
+ config TARGET_m68k
+ 	bool "m68k"
+ 
+@@ -122,6 +125,10 @@ if TARGET_i960
+ source "extra/Configs/Config.i960"
+ endif
+ 
++if TARGET_ia64
++source "extra/Configs/Config.ia64"
++endif
++
+ if TARGET_m68k
+ source "extra/Configs/Config.m68k"
+ endif
+diff --git a/libc/string/ia64/Makefile b/libc/string/ia64/Makefile
+new file mode 100644
+index 000000000..0a95346fd
+--- /dev/null
++++ b/libc/string/ia64/Makefile
+@@ -0,0 +1,13 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++top_srcdir:=../../../
++top_builddir:=../../../
++all: objs
++include $(top_builddir)Rules.mak
++include ../Makefile.in
++include $(top_srcdir)Makerules
+diff --git a/libc/string/ia64/bcopy.S b/libc/string/ia64/bcopy.S
+new file mode 100644
+index 000000000..c4eb22b1f
+--- /dev/null
++++ b/libc/string/ia64/bcopy.S
+@@ -0,0 +1,10 @@
++#include "sysdep.h"
++
++ENTRY(bcopy)
++	.regstk 3, 0, 0, 0
++	mov r8 = in0
++	mov in0 = in1
++	;;
++	mov in1 = r8
++	br.cond.sptk.many HIDDEN_JUMPTARGET(memmove)
++END(bcopy)
+diff --git a/libc/string/ia64/bzero.S b/libc/string/ia64/bzero.S
+new file mode 100644
+index 000000000..bcca41d5e
+--- /dev/null
++++ b/libc/string/ia64/bzero.S
+@@ -0,0 +1,315 @@
++/* Optimized version of the standard bzero() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2002 Free Software Foundation, Inc.
++   Contributed by Dan Pop for Itanium <Dan.Pop@cern.ch>.
++   Rewritten for McKinley by Sverre Jarp, HP Labs/CERN <Sverre.Jarp@cern.ch>
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: dest
++
++   Inputs:
++        in0:    dest
++        in1:    count
++
++   The algorithm is fairly straightforward: set byte by byte until we
++   we get to a 16B-aligned address, then loop on 128 B chunks using an
++   early store as prefetching, then loop on 32B chucks, then clear remaining
++   words, finally clear remaining bytes.
++   Since a stf.spill f0 can store 16B in one go, we use this instruction
++   to get peak speed.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define dest		in0
++#define	cnt		in1
++
++#define tmp		r31
++#define save_lc		r30
++#define ptr0		r29
++#define ptr1		r28
++#define ptr2		r27
++#define ptr3		r26
++#define ptr9 		r24
++#define	loopcnt		r23
++#define linecnt		r22
++#define bytecnt		r21
++
++// This routine uses only scratch predicate registers (p6 - p15)
++#define p_scr		p6	// default register for same-cycle branches
++#define p_unalgn	p9
++#define p_y		p11
++#define p_n		p12
++#define p_yy		p13
++#define p_nn		p14
++
++#define movi0		mov
++
++#define MIN1		15
++#define MIN1P1HALF	8
++#define LINE_SIZE	128
++#define LSIZE_SH        7			// shift amount
++#define PREF_AHEAD	8
++
++#define USE_FLP
++#if defined(USE_INT)
++#define store		st8
++#define myval		r0
++#elif defined(USE_FLP)
++#define store		stf8
++#define myval		f0
++#endif
++
++.align	64
++ENTRY(bzero)
++{ .mmi
++	.prologue
++	alloc	tmp = ar.pfs, 2, 0, 0, 0
++	lfetch.nt1 [dest]
++	.save   ar.lc, save_lc
++	movi0	save_lc = ar.lc
++} { .mmi
++	.body
++	mov	ret0 = dest		// return value
++	nop.m	0
++	cmp.eq	p_scr, p0 = cnt, r0
++;; }
++{ .mmi
++	and	ptr2 = -(MIN1+1), dest	// aligned address
++	and	tmp = MIN1, dest	// prepare to check for alignment
++	tbit.nz p_y, p_n = dest, 0	// Do we have an odd address? (M_B_U)
++} { .mib
++	mov	ptr1 = dest
++	nop.i	0
++(p_scr)	br.ret.dpnt.many rp		// return immediately if count = 0
++;; }
++{ .mib
++	cmp.ne	p_unalgn, p0 = tmp, r0
++} { .mib					// NB: # of bytes to move is 1
++	sub	bytecnt = (MIN1+1), tmp		//     higher than loopcnt
++	cmp.gt	p_scr, p0 = 16, cnt		// is it a minimalistic task?
++(p_scr)	br.cond.dptk.many .move_bytes_unaligned	// go move just a few (M_B_U)
++;; }
++{ .mmi
++(p_unalgn) add	ptr1 = (MIN1+1), ptr2		// after alignment
++(p_unalgn) add	ptr2 = MIN1P1HALF, ptr2		// after alignment
++(p_unalgn) tbit.nz.unc p_y, p_n = bytecnt, 3	// should we do a st8 ?
++;; }
++{ .mib
++(p_y)	add	cnt = -8, cnt
++(p_unalgn) tbit.nz.unc p_yy, p_nn = bytecnt, 2	// should we do a st4 ?
++} { .mib
++(p_y)	st8	[ptr2] = r0,-4
++(p_n)	add	ptr2 = 4, ptr2
++;; }
++{ .mib
++(p_yy)	add	cnt = -4, cnt
++(p_unalgn) tbit.nz.unc p_y, p_n = bytecnt, 1	// should we do a st2 ?
++} { .mib
++(p_yy)	st4	[ptr2] = r0,-2
++(p_nn)	add	ptr2 = 2, ptr2
++;; }
++{ .mmi
++	mov	tmp = LINE_SIZE+1		// for compare
++(p_y)	add	cnt = -2, cnt
++(p_unalgn) tbit.nz.unc p_yy, p_nn = bytecnt, 0	// should we do a st1 ?
++} { .mmi
++	nop.m	0
++(p_y)	st2	[ptr2] = r0,-1
++(p_n)	add	ptr2 = 1, ptr2
++;; }
++
++{ .mmi
++(p_yy)	st1	[ptr2] = r0
++  	cmp.gt	p_scr, p0 = tmp, cnt		// is it a minimalistic task?
++} { .mbb
++(p_yy)	add	cnt = -1, cnt
++(p_scr)	br.cond.dpnt.many .fraction_of_line	// go move just a few
++;; }
++{ .mib
++	nop.m 	0
++	shr.u	linecnt = cnt, LSIZE_SH
++	nop.b	0
++;; }
++
++	.align 32
++.l1b:	// ------------------//  L1B: store ahead into cache lines; fill later
++{ .mmi
++	and	tmp = -(LINE_SIZE), cnt		// compute end of range
++	mov	ptr9 = ptr1			// used for prefetching
++	and	cnt = (LINE_SIZE-1), cnt	// remainder
++} { .mmi
++	mov	loopcnt = PREF_AHEAD-1		// default prefetch loop
++	cmp.gt	p_scr, p0 = PREF_AHEAD, linecnt	// check against actual value
++;; }
++{ .mmi
++(p_scr)	add	loopcnt = -1, linecnt
++	add	ptr2 = 16, ptr1	// start of stores (beyond prefetch stores)
++	add	ptr1 = tmp, ptr1	// first address beyond total range
++;; }
++{ .mmi
++	add	tmp = -1, linecnt	// next loop count
++	movi0	ar.lc = loopcnt
++;; }
++.pref_l1b:
++{ .mib
++	stf.spill [ptr9] = f0, 128	// Do stores one cache line apart
++	nop.i   0
++	br.cloop.dptk.few .pref_l1b
++;; }
++{ .mmi
++	add	ptr0 = 16, ptr2		// Two stores in parallel
++	movi0	ar.lc = tmp
++;; }
++.l1bx:
++ { .mmi
++	stf.spill [ptr2] = f0, 32
++	stf.spill [ptr0] = f0, 32
++ ;; }
++ { .mmi
++	stf.spill [ptr2] = f0, 32
++	stf.spill [ptr0] = f0, 32
++ ;; }
++ { .mmi
++	stf.spill [ptr2] = f0, 32
++	stf.spill [ptr0] = f0, 64
++ 	cmp.lt	p_scr, p0 = ptr9, ptr1	// do we need more prefetching?
++ ;; }
++{ .mmb
++	stf.spill [ptr2] = f0, 32
++(p_scr)	stf.spill [ptr9] = f0, 128
++	br.cloop.dptk.few .l1bx
++;; }
++{ .mib
++	cmp.gt  p_scr, p0 = 8, cnt	// just a few bytes left ?
++(p_scr)	br.cond.dpnt.many  .move_bytes_from_alignment
++;; }
++
++.fraction_of_line:
++{ .mib
++	add	ptr2 = 16, ptr1
++	shr.u	loopcnt = cnt, 5   	// loopcnt = cnt / 32
++;; }
++{ .mib
++	cmp.eq	p_scr, p0 = loopcnt, r0
++	add	loopcnt = -1, loopcnt
++(p_scr)	br.cond.dpnt.many .store_words
++;; }
++{ .mib
++	and	cnt = 0x1f, cnt		// compute the remaining cnt
++	movi0   ar.lc = loopcnt
++;; }
++	.align 32
++.l2:	// -----------------------------//  L2A:  store 32B in 2 cycles
++{ .mmb
++	store	[ptr1] = myval, 8
++	store	[ptr2] = myval, 8
++;; } { .mmb
++	store	[ptr1] = myval, 24
++	store	[ptr2] = myval, 24
++	br.cloop.dptk.many .l2
++;; }
++.store_words:
++{ .mib
++	cmp.gt	p_scr, p0 = 8, cnt	// just a few bytes left ?
++(p_scr)	br.cond.dpnt.many .move_bytes_from_alignment	// Branch
++;; }
++
++{ .mmi
++	store	[ptr1] = myval, 8	// store
++	cmp.le	p_y, p_n = 16, cnt	//
++	add	cnt = -8, cnt		// subtract
++;; }
++{ .mmi
++(p_y)	store	[ptr1] = myval, 8	// store
++(p_y)	cmp.le.unc p_yy, p_nn = 16, cnt
++(p_y)	add	cnt = -8, cnt		// subtract
++;; }
++{ .mmi					// store
++(p_yy)	store	[ptr1] = myval, 8
++(p_yy)	add	cnt = -8, cnt		// subtract
++;; }
++
++.move_bytes_from_alignment:
++{ .mib
++	cmp.eq	p_scr, p0 = cnt, r0
++	tbit.nz.unc p_y, p0 = cnt, 2	// should we terminate with a st4 ?
++(p_scr)	br.cond.dpnt.few .restore_and_exit
++;; }
++{ .mib
++(p_y)	st4	[ptr1] = r0,4
++	tbit.nz.unc p_yy, p0 = cnt, 1	// should we terminate with a st2 ?
++;; }
++{ .mib
++(p_yy)	st2	[ptr1] = r0,2
++	tbit.nz.unc p_y, p0 = cnt, 0	// should we terminate with a st1 ?
++;; }
++
++{ .mib
++(p_y)	st1	[ptr1] = r0
++;; }
++.restore_and_exit:
++{ .mib
++	nop.m	0
++	movi0	ar.lc = save_lc
++	br.ret.sptk.many rp
++;; }
++
++.move_bytes_unaligned:
++{ .mmi
++       .pred.rel "mutex",p_y, p_n
++       .pred.rel "mutex",p_yy, p_nn
++(p_n)	cmp.le  p_yy, p_nn = 4, cnt
++(p_y)	cmp.le  p_yy, p_nn = 5, cnt
++(p_n)	add	ptr2 = 2, ptr1
++} { .mmi
++(p_y)	add	ptr2 = 3, ptr1
++(p_y)	st1	[ptr1] = r0, 1		// fill 1 (odd-aligned) byte
++(p_y)	add	cnt = -1, cnt		// [15, 14 (or less) left]
++;; }
++{ .mmi
++(p_yy)	cmp.le.unc p_y, p0 = 8, cnt
++	add	ptr3 = ptr1, cnt	// prepare last store
++	movi0	ar.lc = save_lc
++} { .mmi
++(p_yy)	st2	[ptr1] = r0, 4		// fill 2 (aligned) bytes
++(p_yy)	st2	[ptr2] = r0, 4		// fill 2 (aligned) bytes
++(p_yy)	add	cnt = -4, cnt		// [11, 10 (o less) left]
++;; }
++{ .mmi
++(p_y)	cmp.le.unc p_yy, p0 = 8, cnt
++	add	ptr3 = -1, ptr3		// last store
++	tbit.nz p_scr, p0 = cnt, 1	// will there be a st2 at the end ?
++} { .mmi
++(p_y)	st2	[ptr1] = r0, 4		// fill 2 (aligned) bytes
++(p_y)	st2	[ptr2] = r0, 4		// fill 2 (aligned) bytes
++(p_y)	add	cnt = -4, cnt		// [7, 6 (or less) left]
++;; }
++{ .mmi
++(p_yy)	st2	[ptr1] = r0, 4		// fill 2 (aligned) bytes
++(p_yy)	st2	[ptr2] = r0, 4		// fill 2 (aligned) bytes
++					// [3, 2 (or less) left]
++	tbit.nz p_y, p0 = cnt, 0	// will there be a st1 at the end ?
++} { .mmi
++(p_yy)	add	cnt = -4, cnt
++;; }
++{ .mmb
++(p_scr)	st2	[ptr1] = r0		// fill 2 (aligned) bytes
++(p_y)	st1	[ptr3] = r0		// fill last byte (using ptr3)
++	br.ret.sptk.many rp
++;; }
++END(bzero)
+diff --git a/libc/string/ia64/memccpy.S b/libc/string/ia64/memccpy.S
+new file mode 100644
+index 000000000..53c43c512
+--- /dev/null
++++ b/libc/string/ia64/memccpy.S
+@@ -0,0 +1,213 @@
++/* Optimized version of the memccpy() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: a pointer to the next byte after char in dest or NULL
++
++   Inputs:
++        in0:    dest
++        in1:    src
++  	in2:	char
++        in3:    byte count
++
++   This implementation assumes little endian mode (UM.be = 0).
++
++   This implementation assumes that it is safe to do read ahead
++   in the src block, without getting beyond its limit.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define OP_T_THRES 	16
++#define OPSIZ 		8
++
++#define saved_pr	r17
++#define saved_lc	r18
++#define dest		r19
++#define src		r20
++#define len		r21
++#define asrc		r22
++#define tmp		r23
++#define char		r24
++#define charx8		r25
++#define saved_ec	r26
++#define sh2		r28
++#define	sh1		r29
++#define loopcnt		r30
++#define	value		r31
++
++#ifdef GAS_ALIGN_BREAKS_UNWIND_INFO
++/* Manually force proper loop-alignment.  Note: be sure to
++   double-check the code-layout after making any changes to
++   this routine! */
++# define ALIGN(n)	{ nop 0 }
++#else
++# define ALIGN(n)	.align n
++#endif
++
++ENTRY(memccpy)
++	.prologue
++	alloc 	r2 = ar.pfs, 4, 40 - 4, 0, 40
++
++#include "softpipe.h"
++	.rotr	r[MEMLAT + 7], tmp1[4], tmp2[4], val[4], tmp3[2], pos0[2]
++	.rotp	p[MEMLAT + 6 + 1]
++
++	mov	ret0 = r0		// return NULL if no match
++	.save pr, saved_pr
++	mov	saved_pr = pr		// save the predicate registers
++	mov 	dest = in0		// dest
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc	// save the loop counter
++        mov 	saved_ec = ar.ec	// save the loop counter
++	.body
++	mov 	src = in1		// src
++	extr.u	char = in2, 0, 8	// char
++	mov	len = in3		// len
++	sub	tmp = r0, in0		// tmp = -dest
++	cmp.ne	p7, p0 = r0, r0		// clear p7
++	;;
++	and	loopcnt = 7, tmp	// loopcnt = -dest % 8
++	cmp.ge	p6, p0 = OP_T_THRES, len	// is len <= OP_T_THRES
++	mov	ar.ec = 0		// ec not guaranteed zero on entry
++(p6)	br.cond.spnt	.cpyfew		// copy byte by byte
++	;;
++	cmp.eq	p6, p0 = loopcnt, r0
++	mux1	charx8 = char, @brcst
++(p6)	br.cond.sptk .dest_aligned
++	sub	len = len, loopcnt	// len -= -dest % 8
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	;;
++	mov	ar.lc = loopcnt
++.l1:					// copy -dest % 8 bytes
++	ld1	value = [src], 1	// value = *src++
++	;;
++	st1	[dest] = value, 1	// *dest++ = value
++	cmp.eq	p6, p0 = value, char
++(p6)	br.cond.spnt .foundit
++	br.cloop.dptk .l1
++.dest_aligned:
++	and	sh1 = 7, src 		// sh1 = src % 8
++	and	tmp = -8, len   	// tmp = len & -OPSIZ
++	and	asrc = -8, src		// asrc = src & -OPSIZ  -- align src
++	shr.u	loopcnt = len, 3	// loopcnt = len / 8
++	and	len = 7, len ;;		// len = len % 8
++	shl	sh1 = sh1, 3		// sh1 = 8 * (src % 8)
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	mov     pr.rot = 1 << 16 ;;	// set rotating predicates
++	sub	sh2 = 64, sh1		// sh2 = 64 - sh1
++	mov	ar.lc = loopcnt		// set LC
++	cmp.eq  p6, p0 = sh1, r0 	// is the src aligned?
++(p6)    br.cond.sptk .src_aligned ;;
++	add	src = src, tmp		// src += len & -OPSIZ
++	mov	ar.ec = MEMLAT + 6 + 1 	// six more passes needed
++	ld8	r[1] = [asrc], 8 	// r[1] = w0
++	cmp.ne	p6, p0 = r0, r0	;;	// clear p6
++	ALIGN(32)
++.l2:
++(p[0])		ld8.s	r[0] = [asrc], 8		// r[0] = w1
++(p[MEMLAT])	shr.u	tmp1[0] = r[1 + MEMLAT], sh1	// tmp1 = w0 >> sh1
++(p[MEMLAT])	shl	tmp2[0] = r[0 + MEMLAT], sh2  	// tmp2 = w1 << sh2
++(p[MEMLAT+4])	xor	tmp3[0] = val[1], charx8
++(p[MEMLAT+5])	czx1.r	pos0[0] = tmp3[1]
++(p[MEMLAT+6])	chk.s	r[6 + MEMLAT], .recovery1	// our data isn't
++							// valid - rollback!
++(p[MEMLAT+6])	cmp.ne	p6, p0 = 8, pos0[1]
++(p6)		br.cond.spnt	.gotit
++(p[MEMLAT+6])	st8	[dest] = val[3], 8		// store val to dest
++(p[MEMLAT+3])	or	val[0] = tmp1[3], tmp2[3] 	// val = tmp1 | tmp2
++		br.ctop.sptk    .l2
++		br.cond.sptk .cpyfew
++
++.src_aligned:
++		cmp.ne  p6, p0 = r0, r0			// clear p6
++		mov     ar.ec = MEMLAT + 2 + 1 ;;	// set EC
++.l3:
++(p[0])		ld8.s	r[0] = [src], 8
++(p[MEMLAT])	xor	tmp3[0] = r[MEMLAT], charx8
++(p[MEMLAT+1])	czx1.r	pos0[0] = tmp3[1]
++(p[MEMLAT+2])	cmp.ne	p7, p0 = 8, pos0[1]
++(p[MEMLAT+2])	chk.s	r[MEMLAT+2], .recovery2
++(p7)		br.cond.spnt	.gotit
++.back2:
++(p[MEMLAT+2])	st8	[dest] = r[MEMLAT+2], 8
++		br.ctop.dptk .l3
++.cpyfew:
++	cmp.eq	p6, p0 = len, r0	// is len == 0 ?
++	adds	len = -1, len		// --len;
++(p6)	br.cond.spnt	.restore_and_exit ;;
++	mov	ar.lc = len
++.l4:
++	ld1	value = [src], 1
++	;;
++	st1	[dest] = value, 1
++	cmp.eq	p6, p0 = value, char
++(p6)	br.cond.spnt .foundit
++	br.cloop.dptk	.l4 ;;
++.foundit:
++(p6)	mov	ret0 = dest
++.restore_and_exit:
++	mov     pr = saved_pr, -1    	// restore the predicate registers
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	mov 	ar.ec = saved_ec ;;	// restore the epilog counter
++	br.ret.sptk.many b0
++.gotit:
++	.pred.rel "mutex" p6, p7
++(p6)	mov	value = val[3]		// if coming from l2
++(p7)	mov	value = r[MEMLAT+2]	// if coming from l3
++	mov	ar.lc = pos0[1] ;;
++.l5:
++	extr.u	tmp = value, 0, 8 ;;
++	st1	[dest] = tmp, 1
++	shr.u	value = value, 8
++	br.cloop.sptk .l5 ;;
++	mov 	ret0 = dest
++	mov	pr = saved_pr, -1
++	mov	ar.lc = saved_lc
++	br.ret.sptk.many b0
++
++.recovery1:
++	adds	src = -(MEMLAT + 6 + 1) * 8, asrc
++	mov	loopcnt = ar.lc
++	mov	tmp = ar.ec ;;
++	sub	sh1 = (MEMLAT + 6 + 1), tmp
++	shr.u	sh2 = sh2, 3
++	;; 
++	shl	loopcnt = loopcnt, 3
++	sub	src = src, sh2
++	shl	sh1 = sh1, 3
++	shl	tmp = tmp, 3
++	;;
++	add	len = len, loopcnt
++	add	src = sh1, src ;;
++	add	len = tmp, len
++.back1:
++	br.cond.sptk .cpyfew
++
++.recovery2:
++	add	tmp = -(MEMLAT + 3) * 8, src
++(p7)	br.cond.spnt .gotit
++	;;
++	ld8	r[MEMLAT+2] = [tmp] ;;
++	xor	pos0[1] = r[MEMLAT+2], charx8 ;;
++	czx1.r	pos0[1] = pos0[1] ;;
++	cmp.ne	p7, p6 = 8, pos0[1]
++(p7)	br.cond.spnt .gotit
++	br.cond.sptk .back2
++END(memccpy)
+diff --git a/libc/string/ia64/memchr.S b/libc/string/ia64/memchr.S
+new file mode 100644
+index 000000000..d7742fe8a
+--- /dev/null
++++ b/libc/string/ia64/memchr.S
+@@ -0,0 +1,133 @@
++/* Optimized version of the standard memchr() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: the address of the first occurence of chr in str or NULL
++
++   Inputs:
++  	in0:	str
++  	in1:	chr
++  	in2:	byte count
++
++   This implementation assumes little endian mode.  For big endian mode,
++   the instruction czx1.r should be replaced by czx1.l.
++
++   The algorithm is fairly straightforward: search byte by byte until we
++   we get to a word aligned address, then search word by word as much as
++   possible; the remaining few bytes are searched one at a time.
++
++   The word by word search is performed by xor-ing the word with a word
++   containing chr in every byte.  If there is a hit, the result will
++   contain a zero byte in the corresponding position.  The presence and
++   position of that zero byte is detected with a czx instruction.
++
++   All the loops in this function could have had the internal branch removed
++   if br.ctop and br.cloop could be predicated :-(.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define saved_pr	r15
++#define saved_lc	r16
++#define	chr		r17
++#define len		r18
++#define pos0		r20
++#define val		r21
++#define tmp		r24
++#define chrx8		r25
++#define loopcnt		r30
++
++#define str		in0
++
++ENTRY(__memchr)
++	.prologue
++	alloc r2 = ar.pfs, 3, 0, 29, 32
++#include "softpipe.h"
++	.rotr	value[MEMLAT+1], addr[MEMLAT+3], aux[2], poschr[2]
++	.rotp	p[MEMLAT+3]
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc 	// save the loop counter
++	.save pr, saved_pr
++	mov	saved_pr = pr		// save the predicates
++	.body
++	mov 	ret0 = str
++	and 	tmp = 7, str		// tmp = str % 8
++	cmp.ne	p7, p0 = r0, r0		// clear p7
++	extr.u	chr = in1, 0, 8		// chr = (unsigned char) in1
++	mov	len = in2
++	cmp.gtu	p6, p0 = 16, in2	// use a simple loop for short
++(p6)	br.cond.spnt .srchfew ;;	// searches
++	sub	loopcnt = 8, tmp	// loopcnt = 8 - tmp
++	cmp.eq	p6, p0 = tmp, r0
++(p6)	br.cond.sptk	.str_aligned;;
++	sub	len = len, loopcnt
++	adds	loopcnt = -1, loopcnt;;
++	mov	ar.lc = loopcnt
++.l1:
++	ld1	val = [ret0], 1
++	;;
++	cmp.eq	p6, p0 = val, chr
++(p6)	br.cond.spnt	.foundit
++	br.cloop.sptk	.l1 ;;
++.str_aligned:
++	cmp.ne	p6, p0 = r0, r0		// clear p6
++	shr.u	loopcnt = len, 3	// loopcnt = len / 8
++	and 	len = 7, len ;;		// remaining len = len & 7
++	adds	loopcnt = -1, loopcnt
++	mov	ar.ec = MEMLAT + 3
++	mux1	chrx8 = chr, @brcst ;;	// get a word full of chr
++	mov	ar.lc = loopcnt
++	mov	pr.rot = 1 << 16 ;;
++.l2:
++(p[0])		mov	addr[0] = ret0
++(p[0])		ld8	value[0] = [ret0], 8
++(p[MEMLAT])	xor	aux[0] = value[MEMLAT], chrx8
++(p[MEMLAT+1])	czx1.r	poschr[0] = aux[1]
++(p[MEMLAT+2])	cmp.ne	p7, p0 = 8, poschr[1]
++(p7)		br.cond.dpnt .foundit
++		br.ctop.dptk .l2
++.srchfew:
++	adds	loopcnt = -1, len
++	cmp.eq	p6, p0 = len, r0
++(p6)	br.cond.spnt .notfound ;;
++	mov	ar.lc = loopcnt
++.l3:
++	ld1	val = [ret0], 1
++	;;
++	cmp.eq	p6, p0 = val, chr
++(p6)	br.cond.dpnt	.foundit
++	br.cloop.sptk	.l3 ;;
++.notfound:
++	cmp.ne	p6, p0 = r0, r0	// clear p6 (p7 was already 0 when we got here)
++	mov	ret0 = r0 ;;	// return NULL
++.foundit:
++	.pred.rel "mutex" p6, p7
++(p6)	adds	ret0 = -1, ret0 		   // if we got here from l1 or l3
++(p7)	add	ret0 = addr[MEMLAT+2], poschr[1]   // if we got here from l2
++	mov	pr = saved_pr, -1
++	mov	ar.lc = saved_lc
++	br.ret.sptk.many b0
++
++END(__memchr)
++
++weak_alias (__memchr, memchr)
++#if !__BOUNDED_POINTERS__
++weak_alias (__memchr, __ubp_memchr)
++#endif
++libc_hidden_def (memchr)
+diff --git a/libc/string/ia64/memcmp.S b/libc/string/ia64/memcmp.S
+new file mode 100644
+index 000000000..997dad9d4
+--- /dev/null
++++ b/libc/string/ia64/memcmp.S
+@@ -0,0 +1,165 @@
++/* Optimized version of the standard memcmp() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2004 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: the result of the comparison
++
++   Inputs:
++        in0:    dest (aka s1)
++        in1:    src  (aka s2)
++        in2:    byte count
++
++   In this form, it assumes little endian mode.  For big endian mode, the
++   the two shifts in .l2 must be inverted:
++
++	shl   	tmp1[0] = r[1 + MEMLAT], sh1   // tmp1 = w0 << sh1
++	shr.u   tmp2[0] = r[0 + MEMLAT], sh2   // tmp2 = w1 >> sh2
++
++   and all the mux1 instructions should be replaced by plain mov's.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define OP_T_THRES 	16
++#define OPSIZ 		8
++#define MEMLAT		2
++
++#define start		r15
++#define saved_pr	r17
++#define saved_lc	r18
++#define dest		r19
++#define src		r20
++#define len		r21
++#define asrc		r22
++#define tmp		r23
++#define value1		r24
++#define value2		r25
++#define sh2		r28
++#define	sh1		r29
++#define loopcnt		r30
++
++ENTRY(memcmp)
++	.prologue
++	alloc 	r2 = ar.pfs, 3, 37, 0, 40
++
++	.rotr	r[MEMLAT + 2], q[MEMLAT + 5], tmp1[4], tmp2[4], val[2]
++	.rotp	p[MEMLAT + 4 + 1]
++
++	mov	ret0 = r0		// by default return value = 0
++	.save pr, saved_pr
++	mov	saved_pr = pr		// save the predicate registers
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc	// save the loop counter
++	.body
++	mov 	dest = in0		// dest
++	mov 	src = in1		// src
++	mov	len = in2		// len
++	sub	tmp = r0, in0		// tmp = -dest
++	;;
++	and	loopcnt = 7, tmp		// loopcnt = -dest % 8
++	cmp.ge	p6, p0 = OP_T_THRES, len	// is len <= OP_T_THRES
++(p6)	br.cond.spnt	.cmpfew			// compare byte by byte
++	;;
++	cmp.eq	p6, p0 = loopcnt, r0
++(p6)	br.cond.sptk .dest_aligned
++	sub	len = len, loopcnt	// len -= -dest % 8
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	;;
++	mov	ar.lc = loopcnt
++.l1:					// copy -dest % 8 bytes
++	ld1	value1 = [src], 1	// value = *src++
++	ld1	value2 = [dest], 1
++	;;
++	cmp.ne	p6, p0 = value1, value2
++(p6)	br.cond.spnt .done
++	br.cloop.dptk .l1
++.dest_aligned:
++	and	sh1 = 7, src 		// sh1 = src % 8
++	and	tmp = -8, len   	// tmp = len & -OPSIZ
++	and	asrc = -8, src		// asrc = src & -OPSIZ  -- align src
++	shr.u	loopcnt = len, 3	// loopcnt = len / 8
++	and	len = 7, len ;;		// len = len % 8
++	shl	sh1 = sh1, 3		// sh1 = 8 * (src % 8)
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	mov     pr.rot = 1 << 16 ;;	// set rotating predicates
++	sub	sh2 = 64, sh1		// sh2 = 64 - sh1
++	mov	ar.lc = loopcnt		// set LC
++	cmp.eq  p6, p0 = sh1, r0 	// is the src aligned?
++(p6)    br.cond.sptk .src_aligned
++	add	src = src, tmp		// src += len & -OPSIZ
++	mov	ar.ec = MEMLAT + 4 + 1 	// four more passes needed
++	ld8	r[1] = [asrc], 8 ;;	// r[1] = w0
++	.align	32
++
++// We enter this loop with p6 cleared by the above comparison
++
++.l2:
++(p[0])		ld8	r[0] = [asrc], 8		// r[0] = w1
++(p[0])		ld8	q[0] = [dest], 8
++(p[MEMLAT])	shr.u	tmp1[0] = r[1 + MEMLAT], sh1	// tmp1 = w0 >> sh1
++(p[MEMLAT])	shl	tmp2[0] = r[0 + MEMLAT], sh2  	// tmp2 = w1 << sh2
++(p[MEMLAT+4])	cmp.ne	p6, p0 = q[MEMLAT + 4], val[1]
++(p[MEMLAT+3])	or	val[0] = tmp1[3], tmp2[3] 	// val = tmp1 | tmp2
++(p6)		br.cond.spnt .l2exit
++		br.ctop.sptk    .l2
++		br.cond.sptk .cmpfew
++.l3exit:
++	mux1	value1 = r[MEMLAT], @rev
++	mux1	value2 = q[MEMLAT], @rev
++	cmp.ne	p6, p0 = r0, r0	;;	// clear p6
++.l2exit:
++(p6)	mux1	value1 = val[1], @rev
++(p6)	mux1	value2 = q[MEMLAT + 4], @rev ;;
++	cmp.ltu	p6, p7 = value2, value1 ;;
++(p6)	mov	ret0 = -1
++(p7)	mov	ret0 = 1
++	mov     pr = saved_pr, -1    	// restore the predicate registers
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	br.ret.sptk.many b0
++.src_aligned:
++	cmp.ne	p6, p0 = r0, r0		// clear p6
++	mov     ar.ec = MEMLAT + 1 ;;	// set EC
++.l3:
++(p[0])		ld8	r[0] = [src], 8
++(p[0])		ld8	q[0] = [dest], 8
++(p[MEMLAT])	cmp.ne	p6, p0 = r[MEMLAT], q[MEMLAT]
++(p6)		br.cond.spnt .l3exit
++		br.ctop.dptk .l3 ;;
++.cmpfew:
++	cmp.eq	p6, p0 = len, r0	// is len == 0 ?
++	adds	len = -1, len		// --len;
++(p6)	br.cond.spnt	.restore_and_exit ;;
++	mov	ar.lc = len
++.l4:
++	ld1	value1 = [src], 1
++	ld1	value2 = [dest], 1
++	;;
++	cmp.ne	p6, p0 = value1, value2
++(p6)	br.cond.spnt	.done
++	br.cloop.dptk	.l4 ;;
++.done:
++(p6)	sub	ret0 = value2, value1	// don't execute it if falling thru
++.restore_and_exit:
++	mov     pr = saved_pr, -1    	// restore the predicate registers
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	br.ret.sptk.many b0
++END(memcmp)
++
++weak_alias (memcmp, bcmp)
++libc_hidden_def (memcmp)
+diff --git a/libc/string/ia64/memcpy.S b/libc/string/ia64/memcpy.S
+new file mode 100644
+index 000000000..34a3706e0
+--- /dev/null
++++ b/libc/string/ia64/memcpy.S
+@@ -0,0 +1,436 @@
++/* Optimized version of the standard memcpy() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop for Itanium <Dan.Pop@cern.ch>.
++   Rewritten for McKinley by Sverre Jarp, HP Labs/CERN <Sverre.Jarp@cern.ch>
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: dest
++
++   Inputs:
++        in0:    dest
++        in1:    src
++        in2:    byte count
++
++   An assembly implementation of the algorithm used by the generic C
++   version from glibc.  The case when source and sest are aligned is
++   treated separately, for extra performance.
++
++   In this form, memcpy assumes little endian mode.  For big endian mode,
++   sh1 must be computed using an extra instruction: sub sh1 = 64, sh1
++   and the order of r[MEMLAT] and r[MEMLAT+1] must be reverted in the
++   shrp instruction.  */
++
++#define USE_LFETCH
++#define USE_FLP
++#include <sysdep.h>
++#undef ret
++
++#define LFETCH_DIST     500
++
++#define ALIGN_UNROLL_no   4 // no. of elements
++#define ALIGN_UNROLL_sh	  2 // (shift amount)
++
++#define MEMLAT	8
++#define Nrot	((4*(MEMLAT+2) + 7) & ~7)
++
++#define OP_T_THRES 	16
++#define OPSIZ 		8
++
++#define loopcnt		r14
++#define elemcnt		r15
++#define saved_pr	r16
++#define saved_lc	r17
++#define adest		r18
++#define dest		r19
++#define asrc		r20
++#define src		r21
++#define len		r22
++#define tmp2		r23
++#define tmp3		r24
++#define	tmp4		r25
++#define ptable		r26
++#define ploop56		r27
++#define	loopaddr	r28
++#define	sh1		r29
++#define ptr1		r30
++#define ptr2		r31
++
++#define movi0 		mov
++
++#define p_scr		p6
++#define p_xtr		p7
++#define p_nxtr		p8
++#define p_few		p9
++
++#if defined(USE_FLP)
++#define load		ldf8
++#define store		stf8
++#define tempreg		f6
++#define the_r		fr
++#define the_s		fs
++#define the_t		ft
++#define the_q		fq
++#define the_w		fw
++#define the_x		fx
++#define the_y		fy
++#define the_z		fz
++#elif defined(USE_INT)
++#define load		ld8
++#define store		st8
++#define tempreg		tmp2
++#define the_r		r
++#define the_s		s
++#define the_t		t
++#define the_q		q
++#define the_w		w
++#define the_x		x
++#define the_y		y
++#define the_z		z
++#endif
++
++#ifdef GAS_ALIGN_BREAKS_UNWIND_INFO
++/* Manually force proper loop-alignment.  Note: be sure to
++   double-check the code-layout after making any changes to
++   this routine! */
++# define ALIGN(n)	{ nop 0 }
++#else
++# define ALIGN(n)	.align n
++#endif
++
++#if defined(USE_LFETCH)
++#define LOOP(shift)						\
++		ALIGN(32);					\
++.loop##shift##:							\
++{ .mmb								\
++(p[0])	ld8.nt1	r[0] = [asrc], 8 ;				\
++(p[0])	lfetch.nt1 [ptr1], 16 ;					\
++	nop.b 0 ;						\
++} { .mib							\
++(p[MEMLAT+1]) st8 [dest] = tmp3, 8 ;				\
++(p[MEMLAT]) shrp tmp3 = r[MEMLAT], s[MEMLAT+1], shift ;		\
++ 	nop.b 0 ;;						\
++ } { .mmb							\
++(p[0])	ld8.nt1	s[0] = [asrc], 8 ;				\
++(p[0])	lfetch.nt1	[ptr2], 16 ;				\
++	nop.b 0 ;						\
++} { .mib							\
++(p[MEMLAT+1]) st8 [dest] = tmp4, 8 ;				\
++(p[MEMLAT]) shrp tmp4 = s[MEMLAT], r[MEMLAT], shift ;		\
++	br.ctop.sptk.many .loop##shift 				\
++;; }								\
++{ .mib								\
++	br.cond.sptk.many .copy_bytes ; /* deal with the remaining bytes */  \
++}
++#else
++#define LOOP(shift)						\
++		ALIGN(32);					\
++.loop##shift##:							\
++{ .mmb								\
++(p[0])	ld8.nt1	r[0] = [asrc], 8 ;				\
++	nop.b 0 ;						\
++} { .mib							\
++(p[MEMLAT+1]) st8 [dest] = tmp3, 8 ;				\
++(p[MEMLAT]) shrp tmp3 = r[MEMLAT], s[MEMLAT+1], shift ;		\
++ 	nop.b 0 ;;						\
++ } { .mmb							\
++(p[0])	ld8.nt1	s[0] = [asrc], 8 ;				\
++	nop.b 0 ;						\
++} { .mib							\
++(p[MEMLAT+1]) st8 [dest] = tmp4, 8 ;				\
++(p[MEMLAT]) shrp tmp4 = s[MEMLAT], r[MEMLAT], shift ;		\
++	br.ctop.sptk.many .loop##shift 				\
++;; }								\
++{ .mib								\
++	br.cond.sptk.many .copy_bytes ; /* deal with the remaining bytes */  \
++}
++#endif
++
++
++ENTRY(memcpy)
++{ .mmi
++	.prologue
++	alloc 	r2 = ar.pfs, 3, Nrot - 3, 0, Nrot
++	.rotr	r[MEMLAT+1], s[MEMLAT+2], q[MEMLAT+1], t[MEMLAT+1]
++	.rotp	p[MEMLAT+2]
++	.rotf	fr[MEMLAT+1], fq[MEMLAT+1], fs[MEMLAT+1], ft[MEMLAT+1]
++	mov	ret0 = in0		// return tmp2 = dest
++	.save   pr, saved_pr
++	movi0	saved_pr = pr		// save the predicate registers
++} { .mmi
++	and	tmp4 = 7, in0 		// check if destination is aligned
++	mov 	dest = in0		// dest
++	mov 	src = in1		// src
++;; }
++{ .mii
++	cmp.eq	p_scr, p0 = in2, r0	// if (len == 0)
++	.save   ar.lc, saved_lc
++        movi0 	saved_lc = ar.lc	// save the loop counter
++	.body
++	cmp.ge	p_few, p0 = OP_T_THRES, in2 // is len <= OP_T_THRESH
++} { .mbb
++	mov	len = in2		// len
++(p_scr)	br.cond.dpnt.few .restore_and_exit // 	Branch no. 1: return dest
++(p_few) br.cond.dpnt.many .copy_bytes	// Branch no. 2: copy byte by byte
++;; }
++{ .mmi
++#if defined(USE_LFETCH)
++	lfetch.nt1 [dest]		//
++	lfetch.nt1 [src]		//
++#endif
++	shr.u	elemcnt = len, 3	// elemcnt = len / 8
++} { .mib
++	cmp.eq	p_scr, p0 = tmp4, r0	// is destination aligned?
++	sub	loopcnt = 7, tmp4	//
++(p_scr) br.cond.dptk.many .dest_aligned
++;; }
++{ .mmi
++	ld1	tmp2 = [src], 1		//
++	sub	len = len, loopcnt, 1	// reduce len
++	movi0	ar.lc = loopcnt		//
++} { .mib
++	cmp.ne  p_scr, p0 = 0, loopcnt	// avoid loading beyond end-point
++;; }
++
++.l0:	// ---------------------------- // L0: Align src on 8-byte boundary
++{ .mmi
++	st1	[dest] = tmp2, 1	//
++(p_scr)	ld1	tmp2 = [src], 1		//
++} { .mib
++	cmp.lt	p_scr, p0 = 1, loopcnt	// avoid load beyond end-point
++	add	loopcnt = -1, loopcnt
++	br.cloop.dptk.few .l0		//
++;; }
++
++.dest_aligned:
++{ .mmi
++	and	tmp4 = 7, src		// ready for alignment check
++	shr.u	elemcnt = len, 3	// elemcnt = len / 8
++;; }
++{ .mib
++	cmp.ne	p_scr, p0 = tmp4, r0	// is source also aligned
++	tbit.nz p_xtr, p_nxtr = src, 3	// prepare a separate move if src
++} { .mib				// is not 16B aligned
++	add	ptr2 = LFETCH_DIST, dest	// prefetch address
++	add	ptr1 = LFETCH_DIST, src
++(p_scr) br.cond.dptk.many .src_not_aligned
++;; }
++
++// The optimal case, when dest, and src are aligned
++
++.both_aligned:
++{ .mmi
++	.pred.rel "mutex",p_xtr,p_nxtr
++(p_xtr)	cmp.gt  p_scr, p0 = ALIGN_UNROLL_no+1, elemcnt // Need N + 1 to qualify
++(p_nxtr) cmp.gt p_scr, p0 = ALIGN_UNROLL_no, elemcnt  // Need only N to qualify
++	movi0	pr.rot = 1 << 16	// set rotating predicates
++} { .mib
++(p_scr) br.cond.dpnt.many .copy_full_words
++;; }
++
++{ .mmi
++(p_xtr)	load	tempreg = [src], 8
++(p_xtr) add 	elemcnt = -1, elemcnt
++	movi0	ar.ec = MEMLAT + 1	// set the epilog counter
++;; }
++{ .mmi
++(p_xtr) add	len = -8, len		//
++	add 	asrc = 16, src 		// one bank apart (for USE_INT)
++	shr.u	loopcnt = elemcnt, ALIGN_UNROLL_sh  // cater for unrolling
++;;}
++{ .mmi
++	add	loopcnt = -1, loopcnt
++(p_xtr)	store	[dest] = tempreg, 8	// copy the "extra" word
++	nop.i	0
++;; }
++{ .mib
++	add	adest = 16, dest
++	movi0	ar.lc = loopcnt 	// set the loop counter
++;; }
++
++#ifdef  GAS_ALIGN_BREAKS_UNWIND_INFO
++	{ nop 0 }
++#else
++	.align	32
++#endif
++#if defined(USE_FLP)
++.l1: // ------------------------------- // L1: Everything a multiple of 8
++{ .mmi
++#if defined(USE_LFETCH)
++(p[0])	lfetch.nt1 [ptr2],32
++#endif
++(p[0])	ldfp8	the_r[0],the_q[0] = [src], 16
++(p[0])	add	len = -32, len
++} {.mmb
++(p[MEMLAT]) store [dest] = the_r[MEMLAT], 8
++(p[MEMLAT]) store [adest] = the_s[MEMLAT], 8
++;; }
++{ .mmi
++#if defined(USE_LFETCH)
++(p[0])	lfetch.nt1 [ptr1],32
++#endif
++(p[0])	ldfp8	the_s[0], the_t[0] = [src], 16
++} {.mmb
++(p[MEMLAT]) store [dest] = the_q[MEMLAT], 24
++(p[MEMLAT]) store [adest] = the_t[MEMLAT], 24
++	br.ctop.dptk.many .l1
++;; }
++#elif defined(USE_INT)
++.l1: // ------------------------------- // L1: Everything a multiple of 8
++{ .mmi
++(p[0])	load	the_r[0] = [src], 8
++(p[0])	load	the_q[0] = [asrc], 8
++(p[0])	add	len = -32, len
++} {.mmb
++(p[MEMLAT]) store [dest] = the_r[MEMLAT], 8
++(p[MEMLAT]) store [adest] = the_q[MEMLAT], 8
++;; }
++{ .mmi
++(p[0])	load	the_s[0]  = [src], 24
++(p[0])	load	the_t[0] = [asrc], 24
++} {.mmb
++(p[MEMLAT]) store [dest] = the_s[MEMLAT], 24
++(p[MEMLAT]) store [adest] = the_t[MEMLAT], 24
++#if defined(USE_LFETCH)
++;; }
++{ .mmb
++(p[0])	lfetch.nt1 [ptr2],32
++(p[0])	lfetch.nt1 [ptr1],32
++#endif
++	br.ctop.dptk.many .l1
++;; }
++#endif
++
++.copy_full_words:
++{ .mib
++	cmp.gt	p_scr, p0 = 8, len	//
++	shr.u	elemcnt = len, 3	//
++(p_scr) br.cond.dpnt.many .copy_bytes
++;; }
++{ .mii
++	load	tempreg = [src], 8
++	add	loopcnt = -1, elemcnt	//
++;; }
++{ .mii
++	cmp.ne	p_scr, p0 = 0, loopcnt	//
++	mov	ar.lc = loopcnt		//
++;; }
++
++.l2: // ------------------------------- // L2: Max 4 words copied separately
++{ .mmi
++	store	[dest] = tempreg, 8
++(p_scr)	load	tempreg = [src], 8	//
++	add	len = -8, len
++} { .mib
++	cmp.lt	p_scr, p0 = 1, loopcnt	// avoid load beyond end-point
++	add	loopcnt = -1, loopcnt
++	br.cloop.dptk.few  .l2
++;; }
++
++.copy_bytes:
++{ .mib
++	cmp.eq	p_scr, p0 = len, r0	// is len == 0 ?
++	add	loopcnt = -1, len	// len--;
++(p_scr)	br.cond.spnt	.restore_and_exit
++;; }
++{ .mii
++	ld1	tmp2 = [src], 1
++	movi0	ar.lc = loopcnt
++	cmp.ne	p_scr, p0 = 0, loopcnt	// avoid load beyond end-point
++;; }
++
++.l3: // ------------------------------- // L3: Final byte move
++{ .mmi
++	st1	[dest] = tmp2, 1
++(p_scr)	ld1	tmp2 = [src], 1
++} { .mib
++	cmp.lt	p_scr, p0 = 1, loopcnt	// avoid load beyond end-point
++	add	loopcnt = -1, loopcnt
++	br.cloop.dptk.few  .l3
++;; }
++
++.restore_and_exit:
++{ .mmi
++	movi0	pr = saved_pr, -1	// restore the predicate registers
++;; }
++{ .mib
++	movi0	ar.lc = saved_lc	// restore the loop counter
++	br.ret.sptk.many b0
++;; }
++
++
++.src_not_aligned:
++{ .mmi
++	cmp.gt	p_scr, p0 = 16, len
++	and	sh1 = 7, src 		// sh1 = src % 8
++	shr.u	loopcnt = len, 4	// element-cnt = len / 16
++} { .mib
++	add	tmp4 = @ltoff(.table), gp
++	add 	tmp3 = @ltoff(.loop56), gp
++(p_scr)	br.cond.dpnt.many .copy_bytes	// do byte by byte if too few
++;; }
++{ .mmi
++	and	asrc = -8, src		// asrc = (-8) -- align src for loop
++	add 	loopcnt = -1, loopcnt	// loopcnt--
++	shl	sh1 = sh1, 3		// sh1 = 8 * (src % 8)
++} { .mmi
++	ld8	ptable = [tmp4]		// ptable = &table
++	ld8	ploop56 = [tmp3]	// ploop56 = &loop56
++	and	tmp2 = -16, len		// tmp2 = len & -OPSIZ
++;; }
++{ .mmi
++	add	tmp3 = ptable, sh1	// tmp3 = &table + sh1
++	add	src = src, tmp2		// src += len & (-16)
++	movi0	ar.lc = loopcnt		// set LC
++;; }
++{ .mmi
++	ld8	tmp4 = [tmp3]		// tmp4 = loop offset
++	sub	len = len, tmp2		// len -= len & (-16)
++	movi0	ar.ec = MEMLAT + 2 	// one more pass needed
++;; }
++{ .mmi
++	ld8	s[1] = [asrc], 8	// preload
++	sub	loopaddr = ploop56,tmp4	// loopadd = &loop56 - loop offset
++	movi0   pr.rot = 1 << 16	// set rotating predicates
++;; }
++{ .mib
++	nop.m	0
++	movi0	b6 = loopaddr
++	br	b6			// jump to the appropriate loop
++;; }
++
++	LOOP(8)
++	LOOP(16)
++	LOOP(24)
++	LOOP(32)
++	LOOP(40)
++	LOOP(48)
++	LOOP(56)
++END(memcpy)
++libc_hidden_def (memcpy)
++
++	.rodata
++	.align 8
++.table:
++	data8	0			// dummy entry
++	data8 	.loop56 - .loop8
++	data8 	.loop56 - .loop16
++	data8 	.loop56 - .loop24
++	data8	.loop56 - .loop32
++	data8	.loop56 - .loop40
++	data8	.loop56 - .loop48
++	data8	.loop56 - .loop56
+diff --git a/libc/string/ia64/memmove.S b/libc/string/ia64/memmove.S
+new file mode 100644
+index 000000000..65f5b0383
+--- /dev/null
++++ b/libc/string/ia64/memmove.S
+@@ -0,0 +1,251 @@
++/* Optimized version of the standard memmove() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: dest
++
++   Inputs:
++        in0:    dest
++        in1:    src
++        in2:    byte count
++
++   The core of the function is the memcpy implementation used in memcpy.S.
++   When bytes have to be copied backwards, only the easy case, when
++   all arguments are multiples of 8, is optimised.
++
++   In this form, it assumes little endian mode.  For big endian mode,
++   sh1 must be computed using an extra instruction: sub sh1 = 64, sh1
++   or the UM.be bit should be cleared at the beginning and set at the end.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define OP_T_THRES 	16
++#define OPSIZ 		 8
++
++#define adest		r15
++#define saved_pr	r17
++#define saved_lc	r18
++#define dest		r19
++#define src		r20
++#define len		r21
++#define asrc		r22
++#define tmp2		r23
++#define tmp3		r24
++#define	tmp4		r25
++#define ptable		r26
++#define ploop56		r27
++#define	loopaddr	r28
++#define	sh1		r29
++#define loopcnt		r30
++#define	value		r31
++
++#ifdef GAS_ALIGN_BREAKS_UNWIND_INFO
++# define ALIGN(n)	{ nop 0 }
++#else
++# define ALIGN(n)	.align n
++#endif
++
++#define LOOP(shift)							\
++		ALIGN(32);						\
++.loop##shift##:								\
++(p[0])		ld8	r[0] = [asrc], 8 ;	/* w1 */		\
++(p[MEMLAT+1])	st8	[dest] = value, 8 ;				\
++(p[MEMLAT])	shrp	value = r[MEMLAT], r[MEMLAT+1], shift ;		\
++		nop.b	0 ;						\
++		nop.b	0 ;						\
++		br.ctop.sptk .loop##shift ;				\
++		br.cond.sptk .cpyfew ; /* deal with the remaining bytes */
++
++#define MEMLAT	21
++#define Nrot	(((2*MEMLAT+3) + 7) & ~7)
++
++ENTRY(memmove)
++	.prologue
++	alloc 	r2 = ar.pfs, 3, Nrot - 3, 0, Nrot
++	.rotr	r[MEMLAT + 2], q[MEMLAT + 1]
++	.rotp	p[MEMLAT + 2]
++	mov	ret0 = in0		// return value = dest
++	.save pr, saved_pr
++	mov	saved_pr = pr		// save the predicate registers
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc	// save the loop counter
++	.body
++	or	tmp3 = in0, in1 ;;	// tmp3 = dest | src
++	or	tmp3 = tmp3, in2	// tmp3 = dest | src | len
++	mov 	dest = in0		// dest
++	mov 	src = in1		// src
++	mov	len = in2		// len
++	sub	tmp2 = r0, in0		// tmp2 = -dest
++	cmp.eq	p6, p0 = in2, r0	// if (len == 0)
++(p6)	br.cond.spnt .restore_and_exit;;// 	return dest;
++	and	tmp4 = 7, tmp3 		// tmp4 = (dest | src | len) & 7
++	cmp.le	p6, p0 = dest, src	// if dest <= src it's always safe
++(p6)	br.cond.spnt .forward		// to copy forward
++	add	tmp3 = src, len;;
++	cmp.lt	p6, p0 = dest, tmp3	// if dest > src && dest < src + len
++(p6)	br.cond.spnt .backward		// we have to copy backward
++
++.forward:
++	shr.u	loopcnt = len, 4 ;;	// loopcnt = len / 16
++	cmp.ne	p6, p0 = tmp4, r0	// if ((dest | src | len) & 7 != 0)
++(p6)	br.cond.sptk .next		//	goto next;
++
++// The optimal case, when dest, src and len are all multiples of 8
++
++	and	tmp3 = 0xf, len
++	mov	pr.rot = 1 << 16	// set rotating predicates
++	mov	ar.ec = MEMLAT + 1 ;;	// set the epilog counter
++	cmp.ne	p6, p0 = tmp3, r0	// do we have to copy an extra word?
++	adds	loopcnt = -1, loopcnt;;	// --loopcnt
++(p6)	ld8	value = [src], 8;;
++(p6)	st8	[dest] = value, 8	// copy the "odd" word
++	mov	ar.lc = loopcnt 	// set the loop counter
++	cmp.eq	p6, p0 = 8, len
++(p6)	br.cond.spnt .restore_and_exit;;// the one-word special case
++	adds	adest = 8, dest		// set adest one word ahead of dest
++	adds	asrc = 8, src ;;	// set asrc one word ahead of src
++	nop.b	0			// get the "golden" alignment for
++	nop.b	0			// the next loop
++.l0:
++(p[0])		ld8	r[0] = [src], 16
++(p[0])		ld8	q[0] = [asrc], 16
++(p[MEMLAT])	st8	[dest] = r[MEMLAT], 16
++(p[MEMLAT])	st8	[adest] = q[MEMLAT], 16
++		br.ctop.dptk .l0 ;;
++
++	mov	pr = saved_pr, -1	// restore the predicate registers
++	mov	ar.lc = saved_lc	// restore the loop counter
++	br.ret.sptk.many b0
++.next:
++	cmp.ge	p6, p0 = OP_T_THRES, len	// is len <= OP_T_THRES
++	and	loopcnt = 7, tmp2 		// loopcnt = -dest % 8
++(p6)	br.cond.spnt	.cpyfew			// copy byte by byte
++	;;
++	cmp.eq	p6, p0 = loopcnt, r0
++(p6)	br.cond.sptk	.dest_aligned
++	sub	len = len, loopcnt	// len -= -dest % 8
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	;;
++	mov	ar.lc = loopcnt
++.l1:					// copy -dest % 8 bytes
++	ld1	value = [src], 1	// value = *src++
++	;;
++	st1	[dest] = value, 1	// *dest++ = value
++	br.cloop.dptk .l1
++.dest_aligned:
++	and	sh1 = 7, src 		// sh1 = src % 8
++	and	tmp2 = -8, len   	// tmp2 = len & -OPSIZ
++	and	asrc = -8, src		// asrc = src & -OPSIZ  -- align src
++	shr.u	loopcnt = len, 3	// loopcnt = len / 8
++	and	len = 7, len;;		// len = len % 8
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	addl	tmp4 = @ltoff(.table), gp
++	addl	tmp3 = @ltoff(.loop56), gp
++	mov     ar.ec = MEMLAT + 1	// set EC
++	mov     pr.rot = 1 << 16;;	// set rotating predicates
++	mov	ar.lc = loopcnt		// set LC
++	cmp.eq  p6, p0 = sh1, r0 	// is the src aligned?
++(p6)    br.cond.sptk .src_aligned
++	add	src = src, tmp2		// src += len & -OPSIZ
++	shl	sh1 = sh1, 3		// sh1 = 8 * (src % 8)
++	ld8	ploop56 = [tmp3]	// ploop56 = &loop56
++	ld8	ptable = [tmp4];;	// ptable = &table
++	add	tmp3 = ptable, sh1;;	// tmp3 = &table + sh1
++	mov	ar.ec = MEMLAT + 1 + 1 // one more pass needed
++	ld8	tmp4 = [tmp3];;		// tmp4 = loop offset
++	sub	loopaddr = ploop56,tmp4	// loopadd = &loop56 - loop offset
++	ld8	r[1] = [asrc], 8;;	// w0
++	mov	b6 = loopaddr;;
++	br	b6			// jump to the appropriate loop
++
++	LOOP(8)
++	LOOP(16)
++	LOOP(24)
++	LOOP(32)
++	LOOP(40)
++	LOOP(48)
++	LOOP(56)
++
++.src_aligned:
++.l3:
++(p[0])		ld8	r[0] = [src], 8
++(p[MEMLAT])	st8	[dest] = r[MEMLAT], 8
++		br.ctop.dptk .l3
++.cpyfew:
++	cmp.eq	p6, p0 = len, r0	// is len == 0 ?
++	adds	len = -1, len		// --len;
++(p6)	br.cond.spnt	.restore_and_exit ;;
++	mov	ar.lc = len
++.l4:
++	ld1	value = [src], 1
++	;;
++	st1	[dest] = value, 1
++	br.cloop.dptk	.l4 ;;
++.restore_and_exit:
++	mov     pr = saved_pr, -1    	// restore the predicate registers
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	br.ret.sptk.many b0
++
++// In the case of a backward copy, optimise only the case when everything
++// is a multiple of 8, otherwise copy byte by byte.  The backward copy is
++// used only when the blocks are overlapping and dest > src.
++
++.backward:
++	shr.u	loopcnt = len, 3	// loopcnt = len / 8
++	add	src = src, len		// src points one byte past the end
++	add	dest = dest, len ;; 	// dest points one byte past the end
++	mov	ar.ec = MEMLAT + 1	// set the epilog counter
++	mov	pr.rot = 1 << 16	// set rotating predicates
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++	cmp.ne	p6, p0 = tmp4, r0	// if ((dest | src | len) & 7 != 0)
++(p6)	br.cond.sptk .bytecopy ;;	// copy byte by byte backward
++	adds	src = -8, src		// src points to the last word
++	adds	dest = -8, dest 	// dest points to the last word
++	mov	ar.lc = loopcnt;;	// set the loop counter
++.l5:
++(p[0])		ld8	r[0] = [src], -8
++(p[MEMLAT])	st8	[dest] = r[MEMLAT], -8
++		br.ctop.dptk .l5
++		br.cond.sptk .restore_and_exit
++.bytecopy:
++	adds	src = -1, src		// src points to the last byte
++	adds	dest = -1, dest		// dest points to the last byte
++	adds	loopcnt = -1, len;;	// loopcnt = len - 1
++	mov	ar.lc = loopcnt;;	// set the loop counter
++.l6:
++(p[0])		ld1	r[0] = [src], -1
++(p[MEMLAT])	st1	[dest] = r[MEMLAT], -1
++		br.ctop.dptk .l6
++		br.cond.sptk .restore_and_exit
++END(memmove)
++
++	.rodata
++	.align 8
++.table:
++	data8	0			// dummy entry
++	data8 	.loop56 - .loop8
++	data8 	.loop56 - .loop16
++	data8 	.loop56 - .loop24
++	data8	.loop56 - .loop32
++	data8	.loop56 - .loop40
++	data8	.loop56 - .loop48
++	data8	.loop56 - .loop56
++
++libc_hidden_def (memmove)
+diff --git a/libc/string/ia64/memset.S b/libc/string/ia64/memset.S
+new file mode 100644
+index 000000000..6754cfb88
+--- /dev/null
++++ b/libc/string/ia64/memset.S
+@@ -0,0 +1,400 @@
++/* Optimized version of the standard memset() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2002, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop for Itanium <Dan.Pop@cern.ch>.
++   Rewritten for McKinley by Sverre Jarp, HP Labs/CERN <Sverre.Jarp@cern.ch>
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: dest
++
++   Inputs:
++        in0:    dest
++        in1:    value
++        in2:    count
++
++   The algorithm is fairly straightforward: set byte by byte until we
++   we get to a 16B-aligned address, then loop on 128 B chunks using an
++   early store as prefetching, then loop on 32B chucks, then clear remaining
++   words, finally clear remaining bytes.
++   Since a stf.spill f0 can store 16B in one go, we use this instruction
++   to get peak speed when value = 0.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define dest		in0
++#define value		in1
++#define	cnt		in2
++
++#define tmp		r31
++#define save_lc		r30
++#define ptr0		r29
++#define ptr1		r28
++#define ptr2		r27
++#define ptr3		r26
++#define ptr9 		r24
++#define	loopcnt		r23
++#define linecnt		r22
++#define bytecnt		r21
++
++#define fvalue		f6
++
++// This routine uses only scratch predicate registers (p6 - p15)
++#define p_scr		p6			// default register for same-cycle branches
++#define p_nz		p7
++#define p_zr		p8
++#define p_unalgn	p9
++#define p_y		p11
++#define p_n		p12
++#define p_yy		p13
++#define p_nn		p14
++
++#define movi0		mov
++
++#define MIN1		15
++#define MIN1P1HALF	8
++#define LINE_SIZE	128
++#define LSIZE_SH        7			// shift amount
++#define PREF_AHEAD	8
++
++#define USE_FLP
++#if defined(USE_INT)
++#define store		st8
++#define myval           value
++#elif defined(USE_FLP)
++#define store		stf8
++#define myval		fvalue
++#endif
++
++.align	64
++ENTRY(memset)
++{ .mmi
++	.prologue
++	alloc	tmp = ar.pfs, 3, 0, 0, 0
++	lfetch.nt1 [dest]
++	.save   ar.lc, save_lc
++	movi0	save_lc = ar.lc
++} { .mmi
++	.body
++	mov	ret0 = dest		// return value
++	cmp.ne	p_nz, p_zr = value, r0	// use stf.spill if value is zero
++	cmp.eq	p_scr, p0 = cnt, r0
++;; }
++{ .mmi
++	and	ptr2 = -(MIN1+1), dest	// aligned address
++	and	tmp = MIN1, dest	// prepare to check for alignment
++	tbit.nz p_y, p_n = dest, 0	// Do we have an odd address? (M_B_U)
++} { .mib
++	mov	ptr1 = dest
++	mux1	value = value, @brcst	// create 8 identical bytes in word
++(p_scr)	br.ret.dpnt.many rp		// return immediately if count = 0
++;; }
++{ .mib
++	cmp.ne	p_unalgn, p0 = tmp, r0
++} { .mib				// NB: # of bytes to move is 1 higher
++	sub	bytecnt = (MIN1+1), tmp	//     than loopcnt
++	cmp.gt	p_scr, p0 = 16, cnt		// is it a minimalistic task?
++(p_scr)	br.cond.dptk.many .move_bytes_unaligned	// go move just a few (M_B_U)
++;; }
++{ .mmi
++(p_unalgn) add	ptr1 = (MIN1+1), ptr2		// after alignment
++(p_unalgn) add	ptr2 = MIN1P1HALF, ptr2		// after alignment
++(p_unalgn) tbit.nz.unc p_y, p_n = bytecnt, 3	// should we do a st8 ?
++;; }
++{ .mib
++(p_y)	add	cnt = -8, cnt
++(p_unalgn) tbit.nz.unc p_yy, p_nn = bytecnt, 2	// should we do a st4 ?
++} { .mib
++(p_y)	st8	[ptr2] = value, -4
++(p_n)	add	ptr2 = 4, ptr2
++;; }
++{ .mib
++(p_yy)	add	cnt = -4, cnt
++(p_unalgn) tbit.nz.unc p_y, p_n = bytecnt, 1	// should we do a st2 ?
++} { .mib
++(p_yy)	st4	[ptr2] = value, -2
++(p_nn)	add	ptr2 = 2, ptr2
++;; }
++{ .mmi
++	mov	tmp = LINE_SIZE+1		// for compare
++(p_y)	add	cnt = -2, cnt
++(p_unalgn) tbit.nz.unc p_yy, p_nn = bytecnt, 0	// should we do a st1 ?
++} { .mmi
++	setf.sig fvalue=value			// transfer value to FLP side
++(p_y)	st2	[ptr2] = value, -1
++(p_n)	add	ptr2 = 1, ptr2
++;; }
++
++{ .mmi
++(p_yy)	st1	[ptr2] = value
++  	cmp.gt	p_scr, p0 = tmp, cnt		// is it a minimalistic task?
++} { .mbb
++(p_yy)	add	cnt = -1, cnt
++(p_scr)	br.cond.dpnt.many .fraction_of_line	// go move just a few
++;; }
++
++{ .mib
++	nop.m 0
++	shr.u	linecnt = cnt, LSIZE_SH
++(p_zr)	br.cond.dptk.many .l1b			// Jump to use stf.spill
++;; }
++
++#ifndef GAS_ALIGN_BREAKS_UNWIND_INFO
++	.align 32 // -------- //  L1A: store ahead into cache lines; fill later
++#endif
++{ .mmi
++	and	tmp = -(LINE_SIZE), cnt		// compute end of range
++	mov	ptr9 = ptr1			// used for prefetching
++	and	cnt = (LINE_SIZE-1), cnt	// remainder
++} { .mmi
++	mov	loopcnt = PREF_AHEAD-1		// default prefetch loop
++	cmp.gt	p_scr, p0 = PREF_AHEAD, linecnt	// check against actual value
++;; }
++{ .mmi
++(p_scr)	add	loopcnt = -1, linecnt		// start of stores
++	add	ptr2 = 8, ptr1			// (beyond prefetch stores)
++	add	ptr1 = tmp, ptr1		// first address beyond total
++;; }						// range
++{ .mmi
++	add	tmp = -1, linecnt		// next loop count
++	movi0	ar.lc = loopcnt
++;; }
++.pref_l1a:
++{ .mib
++	store [ptr9] = myval, 128	// Do stores one cache line apart
++	nop.i	0
++	br.cloop.dptk.few .pref_l1a
++;; }
++{ .mmi
++	add	ptr0 = 16, ptr2		// Two stores in parallel
++	movi0	ar.lc = tmp
++;; }
++.l1ax:
++ { .mmi
++	store [ptr2] = myval, 8
++	store [ptr0] = myval, 8
++ ;; }
++ { .mmi
++	store [ptr2] = myval, 24
++	store [ptr0] = myval, 24
++ ;; }
++ { .mmi
++	store [ptr2] = myval, 8
++	store [ptr0] = myval, 8
++ ;; }
++ { .mmi
++	store [ptr2] = myval, 24
++	store [ptr0] = myval, 24
++ ;; }
++ { .mmi
++	store [ptr2] = myval, 8
++	store [ptr0] = myval, 8
++ ;; }
++ { .mmi
++	store [ptr2] = myval, 24
++	store [ptr0] = myval, 24
++ ;; }
++ { .mmi
++	store [ptr2] = myval, 8
++	store [ptr0] = myval, 32
++ 	cmp.lt	p_scr, p0 = ptr9, ptr1		// do we need more prefetching?
++ ;; }
++{ .mmb
++	store [ptr2] = myval, 24
++(p_scr)	store [ptr9] = myval, 128
++	br.cloop.dptk.few .l1ax
++;; }
++{ .mbb
++	cmp.le  p_scr, p0 = 8, cnt		// just a few bytes left ?
++(p_scr) br.cond.dpnt.many  .fraction_of_line	// Branch no. 2
++	br.cond.dpnt.many  .move_bytes_from_alignment	// Branch no. 3
++;; }
++
++#ifdef GAS_ALIGN_BREAKS_UNWIND_INFO
++	{ nop 0 }
++#else
++	.align 32
++#endif
++.l1b:	// ------------------ //  L1B: store ahead into cache lines; fill later
++{ .mmi
++	and	tmp = -(LINE_SIZE), cnt		// compute end of range
++	mov	ptr9 = ptr1			// used for prefetching
++	and	cnt = (LINE_SIZE-1), cnt	// remainder
++} { .mmi
++	mov	loopcnt = PREF_AHEAD-1		// default prefetch loop
++	cmp.gt	p_scr, p0 = PREF_AHEAD, linecnt	// check against actual value
++;; }
++{ .mmi
++(p_scr)	add	loopcnt = -1, linecnt
++	add	ptr2 = 16, ptr1	// start of stores (beyond prefetch stores)
++	add	ptr1 = tmp, ptr1	// first address beyond total range
++;; }
++{ .mmi
++	add	tmp = -1, linecnt	// next loop count
++	movi0	ar.lc = loopcnt
++;; }
++.pref_l1b:
++{ .mib
++	stf.spill [ptr9] = f0, 128	// Do stores one cache line apart
++	nop.i   0
++	br.cloop.dptk.few .pref_l1b
++;; }
++{ .mmi
++	add	ptr0 = 16, ptr2		// Two stores in parallel
++	movi0	ar.lc = tmp
++;; }
++.l1bx:
++ { .mmi
++	stf.spill [ptr2] = f0, 32
++	stf.spill [ptr0] = f0, 32
++ ;; }
++ { .mmi
++	stf.spill [ptr2] = f0, 32
++	stf.spill [ptr0] = f0, 32
++ ;; }
++ { .mmi
++	stf.spill [ptr2] = f0, 32
++	stf.spill [ptr0] = f0, 64
++ 	cmp.lt	p_scr, p0 = ptr9, ptr1	// do we need more prefetching?
++ ;; }
++{ .mmb
++	stf.spill [ptr2] = f0, 32
++(p_scr)	stf.spill [ptr9] = f0, 128
++	br.cloop.dptk.few .l1bx
++;; }
++{ .mib
++	cmp.gt  p_scr, p0 = 8, cnt	// just a few bytes left ?
++(p_scr)	br.cond.dpnt.many  .move_bytes_from_alignment
++;; }
++
++.fraction_of_line:
++{ .mib
++	add	ptr2 = 16, ptr1
++	shr.u	loopcnt = cnt, 5   	// loopcnt = cnt / 32
++;; }
++{ .mib
++	cmp.eq	p_scr, p0 = loopcnt, r0
++	add	loopcnt = -1, loopcnt
++(p_scr)	br.cond.dpnt.many store_words
++;; }
++{ .mib
++	and	cnt = 0x1f, cnt		// compute the remaining cnt
++	movi0   ar.lc = loopcnt
++;; }
++#ifndef GAS_ALIGN_BREAKS_UNWIND_INFO
++	.align 32
++#endif
++.l2:	// ---------------------------- //  L2A:  store 32B in 2 cycles
++{ .mmb
++	store	[ptr1] = myval, 8
++	store	[ptr2] = myval, 8
++;; } { .mmb
++	store	[ptr1] = myval, 24
++	store	[ptr2] = myval, 24
++	br.cloop.dptk.many .l2
++;; }
++store_words:
++{ .mib
++	cmp.gt	p_scr, p0 = 8, cnt		// just a few bytes left ?
++(p_scr)	br.cond.dpnt.many .move_bytes_from_alignment	// Branch
++;; }
++
++{ .mmi
++	store	[ptr1] = myval, 8		// store
++	cmp.le	p_y, p_n = 16, cnt		//
++	add	cnt = -8, cnt			// subtract
++;; }
++{ .mmi
++(p_y)	store	[ptr1] = myval, 8		// store
++(p_y)	cmp.le.unc p_yy, p_nn = 16, cnt		//
++(p_y)	add	cnt = -8, cnt			// subtract
++;; }
++{ .mmi						// store
++(p_yy)	store	[ptr1] = myval, 8		//
++(p_yy)	add	cnt = -8, cnt			// subtract
++;; }
++
++.move_bytes_from_alignment:
++{ .mib
++	cmp.eq	p_scr, p0 = cnt, r0
++	tbit.nz.unc p_y, p0 = cnt, 2	// should we terminate with a st4 ?
++(p_scr)	br.cond.dpnt.few .restore_and_exit
++;; }
++{ .mib
++(p_y)	st4	[ptr1] = value, 4
++	tbit.nz.unc p_yy, p0 = cnt, 1	// should we terminate with a st2 ?
++;; }
++{ .mib
++(p_yy)	st2	[ptr1] = value, 2
++	tbit.nz.unc p_y, p0 = cnt, 0
++;; }
++
++{ .mib
++(p_y)	st1	[ptr1] = value
++;; }
++.restore_and_exit:
++{ .mib
++	nop.m	0
++	movi0	ar.lc = save_lc
++	br.ret.sptk.many rp
++;; }
++
++.move_bytes_unaligned:
++{ .mmi
++       .pred.rel "mutex",p_y, p_n
++       .pred.rel "mutex",p_yy, p_nn
++(p_n)	cmp.le  p_yy, p_nn = 4, cnt
++(p_y)	cmp.le  p_yy, p_nn = 5, cnt
++(p_n)	add	ptr2 = 2, ptr1
++} { .mmi
++(p_y)	add	ptr2 = 3, ptr1
++(p_y)	st1	[ptr1] = value, 1	// fill 1 (odd-aligned) byte
++(p_y)	add	cnt = -1, cnt		// [15, 14 (or less) left]
++;; }
++{ .mmi
++(p_yy)	cmp.le.unc p_y, p0 = 8, cnt
++	add	ptr3 = ptr1, cnt	// prepare last store
++	movi0	ar.lc = save_lc
++} { .mmi
++(p_yy)	st2	[ptr1] = value, 4	// fill 2 (aligned) bytes
++(p_yy)	st2	[ptr2] = value, 4	// fill 2 (aligned) bytes
++(p_yy)	add	cnt = -4, cnt		// [11, 10 (o less) left]
++;; }
++{ .mmi
++(p_y)	cmp.le.unc p_yy, p0 = 8, cnt
++	add	ptr3 = -1, ptr3		// last store
++	tbit.nz p_scr, p0 = cnt, 1	// will there be a st2 at the end ?
++} { .mmi
++(p_y)	st2	[ptr1] = value, 4	// fill 2 (aligned) bytes
++(p_y)	st2	[ptr2] = value, 4	// fill 2 (aligned) bytes
++(p_y)	add	cnt = -4, cnt		// [7, 6 (or less) left]
++;; }
++{ .mmi
++(p_yy)	st2	[ptr1] = value, 4	// fill 2 (aligned) bytes
++(p_yy)	st2	[ptr2] = value, 4	// fill 2 (aligned) bytes
++					// [3, 2 (or less) left]
++	tbit.nz p_y, p0 = cnt, 0	// will there be a st1 at the end ?
++} { .mmi
++(p_yy)	add	cnt = -4, cnt
++;; }
++{ .mmb
++(p_scr)	st2	[ptr1] = value		// fill 2 (aligned) bytes
++(p_y)	st1	[ptr3] = value		// fill last byte (using ptr3)
++	br.ret.sptk.many rp
++;; }
++END(memset)
++libc_hidden_def (memset)
+diff --git a/libc/string/ia64/softpipe.h b/libc/string/ia64/softpipe.h
+new file mode 100644
+index 000000000..cf0eb5355
+--- /dev/null
++++ b/libc/string/ia64/softpipe.h
+@@ -0,0 +1,29 @@
++/* This file is part of the GNU C Library.
++   Copyright (C) 2000 Free Software Foundation, Inc.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* The latency of a memory load assumed by the assembly implementation
++   of the mem and str functions.  Since we don't have any clue about
++   where the data might be, let's assume it's in the L2 cache.  
++   Assuming L3 would be too pessimistic :-)
++
++   Some functions define MEMLAT as 2, because they expect their data
++   to be in the L1D cache.  */
++
++#ifndef MEMLAT
++# define MEMLAT 6
++#endif
+diff --git a/libc/string/ia64/strchr.S b/libc/string/ia64/strchr.S
+new file mode 100644
+index 000000000..24001eea6
+--- /dev/null
++++ b/libc/string/ia64/strchr.S
+@@ -0,0 +1,112 @@
++/* Optimized version of the standard strchr() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: the address of the first occurence of chr in str or NULL
++
++   Inputs:
++        in0:    str
++        in1:    chr
++
++   A modified version of memchr.S, the search ends when the character is
++   found or the terminating null character is encountered.
++
++   This implementation assumes little endian mode.  For big endian mode,
++   the instruction czx1.r should be replaced by czx1.l.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define saved_lc	r18
++#define poschr		r19
++#define pos0		r20
++#define val1		r21
++#define val2		r22
++#define tmp		r24
++#define chrx8		r25
++#define loopcnt		r30
++
++#define str		in0
++#define chr		in1
++
++ENTRY(strchr)
++	.prologue
++	alloc r2 = ar.pfs, 2, 0, 0, 0
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc 	// save the loop counter
++	.body
++	mov 	ret0 = str	
++	and 	tmp = 7, str		// tmp = str % 8
++	mux1	chrx8 = chr, @brcst
++	extr.u	chr = chr, 0, 8		// retain only the last byte
++	cmp.ne	p8, p0 = r0, r0		// clear p8
++	;;
++	sub	loopcnt = 8, tmp	// loopcnt = 8 - tmp
++	cmp.eq	p6, p0 = tmp, r0
++(p6)	br.cond.sptk	.str_aligned;;
++	adds	loopcnt = -1, loopcnt;;
++	mov	ar.lc = loopcnt
++.l1:
++	ld1	val2 = [ret0], 1
++	;;
++	cmp.eq	p6, p0 = val2, chr
++	cmp.eq	p7, p0 = val2, r0
++(p6)	br.cond.spnt	.restore_and_exit
++(p7)	br.cond.spnt	.notfound
++	br.cloop.sptk	.l1
++.str_aligned:
++	ld8	val1 = [ret0], 8;;
++	nop.b	0
++	nop.b 	0
++.l2:	
++	ld8.s	val2 = [ret0], 8	// don't bomb out here
++	czx1.r	pos0 = val1	
++	xor	tmp = val1, chrx8	// if val1 contains chr, tmp will
++	;;				// contain a zero in its position
++	czx1.r	poschr = tmp
++	cmp.ne	p6, p0 = 8, pos0
++	;;
++	cmp.ne	p7, p0 = 8, poschr
++(p7)	br.cond.spnt .foundit
++(p6)	br.cond.spnt .notfound
++	chk.s	val2, .recovery
++.back:
++	mov	val1 = val2	
++	br.cond.dptk .l2
++.foundit:
++(p6)	cmp.lt	p8, p0 = pos0, poschr	// we found chr and null in the word
++(p8)	br.cond.spnt .notfound		// null was found before chr
++	add	ret0 = ret0, poschr ;;
++	adds	ret0 = -15, ret0 ;;	// should be -16, but we decrement
++.restore_and_exit:			// ret0 in the next instruction
++	adds	ret0 = -1, ret0		// ret0 was pointing 1 char too far
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	br.ret.sptk.many b0
++.notfound:
++	mov	ret0 = r0		// return NULL if null was found
++	mov 	ar.lc = saved_lc
++	br.ret.sptk.many b0
++.recovery:
++	adds	ret0 = -8, ret0;;
++	ld8	val2 = [ret0], 8	// bomb out here
++	br.cond.sptk	.back
++END(strchr)
++
++weak_alias (strchr, index)
++libc_hidden_def (strchr)
+diff --git a/libc/string/ia64/strcmp.S b/libc/string/ia64/strcmp.S
+new file mode 100644
+index 000000000..180b5524f
+--- /dev/null
++++ b/libc/string/ia64/strcmp.S
+@@ -0,0 +1,54 @@
++/* Optimized version of the standard strcmp() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: the result of the comparison
++
++   Inputs:
++        in0:    s1
++        in1:    s2
++
++   Unlike memcmp(), this function is optimized for mismatches within the
++   first few characters.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define s1		in0
++#define s2		in1
++
++#define val1		r15
++#define val2		r16
++
++
++ENTRY(strcmp)
++	alloc	r2 = ar.pfs, 2, 0, 0, 0
++.loop:
++	ld1	val1 = [s1], 1
++	ld1	val2 = [s2], 1
++	cmp.eq	p6, p0 = r0, r0		// set p6
++	;;
++	cmp.ne.and p6, p0 = val1, r0
++	cmp.ne.and p6, p0 = val2, r0
++	cmp.eq.and p6, p0 = val1, val2
++(p6)	br.cond.sptk .loop
++	sub	ret0 = val1, val2
++	br.ret.sptk.many b0
++END(strcmp)
++libc_hidden_def (strcmp)
+diff --git a/libc/string/ia64/strcpy.S b/libc/string/ia64/strcpy.S
+new file mode 100644
+index 000000000..bee5bf7c2
+--- /dev/null
++++ b/libc/string/ia64/strcpy.S
+@@ -0,0 +1,145 @@
++/* Optimized version of the standard strcpy() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: dest
++
++   Inputs:
++        in0:    dest
++        in1:    src
++
++   In this form, it assumes little endian mode.  For big endian mode, the
++   the two shifts in .l2 must be inverted:
++
++	shl   	value = r[1], sh1   	// value = w0 << sh1
++	shr.u   tmp = r[0], sh2   	// tmp = w1 >> sh2
++ */
++
++#include <sysdep.h>
++#undef ret
++
++#define saved_lc	r15
++#define saved_pr	r16
++#define thresh		r17
++#define dest		r19
++#define src		r20
++#define len		r21
++#define asrc		r22
++#define tmp		r23
++#define pos		r24
++#define w0		r25
++#define w1		r26
++#define c		r27
++#define sh2		r28
++#define	sh1		r29
++#define loopcnt		r30
++#define	value		r31
++
++ENTRY(strcpy)
++	.prologue
++	alloc 	r2 = ar.pfs, 2, 0, 30, 32
++
++#define MEMLAT 2
++	.rotr	r[MEMLAT + 2]
++	.rotp	p[MEMLAT + 1]
++
++	mov	ret0 = in0		// return value = dest
++	.save pr, saved_pr
++	mov	saved_pr = pr           // save the predicate registers
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc	// save the loop counter
++	.body
++	sub	tmp = r0, in0 ;;	// tmp = -dest
++	mov 	dest = in0		// dest
++	mov 	src = in1		// src
++	and	loopcnt = 7, tmp ;;	// loopcnt = -dest % 8
++	cmp.eq	p6, p0 = loopcnt, r0
++	adds	loopcnt = -1, loopcnt	// --loopcnt
++(p6)	br.cond.sptk .dest_aligned ;;
++	mov	ar.lc = loopcnt
++.l1:					// copy -dest % 8 bytes
++	ld1	c = [src], 1		// c = *src++
++	;;
++	st1	[dest] = c, 1		// *dest++ = c
++	cmp.eq	p6, p0 = c, r0
++(p6)	br.cond.dpnt .restore_and_exit
++	br.cloop.dptk .l1 ;;
++.dest_aligned:
++	and	sh1 = 7, src 		// sh1 = src % 8
++	mov	ar.lc = -1		// "infinite" loop
++	and	asrc = -8, src ;;	// asrc = src & -OPSIZ  -- align src
++	sub	thresh = 8, sh1
++	mov	pr.rot = 1 << 16	// set rotating predicates
++	cmp.ne	p7, p0 = r0, r0		// clear p7
++	shl	sh1 = sh1, 3 ;;		// sh1 = 8 * (src % 8)
++	sub	sh2 = 64, sh1		// sh2 = 64 - sh1
++	cmp.eq  p6, p0 = sh1, r0 	// is the src aligned?
++(p6)    br.cond.sptk .src_aligned ;;
++	ld8	r[1] = [asrc],8 ;;
++
++	.align	32
++.l2:
++	ld8.s	r[0] = [asrc], 8
++	shr.u	value = r[1], sh1 ;; 	// value = w0 >> sh1
++	czx1.r	pos = value ;;		// do we have an "early" zero
++	cmp.lt	p7, p0 = pos, thresh	// in w0 >> sh1?
++(p7)	br.cond.dpnt .found0
++	chk.s	r[0], .recovery2	// it is safe to do that only
++.back2:					// after the previous test
++	shl	tmp = r[0], sh2  	// tmp = w1 << sh2
++	;;
++	or	value = value, tmp ;;	// value |= tmp
++	czx1.r	pos = value ;;
++	cmp.ne	p7, p0 = 8, pos
++(p7)	br.cond.dpnt .found0
++	st8	[dest] = value, 8	// store val to dest
++	br.ctop.dptk    .l2 ;;
++.src_aligned:
++.l3:
++(p[0])		ld8.s	r[0] = [src], 8
++(p[MEMLAT])	chk.s	r[MEMLAT], .recovery3
++.back3:
++(p[MEMLAT])	mov	value = r[MEMLAT]
++(p[MEMLAT])	czx1.r	pos = r[MEMLAT] ;;
++(p[MEMLAT])	cmp.ne	p7, p0 = 8, pos
++(p7)		br.cond.dpnt .found0
++(p[MEMLAT])	st8	[dest] = r[MEMLAT], 8
++		br.ctop.dptk .l3 ;;
++.found0:
++	mov	ar.lc = pos
++.l4:
++	extr.u	c = value, 0, 8		// c = value & 0xff
++	shr.u	value = value, 8
++	;;
++	st1	[dest] = c, 1
++	br.cloop.dptk	.l4 ;;
++.restore_and_exit:
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	mov	pr = saved_pr, -1	// restore the predicate registers
++	br.ret.sptk.many b0
++.recovery2:
++	add	tmp = -8, asrc ;;
++	ld8	r[0] = [tmp]
++	br.cond.sptk .back2
++.recovery3:
++	add	tmp = -(MEMLAT + 1) * 8, src ;;
++	ld8	r[MEMLAT] = [tmp]
++	br.cond.sptk .back3
++END(strcpy)
++libc_hidden_def (strcpy)
+diff --git a/libc/string/ia64/strlen.S b/libc/string/ia64/strlen.S
+new file mode 100644
+index 000000000..f5a6ef044
+--- /dev/null
++++ b/libc/string/ia64/strlen.S
+@@ -0,0 +1,98 @@
++/* Optimized version of the standard strlen() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003, 2005 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: the length of the input string
++
++   Input:
++        in0:    str
++
++   Look for the null character byte by byte, until we reach a word aligned
++   address, then search word by word, using the czx instruction.  We're
++   also doing one word of read ahead, which could cause problems if the
++   null character is on the last word of a page and the next page is not
++   mapped in the process address space.  Hence the use of the speculative
++   load.
++
++   This implementation assumes little endian mode.  For big endian mode,
++   the instruction czx1.r should be replaced by czx1.l.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define saved_lc	r18
++#define str		r19
++#define pos0		r20
++#define val1		r21
++#define val2		r22
++#define origadd		r23
++#define tmp		r24
++#define loopcnt		r30
++#define len		ret0
++
++ENTRY(strlen)
++	.prologue
++	alloc r2 = ar.pfs, 1, 0, 0, 0
++	.save ar.lc, saved_lc
++        mov 	saved_lc = ar.lc 	// save the loop counter
++	.body
++	mov 	str = in0	
++	mov 	len = r0		// len = 0
++	and 	tmp = 7, in0		// tmp = str % 8
++	;;
++	sub	loopcnt = 8, tmp	// loopcnt = 8 - tmp
++	cmp.eq	p6, p0 = tmp, r0
++(p6)	br.cond.sptk	.str_aligned;;
++	adds	loopcnt = -1, loopcnt;;
++	mov	ar.lc = loopcnt
++.l1:
++	ld1	val2 = [str], 1
++	;;
++	cmp.eq	p6, p0 = val2, r0
++(p6)	br.cond.spnt	.restore_and_exit
++	adds	len = 1, len
++	br.cloop.dptk	.l1
++.str_aligned:
++	mov	origadd = str		// origadd = orig
++	ld8	val1 = [str], 8;;
++	nop.b	0
++	nop.b 	0
++.l2:	ld8.s	val2 = [str], 8		// don't bomb out here
++	czx1.r	pos0 = val1	
++	;;
++	cmp.ne	p6, p0 = 8, pos0
++(p6)	br.cond.spnt .foundit
++	chk.s	val2, .recovery
++.back:
++	mov	val1 = val2	
++	br.cond.dptk	.l2
++.foundit:
++	sub	tmp = str, origadd	// tmp = crt address - orig
++	add	len = len, pos0;;
++	add	len = len, tmp;;
++	adds	len = -16, len
++.restore_and_exit:
++	mov ar.lc = saved_lc		// restore the loop counter
++	br.ret.sptk.many b0
++.recovery:
++	adds	str = -8, str;;
++	ld8	val2 = [str], 8		// bomb out here
++	br.cond.sptk	.back
++END(strlen)
++libc_hidden_def (strlen)
+diff --git a/libc/string/ia64/strncmp.S b/libc/string/ia64/strncmp.S
+new file mode 100644
+index 000000000..915ea5aa2
+--- /dev/null
++++ b/libc/string/ia64/strncmp.S
+@@ -0,0 +1,62 @@
++/* Optimized version of the standard strncmp() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: the result of the comparison
++
++   Inputs:
++        in0:    s1
++        in1:    s2
++  	in2:	n
++
++   Unlike memcmp(), this function is optimized for mismatches within the
++   first few characters.  */
++
++#include <sysdep.h>
++#undef ret
++
++#define s1		in0
++#define s2		in1
++#define n		in2
++
++#define val1		r15
++#define val2		r16
++
++
++ENTRY(strncmp)
++	alloc	r2 = ar.pfs, 3, 0, 0, 0
++	mov	ret0 = r0
++	cmp.eq  p6, p0 = r0, r0		// set p6
++	cmp.eq	p7, p0 = n, r0		// return immediately if n == 0
++(p7)	br.cond.spnt .restore_and_exit ;;
++.loop:
++	ld1	val1 = [s1], 1
++	ld1	val2 = [s2], 1
++	adds	n = -1, n		// n--
++	;;
++	cmp.ne.and p6, p0 = val1, r0
++	cmp.ne.and p6, p0 = val2, r0
++	cmp.ne.and p6, p0 = n, r0
++	cmp.eq.and p6, p0 = val1, val2
++(p6)	br.cond.sptk .loop
++	sub	ret0 = val1, val2
++.restore_and_exit:
++	br.ret.sptk.many b0
++END(strncmp)	
++libc_hidden_def (strncmp)
+diff --git a/libc/string/ia64/strncpy.S b/libc/string/ia64/strncpy.S
+new file mode 100644
+index 000000000..0a98ea4db
+--- /dev/null
++++ b/libc/string/ia64/strncpy.S
+@@ -0,0 +1,232 @@
++/* Optimized version of the standard strncpy() function.
++   This file is part of the GNU C Library.
++   Copyright (C) 2000, 2001, 2002, 2003 Free Software Foundation, Inc.
++   Contributed by Dan Pop <Dan.Pop@cern.ch>
++	      and Jakub Jelinek <jakub@redhat.com>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* Return: dest
++
++   Inputs:
++	in0:    dest
++	in1:    src
++	in2:	len
++
++   In this form, it assumes little endian mode.
++ */
++
++#include <sysdep.h>
++#undef ret
++
++#define saved_lc	r15
++#define saved_pr	r16
++#define thresh		r17
++#define dest		r18
++#define dest2		r19
++#define src		r20
++#define len		r21
++#define asrc		r22
++#define tmp		r23
++#define pos		r24
++#define w0		r25
++#define w1		r26
++#define c		r27
++#define sh2		r28
++#define	sh1		r29
++#define loopcnt		r30
++#define	value		r31
++
++ENTRY(strncpy)
++	.prologue
++	alloc 	r2 = ar.pfs, 3, 0, 29, 32
++
++#define MEMLAT 2
++	.rotr	r[MEMLAT + 2]
++	.rotp	p[MEMLAT + 1]
++
++	mov	ret0 = in0		// return value = dest
++	.save pr, saved_pr
++	mov	saved_pr = pr           // save the predicate registers
++	.save ar.lc, saved_lc
++	mov 	saved_lc = ar.lc	// save the loop counter
++	mov	ar.ec = 0		// ec is not guaranteed to
++					// be zero upon function entry
++	.body
++	cmp.geu p6, p5 = 24, in2
++(p6)	br.cond.spnt .short_len
++	sub	tmp = r0, in0 ;;	// tmp = -dest
++	mov	len = in2		// len
++	mov 	dest = in0		// dest
++	mov 	src = in1		// src
++	and	tmp = 7, tmp ;;		// loopcnt = -dest % 8
++	cmp.eq	p6, p7 = tmp, r0
++	adds	loopcnt = -1, tmp	// --loopcnt
++(p6)	br.cond.sptk .dest_aligned ;;
++	sub	len = len, tmp		// len -= -dest % 8
++	mov	ar.lc = loopcnt
++.l1:					// copy -dest % 8 bytes
++(p5)	ld1	c = [src], 1		// c = *src++
++	;;
++	st1	[dest] = c, 1		// *dest++ = c
++	cmp.ne	p5, p7 = c, r0
++	br.cloop.dptk .l1 ;;
++(p7)	br.cond.dpnt	.found0_align
++
++.dest_aligned:				// p7 should be cleared here
++	shr.u	c = len, 3		// c = len / 8
++	and	sh1 = 7, src 		// sh1 = src % 8
++	and	asrc = -8, src ;;	// asrc = src & -OPSIZ  -- align src
++	adds	c = (MEMLAT-1), c	// c = (len / 8) + MEMLAT - 1
++	sub	thresh = 8, sh1
++	mov	pr.rot = 1 << 16	// set rotating predicates
++	shl	sh1 = sh1, 3 ;;		// sh1 = 8 * (src % 8)
++	mov	ar.lc = c		// "infinite" loop
++	sub	sh2 = 64, sh1		// sh2 = 64 - sh1
++	cmp.eq  p6, p0 = sh1, r0 	// is the src aligned?
++(p6)    br.cond.sptk .src_aligned
++	adds	c = -(MEMLAT-1), c ;;	// c = (len / 8)
++	ld8	r[1] = [asrc],8
++	mov	ar.lc = c ;;
++
++	.align	32
++.l2:
++(p6)	st8	[dest] = value, 8	// store val to dest
++	ld8.s	r[0] = [asrc], 8
++	shr.u	value = r[1], sh1 ;; 	// value = w0 >> sh1
++	czx1.r	pos = value ;;		// do we have an "early" zero
++	cmp.lt	p7, p0 = pos, thresh	// in w0 >> sh1?
++	adds	len = -8, len		// len -= 8
++(p7)	br.cond.dpnt .nonalign_found0
++	chk.s	r[0], .recovery2	// it is safe to do that only
++.back2:					// after the previous test
++	shl	tmp = r[0], sh2  	// tmp = w1 << sh2
++	;;
++	or	value = value, tmp ;;	// value |= tmp
++	czx1.r	pos = value ;;
++	cmp.ne	p7, p6 = 8, pos
++(p7)	br.cond.dpnt .nonalign_found0
++	br.ctop.dptk    .l2 ;;
++	adds	len = 8, len
++	br.cond.sptk	.not_found0 ;;
++.nonalign_found0:
++	cmp.gtu	p6, p0 = -8, len
++(p6)	br.cond.dptk .found0
++	adds	len = 8, len
++	br.cond.sptk	.not_found0 ;;
++
++	.align	32
++.src_aligned:
++.l3:
++(p[0])		ld8.s	r[0] = [src], 8
++(p[MEMLAT])	chk.s	r[MEMLAT], .recovery3
++.back3:
++(p[MEMLAT])	mov	value = r[MEMLAT]
++(p[MEMLAT])	czx1.r	pos = r[MEMLAT] ;;
++(p[MEMLAT])	cmp.ne	p7, p0 = 8, pos
++(p[MEMLAT])	adds	len = -8, len	// len -= 8
++(p7)		br.cond.dpnt .found0
++(p[MEMLAT])	st8	[dest] = r[MEMLAT], 8
++		br.ctop.dptk .l3 ;;
++
++	chk.s	r[MEMLAT-1], .recovery4
++.back4:
++	mov	value = r[MEMLAT-1]
++
++.not_found0:
++	cmp.eq	p5, p6 = len, r0
++	adds	len = -1, len
++(p5)	br.cond.dptk	.restore_and_exit ;;
++	mov	ar.lc = len
++.l4:
++(p6)	extr.u	c = value, 0, 8		// c = value & 0xff
++(p6)	shr.u	value = value, 8 ;;
++	st1	[dest] = c, 1
++	cmp.ne	p6, p0 = c, r0
++	br.cloop.dptk	.l4
++	br.cond.sptk	.restore_and_exit
++
++.found0_align:
++	mov	pos = 0
++	adds	len = -8, len
++	mov	value = 0 ;;
++.found0:
++	shl	tmp = pos, 3
++	shr.u	loopcnt = len, 4	// loopcnt = len / 16
++	mov	c = -1 ;;
++	cmp.eq	p6, p0 = loopcnt, r0
++	adds	loopcnt = -1, loopcnt
++	shl	c = c, tmp ;;
++	and	len = 0xf, len
++	andcm	value = value, c
++	mov	ar.lc = loopcnt ;;
++	cmp.le	p7, p0 = 8, len
++	adds	dest2 = 16, dest
++	st8	[dest] = value, 8
++	and	len = 0x7, len
++(p6)	br.cond.dpnt	.l6 ;;
++.l5:
++	st8	[dest] = r0, 16
++	st8	[dest2] = r0, 16
++	br.cloop.dptk	.l5 ;;
++.l6:
++(p7)	st8	[dest] = r0, 8
++	cmp.eq	p5, p0 = len, r0
++	adds	len = -1, len
++(p5)	br.cond.dptk .restore_and_exit ;;
++	mov	ar.lc = len ;;
++.l7:
++	st1	[dest] = r0, 1
++	br.cloop.dptk	.l7 ;;
++.restore_and_exit:
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	mov	pr = saved_pr, -1	// restore the predicate registers
++	br.ret.sptk.many b0
++
++.short_len:
++	cmp.eq	p5, p0 = in2, r0
++	adds	loopcnt = -1, in2
++(p5)	br.cond.spnt .restore_and_exit ;;
++	mov	ar.lc = loopcnt		// p6 should be set when we get here
++.l8:
++(p6)	ld1	c = [in1], 1		// c = *src++
++	;;
++	st1	[in0] = c, 1		// *dest++ = c
++(p6)	cmp.ne	p6, p0 = c, r0
++	br.cloop.dptk .l8
++	;;
++	mov 	ar.lc = saved_lc	// restore the loop counter
++	mov	pr = saved_pr, -1	// restore the predicate registers
++	br.ret.sptk.many b0
++.recovery2:
++	add	c = 8, len
++	add	tmp = -8, asrc ;;
++	cmp.gtu	p8, p5 = c, thresh ;;
++(p8)	ld8	r[0] = [tmp]
++(p5)	mov	r[0] = r0
++	br.cond.sptk .back2
++.recovery3:
++	add	tmp = -(MEMLAT + 1) * 8, src ;;
++	ld8	r[MEMLAT] = [tmp]
++	br.cond.sptk .back3
++.recovery4:
++	cmp.eq	p5, p6 = len, r0
++	add	tmp = -MEMLAT * 8, src ;;
++(p6)	ld8	r[MEMLAT - 1] = [tmp]
++(p5)	mov	r[MEMLAT - 1] = r0
++	br.cond.sptk .back4
++END(strncpy)
++libc_hidden_def (strncpy)
+diff --git a/libc/string/ia64/sysdep.h b/libc/string/ia64/sysdep.h
+new file mode 100644
+index 000000000..03e74360d
+--- /dev/null
++++ b/libc/string/ia64/sysdep.h
+@@ -0,0 +1,168 @@
++/* Copyright (C) 1999, 2000, 2002, 2003, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Written by Jes Sorensen, <Jes.Sorensen@cern.ch>, April 1999.
++   Based on code originally written by David Mosberger-Tang
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _LINUX_IA64_SYSDEP_H
++#define _LINUX_IA64_SYSDEP_H 1
++
++#include <features.h>
++#include <asm/unistd.h>
++
++#ifdef __ASSEMBLER__
++
++/* Macros to help writing .prologue directives in assembly code.  */
++#define ASM_UNW_PRLG_RP			0x8
++#define ASM_UNW_PRLG_PFS		0x4
++#define ASM_UNW_PRLG_PSP		0x2
++#define ASM_UNW_PRLG_PR			0x1
++#define ASM_UNW_PRLG_GRSAVE(ninputs)	(32+(ninputs))
++
++#ifdef	__STDC__
++#define C_LABEL(name)		name##:
++#else
++#define C_LABEL(name)		name/**/:
++#endif
++
++#define CALL_MCOUNT
++
++#define ENTRY(name)				\
++	.text;					\
++	.align 32;				\
++	.proc C_SYMBOL_NAME(name);		\
++	.global C_SYMBOL_NAME(name);		\
++	C_LABEL(name)				\
++	CALL_MCOUNT
++
++#define LEAF(name)				\
++  .text;					\
++  .align 32;					\
++  .proc C_SYMBOL_NAME(name);			\
++  .global name;					\
++  C_LABEL(name)
++
++/* Mark the end of function SYM.  */
++#undef END
++#define END(sym)	.endp C_SYMBOL_NAME(sym)
++
++/* For Linux we can use the system call table in the header file
++	/usr/include/asm/unistd.h
++   of the kernel.  But these symbols do not follow the SYS_* syntax
++   so we have to redefine the `SYS_ify' macro here.  */
++#undef SYS_ify
++#ifdef __STDC__
++# define SYS_ify(syscall_name)	__NR_##syscall_name
++#else
++# define SYS_ify(syscall_name)	__NR_/**/syscall_name
++#endif
++
++/* Linux uses a negative return value to indicate syscall errors, unlike
++   most Unices, which use the condition codes' carry flag.
++
++   Since version 2.1 the return value of a system call might be negative
++   even if the call succeeded.  E.g., the `lseek' system call might return
++   a large offset.  Therefore we must not anymore test for < 0, but test
++   for a real error by making sure the value in %d0 is a real error
++   number.  Linus said he will make sure the no syscall returns a value
++   in -1 .. -4095 as a valid result so we can savely test with -4095.  */
++
++/* We don't want the label for the error handler to be visible in the symbol
++   table when we define it here.  */
++#define SYSCALL_ERROR_LABEL __syscall_error
++
++#undef PSEUDO
++#define	PSEUDO(name, syscall_name, args)	\
++  ENTRY(name)					\
++    DO_CALL (SYS_ify(syscall_name));		\
++	cmp.eq p6,p0=-1,r10;			\
++(p6)	br.cond.spnt.few __syscall_error;
++
++#define DO_CALL_VIA_BREAK(num)			\
++	mov r15=num;				\
++	break __BREAK_SYSCALL
++
++#ifdef IA64_USE_NEW_STUB
++# ifdef SHARED
++#  define DO_CALL(num)				\
++	.prologue;				\
++	adds r2 = SYSINFO_OFFSET, r13;;		\
++	ld8 r2 = [r2];				\
++	.save ar.pfs, r11;			\
++	mov r11 = ar.pfs;;			\
++	.body;					\
++	mov r15 = num;				\
++	mov b7 = r2;				\
++	br.call.sptk.many b6 = b7;;		\
++	.restore sp;				\
++	mov ar.pfs = r11;			\
++	.prologue;				\
++	.body
++# else /* !SHARED */
++#  define DO_CALL(num)				\
++	.prologue;				\
++	mov r15 = num;				\
++	movl r2 = _dl_sysinfo;;			\
++	ld8 r2 = [r2];				\
++	.save ar.pfs, r11;			\
++	mov r11 = ar.pfs;;			\
++	.body;					\
++	mov b7 = r2;				\
++	br.call.sptk.many b6 = b7;;		\
++	.restore sp;				\
++	mov ar.pfs = r11;			\
++	.prologue;				\
++	.body
++# endif
++#else
++# define DO_CALL(num)				DO_CALL_VIA_BREAK(num)
++#endif
++
++#undef PSEUDO_END
++#define PSEUDO_END(name)	.endp C_SYMBOL_NAME(name);
++
++#undef PSEUDO_NOERRNO
++#define	PSEUDO_NOERRNO(name, syscall_name, args)	\
++  ENTRY(name)						\
++    DO_CALL (SYS_ify(syscall_name));
++
++#undef PSEUDO_END_NOERRNO
++#define PSEUDO_END_NOERRNO(name)	.endp C_SYMBOL_NAME(name);
++
++#undef PSEUDO_ERRVAL
++#define	PSEUDO_ERRVAL(name, syscall_name, args)	\
++  ENTRY(name)					\
++    DO_CALL (SYS_ify(syscall_name));		\
++	cmp.eq p6,p0=-1,r10;			\
++(p6)	mov r10=r8;
++
++
++#undef PSEUDO_END_ERRVAL
++#define PSEUDO_END_ERRVAL(name)	.endp C_SYMBOL_NAME(name);
++
++#undef END
++#define END(name)						\
++	.size	C_SYMBOL_NAME(name), . - C_SYMBOL_NAME(name) ;	\
++	.endp	C_SYMBOL_NAME(name)
++
++#define ret			br.ret.sptk.few b0
++#define ret_NOERRNO		ret
++#define ret_ERRVAL		ret
++
++#endif /* not __ASSEMBLER__ */
++
++#endif /* linux/ia64/sysdep.h */
+diff --git a/libc/sysdeps/linux/ia64/Makefile b/libc/sysdeps/linux/ia64/Makefile
+new file mode 100644
+index 000000000..b1bf1ef10
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/Makefile
+@@ -0,0 +1,15 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++TOPDIR=../../../../
++
++top_srcdir=$(TOPDIR)
++top_builddir=../../../../
++all: objs
++include $(top_builddir)Rules.mak
++include Makefile.arch
++include $(top_srcdir)Makerules
+diff --git a/libc/sysdeps/linux/ia64/Makefile.arch b/libc/sysdeps/linux/ia64/Makefile.arch
+new file mode 100644
+index 000000000..2b3212498
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/Makefile.arch
+@@ -0,0 +1,14 @@
++# Makefile for uClibc
++#
++# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
++#
++# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++#
++
++CSRC := __syscall_error.c
++
++SSRC := \
++	__longjmp.S brk.S bsd-setjmp.S bsd-_setjmp.S clone2.S fork.S \
++	pipe.S setjmp.S syscall.S vfork.S
++
++include $(top_srcdir)libc/sysdeps/linux/Makefile.commonarch
+diff --git a/libc/sysdeps/linux/ia64/__longjmp.S b/libc/sysdeps/linux/ia64/__longjmp.S
+new file mode 100644
+index 000000000..90f70e8e0
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/__longjmp.S
+@@ -0,0 +1,160 @@
++/* Copyright (C) 1999, 2000, 2001 Free Software Foundation, Inc.
++   Contributed by David Mosberger-Tang <davidm@hpl.hp.com>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.
++
++   Note that __sigsetjmp() did NOT flush the register stack.  Instead,
++   we do it here since __longjmp() is usually much less frequently
++   invoked than __sigsetjmp(). The only difficulty is that __sigsetjmp()
++   didn't (and wouldn't be able to) save ar.rnat either.  This is a problem
++   because if we're not careful, we could end up loading random NaT bits.
++   There are two cases:
++
++	(i)  ar.bsp < ia64_rse_rnat_addr(jmpbuf.ar_bsp)
++		ar.rnat contains the desired bits---preserve ar.rnat
++		across loadrs and write to ar.bspstore
++
++	(ii) ar.bsp >= ia64_rse_rnat_addr(jmpbuf.ar_bsp)
++		The desired ar.rnat is stored in
++		ia64_rse_rnat_addr(jmpbuf.ar_bsp).  Load those
++		bits into ar.rnat after setting ar.bspstore. */
++
++#include "sysdep.h"
++#include <features.h>
++
++#	define	pPos	p6	/* is rotate count positive? */
++#	define	pNeg	p7	/* is rotate count negative? */
++
++
++	/* __longjmp(__jmp_buf buf, int val) */
++
++LEAF(__longjmp)
++	alloc r8=ar.pfs,2,1,0,0
++	mov r27=ar.rsc
++	add r2=0x98,in0		// r2 <- &jmpbuf.orig_jmp_buf_addr
++	;;
++	ld8 r8=[r2],-16		// r8 <- orig_jmp_buf_addr
++	mov r10=ar.bsp
++	and r11=~0x3,r27	// clear ar.rsc.mode
++	;;
++	flushrs			// flush dirty regs to backing store (must be first in insn grp)
++	ld8 r23=[r2],8		// r23 <- jmpbuf.ar_bsp
++	sub r8=r8,in0		// r8 <- &orig_jmpbuf - &jmpbuf
++	;;
++	ld8 r25=[r2]		// r25 <- jmpbuf.ar_unat
++	extr.u r8=r8,3,6	// r8 <- (&orig_jmpbuf - &jmpbuf)/8 & 0x3f
++	;;
++	cmp.lt pNeg,pPos=r8,r0
++	mov r2=in0
++	;;
++(pPos)	mov r16=r8
++(pNeg)	add r16=64,r8
++(pPos)	sub r17=64,r8
++(pNeg)	sub r17=r0,r8
++	;;
++	mov ar.rsc=r11		// put RSE in enforced lazy mode
++	shr.u r8=r25,r16
++	add r3=8,in0		// r3 <- &jmpbuf.r1
++	shl r9=r25,r17
++	;;
++	or r25=r8,r9
++	;;
++	mov r26=ar.rnat
++	mov ar.unat=r25		// setup ar.unat (NaT bits for r1, r4-r7, and r12)
++	;;
++	ld8.fill.nta sp=[r2],16	// r12 (sp)
++	ld8.fill.nta gp=[r3],16		// r1 (gp)
++	dep r11=-1,r23,3,6	// r11 <- ia64_rse_rnat_addr(jmpbuf.ar_bsp)
++	;;
++	ld8.nta r16=[r2],16		// caller's unat
++	ld8.nta r17=[r3],16		// fpsr
++	;;
++	ld8.fill.nta r4=[r2],16	// r4
++	ld8.fill.nta r5=[r3],16		// r5 (gp)
++	cmp.geu p8,p0=r10,r11	// p8 <- (ar.bsp >= jmpbuf.ar_bsp)
++	;;
++	ld8.fill.nta r6=[r2],16	// r6
++	ld8.fill.nta r7=[r3],16		// r7
++	;;
++	mov ar.unat=r16			// restore caller's unat
++	mov ar.fpsr=r17			// restore fpsr
++	;;
++	ld8.nta r16=[r2],16		// b0
++	ld8.nta r17=[r3],16		// b1
++	;;
++(p8)	ld8 r26=[r11]		// r26 <- *ia64_rse_rnat_addr(jmpbuf.ar_bsp)
++	mov ar.bspstore=r23	// restore ar.bspstore
++	;;
++	ld8.nta r18=[r2],16		// b2
++	ld8.nta r19=[r3],16		// b3
++	;;
++	ld8.nta r20=[r2],16		// b4
++	ld8.nta r21=[r3],16		// b5
++	;;
++	ld8.nta r11=[r2],16		// ar.pfs
++	ld8.nta r22=[r3],56		// ar.lc
++	;;
++	ld8.nta r24=[r2],32		// pr
++	mov b0=r16
++	;;
++	ldf.fill.nta f2=[r2],32
++	ldf.fill.nta f3=[r3],32
++	mov b1=r17
++	;;
++	ldf.fill.nta f4=[r2],32
++	ldf.fill.nta f5=[r3],32
++	mov b2=r18
++	;;
++	ldf.fill.nta f16=[r2],32
++	ldf.fill.nta f17=[r3],32
++	mov b3=r19
++	;;
++	ldf.fill.nta f18=[r2],32
++	ldf.fill.nta f19=[r3],32
++	mov b4=r20
++	;;
++	ldf.fill.nta f20=[r2],32
++	ldf.fill.nta f21=[r3],32
++	mov b5=r21
++	;;
++	ldf.fill.nta f22=[r2],32
++	ldf.fill.nta f23=[r3],32
++	mov ar.lc=r22
++	;;
++	ldf.fill.nta f24=[r2],32
++	ldf.fill.nta f25=[r3],32
++	cmp.eq p8,p9=0,in1
++	;;
++	ldf.fill.nta f26=[r2],32
++	ldf.fill.nta f27=[r3],32
++	mov ar.pfs=r11
++	;;
++	ldf.fill.nta f28=[r2],32
++	ldf.fill.nta f29=[r3],32
++	;;
++	ldf.fill.nta f30=[r2]
++	ldf.fill.nta f31=[r3]
++(p8)	mov r8=1
++
++	mov ar.rnat=r26		// restore ar.rnat
++	;;
++	mov ar.rsc=r27		// restore ar.rsc
++(p9)	mov r8=in1
++
++	invala			// virt. -> phys. regnum mapping may change
++	mov pr=r24,-1
++	ret
++END(__longjmp)
+diff --git a/libc/sysdeps/linux/ia64/__syscall_error.c b/libc/sysdeps/linux/ia64/__syscall_error.c
+new file mode 100644
+index 000000000..910b32cda
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/__syscall_error.c
+@@ -0,0 +1,19 @@
++/* Wrapper for setting errno.
++ *
++ * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <errno.h>
++#include <features.h>
++
++/* This routine is jumped to by all the syscall handlers, to stash
++ * an error number into errno.  */
++int __syscall_error(void) attribute_hidden;
++int __syscall_error(void)
++{
++	register int err_no asm("%r8");
++	__set_errno(-err_no);
++	return -1;
++}
+diff --git a/libc/sysdeps/linux/ia64/bits/endian.h b/libc/sysdeps/linux/ia64/bits/endian.h
+new file mode 100644
+index 000000000..98a5e2399
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/endian.h
+@@ -0,0 +1,7 @@
++/* Linux/ia64 is little-endian.  */
++
++#ifndef _ENDIAN_H
++# error "Never use <bits/endian.h> directly; include <endian.h> instead."
++#endif
++
++#define __BYTE_ORDER __LITTLE_ENDIAN
+diff --git a/libc/sysdeps/linux/ia64/bits/fcntl.h b/libc/sysdeps/linux/ia64/bits/fcntl.h
+new file mode 100644
+index 000000000..d330954d4
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/fcntl.h
+@@ -0,0 +1,183 @@
++/* O_*, F_*, FD_* bit values for Linux/IA64.
++   Copyright (C) 1999, 2000, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_FCNTL_H
++# error "Never use <bits/fcntl.h> directly; include <fcntl.h> instead."
++#endif
++
++
++#include <sys/types.h>
++
++/* open/fcntl - O_SYNC is only implemented on blocks devices and on files
++   located on an ext2 file system */
++#define O_ACCMODE	  0003
++#define O_RDONLY	    00
++#define O_WRONLY	    01
++#define O_RDWR		    02
++#define O_CREAT		  0100	/* not fcntl */
++#define O_EXCL		  0200	/* not fcntl */
++#define O_NOCTTY	  0400	/* not fcntl */
++#define O_TRUNC		 01000	/* not fcntl */
++#define O_APPEND	 02000
++#define O_NONBLOCK	 04000
++#define O_NDELAY	O_NONBLOCK
++#define O_SYNC		010000
++#define O_FSYNC		O_SYNC
++#define O_ASYNC		020000
++#define O_DIRECT	040000
++
++#ifdef __USE_GNU
++# define O_DIRECTORY	0200000	/* must be a directory */
++# define O_NOFOLLOW	0400000 /* don't follow links */
++# define O_NOATIME	01000000 /* Do not set atime.  */
++#endif
++
++#ifdef __USE_LARGEFILE64
++/* Not necessary, files are always with 64bit off_t.  */
++# define O_LARGEFILE	0
++#endif
++
++/* For now Linux has synchronisity options for data and read operations.
++   We define the symbols here but let them do the same as O_SYNC since
++   this is a superset.	*/
++#if defined __USE_POSIX199309 || defined __USE_UNIX98
++# define O_DSYNC	O_SYNC	/* Synchronize data.  */
++# define O_RSYNC	O_SYNC	/* Synchronize read operations.	 */
++#endif
++
++/* Values for the second argument to `fcntl'.  */
++#define F_DUPFD		0	/* Duplicate file descriptor.  */
++#define F_GETFD		1	/* Get file descriptor flags.  */
++#define F_SETFD		2	/* Set file descriptor flags.  */
++#define F_GETFL		3	/* Get file status flags.  */
++#define F_SETFL		4	/* Set file status flags.  */
++#define F_GETLK		5	/* Get record locking info.  */
++#define F_SETLK		6	/* Set record locking info (non-blocking).  */
++#define F_SETLKW	7	/* Set record locking info (blocking).	*/
++
++/* Not necessary, we always have 64-bit offsets.  */
++#define F_GETLK64	5	/* Get record locking info.  */
++#define F_SETLK64	6	/* Set record locking info (non-blocking).  */
++#define F_SETLKW64	7	/* Set record locking info (blocking).	*/
++
++#if defined __USE_BSD || defined __USE_UNIX98
++# define F_SETOWN	8	/* Get owner of socket (receiver of SIGIO).  */
++# define F_GETOWN	9	/* Set owner of socket (receiver of SIGIO).  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETSIG	10	/* Set number of signal to be sent.  */
++# define F_GETSIG	11	/* Get number of signal to be sent.  */
++#endif
++
++#ifdef __USE_GNU
++# define F_SETLEASE	1024	/* Set a lease.	 */
++# define F_GETLEASE	1025	/* Enquire what lease is active.  */
++# define F_NOTIFY	1026	/* Request notfications on a directory.	 */
++#endif
++
++/* For F_[GET|SET]FL.  */
++#define FD_CLOEXEC	1	/* actually anything with low bit set goes */
++
++/* For posix fcntl() and `l_type' field of a `struct flock' for lockf().  */
++#define F_RDLCK		0	/* Read lock.  */
++#define F_WRLCK		1	/* Write lock.	*/
++#define F_UNLCK		2	/* Remove lock.	 */
++
++/* for old implementation of bsd flock () */
++#define F_EXLCK		4	/* or 3 */
++#define F_SHLCK		8	/* or 4 */
++
++#ifdef __USE_BSD
++/* Operations for bsd flock(), also used by the kernel implementation */
++# define LOCK_SH	1	/* shared lock */
++# define LOCK_EX	2	/* exclusive lock */
++# define LOCK_NB	4	/* or'd with one of the above to prevent
++				   blocking */
++# define LOCK_UN	8	/* remove lock */
++#endif
++
++#ifdef __USE_GNU
++# define LOCK_MAND	32	/* This is a mandatory flock:	*/
++# define LOCK_READ	64	/* ... which allows concurrent read operations.	 */
++# define LOCK_WRITE	128	/* ... which allows concurrent write operations.  */
++# define LOCK_RW	192	/* ... Which allows concurrent read & write operations.	 */
++#endif
++
++
++#ifdef __USE_GNU
++/* Types of directory notifications that may be requested with F_NOTIFY.  */
++# define DN_ACCESS	0x00000001	/* File accessed.  */
++# define DN_MODIFY	0x00000002	/* File modified.  */
++# define DN_CREATE	0x00000004	/* File created.  */
++# define DN_DELETE	0x00000008	/* File removed.  */
++# define DN_RENAME	0x00000010	/* File renamed.  */
++# define DN_ATTRIB	0x00000020	/* File changed attibutes.  */
++# define DN_MULTISHOT	0x80000000	/* Don't remove notifier.  */
++#endif
++
++/* We don't need to support __USE_FILE_OFFSET64.  */
++struct flock
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off_t l_start;	/* Offset where the lock begins.  */
++    __off_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++
++#ifdef __USE_LARGEFILE64
++struct flock64
++  {
++    short int l_type;	/* Type of lock: F_RDLCK, F_WRLCK, or F_UNLCK.	*/
++    short int l_whence;	/* Where `l_start' is relative to (like `lseek').  */
++    __off64_t l_start;	/* Offset where the lock begins.  */
++    __off64_t l_len;	/* Size of the locked area; zero means until EOF.  */
++    __pid_t l_pid;	/* Process holding the lock.  */
++  };
++#endif
++
++
++/* Define some more compatibility macros to be backward compatible with
++   BSD systems which did not managed to hide these kernel macros.  */
++#ifdef	__USE_BSD
++# define FAPPEND	O_APPEND
++# define FFSYNC		O_FSYNC
++# define FASYNC		O_ASYNC
++# define FNONBLOCK	O_NONBLOCK
++# define FNDELAY	O_NDELAY
++#endif /* Use BSD.  */
++
++/* Advise to `posix_fadvise'.  */
++#ifdef __USE_XOPEN2K
++# define POSIX_FADV_NORMAL	0 /* No further special treatment.  */
++# define POSIX_FADV_RANDOM	1 /* Expect random page references.  */
++# define POSIX_FADV_SEQUENTIAL	2 /* Expect sequential page references.	 */
++# define POSIX_FADV_WILLNEED	3 /* Will need these pages.  */
++# define POSIX_FADV_DONTNEED	4 /* Don't need these pages.  */
++# define POSIX_FADV_NOREUSE	5 /* Data will be accessed once.  */
++#endif
++
++__BEGIN_DECLS
++
++/* Provide kernel hint to read ahead.  */
++extern ssize_t readahead (int __fd, __off64_t __offset, size_t __count)
++    __THROW;
++
++__END_DECLS
+diff --git a/libc/sysdeps/linux/ia64/bits/kernel_stat.h b/libc/sysdeps/linux/ia64/bits/kernel_stat.h
+new file mode 100644
+index 000000000..b46369c3c
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/kernel_stat.h
+@@ -0,0 +1,57 @@
++/* Ripped from linux/include/asm-ia64/stat.h
++ * and renamed 'struct stat' to 'struct kernel_stat' */
++
++#ifndef _ASM_IA64_STAT_H
++#define _ASM_IA64_STAT_H
++
++/*
++ * Modified 1998, 1999
++ *	David Mosberger-Tang <davidm@hpl.hp.com>, Hewlett-Packard Co
++ */
++
++struct kernel_stat {
++	unsigned long	st_dev;
++	unsigned long	st_ino;
++	unsigned long	st_nlink;
++	unsigned int	st_mode;
++	unsigned int	st_uid;
++	unsigned int	st_gid;
++	unsigned int	__pad0;
++	unsigned long	st_rdev;
++	unsigned long	st_size;
++	unsigned long	st_atime;
++	unsigned long	st_atime_nsec;
++	unsigned long	st_mtime;
++	unsigned long	st_mtime_nsec;
++	unsigned long	st_ctime;
++	unsigned long	st_ctime_nsec;
++	unsigned long	st_blksize;
++	long		st_blocks;
++	unsigned long	__unused[3];
++};
++
++#define STAT_HAVE_NSEC 1
++
++struct __old_kernel_stat {
++	unsigned int	st_dev;
++	unsigned int	st_ino;
++	unsigned int	st_mode;
++	unsigned int	st_nlink;
++	unsigned int	st_uid;
++	unsigned int	st_gid;
++	unsigned int	st_rdev;
++	unsigned int	__pad1;
++	unsigned long	st_size;
++	unsigned long	st_atime;
++	unsigned long	st_mtime;
++	unsigned long	st_ctime;
++	unsigned int	st_blksize;
++	int		st_blocks;
++	unsigned int	__unused1;
++	unsigned int	__unused2;
++};
++
++/* ia64 stat64 is same as stat */
++#define kernel_stat64 kernel_stat
++
++#endif /* _ASM_IA64_STAT_H */
+diff --git a/libc/sysdeps/linux/ia64/bits/kernel_types.h b/libc/sysdeps/linux/ia64/bits/kernel_types.h
+new file mode 100644
+index 000000000..6449b5e27
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/kernel_types.h
+@@ -0,0 +1,56 @@
++/* Note that we use the exact same include guard #define names
++ * as asm/posix_types.h.  This will avoid gratuitous conflicts 
++ * with the posix_types.h kernel header, and will ensure that 
++ * our private content, and not the kernel header, will win.
++ *  -Erik
++ */
++#ifndef _ASM_IA64_POSIX_TYPES_H
++#define _ASM_IA64_POSIX_TYPES_H
++
++/*
++ * This file is generally used by user-level software, so you need to
++ * be a little careful about namespace pollution etc.  Also, we cannot
++ * assume GCC is being used.
++ *
++ * Based on <asm-alpha/posix_types.h>.
++ *
++ * Modified 1998-2000, 2003
++ *	David Mosberger-Tang <davidm@hpl.hp.com>, Hewlett-Packard Co
++ */
++
++typedef unsigned long	__kernel_ino_t;
++typedef unsigned int	__kernel_mode_t;
++typedef unsigned int	__kernel_nlink_t;
++typedef long		__kernel_off_t;
++typedef long long	__kernel_loff_t;
++typedef int		__kernel_pid_t;
++typedef int		__kernel_ipc_pid_t;
++typedef unsigned int	__kernel_uid_t;
++typedef unsigned int	__kernel_gid_t;
++typedef unsigned long	__kernel_size_t;
++typedef long		__kernel_ssize_t;
++typedef long		__kernel_ptrdiff_t;
++typedef long		__kernel_time_t;
++typedef long		__kernel_suseconds_t;
++typedef long		__kernel_clock_t;
++typedef int		__kernel_timer_t;
++typedef int		__kernel_clockid_t;
++typedef int		__kernel_daddr_t;
++typedef char *		__kernel_caddr_t;
++typedef unsigned long	__kernel_sigset_t;	/* at least 32 bits */
++typedef unsigned short	__kernel_uid16_t;
++typedef unsigned short	__kernel_gid16_t;
++
++typedef struct {
++	int	val[2];
++} __kernel_fsid_t;
++
++typedef __kernel_uid_t __kernel_old_uid_t;
++typedef __kernel_gid_t __kernel_old_gid_t;
++typedef __kernel_uid_t __kernel_uid32_t;
++typedef __kernel_gid_t __kernel_gid32_t;
++
++typedef unsigned int	__kernel_dev_t;
++typedef unsigned int	__kernel_old_dev_t;
++
++#endif /* _ASM_IA64_POSIX_TYPES_H */
+diff --git a/libc/sysdeps/linux/ia64/bits/setjmp.h b/libc/sysdeps/linux/ia64/bits/setjmp.h
+new file mode 100644
+index 000000000..76625753d
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/setjmp.h
+@@ -0,0 +1,40 @@
++/* Define the machine-dependent type `jmp_buf'.  Linux/IA-64 version.
++   Copyright (C) 1999, 2000, 2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by David Mosberger-Tang <davidm@hpl.hp.com>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _BITS_SETJMP_H
++#define _BITS_SETJMP_H  1
++
++#if !defined _SETJMP_H && !defined _PTHREAD_H
++# error "Never include <bits/setjmp.h> directly; use <setjmp.h> instead."
++#endif
++
++/* User code must not depend on the internal representation of jmp_buf. */
++
++#define _JBLEN	70
++
++/* the __jmp_buf element type should be __float80 per ABI... */
++typedef long __jmp_buf[_JBLEN] __attribute__ ((aligned (16))); /* guarantees 128-bit alignment! */
++
++/* Test if longjmp to JMPBUF would unwind the frame containing a local
++   variable at ADDRESS.  */
++#define _JMPBUF_UNWINDS(_jmpbuf, _address)		\
++     ((void *)(_address) < (void *)(((long *)_jmpbuf)[0]))
++
++#endif  /* bits/setjmp.h */
+diff --git a/libc/sysdeps/linux/ia64/bits/sigaction.h b/libc/sysdeps/linux/ia64/bits/sigaction.h
+new file mode 100644
+index 000000000..11599d520
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/sigaction.h
+@@ -0,0 +1,73 @@
++/* Definitions for Linux/ia64 sigaction.
++   Copyright (C) 1996, 1997, 2000, 2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SIGNAL_H
++# error "Never include <bits/sigaction.h> directly; use <signal.h> instead."
++#endif
++
++/* Structure describing the action to be taken when a signal arrives.  */
++struct sigaction
++  {
++    /* Signal handler.  */
++#ifdef __USE_POSIX199309
++    union
++      {
++	/* Used if SA_SIGINFO is not set.  */
++	__sighandler_t sa_handler;
++	/* Used if SA_SIGINFO is set.  */
++	void (*sa_sigaction) (int, siginfo_t *, void *);
++      }
++    __sigaction_handler;
++# define sa_handler	__sigaction_handler.sa_handler
++# define sa_sigaction	__sigaction_handler.sa_sigaction
++#else
++    __sighandler_t sa_handler;
++#endif
++
++    /* Special flags.  */
++    unsigned long int sa_flags;
++
++    /* Additional set of signals to be blocked.  */
++    __sigset_t sa_mask;
++  };
++
++/* Bits in `sa_flags'.  */
++#define SA_NOCLDSTOP  0x00000001 /* Don't send SIGCHLD when children stop.  */
++#define SA_NOCLDWAIT  0x00000002 /* Don't create zombie on child death.  */
++#define SA_SIGINFO    0x00000004
++#if defined __USE_UNIX98 || defined __USE_MISC
++# define SA_ONSTACK   0x08000000 /* Use signal stack by using `sa_restorer'. */
++# define SA_RESTART   0x10000000 /* Restart syscall on signal return.  */
++# define SA_NODEFER   0x40000000 /* Don't automatically block the signal
++				    when its handler is being executed.  */
++# define SA_RESETHAND 0x80000000 /* Reset to SIG_DFL on entry to handler.  */
++#endif
++#ifdef __USE_MISC
++# define SA_INTERRUPT 0x20000000 /* Historic no-op.  */
++
++/* Some aliases for the SA_ constants.  */
++# define SA_NOMASK    SA_NODEFER
++# define SA_ONESHOT   SA_RESETHAND
++# define SA_STACK     SA_ONSTACK
++#endif
++
++/* Values for the HOW argument to `sigprocmask'.  */
++#define SIG_BLOCK          0	/* for blocking signals */
++#define SIG_UNBLOCK        1	/* for unblocking signals */
++#define SIG_SETMASK        2	/* for setting the signal mask */
+diff --git a/libc/sysdeps/linux/ia64/bits/sigcontext.h b/libc/sysdeps/linux/ia64/bits/sigcontext.h
+new file mode 100644
+index 000000000..72c60ec24
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/sigcontext.h
+@@ -0,0 +1,79 @@
++/* Copyright (C) 1996, 1997, 1998, 2000, 2001, 2003, 2004
++   Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Jes Sorensen <jes@linuxcare.com>, July 2000
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#if !defined _SIGNAL_H && !defined _SYS_UCONTEXT_H
++# error "Never use <bits/sigcontext.h> directly; include <signal.h> instead."
++#endif
++
++#ifndef _BITS_SIGCONTEXT_H
++#define _BITS_SIGCONTEXT_H 1
++
++#include <bits/sigstack.h>
++
++struct ia64_fpreg
++  {
++    union
++      {
++	unsigned long bits[2];
++      } u;
++  } __attribute__ ((aligned (16)));
++
++struct sigcontext
++{
++  unsigned long int sc_flags;	/* see manifest constants below */
++  unsigned long int sc_nat;	/* bit i == 1 iff scratch reg gr[i] is a NaT */
++  stack_t sc_stack;		/* previously active stack */
++
++  unsigned long int sc_ip;	/* instruction pointer */
++  unsigned long int sc_cfm;	/* current frame marker */
++  unsigned long int sc_um;	/* user mask bits */
++  unsigned long int sc_ar_rsc;	/* register stack configuration register */
++  unsigned long int sc_ar_bsp;	/* backing store pointer */
++  unsigned long int sc_ar_rnat;	/* RSE NaT collection register */
++  unsigned long int sc_ar_ccv;	/* compare & exchange compare value register */
++  unsigned long int sc_ar_unat;	/* ar.unat of interrupted context */
++  unsigned long int sc_ar_fpsr;	/* floating-point status register */
++  unsigned long int sc_ar_pfs;	/* previous function state */
++  unsigned long int sc_ar_lc;	/* loop count register */
++  unsigned long int sc_pr;	/* predicate registers */
++  unsigned long int sc_br[8];	/* branch registers */
++  unsigned long int sc_gr[32];	/* general registers (static partition) */
++  struct ia64_fpreg sc_fr[128];	/* floating-point registers */
++  unsigned long int sc_rbs_base;/* NULL or new base of sighandler's rbs */
++  unsigned long int sc_loadrs;	/* see description above */
++  unsigned long int sc_ar25;	/* cmp8xchg16 uses this */
++  unsigned long int sc_ar26;	/* rsvd for scratch use */
++  unsigned long int sc_rsvd[12];/* reserved for future use */
++
++  /* sc_mask is actually an sigset_t but we don't want to
++   * include the kernel headers here. */
++  unsigned long int sc_mask;	/* signal mask to restore after handler returns */
++};
++
++/* sc_flag bit definitions. */
++#define IA64_SC_FLAG_ONSTACK_BIT	0	/* is handler running on signal stack? */
++#define IA64_SC_FLAG_IN_SYSCALL_BIT	1	/* did signal interrupt a syscall? */
++#define IA64_SC_FLAG_FPH_VALID_BIT	2	/* is state in f[32]-f[127] valid? */
++
++#define IA64_SC_FLAG_ONSTACK		(1 << IA64_SC_FLAG_ONSTACK_BIT)
++#define IA64_SC_FLAG_IN_SYSCALL		(1 << IA64_SC_FLAG_IN_SYSCALL_BIT)
++#define IA64_SC_FLAG_FPH_VALID		(1 << IA64_SC_FLAG_FPH_VALID_BIT)
++
++#endif /* _BITS_SIGCONTEXT_H */
+diff --git a/libc/sysdeps/linux/ia64/bits/sigstack.h b/libc/sysdeps/linux/ia64/bits/sigstack.h
+new file mode 100644
+index 000000000..c9c9d2fed
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/sigstack.h
+@@ -0,0 +1,63 @@
++/* sigstack, sigaltstack definitions.
++   Copyright (C) 1998, 2000, 2002, 2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SIGNAL_H
++# error "Never include this file directly.  Use <signal.h> instead"
++#endif
++
++#ifndef _SIGSTACK_H
++#define _SIGSTACK_H	1
++
++/* Structure describing a signal stack (obsolete).  */
++struct sigstack
++  {
++    __ptr_t ss_sp;		/* Signal stack pointer.  */
++    int ss_onstack;		/* Nonzero if executing on this stack.  */
++  };
++
++
++/* Possible values for `ss_flags.'.  */
++enum
++{
++  SS_ONSTACK = 1,
++#define SS_ONSTACK	SS_ONSTACK
++  SS_DISABLE
++#define SS_DISABLE	SS_DISABLE
++};
++
++/* Minimum stack size for a signal handler.
++
++   Yes, this should be 131072 but the constant got defined incorrectly
++   in the kernel and we have to live with it.  Users should in any case
++   use SIGSTKSZ as the size user-supplied buffers should have.  */
++#define MINSIGSTKSZ	131027
++
++/* System default stack size.  */
++#define SIGSTKSZ	262144
++
++
++/* Alternate, preferred interface.  */
++typedef struct sigaltstack
++  {
++    __ptr_t ss_sp;
++    int ss_flags;
++    size_t ss_size;
++  } stack_t;
++
++#endif	/* bits/sigstack.h */
+diff --git a/libc/sysdeps/linux/ia64/bits/stackinfo.h b/libc/sysdeps/linux/ia64/bits/stackinfo.h
+new file mode 100644
+index 000000000..b7dc5d91d
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/stackinfo.h
+@@ -0,0 +1,29 @@
++/* Copyright (C) 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* This file contains a bit of information about the stack allocation
++   of the processor.  */
++
++#ifndef _STACKINFO_H
++#define _STACKINFO_H	1
++
++/* On IA-64 the stack grows down.  The register stack is of no concern
++   here.  */
++#define _STACK_GROWS_DOWN	1
++
++#endif	/* stackinfo.h */
+diff --git a/libc/sysdeps/linux/ia64/bits/syscalls.h b/libc/sysdeps/linux/ia64/bits/syscalls.h
+new file mode 100644
+index 000000000..591075ab0
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/syscalls.h
+@@ -0,0 +1,198 @@
++/* Copyright (C) 1999, 2000, 2002, 2003, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Written by Jes Sorensen, <Jes.Sorensen@cern.ch>, April 1999.
++   Based on code originally written by David Mosberger-Tang
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _BITS_SYSCALLS_H
++#define _BITS_SYSCALLS_H
++
++#ifndef _SYSCALL_H
++# error "Never use <bits/syscalls.h> directly; include <sys/syscall.h> instead."
++#endif
++
++/* This includes the `__NR_<name>' syscall numbers taken from the Linux kernel
++ * header files.  It also defines the traditional `SYS_<name>' macros for older
++ * programs.  */
++#include <bits/sysnum.h>
++
++#ifndef __set_errno
++# define __set_errno(val) (*__errno_location ()) = (val)
++#endif
++
++
++#ifndef __ASSEMBLER__
++
++#undef IA64_USE_NEW_STUB
++
++#define SYS_ify(syscall_name)   __NR_##syscall_name
++
++/* taken from asm-ia64/break.h */
++#define __IA64_BREAK_SYSCALL	"0x100000"
++
++#define _DO_SYSCALL(name, nr, args...) \
++    LOAD_ARGS_##nr (args) \
++    register long _r8 asm ("r8"); \
++    register long _r10 asm ("r10"); \
++    register long _r15 asm ("r15") = SYS_ify(name); \
++    long _retval; \
++    LOAD_REGS_##nr \
++    __asm __volatile ("break " __IA64_BREAK_SYSCALL ";;\n\t" \
++		: "=r" (_r8), "=r" (_r10), "=r" (_r15) ASM_OUTARGS_##nr \
++		: "2" (_r15) ASM_ARGS_##nr \
++		: "memory" ASM_CLOBBERS_##nr); \
++    _retval = _r8; \
++	if (_r10 == -1) { \
++		__set_errno (_retval); \
++		_retval = -1; \
++	}
++
++#define LOAD_ARGS_0()
++#define LOAD_REGS_0
++#define LOAD_ARGS_1(a1)					\
++  long _arg1 = (long) (a1);				\
++  LOAD_ARGS_0 ()
++#define LOAD_REGS_1					\
++  register long _out0 asm ("out0") = _arg1;		\
++  LOAD_REGS_0
++#define LOAD_ARGS_2(a1, a2)				\
++  long _arg2 = (long) (a2);				\
++  LOAD_ARGS_1 (a1)
++#define LOAD_REGS_2					\
++  register long _out1 asm ("out1") = _arg2;		\
++  LOAD_REGS_1
++#define LOAD_ARGS_3(a1, a2, a3)				\
++  long _arg3 = (long) (a3);				\
++  LOAD_ARGS_2 (a1, a2)
++#define LOAD_REGS_3					\
++  register long _out2 asm ("out2") = _arg3;		\
++  LOAD_REGS_2
++#define LOAD_ARGS_4(a1, a2, a3, a4)			\
++  long _arg4 = (long) (a4);				\
++  LOAD_ARGS_3 (a1, a2, a3)
++#define LOAD_REGS_4					\
++  register long _out3 asm ("out3") = _arg4;		\
++  LOAD_REGS_3
++#define LOAD_ARGS_5(a1, a2, a3, a4, a5)			\
++  long _arg5 = (long) (a5);				\
++  LOAD_ARGS_4 (a1, a2, a3, a4)
++#define LOAD_REGS_5					\
++  register long _out4 asm ("out4") = _arg5;		\
++  LOAD_REGS_4
++#define LOAD_ARGS_6(a1, a2, a3, a4, a5, a6)		\
++  long _arg6 = (long) (a6);	    			\
++  LOAD_ARGS_5 (a1, a2, a3, a4, a5)
++#define LOAD_REGS_6					\
++  register long _out5 asm ("out5") = _arg6;		\
++  LOAD_REGS_5
++
++#define ASM_OUTARGS_0
++#define ASM_OUTARGS_1	ASM_OUTARGS_0, "=r" (_out0)
++#define ASM_OUTARGS_2	ASM_OUTARGS_1, "=r" (_out1)
++#define ASM_OUTARGS_3	ASM_OUTARGS_2, "=r" (_out2)
++#define ASM_OUTARGS_4	ASM_OUTARGS_3, "=r" (_out3)
++#define ASM_OUTARGS_5	ASM_OUTARGS_4, "=r" (_out4)
++#define ASM_OUTARGS_6	ASM_OUTARGS_5, "=r" (_out5)
++
++#ifdef IA64_USE_NEW_STUB
++#define ASM_ARGS_0
++#define ASM_ARGS_1	ASM_ARGS_0, "4" (_out0)
++#define ASM_ARGS_2	ASM_ARGS_1, "5" (_out1)
++#define ASM_ARGS_3	ASM_ARGS_2, "6" (_out2)
++#define ASM_ARGS_4	ASM_ARGS_3, "7" (_out3)
++#define ASM_ARGS_5	ASM_ARGS_4, "8" (_out4)
++#define ASM_ARGS_6	ASM_ARGS_5, "9" (_out5)
++#else
++#define ASM_ARGS_0
++#define ASM_ARGS_1	ASM_ARGS_0, "3" (_out0)
++#define ASM_ARGS_2	ASM_ARGS_1, "4" (_out1)
++#define ASM_ARGS_3	ASM_ARGS_2, "5" (_out2)
++#define ASM_ARGS_4	ASM_ARGS_3, "6" (_out3)
++#define ASM_ARGS_5	ASM_ARGS_4, "7" (_out4)
++#define ASM_ARGS_6	ASM_ARGS_5, "8" (_out5)
++#endif
++
++#define ASM_CLOBBERS_0	ASM_CLOBBERS_1, "out0"
++#define ASM_CLOBBERS_1	ASM_CLOBBERS_2, "out1"
++#define ASM_CLOBBERS_2	ASM_CLOBBERS_3, "out2"
++#define ASM_CLOBBERS_3	ASM_CLOBBERS_4, "out3"
++#define ASM_CLOBBERS_4	ASM_CLOBBERS_5, "out4"
++#define ASM_CLOBBERS_5	ASM_CLOBBERS_6, "out5"
++#define ASM_CLOBBERS_6_COMMON	, "out6", "out7",			\
++  /* Non-stacked integer registers, minus r8, r10, r15.  */		\
++  "r2", "r3", "r9", "r11", "r12", "r13", "r14", "r16", "r17", "r18",	\
++  "r19", "r20", "r21", "r22", "r23", "r24", "r25", "r26", "r27",	\
++  "r28", "r29", "r30", "r31",						\
++  /* Predicate registers.  */						\
++  "p6", "p7", "p8", "p9", "p10", "p11", "p12", "p13", "p14", "p15",	\
++  /* Non-rotating fp registers.  */					\
++  "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",	\
++  /* Branch registers.  */						\
++  "b6"
++
++#ifdef IA64_USE_NEW_STUB
++# define ASM_CLOBBERS_6	ASM_CLOBBERS_6_COMMON
++#else
++# define ASM_CLOBBERS_6	ASM_CLOBBERS_6_COMMON , "b7"
++#endif
++
++
++
++#define _syscall0(type,name) \
++type name(void) \
++{ \
++	_DO_SYSCALL(name, 0); return (type) _retval; \
++}
++
++#define _syscall1(type,name,type1,arg1) \
++type name(type1 arg1) \
++{ \
++	_DO_SYSCALL(name, 1, arg1); return (type) _retval; \
++}
++
++#define _syscall2(type,name,type1,arg1,type2,arg2) \
++type name(type1 arg1, type2 arg2) \
++{ \
++	_DO_SYSCALL(name, 2, arg1, arg2); return (type) _retval; \
++}
++
++#define _syscall3(type,name,type1,arg1,type2,arg2,type3,arg3) \
++type name(type1 arg1, type2 arg2, type3 arg3) \
++{ \
++	_DO_SYSCALL(name, 3, arg1, arg2, arg3); return (type) _retval; \
++}
++
++#define _syscall4(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
++type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
++{ \
++	_DO_SYSCALL(name, 4, arg1, arg2, arg3, arg4); return (type) _retval; \
++}
++
++#define _syscall5(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5) \
++type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5) \
++{ \
++	_DO_SYSCALL(name, 5, arg1, arg2, arg3, arg4, arg5); return (type) _retval; \
++}
++
++#define _syscall6(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
++type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5, type6 arg6) \
++{ \
++	_DO_SYSCALL(name, 6, arg1, arg2, arg3, arg4, arg5, arg6); return (type) _retval; \
++}
++
++#endif /* __ASSEMBLER__ */
++#endif /* _BITS_SYSCALLS_H */
+diff --git a/libc/sysdeps/linux/ia64/bits/uClibc_arch_features.h b/libc/sysdeps/linux/ia64/bits/uClibc_arch_features.h
+new file mode 100644
+index 000000000..ebfabce90
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/uClibc_arch_features.h
+@@ -0,0 +1,41 @@
++/*
++ * Track misc arch-specific features that aren't config options
++ */
++
++#ifndef _BITS_UCLIBC_ARCH_FEATURES_H
++#define _BITS_UCLIBC_ARCH_FEATURES_H
++
++/* instruction used when calling abort() to kill yourself */
++#define __UCLIBC_ABORT_INSTRUCTION__ "break 0"
++
++/* can your target use syscall6() for mmap ? */
++#define __UCLIBC_MMAP_HAS_6_ARGS__
++
++/* does your target use syscall4() for truncate64 ? (32bit arches only) */
++#undef __UCLIBC_TRUNCATE64_HAS_4_ARGS__
++
++/* does your target have a broken create_module() ? */
++#undef __UCLIBC_BROKEN_CREATE_MODULE__
++
++/* does your target prefix all symbols with an _ ? */
++#define __UCLIBC_NO_UNDERSCORES__
++
++/* does your target have an asm .set ? */
++#define __UCLIBC_HAVE_ASM_SET_DIRECTIVE__
++
++/* define if target doesn't like .global */
++#undef __UCLIBC_ASM_GLOBAL_DIRECTIVE__
++
++/* define if target supports .weak */
++#define __UCLIBC_HAVE_ASM_WEAK_DIRECTIVE__
++
++/* define if target supports .weakext */
++#undef __UCLIBC_HAVE_ASM_WEAKEXT_DIRECTIVE__
++
++/* needed probably only for ppc64 */
++#undef __UCLIBC_HAVE_ASM_GLOBAL_DOT_NAME__
++
++/* define if target supports IEEE signed zero floats */
++#define __UCLIBC_HAVE_SIGNED_ZERO__
++
++#endif /* _BITS_UCLIBC_ARCH_FEATURES_H */
+diff --git a/libc/sysdeps/linux/ia64/bits/wordsize.h b/libc/sysdeps/linux/ia64/bits/wordsize.h
+new file mode 100644
+index 000000000..dd698fa97
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bits/wordsize.h
+@@ -0,0 +1,19 @@
++/* Copyright (C) 1999 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define __WORDSIZE	64
+diff --git a/libc/sysdeps/linux/ia64/brk.S b/libc/sysdeps/linux/ia64/brk.S
+new file mode 100644
+index 000000000..6d146a579
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/brk.S
+@@ -0,0 +1,52 @@
++/* brk system call for Linux/ia64
++   Copyright (C) 1999,2000,2001,2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Written by Stephane Eranian <eranian@hpl.hp.com> and
++	      Jes Sorensen, <Jes.Sorensen@cern.ch>, April 1999.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include "sysdep.h"
++
++#include <asm/unistd.h>
++#include <asm/errno.h>
++
++	.global __curbrk
++	.type __curbrk,@object
++	.size __curbrk,8
++	.data
++	.align	8
++__curbrk:
++	data8	0
++
++weak_alias (__curbrk, ___brk_addr)
++
++LEAF(__brk)
++	.regstk 1, 0, 0, 0
++	DO_CALL(__NR_brk)
++	cmp.ltu	p6, p0 = ret0, in0
++	addl r9 = @ltoff(__curbrk), gp
++	;;
++	ld8 r9 = [r9]
++(p6) 	mov ret0 = ENOMEM
++(p6)	br.cond.spnt.few __syscall_error
++	;;
++	st8 [r9] = ret0
++	mov ret0 = 0
++	ret
++END(__brk)
++
++weak_alias (__brk, brk)
+diff --git a/libc/sysdeps/linux/ia64/bsd-_setjmp.S b/libc/sysdeps/linux/ia64/bsd-_setjmp.S
+new file mode 100644
+index 000000000..4e6a2da56
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bsd-_setjmp.S
+@@ -0,0 +1 @@
++/* _setjmp is in setjmp.S  */
+diff --git a/libc/sysdeps/linux/ia64/bsd-setjmp.S b/libc/sysdeps/linux/ia64/bsd-setjmp.S
+new file mode 100644
+index 000000000..1da848d2f
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/bsd-setjmp.S
+@@ -0,0 +1 @@
++/* setjmp is in setjmp.S  */
+diff --git a/libc/sysdeps/linux/ia64/clone2.S b/libc/sysdeps/linux/ia64/clone2.S
+new file mode 100644
+index 000000000..af621662c
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/clone2.S
+@@ -0,0 +1,105 @@
++/* Copyright (C) 2000, 2001, 2003, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include "sysdep.h"
++
++#include "sysdep.h"
++#include <asm/errno.h>
++
++
++/* int  __clone2(int (*fn) (void *arg), void *child_stack_base, 	*/
++/* 	         size_t child_stack_size, int flags, void *arg,		*/
++/*	         pid_t *parent_tid, void *tls, pid_t *child_tid)	*/
++
++#define CHILD	p8
++#define PARENT	p9
++
++ENTRY(__clone2)
++	.prologue
++	alloc r2=ar.pfs,8,1,6,0
++	cmp.eq p6,p0=0,in0
++	mov r8=EINVAL
++	mov out0=in3		/* Flags are first syscall argument.	*/
++	mov out1=in1		/* Stack address.			*/
++(p6)	br.cond.spnt.many __syscall_error
++	;;
++	mov out2=in2		/* Stack size.				*/
++	mov out3=in5		/* Parent TID Pointer			*/
++	mov out4=in7		/* Child TID Pointer			*/
++ 	mov out5=in6		/* TLS pointer				*/
++	/*
++	 * clone2() is special: the child cannot execute br.ret right
++	 * after the system call returns, because it starts out
++	 * executing on an empty stack.  Because of this, we can't use
++	 * the new (lightweight) syscall convention here.  Instead, we
++	 * just fall back on always using "break".
++	 *
++	 * Furthermore, since the child starts with an empty stack, we
++	 * need to avoid unwinding past invalid memory.  To that end,
++	 * we'll pretend now that __clone2() is the end of the
++	 * call-chain.  This is wrong for the parent, but only until
++	 * it returns from clone2() but it's better than the
++	 * alternative.
++	 */
++	mov r15=SYS_ify (clone2)
++	.save rp, r0
++	break __BREAK_SYSCALL
++	.body
++        cmp.eq p6,p0=-1,r10
++	cmp.eq CHILD,PARENT=0,r8 /* Are we the child?   */
++(p6)	br.cond.spnt.many __syscall_error
++	;;
++(CHILD)	mov loc0=gp
++(PARENT) ret
++	;;
++#ifdef RESET_PID
++	tbit.nz p6,p0=in3,16	/* CLONE_THREAD */
++	tbit.z p7,p10=in3,8	/* CLONE_VM */
++(p6)	br.cond.dptk 1f
++	;;
++	mov r15=SYS_ify (getpid)
++(p10)	addl r8=-1,r0
++(p7)	break __BREAK_SYSCALL
++	;;
++	add r9=PID,r13
++	add r10=TID,r13
++	;;
++	st4 [r9]=r8
++	st4 [r10]=r8
++	;;
++#endif
++1:	ld8 out1=[in0],8	/* Retrieve code pointer.	*/
++	mov out0=in4		/* Pass proper argument	to fn */
++	;;
++	ld8 gp=[in0]		/* Load function gp.		*/
++	mov b6=out1
++	br.call.dptk.many rp=b6	/* Call fn(arg) in the child 	*/
++	;;
++	mov out0=r8		/* Argument to _exit		*/
++	mov gp=loc0
++	.globl HIDDEN_JUMPTARGET(_exit)
++	br.call.dpnt.many rp=HIDDEN_JUMPTARGET(_exit)
++				/* call _exit with result from fn.	*/
++	ret			/* Not reached.		*/
++PSEUDO_END(__clone2)
++
++/* For now we leave __clone undefined.  This is unlikely to be a	*/
++/* problem, since at least the i386 __clone in glibc always failed	*/
++/* with a 0 sp (eventhough the kernel explicitly handled it).		*/
++/* Thus all such calls needed to pass an explicit sp, and as a result,	*/
++/* would be unlikely to work on ia64.					*/
+diff --git a/libc/sysdeps/linux/ia64/crt1.S b/libc/sysdeps/linux/ia64/crt1.S
+new file mode 100644
+index 000000000..774e84ff4
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/crt1.S
+@@ -0,0 +1,129 @@
++/* Copyright (C) 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Written by Jes Sorensen, <Jes.Sorensen@cern.ch>, April 1999.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   In addition to the permissions in the GNU Lesser General Public
++   License, the Free Software Foundation gives you unlimited
++   permission to link the compiled version of this file with other
++   programs, and to distribute those programs without any restriction
++   coming from the use of this file. (The GNU Lesser General Public
++   License restrictions do apply in other respects; for example, they
++   cover modification of the file, and distribution when not linked
++   into another program.)
++
++   Note that people who make modified versions of this file are not
++   obligated to grant this special exception for their modified
++   versions; it is their choice whether to do so. The GNU Lesser
++   General Public License gives permission to release a modified
++   version without this exception; this exception also makes it
++   possible to release a modified version which carries forward this
++   exception.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#define __ASSEMBLY__
++#include "sysdep.h"
++
++#include <asm/unistd.h>
++#include <asm/fpu.h>
++
++/*
++ * Arguments for __uClibc_main:
++ *	out0:	main
++ *	out1:	argc
++ *	out2:	argv
++ *	out3:	init
++ *	out4:	fini
++ *	out5:	rtld_fini
++ *	out6:	stack_end
++ */
++
++#if defined(__UCLIBC_CTOR_DTOR__)
++.type   _init,%function
++.type   _fini,%function
++#else
++.weak   _init
++.weak   _fini
++#endif
++
++	.align 32
++	.global _start
++
++	.proc _start
++	.type _start,@function
++_start:
++	.prologue
++	.save rp, r0
++	.body
++	.prologue
++	{ .mlx
++	  alloc r2 = ar.pfs,0,0,7,0
++	  movl r3 = FPSR_DEFAULT
++	}
++	{ .mlx
++	  adds out2 = 16, sp	/* get address of argc value */
++	  movl gp = @gprel(0f)
++	  ;;
++	}
++0:	{ .mmi
++	  ld8 out1 = [out2], 8	/* load argc and move out2 to become argv */
++	  mov.m r10 = ar.bsp	/* fetch rbs base address */
++	  mov r9 = ip
++	  ;;
++	}
++	{ .mii
++	  mov ar.fpsr = r3
++	  sub gp = r9, gp	/* back-compute gp value */
++	  adds out6 = 16, sp	/* highest non-environment stack address */
++	  ;;
++	}
++	{
++	  addl r11 = @ltoff(__libc_ia64_register_backing_store_base), gp
++	  addl out0 = @ltoff(@fptr(main)), gp
++	  addl out3 = @ltoff(@fptr(_init)), gp
++	  ;;
++	}
++	{ .mmi
++	  ld8 r3 = [r11]	/* pointer to __libc_ia64_register_backing_store_base */
++	  ld8 out0 = [out0]	/* pointer to `main' function descriptor */
++	  addl out4 = @ltoff(@fptr(_fini)), gp
++	  ;;
++	}
++	{ .mmi
++	  ld8 out3 = [out3]	/* pointer to `init' function descriptor */
++	  ld8 out4 = [out4]	/* pointer to `fini' function descriptor */
++	  nop 0
++	}
++	.body
++	{ .mib
++	  st8 [r3] = r10
++	  mov out5 = ret0	/* dynamic linker destructor */
++	  br.call.sptk.few rp = __uClibc_main
++	}
++	{ .mib
++	  break 0	/* break miserably if we ever return */
++	}
++	.endp _start
++
++/* Define a symbol for the first piece of initialized data.  */
++	.data
++	.globl __data_start
++__data_start:
++	.long 0
++	.weak data_start
++	data_start = __data_start
++
++	.common __libc_ia64_register_backing_store_base, 8, 8
+diff --git a/libc/sysdeps/linux/ia64/crti.S b/libc/sysdeps/linux/ia64/crti.S
+new file mode 100644
+index 000000000..c22bbf194
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/crti.S
+@@ -0,0 +1,36 @@
++/* glibc's sysdeps/ia64/elf/initfini.c used for reference [PROLOG] */
++
++	.text
++	.section .init
++	.global _init#
++	.proc _init#
++_init:
++	.prologue
++	.save ar.pfs, r34
++	alloc r34 = ar.pfs, 0, 3, 0, 0
++	.vframe r32
++	mov r32 = r12
++	.save rp, r33
++	mov r33 = b0
++	.body
++	adds r12 = -16, r12
++	;;
++	.endp _init#
++
++
++
++	.section .fini
++	.global _fini#
++	.proc _fini#
++_fini:
++	.prologue
++	.save ar.pfs, r34
++	alloc r34 = ar.pfs, 0, 3, 0, 0
++	.vframe r32
++	mov r32 = r12
++	.save rp, r33
++	mov r33 = b0
++	.body
++	adds r12 = -16, r12
++	;;
++	.endp _fini#
+diff --git a/libc/sysdeps/linux/ia64/crtn.S b/libc/sysdeps/linux/ia64/crtn.S
+new file mode 100644
+index 000000000..5403446b5
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/crtn.S
+@@ -0,0 +1,33 @@
++/* glibc's sysdeps/ia64/elf/initfini.c used for reference [EPILOG] */
++
++	.text
++	.section .init
++	.proc _init#
++_init:
++	.prologue
++	.save ar.pfs, r34
++	.vframe r32
++	.save rp, r33
++	.body
++	.regstk 0,2,0,0
++	mov r12 = r32
++	mov ar.pfs = r34
++	mov b0 = r33
++	br.ret.sptk.many b0
++	.endp _init#
++
++
++
++	.section .fini
++	.proc _fini#
++_fini:
++	.prologue
++	.save ar.pfs, r34
++	.vframe r32
++	.save rp, r33
++	.body
++	mov r12 = r32
++	mov ar.pfs = r34
++	mov b0 = r33
++	br.ret.sptk.many b0
++	.endp _fini#
+diff --git a/libc/sysdeps/linux/ia64/fork.S b/libc/sysdeps/linux/ia64/fork.S
+new file mode 100644
+index 000000000..96d047f3f
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/fork.S
+@@ -0,0 +1,41 @@
++/* Copyright (C) 2000, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++
++#include "sysdep.h"
++#define _SIGNAL_H
++#include <bits/signum.h>
++
++/* pid_t fork(void); */
++/* Implemented as a clone system call with parameters SIGCHLD and 0	*/
++
++ENTRY(__libc_fork)
++	alloc r2=ar.pfs,0,0,2,0
++	mov out0=SIGCHLD	/* Return SIGCHLD when child finishes	*/
++				/* no other clone flags; nothing shared	*/
++	mov out1=0		/* Standard sp value.			*/
++	;;
++	DO_CALL (SYS_ify (clone))
++	cmp.eq p6,p0=-1,r10
++(p6)	br.cond.spnt.few __syscall_error
++	ret
++PSEUDO_END(__libc_fork)
++
++weak_alias (__libc_fork, __fork)
++libc_hidden_def (__fork)
++weak_alias (__libc_fork, fork)
+diff --git a/libc/sysdeps/linux/ia64/pipe.S b/libc/sysdeps/linux/ia64/pipe.S
+new file mode 100644
+index 000000000..a86536b13
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/pipe.S
+@@ -0,0 +1,38 @@
++/* Copyright (C) 1999, 2000, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by David Mosberger <davidm@hpl.hp.com>
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/* __pipe is a special syscall since it returns two values.  */
++
++#include "sysdep.h"
++
++ENTRY(__pipe)
++       .regstk 1,0,0,0
++       DO_CALL (SYS_ify (pipe))
++       cmp.ne p6,p0=-1,r10
++       ;;
++(p6)   st4 [in0]=r8,4
++(p6)   mov ret0=0
++       ;;
++(p6)   st4 [in0]=r9
++(p6)   ret
++       br.cond.spnt.few __syscall_error
++PSEUDO_END(__pipe)
++
++libc_hidden_def (__pipe)
++weak_alias (__pipe, pipe)
+diff --git a/libc/sysdeps/linux/ia64/setjmp.S b/libc/sysdeps/linux/ia64/setjmp.S
+new file mode 100644
+index 000000000..11dc0e62e
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/setjmp.S
+@@ -0,0 +1,189 @@
++/* Copyright (C) 1999, 2000, 2001, 2002, 2004, 2005
++   Free Software Foundation, Inc.
++   Contributed by David Mosberger-Tang <davidm@hpl.hp.com>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.
++
++   The layout of the jmp_buf is as follows.  This is subject to change
++   and user-code should never depend on the particular layout of
++   jmp_buf!
++
++
++  	offset:	description:
++	-------	------------
++  	0x000	stack pointer (r12)	; unchangeable (see _JMPBUF_UNWINDS)
++  	0x008	r1 (gp)
++	0x010	caller's unat
++	0x018	fpsr
++  	0x020	r4
++  	0x028	r5
++  	0x030	r6
++  	0x038	r7
++  	0x040	rp (b0)
++  	0x048	b1
++  	0x050	b2
++  	0x058	b3
++  	0x060	b4
++  	0x068	b5
++  	0x070	ar.pfs
++  	0x078	ar.lc
++  	0x080	pr
++  	0x088	ar.bsp			; unchangeable (see __longjmp.S)
++  	0x090	ar.unat
++	0x098	&__jmp_buf	; address of the jmpbuf (needed to locate NaT bits in unat)
++	0x0a0	 f2
++	0x0b0	 f3
++	0x0c0	 f4
++	0x0d0	 f5
++	0x0e0	f16
++  	0x0f0	f17
++  	0x100	f18
++  	0x110	f19
++  	0x120	f20
++  	0x130	f21
++  	0x130	f22
++  	0x140	f23
++  	0x150	f24
++  	0x160	f25
++  	0x170	f26
++  	0x180	f27
++  	0x190	f28
++  	0x1a0	f29
++  	0x1b0	f30
++  	0x1c0	f31 */
++
++#include "sysdep.h"
++#include <features.h>
++
++	/* The following two entry points are the traditional entry points: */
++
++LEAF(setjmp)
++	alloc r8=ar.pfs,2,0,0,0
++	mov in1=1
++	br.cond.sptk.many _GI___sigsetjmp
++END(setjmp)
++
++LEAF(_setjmp)
++	alloc r8=ar.pfs,2,0,0,0
++	mov in1=0
++	br.cond.sptk.many _GI___sigsetjmp
++END(_setjmp)
++libc_hidden_def (_setjmp)
++
++	/* __sigsetjmp(__jmp_buf buf, int savemask) */
++
++ENTRY(__sigsetjmp)
++	.prologue ASM_UNW_PRLG_RP|ASM_UNW_PRLG_PFS, ASM_UNW_PRLG_GRSAVE(2)
++	alloc loc1=ar.pfs,2,5,2,0
++	.save ar.unat, loc2
++	mov loc2=ar.unat
++	;;
++	mov r17=ar.fpsr
++	mov r2=in0
++	add r3=8,in0
++	;;
++.mem.offset 8,0;	st8.spill.nta [r2]=sp,16	// r12 (sp)
++.mem.offset 0,0;	st8.spill.nta [r3]=gp,16	// r1 (gp)
++	;;
++	st8.nta [r2]=loc2,16		// save caller's unat
++	st8.nta [r3]=r17,16		// save fpsr
++	add r8=0xa0,in0
++	;;
++.mem.offset 8,0;	st8.spill.nta [r2]=r4,16	// r4
++.mem.offset 0,0;	st8.spill.nta [r3]=r5,16	// r5
++	add r9=0xb0,in0
++	;;
++	stf.spill.nta [r8]=f2,32
++	stf.spill.nta [r9]=f3,32
++	mov loc0=rp
++	.body
++	;;
++	stf.spill.nta [r8]=f4,32
++	stf.spill.nta [r9]=f5,32
++	mov r17=b1
++	;;
++	stf.spill.nta [r8]=f16,32
++	stf.spill.nta [r9]=f17,32
++	mov r18=b2
++	;;
++	stf.spill.nta [r8]=f18,32
++	stf.spill.nta [r9]=f19,32
++	mov r19=b3
++	;;
++	stf.spill.nta [r8]=f20,32
++	stf.spill.nta [r9]=f21,32
++	mov r20=b4
++	;;
++	stf.spill.nta [r8]=f22,32
++	stf.spill.nta [r9]=f23,32
++	mov r21=b5
++	;;
++	stf.spill.nta [r8]=f24,32
++	stf.spill.nta [r9]=f25,32
++	mov r22=ar.lc
++	;;
++	stf.spill.nta [r8]=f26,32
++	stf.spill.nta [r9]=f27,32
++	mov r24=pr
++	;;
++	stf.spill.nta [r8]=f28,32
++	stf.spill.nta [r9]=f29,32
++	;;
++	stf.spill.nta [r8]=f30
++	stf.spill.nta [r9]=f31
++
++.mem.offset 8,0;	st8.spill.nta [r2]=r6,16	// r6
++.mem.offset 0,0;	st8.spill.nta [r3]=r7,16	// r7
++	;;
++	mov r23=ar.bsp
++	mov r25=ar.unat
++	mov out0=in0
++
++	st8.nta [r2]=loc0,16		// b0
++	st8.nta [r3]=r17,16		// b1
++	mov out1=in1
++	;;
++	st8.nta [r2]=r18,16		// b2
++	st8.nta [r3]=r19,16		// b3
++	;;
++	st8.nta [r2]=r20,16		// b4
++	st8.nta [r3]=r21,16		// b5
++	;;
++	st8.nta [r2]=loc1,16		// ar.pfs
++	st8.nta [r3]=r22,16		// ar.lc
++	;;
++	st8.nta [r2]=r24,16		// pr
++	st8.nta [r3]=r23,16		// ar.bsp
++	;;
++	st8.nta [r2]=r25		// ar.unat
++	st8.nta [r3]=in0		// &__jmp_buf
++#if defined NOT_IN_libc && defined IS_IN_rtld
++	/* In ld.so we never save the signal mask.  */
++	;;
++#else
++	br.call.dpnt.few rp=__sigjmp_save
++#endif
++.ret0:					// force a new bundle ::q
++	mov.m ar.unat=loc2		// restore caller's unat
++	mov rp=loc0
++	mov ar.pfs=loc1
++	mov r8=0
++	ret
++END(__sigsetjmp)
++strong_alias(__sigsetjmp, _GI___sigsetjmp)
++
++weak_extern(_setjmp)
++weak_extern(setjmp)
+diff --git a/libc/sysdeps/linux/ia64/sys/io.h b/libc/sysdeps/linux/ia64/sys/io.h
+new file mode 100644
+index 000000000..14736ff1c
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/sys/io.h
+@@ -0,0 +1,68 @@
++/* Copyright (C) 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++     Contributed by David Mosberger-Tang <davidm@hpl.hp.com>
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef	_SYS_IO_H
++#define	_SYS_IO_H	1
++
++#include <features.h>
++
++__BEGIN_DECLS
++
++/* If TURN_ON is TRUE, request for permission to do direct i/o on the
++   port numbers in the range [FROM,FROM+NUM-1].  Otherwise, turn I/O
++   permission off for that range.  This call requires root privileges.
++
++   Portability note: not all Linux platforms support this call.  Most
++   platforms based on the PC I/O architecture probably will, however.
++   E.g., Linux/Alpha for Alpha PCs supports this.  */
++extern int ioperm (unsigned long int __from, unsigned long int __num,
++		   int __turn_on);
++
++/* Set the I/O privilege level to LEVEL.  If LEVEL>3, permission to
++   access any I/O port is granted.  This call requires root
++   privileges. */
++extern int iopl (int __level);
++
++extern unsigned int _inb (unsigned long int __port);
++extern unsigned int _inb (unsigned long int __port);
++extern unsigned int _inw (unsigned long int __port);
++extern unsigned int _inl (unsigned long int __port);
++extern void _outb (unsigned char __val, unsigned long int __port);
++extern void _outw (unsigned short __val, unsigned long int __port);
++extern void _outl (unsigned int __val, unsigned long int __port);
++
++#define inb	_inb
++#define inw	_inw
++#define inl	_inl
++#define outb	_outb
++#define outw	_outw
++#define outl	_outl
++
++/* Access PCI space protected from machine checks.  */
++extern int pciconfig_read (unsigned long int __bus, unsigned long int __dfn,
++			   unsigned long int __off, unsigned long int __len,
++			   unsigned char *__buf);
++
++extern int pciconfig_write (unsigned long int __bus, unsigned long int __dfn,
++			    unsigned long int __off, unsigned long int __len,
++			    unsigned char *__buf);
++
++__END_DECLS
++
++#endif /* _SYS_IO_H */
+diff --git a/libc/sysdeps/linux/ia64/sys/procfs.h b/libc/sysdeps/linux/ia64/sys/procfs.h
+new file mode 100644
+index 000000000..b5196b997
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/sys/procfs.h
+@@ -0,0 +1,130 @@
++/* Copyright (C) 1999, 2000, 2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_PROCFS_H
++#define _SYS_PROCFS_H	1
++
++/* This is somehow modelled after the file of the same name on SysVr4
++   systems.  It provides a definition of the core file format for ELF
++   used on Linux.  */
++
++#include <features.h>
++#include <signal.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <sys/ucontext.h>
++#include <sys/user.h>
++
++__BEGIN_DECLS
++
++struct elf_siginfo
++  {
++    int si_signo;			/* Signal number.  */
++    int si_code;			/* Extra code.  */
++    int si_errno;			/* Errno.  */
++  };
++
++/* We really need just 72 but let's leave some headroom...  */
++#define ELF_NGREG	128
++/* f0 and f1 could be omitted, but so what...  */
++#define ELF_NFPREG	128
++
++typedef unsigned long elf_greg_t;
++typedef elf_greg_t elf_gregset_t[ELF_NGREG];
++
++typedef struct ia64_fpreg elf_fpreg_t;
++typedef elf_fpreg_t elf_fpregset_t[ELF_NFPREG];
++
++typedef elf_greg_t greg_t;
++typedef elf_gregset_t gregset_t;
++typedef elf_fpregset_t fpregset_t;
++#define NGREG ELF_NGREG
++
++/* Definitions to generate Intel SVR4-like core files.  These mostly
++   have the same names as the SVR4 types with "elf_" tacked on the
++   front to prevent clashes with linux definitions, and the typedef
++   forms have been avoided.  This is mostly like the SVR4 structure,
++   but more Linuxy, with things that Linux does not support and which
++   gdb doesn't really use excluded.  Fields present but not used are
++   marked with "XXX".  */
++struct elf_prstatus
++  {
++#if 0
++    long int pr_flags;			/* XXX Process flags.  */
++    short int pr_why;			/* XXX Reason for process halt.  */
++    short int pr_what;			/* XXX More detailed reason.  */
++#endif
++    struct elf_siginfo pr_info;		/* Info associated with signal.  */
++    short int pr_cursig;		/* Current signal.  */
++    unsigned long int pr_sigpend;	/* Set of pending signals.  */
++    unsigned long int pr_sighold;	/* Set of held signals.  */
++#if 0
++    struct sigaltstack pr_altstack;	/* Alternate stack info.  */
++    struct sigaction pr_action;		/* Signal action for current sig.  */
++#endif
++    __pid_t pr_pid;
++    __pid_t pr_ppid;
++    __pid_t pr_pgrp;
++    __pid_t pr_sid;
++    struct timeval pr_utime;		/* User time.  */
++    struct timeval pr_stime;		/* System time.  */
++    struct timeval pr_cutime;		/* Cumulative user time.  */
++    struct timeval pr_cstime;		/* Cumulative system time.  */
++#if 0
++    long int pr_instr;			/* Current instruction.  */
++#endif
++    elf_gregset_t pr_reg;		/* GP registers.  */
++    int pr_fpvalid;			/* True if math copro being used.  */
++  };
++
++
++#define ELF_PRARGSZ     (80)    /* Number of chars for args */
++
++struct elf_prpsinfo
++  {
++    char pr_state;			/* Numeric process state.  */
++    char pr_sname;			/* Char for pr_state.  */
++    char pr_zomb;			/* Zombie.  */
++    char pr_nice;			/* Nice val.  */
++    unsigned long int pr_flag;		/* Flags.  */
++    unsigned int pr_uid;
++    unsigned int pr_gid;
++    int pr_pid, pr_ppid, pr_pgrp, pr_sid;
++    /* Lots missing */
++    char pr_fname[16];			/* Filename of executable.  */
++    char pr_psargs[ELF_PRARGSZ];	/* Initial part of arg list.  */
++  };
++
++/* Addresses.  */
++typedef void *psaddr_t;
++
++/* Register sets.  Linux has different names.  */
++typedef gregset_t prgregset_t;
++typedef fpregset_t prfpregset_t;
++
++/* We don't have any differences between processes and threads,
++   therefore habe only ine PID type.  */
++typedef __pid_t lwpid_t;
++
++
++typedef struct elf_prstatus prstatus_t;
++typedef struct elf_prpsinfo prpsinfo_t;
++
++__END_DECLS
++
++#endif	/* sys/procfs.h */
+diff --git a/libc/sysdeps/linux/ia64/sys/ptrace.h b/libc/sysdeps/linux/ia64/sys/ptrace.h
+new file mode 100644
+index 000000000..986c4b2d3
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/sys/ptrace.h
+@@ -0,0 +1,135 @@
++/* `ptrace' debugger support interface.  Linux/ia64 version.
++   Copyright (C) 2001 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_PTRACE_H
++#define _SYS_PTRACE_H	1
++
++#include <features.h>
++#include <sys/ucontext.h>
++
++__BEGIN_DECLS
++
++/* Type of the REQUEST argument to `ptrace.'  */
++enum __ptrace_request
++{
++  /* Indicate that the process making this request should be traced.
++     All signals received by this process can be intercepted by its
++     parent, and its parent can use the other `ptrace' requests.  */
++  PTRACE_TRACEME = 0,
++#define PT_TRACE_ME PTRACE_TRACEME
++
++  /* Return the word in the process's text space at address ADDR.  */
++  PTRACE_PEEKTEXT = 1,
++#define PT_READ_I PTRACE_PEEKTEXT
++
++  /* Return the word in the process's data space at address ADDR.  */
++  PTRACE_PEEKDATA = 2,
++#define PT_READ_D PTRACE_PEEKDATA
++
++  /* Return the word in the process's user area at offset ADDR.  */
++  PTRACE_PEEKUSER = 3,
++#define PT_READ_U PTRACE_PEEKUSER
++
++  /* Write the word DATA into the process's text space at address ADDR.  */
++  PTRACE_POKETEXT = 4,
++#define PT_WRITE_I PTRACE_POKETEXT
++
++  /* Write the word DATA into the process's data space at address ADDR.  */
++  PTRACE_POKEDATA = 5,
++#define PT_WRITE_D PTRACE_POKEDATA
++
++  /* Write the word DATA into the process's user area at offset ADDR.  */
++  PTRACE_POKEUSER = 6,
++#define PT_WRITE_U PTRACE_POKEUSER
++
++  /* Continue the process.  */
++  PTRACE_CONT = 7,
++#define PT_CONTINUE PTRACE_CONT
++
++  /* Kill the process.  */
++  PTRACE_KILL = 8,
++#define PT_KILL PTRACE_KILL
++
++  /* Single step the process.
++     This is not supported on all machines.  */
++  PTRACE_SINGLESTEP = 9,
++#define PT_STEP PTRACE_SINGLESTEP
++
++  /* Execute process until next taken branch.  */
++  PTRACE_SINGLEBLOCK = 12,
++#define PT_STEPBLOCK PTRACE_SINGLEBLOCK
++
++  /* Get siginfo for process.  */
++  PTRACE_GETSIGINFO = 13,
++#define PT_GETSIGINFO PTRACE_GETSIGINFO
++
++  /* Set new siginfo for process.  */
++  PTRACE_SETSIGINFO = 14,
++#define PT_GETSIGINFO PTRACE_GETSIGINFO
++
++  /* Attach to a process that is already running. */
++  PTRACE_ATTACH = 16,
++#define PT_ATTACH PTRACE_ATTACH
++
++  /* Detach from a process attached to with PTRACE_ATTACH.  */
++  PTRACE_DETACH = 17,
++#define PT_DETACH PTRACE_DETACH
++
++  /* Get all registers (pt_all_user_regs) in one shot */
++  PTRACE_GETREGS = 18,
++#define PT_GETREGS PTRACE_GETREGS
++
++  /* Set all registers (pt_all_user_regs) in one shot */
++  PTRACE_SETREGS = 19,
++#define PT_SETREGS PTRACE_SETREGS
++
++  /* Continue and stop at the next (return from) syscall.  */
++  PTRACE_SYSCALL = 24
++#define PT_SYSCALL PTRACE_SYSCALL
++};
++
++/* pt_all_user_regs is used for PTRACE_GETREGS/PTRACE_SETREGS.  */
++struct pt_all_user_regs
++  {
++    unsigned long nat;
++    unsigned long cr_iip;
++    unsigned long cfm;
++    unsigned long cr_ipsr;
++    unsigned long pr;
++
++    unsigned long gr[32];
++    unsigned long br[8];
++    unsigned long ar[128];
++    struct ia64_fpreg fr[128];
++  };
++
++/* Perform process tracing functions.  REQUEST is one of the values
++   above, and determines the action to be taken.
++   For all requests except PTRACE_TRACEME, PID specifies the process to be
++   traced.
++
++   PID and the other arguments described above for the various requests should
++   appear (those that are used for the particular request) as:
++     pid_t PID, void *ADDR, int DATA, void *ADDR2
++   after REQUEST.  */
++extern long int ptrace (enum __ptrace_request __request, ...) __THROW;
++
++__END_DECLS
++
++#endif /* _SYS_PTRACE_H */
+diff --git a/libc/sysdeps/linux/ia64/sys/ucontext.h b/libc/sysdeps/linux/ia64/sys/ucontext.h
+new file mode 100644
+index 000000000..17dc85f99
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/sys/ucontext.h
+@@ -0,0 +1,66 @@
++/* Copyright (C) 1998, 2000, 2001, 2002, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_UCONTEXT_H
++#define _SYS_UCONTEXT_H	1
++
++#include <features.h>
++#include <signal.h>
++
++#include <bits/sigcontext.h>
++
++/*
++ * These are here mostly for backwards compatibility with older Unices.
++ * IA-64 Linux does not distinguish between "struct sigcontext" and
++ * "ucontext_t" as all the necessary info is inside the former.
++ */
++
++typedef struct sigcontext mcontext_t;
++
++#if defined __cplusplus && __GNUC_PREREQ (3, 5)
++# define _SC_GR0_OFFSET	\
++	__builtin_offsetof (struct sigcontext, sc_gr[0])
++#elif defined __GNUC__
++# define _SC_GR0_OFFSET	\
++	(((char *) &((struct sigcontext *) 0)->sc_gr[0]) - (char *) 0)
++#else
++# define _SC_GR0_OFFSET	0xc8	/* pray that this is correct... */
++#endif
++
++typedef struct ucontext
++  {
++    union
++      {
++	mcontext_t _mc;
++	struct
++	  {
++	    unsigned long _pad[_SC_GR0_OFFSET/8];
++	    struct ucontext *_link;	/* this should overlay sc_gr[0] */
++	  }
++	_uc;
++      }
++    _u;
++  }
++ucontext_t;
++
++#define uc_mcontext	_u._mc
++#define uc_sigmask	_u._mc.sc_mask
++#define uc_stack	_u._mc.sc_stack
++#define uc_link		_u._uc._link
++
++#endif /* sys/ucontext.h */
+diff --git a/libc/sysdeps/linux/ia64/sys/user.h b/libc/sysdeps/linux/ia64/sys/user.h
+new file mode 100644
+index 000000000..039218761
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/sys/user.h
+@@ -0,0 +1,54 @@
++/* Copyright (C) 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _SYS_USER_H
++#define _SYS_USER_H	1
++
++#include <features.h>
++#include <sys/types.h>
++
++/* This definition comes directly from the kernel headers.  If
++   anything changes in them this header has to be changed, too.  */
++
++
++/* The definition in the kernel has the comment "XXX fix me".  */
++#define EF_SIZE		3072
++
++
++struct user
++{
++  unsigned long int regs[EF_SIZE / 8 + 32];	/* Integer and fp regs.  */
++  size_t u_tsize;				/* Text size (pages).  */
++  size_t u_dsize;				/* Data size (pages).  */
++  size_t u_ssize;				/* Stack size (pages).  */
++  unsigned long int start_code;			/* Text starting address.  */
++  unsigned long int start_data;			/* Data starting address.  */
++  unsigned long int start_stack;		/* Stack starting address.  */
++  long int signal;				/* Signal causing core dump. */
++  struct regs *u_ar0;				/* Help gdb find registers.  */
++  unsigned long int magic;			/* Identifies a core file.  */
++  char u_comm[32];				/* User command name.  */
++};
++
++#define NBPG			PAGE_SIZE
++#define UPAGES			1
++#define HOST_TEXT_START_ADDR	(u.start_code)
++#define HOST_DATA_START_ADDR	(u.start_data)
++#define HOST_STACK_END_ADDR	(u.start_stack + u.u_ssize * NBPG)
++
++#endif	/* sys/user.h */
+diff --git a/libc/sysdeps/linux/ia64/syscall.S b/libc/sysdeps/linux/ia64/syscall.S
+new file mode 100644
+index 000000000..e4ac834c6
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/syscall.S
+@@ -0,0 +1,30 @@
++/* Copyright (C) 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Jes Sorensen <Jes.Sorensen@cern.ch>.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include "sysdep.h"
++
++ENTRY(syscall)
++	alloc r2=ar.pfs,1,0,8,0
++	mov r15=r32		/* syscall number */
++	break __BREAK_SYSCALL
++	;;
++	cmp.ne p6,p0=-1,r10	/* r10 = -1 on error */
++(p6)	ret
++	br.cond.spnt.few __syscall_error
++PSEUDO_END(syscall)
+diff --git a/libc/sysdeps/linux/ia64/sysdep.h b/libc/sysdeps/linux/ia64/sysdep.h
+new file mode 100644
+index 000000000..03e74360d
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/sysdep.h
+@@ -0,0 +1,168 @@
++/* Copyright (C) 1999, 2000, 2002, 2003, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Written by Jes Sorensen, <Jes.Sorensen@cern.ch>, April 1999.
++   Based on code originally written by David Mosberger-Tang
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _LINUX_IA64_SYSDEP_H
++#define _LINUX_IA64_SYSDEP_H 1
++
++#include <features.h>
++#include <asm/unistd.h>
++
++#ifdef __ASSEMBLER__
++
++/* Macros to help writing .prologue directives in assembly code.  */
++#define ASM_UNW_PRLG_RP			0x8
++#define ASM_UNW_PRLG_PFS		0x4
++#define ASM_UNW_PRLG_PSP		0x2
++#define ASM_UNW_PRLG_PR			0x1
++#define ASM_UNW_PRLG_GRSAVE(ninputs)	(32+(ninputs))
++
++#ifdef	__STDC__
++#define C_LABEL(name)		name##:
++#else
++#define C_LABEL(name)		name/**/:
++#endif
++
++#define CALL_MCOUNT
++
++#define ENTRY(name)				\
++	.text;					\
++	.align 32;				\
++	.proc C_SYMBOL_NAME(name);		\
++	.global C_SYMBOL_NAME(name);		\
++	C_LABEL(name)				\
++	CALL_MCOUNT
++
++#define LEAF(name)				\
++  .text;					\
++  .align 32;					\
++  .proc C_SYMBOL_NAME(name);			\
++  .global name;					\
++  C_LABEL(name)
++
++/* Mark the end of function SYM.  */
++#undef END
++#define END(sym)	.endp C_SYMBOL_NAME(sym)
++
++/* For Linux we can use the system call table in the header file
++	/usr/include/asm/unistd.h
++   of the kernel.  But these symbols do not follow the SYS_* syntax
++   so we have to redefine the `SYS_ify' macro here.  */
++#undef SYS_ify
++#ifdef __STDC__
++# define SYS_ify(syscall_name)	__NR_##syscall_name
++#else
++# define SYS_ify(syscall_name)	__NR_/**/syscall_name
++#endif
++
++/* Linux uses a negative return value to indicate syscall errors, unlike
++   most Unices, which use the condition codes' carry flag.
++
++   Since version 2.1 the return value of a system call might be negative
++   even if the call succeeded.  E.g., the `lseek' system call might return
++   a large offset.  Therefore we must not anymore test for < 0, but test
++   for a real error by making sure the value in %d0 is a real error
++   number.  Linus said he will make sure the no syscall returns a value
++   in -1 .. -4095 as a valid result so we can savely test with -4095.  */
++
++/* We don't want the label for the error handler to be visible in the symbol
++   table when we define it here.  */
++#define SYSCALL_ERROR_LABEL __syscall_error
++
++#undef PSEUDO
++#define	PSEUDO(name, syscall_name, args)	\
++  ENTRY(name)					\
++    DO_CALL (SYS_ify(syscall_name));		\
++	cmp.eq p6,p0=-1,r10;			\
++(p6)	br.cond.spnt.few __syscall_error;
++
++#define DO_CALL_VIA_BREAK(num)			\
++	mov r15=num;				\
++	break __BREAK_SYSCALL
++
++#ifdef IA64_USE_NEW_STUB
++# ifdef SHARED
++#  define DO_CALL(num)				\
++	.prologue;				\
++	adds r2 = SYSINFO_OFFSET, r13;;		\
++	ld8 r2 = [r2];				\
++	.save ar.pfs, r11;			\
++	mov r11 = ar.pfs;;			\
++	.body;					\
++	mov r15 = num;				\
++	mov b7 = r2;				\
++	br.call.sptk.many b6 = b7;;		\
++	.restore sp;				\
++	mov ar.pfs = r11;			\
++	.prologue;				\
++	.body
++# else /* !SHARED */
++#  define DO_CALL(num)				\
++	.prologue;				\
++	mov r15 = num;				\
++	movl r2 = _dl_sysinfo;;			\
++	ld8 r2 = [r2];				\
++	.save ar.pfs, r11;			\
++	mov r11 = ar.pfs;;			\
++	.body;					\
++	mov b7 = r2;				\
++	br.call.sptk.many b6 = b7;;		\
++	.restore sp;				\
++	mov ar.pfs = r11;			\
++	.prologue;				\
++	.body
++# endif
++#else
++# define DO_CALL(num)				DO_CALL_VIA_BREAK(num)
++#endif
++
++#undef PSEUDO_END
++#define PSEUDO_END(name)	.endp C_SYMBOL_NAME(name);
++
++#undef PSEUDO_NOERRNO
++#define	PSEUDO_NOERRNO(name, syscall_name, args)	\
++  ENTRY(name)						\
++    DO_CALL (SYS_ify(syscall_name));
++
++#undef PSEUDO_END_NOERRNO
++#define PSEUDO_END_NOERRNO(name)	.endp C_SYMBOL_NAME(name);
++
++#undef PSEUDO_ERRVAL
++#define	PSEUDO_ERRVAL(name, syscall_name, args)	\
++  ENTRY(name)					\
++    DO_CALL (SYS_ify(syscall_name));		\
++	cmp.eq p6,p0=-1,r10;			\
++(p6)	mov r10=r8;
++
++
++#undef PSEUDO_END_ERRVAL
++#define PSEUDO_END_ERRVAL(name)	.endp C_SYMBOL_NAME(name);
++
++#undef END
++#define END(name)						\
++	.size	C_SYMBOL_NAME(name), . - C_SYMBOL_NAME(name) ;	\
++	.endp	C_SYMBOL_NAME(name)
++
++#define ret			br.ret.sptk.few b0
++#define ret_NOERRNO		ret
++#define ret_ERRVAL		ret
++
++#endif /* not __ASSEMBLER__ */
++
++#endif /* linux/ia64/sysdep.h */
+diff --git a/libc/sysdeps/linux/ia64/vfork.S b/libc/sysdeps/linux/ia64/vfork.S
+new file mode 100644
+index 000000000..ab29f6287
+--- /dev/null
++++ b/libc/sysdeps/linux/ia64/vfork.S
+@@ -0,0 +1,44 @@
++/* Copyright (C) 2000, 2002 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++
++#include "sysdep.h"
++#define _SIGNAL_H
++#include <bits/signum.h>
++
++/* The following are defined in linux/sched.h, which unfortunately	*/
++/* is not safe for inclusion in an assembly file.			*/
++#define CLONE_VM        0x00000100      /* set if VM shared between processes */
++#define CLONE_VFORK     0x00004000      /* set if the parent wants the child to wake it up on mm_release */
++
++/* pid_t vfork(void); */
++/* Implemented as __clone_syscall(CLONE_VFORK | CLONE_VM | SIGCHLD, 0)	*/
++
++ENTRY(__vfork)
++	alloc r2=ar.pfs,0,0,2,0
++	mov out0=CLONE_VM+CLONE_VFORK+SIGCHLD
++	mov out1=0		/* Standard sp value.			*/
++	;;
++	DO_CALL_VIA_BREAK (SYS_ify (clone))
++	cmp.eq p6,p0=-1,r10
++(p6)	br.cond.spnt.few __syscall_error
++	ret
++PSEUDO_END(__vfork)
++libc_hidden_def (__vfork)
++
++weak_alias (__vfork, vfork)
+diff --git a/test/unistd/clone.c b/test/unistd/clone.c
+index 6d9aa6873..cbbdbb8fc 100644
+--- a/test/unistd/clone.c
++++ b/test/unistd/clone.c
+@@ -28,6 +28,7 @@
+ #include <signal.h>
+ #include <sched.h>
+ #include <sys/wait.h>
++#include "clone_cruft.h"
+ 
+ #define GOT1     (1 << 1)
+ #define GOT2     (1 << 2)
+@@ -56,15 +57,15 @@ int main(void)
+ 
+ 	signal(SIGCHLD, child_handler);
+ 
+-	if ((clone1 = clone(clone_main, clone1_stack, 0, (void*)11)) == -1) {
++	if ((clone1 = do_clone(clone_main, clone1_stack, 0, (void*)11)) == -1) {
+ 		perror("Clone 1 failed");
+ 		exit(-1);
+ 	}
+-	if ((clone2 = clone(clone_main, clone2_stack, 0, (void*)22)) == -1) {
++	if ((clone2 = do_clone(clone_main, clone2_stack, 0, (void*)22)) == -1) {
+ 		perror("Clone 2 failed");
+ 		exit(-2);
+ 	}
+-	if ((clone3 = clone(clone_main, clone3_stack, 0, (void*)33)) == -1) {
++	if ((clone3 = do_clone(clone_main, clone3_stack, 0, (void*)33)) == -1) {
+ 		perror("Clone 3 failed");
+ 		exit(-3);
+ 	}
+diff --git a/test/unistd/clone_cruft.h b/test/unistd/clone_cruft.h
+new file mode 100644
+index 000000000..dacc1b2bf
+--- /dev/null
++++ b/test/unistd/clone_cruft.h
+@@ -0,0 +1,20 @@
++/* because people like to make things difficult */
++
++#undef do_clone
++
++#if defined __ia64__
++
++# define do_clone(fn, stack, flags, arg) \
++	__clone2(fn, stack, sizeof(stack), flags, arg, NULL, NULL, NULL)
++
++#elif defined __hppa__
++
++# define do_clone(fn, stack, flags, arg) \
++	clone(fn, stack, flags, arg)
++
++#else
++
++# define do_clone(fn, stack, flags, arg) \
++	clone(fn, stack+sizeof(stack), flags, arg)
++
++#endif
+diff --git a/test/unistd/errno.c b/test/unistd/errno.c
+index cb082b890..c77f58aa2 100644
+--- a/test/unistd/errno.c
++++ b/test/unistd/errno.c
+@@ -4,6 +4,7 @@
+ #include <stdlib.h>
+ #include <errno.h>
+ #include <sched.h>
++#include "clone_cruft.h"
+ 
+ int child_fn(void *arg)
+ {
+@@ -15,7 +16,7 @@ int main(void)
+ {
+ 	int r_clone, ret_errno;
+ 
+-	r_clone = clone(child_fn, NULL, (int) NULL, NULL);
++	r_clone = do_clone(child_fn, NULL, (int) NULL, NULL);
+ 	ret_errno = errno;
+ 	if (ret_errno != EINVAL || r_clone != -1) {
+ 		fprintf(stderr, "clone: res=%d (wanted -1) errno=%d (wanted %d)\n",

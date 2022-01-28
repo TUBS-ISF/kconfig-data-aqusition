@@ -1,0 +1,67 @@
+"2005-07-28 03:34:44 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 743c3f554..4cb4216bb 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -775,10 +775,11 @@ config UCLIBC_PRINTF_SCANF_POSITIONAL_ARGS
+ 
+ 
+ config UCLIBC_HAS_SCANF_GLIBC_A_FLAG
+-	bool "Support glibc's 'a' flag for scanf string conversions"
++	bool "Support glibc's 'a' flag for scanf string conversions (not implemented)"
+ 	default n
+ 	help
+ 	  NOTE!!!  Currently Not Implemented!!! Just A Place Holder!!  NOTE!!!
++	  NOTE!!!  Conflicts with an ANSI/ISO C99 scanf flag!!         NOTE!!!
+ 
+ 	  Answer Y to enable support for glibc's 'a' flag for the scanf string
+ 	  conversions '%s', '%[', '%ls', '%l[', and '%S'.  This is used to
+@@ -851,6 +852,16 @@ config UCLIBC_HAS_STDIO_BUILTIN_BUFFER_8
+ 
+ endchoice
+ 
++config UCLIBC_HAS_STDIO_SHUTDOWN_ON_ABORT
++	bool "Attemt to shutdown stdio subsystem when abort() is called."
++	default n
++	help
++	  ANSI/ISO C99 requires abort() to be asyn-signal-safe.  So there was a behavioral
++	  change made in SUSv3.  Previously, abort() was required to have the affect of
++	  fclose() on all open streams.  The wording has been changed to "may" from "shall".
++
++	  Most people will answer N.
++
+ config UCLIBC_HAS_STDIO_GETC_MACRO
+ 	bool "Provide a macro version of getc()"
+ 	depends !UCLIBC_HAS_STDIO_BUFSIZ_NONE
+diff --git a/libc/stdlib/abort.c b/libc/stdlib/abort.c
+index 05d7a6836..77c2cdc69 100644
+--- a/libc/stdlib/abort.c
++++ b/libc/stdlib/abort.c
+@@ -63,6 +63,9 @@ Cambridge, MA 02139, USA.  */
+ #warning no abort instruction define for your arch
+ #endif
+ 
++#ifdef __UCLIBC_HAS_STDIO_SHUTDOWN_ON_ABORT__
++extern void weak_function _stdio_term(void);
++#endif
+ extern void _exit __P((int __status)) __attribute__ ((__noreturn__));
+ static int been_there_done_that = 0;
+ 
+@@ -95,6 +98,17 @@ void abort(void)
+ 		/* Try to suicide with a SIGABRT */
+ 		if (been_there_done_that == 0) {
+ 			been_there_done_that++;
++
++#ifdef __UCLIBC_HAS_STDIO_SHUTDOWN_ON_ABORT__
++			/* If we are using stdio, try to shut it down.  At the very least,
++			 * this will attemt to commit all buffered writes.  It may also
++			 * unboffer all writable files, or close them outright.
++			 * Check the stdio routines for details. */
++			if (_stdio_term) {
++				_stdio_term();
++			}
++#endif
++
+ abort_it:
+ 			UNLOCK;
+ 			raise(SIGABRT);

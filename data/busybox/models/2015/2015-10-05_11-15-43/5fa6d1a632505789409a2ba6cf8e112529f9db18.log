@@ -1,0 +1,157 @@
+"2015-10-05 11:15:43 +0200"
+diff --git a/Config.in b/Config.in
+index 07b4bf36b..11371c783 100644
+--- a/Config.in
++++ b/Config.in
+@@ -514,6 +514,14 @@ config PIE
+ 
+ 	  Most people will leave this set to 'N'.
+ 
++config LINK_WITH_PTHREAD
++	bool "Link with pthread library"
++	default n
++	help
++	  On some systems, some libraries (such as crypt) also require pthread.
++
++	  Select this only if your build otherwise fails.
++
+ config NOMMU
+ 	bool "Force NOMMU build"
+ 	default n
+diff --git a/Makefile.flags b/Makefile.flags
+index b29b06839..2bc83d1d9 100644
+--- a/Makefile.flags
++++ b/Makefile.flags
+@@ -126,10 +126,12 @@ else
+ LDLIBS += m
+ endif
+ 
++ifeq ($(CONFIG_LINK_WITH_PTHREAD),y)
+ PTHREAD_AVAILABLE := $(shell echo 'int main(void){return 0;}' >pthreadtest.c; $(CC) $(CFLAGS) -lpthread -o /dev/null pthreadtest.c >/dev/null 2>&1 && echo "y"; rm pthreadtest.c)
+ ifeq ($(PTHREAD_AVAILABLE),y)
+ LDLIBS += pthread
+ endif
++endif
+ 
+ ifeq ($(CONFIG_PAM),y)
+ # libpam uses libpthread, libdl and libaudit, so for static builds busybox
+diff --git a/applets/usage_compressed b/applets/usage_compressed
+index fb6e1c286..186fcde77 100755
+--- a/applets/usage_compressed
++++ b/applets/usage_compressed
+@@ -20,6 +20,7 @@ exec >"$target.$$"
+ 
+ echo '#define UNPACKED_USAGE "" \'
+ "$loc/usage" | od -v -b \
++| grep -v '^ ' \
+ | $SED -e 's/^[^ ]*//' \
+ 	-e 's/ //g' \
+ 	-e '/^$/d' \
+@@ -27,6 +28,13 @@ echo '#define UNPACKED_USAGE "" \'
+ 	-e 's/^/"/' \
+ 	-e 's/$/" \\/'
+ echo ''
++# "grep -v '^ '" is for toybox's od bug: od -b prints some extra lines:
++#0000000 010 000 010 000 133 055 144 146 135 040 133 055 143 040 103 117
++#         000010 000010 026533 063144 020135 026533 020143 047503
++#0000020 116 106 104 111 122 135 040 133 055 154 040 114 117 107 106 111
++#         043116 044504 056522 055440 066055 046040 043517 044506
++#0000040 114 105 135 040 133 055 141 040 101 103 124 111 117 116 106 111
++#         042514 020135 026533 020141 041501 044524 047117 044506
+ 
+ echo '#define PACKED_USAGE \'
+ ## Breaks on big-endian systems!
+@@ -40,6 +48,7 @@ echo '#define PACKED_USAGE \'
+ ##	-e 's/\(..\)\(..\)/0x\2,0x\1,/g'
+ ##	-e 's/$/ \\/'
+ "$loc/usage" | bzip2 -1 | $DD bs=2 skip=1 2>/dev/null | od -v -b \
++| grep -v '^ ' \
+ | $SED -e 's/^[^ ]*//' \
+ 	-e 's/ //g' \
+ 	-e '/^$/d' \
+diff --git a/networking/brctl.c b/networking/brctl.c
+index 207b069aa..8043d600b 100644
+--- a/networking/brctl.c
++++ b/networking/brctl.c
+@@ -64,7 +64,57 @@
+ #define BRCTL_USE_INTERNAL 1
+ 
+ #if ENABLE_FEATURE_BRCTL_FANCY
+-# include <linux/if_bridge.h>
++/* #include <linux/if_bridge.h>
++ * breaks on musl: we already included netinet/in.h in libbb.h,
++ * if we include <linux/if_bridge.h> here, we get this:
++ * In file included from /usr/include/linux/if_bridge.h:18,
++ *                  from networking/brctl.c:67:
++ * /usr/include/linux/in6.h:32: error: redefinition of 'struct in6_addr'
++ * /usr/include/linux/in6.h:49: error: redefinition of 'struct sockaddr_in6'
++ * /usr/include/linux/in6.h:59: error: redefinition of 'struct ipv6_mreq'
++ */
++/* From <linux/if_bridge.h> */
++#define BRCTL_GET_VERSION 0
++#define BRCTL_GET_BRIDGES 1
++#define BRCTL_ADD_BRIDGE 2
++#define BRCTL_DEL_BRIDGE 3
++#define BRCTL_ADD_IF 4
++#define BRCTL_DEL_IF 5
++#define BRCTL_GET_BRIDGE_INFO 6
++#define BRCTL_GET_PORT_LIST 7
++#define BRCTL_SET_BRIDGE_FORWARD_DELAY 8
++#define BRCTL_SET_BRIDGE_HELLO_TIME 9
++#define BRCTL_SET_BRIDGE_MAX_AGE 10
++#define BRCTL_SET_AGEING_TIME 11
++#define BRCTL_SET_GC_INTERVAL 12
++#define BRCTL_GET_PORT_INFO 13
++#define BRCTL_SET_BRIDGE_STP_STATE 14
++#define BRCTL_SET_BRIDGE_PRIORITY 15
++#define BRCTL_SET_PORT_PRIORITY 16
++#define BRCTL_SET_PATH_COST 17
++#define BRCTL_GET_FDB_ENTRIES 18
++struct __bridge_info {
++	uint64_t designated_root;
++	uint64_t bridge_id;
++	uint32_t root_path_cost;
++	uint32_t max_age;
++	uint32_t hello_time;
++	uint32_t forward_delay;
++	uint32_t bridge_max_age;
++	uint32_t bridge_hello_time;
++	uint32_t bridge_forward_delay;
++	uint8_t  topology_change;
++	uint8_t  topology_change_detected;
++	uint8_t  root_port;
++	uint8_t  stp_enabled;
++	uint32_t ageing_time;
++	uint32_t gc_interval;
++	uint32_t hello_timer_value;
++	uint32_t tcn_timer_value;
++	uint32_t topology_change_timer_value;
++	uint32_t gc_timer_value;
++};
++/* end <linux/if_bridge.h> */
+ 
+ /* FIXME: These 4 funcs are not really clean and could be improved */
+ static ALWAYS_INLINE void bb_strtotimeval(struct timeval *tv,
+diff --git a/networking/ifplugd.c b/networking/ifplugd.c
+index fef7a5ac9..1e6c562e0 100644
+--- a/networking/ifplugd.c
++++ b/networking/ifplugd.c
+@@ -38,7 +38,17 @@
+ #include <linux/mii.h>
+ #include <linux/ethtool.h>
+ #ifdef HAVE_NET_ETHERNET_H
+-# include <net/ethernet.h>
++/* musl breakage:
++ * In file included from /usr/include/net/ethernet.h:10,
++ *                  from networking/ifplugd.c:41:
++ * /usr/include/netinet/if_ether.h:96: error: redefinition of 'struct ethhdr'
++ *
++ * Build succeeds without it on musl. Commented it out.
++ * If on your system you need it, consider removing <linux/ethtool.h>
++ * and copy-pasting its definitions here (<linux/ethtool.h> is what pulls in
++ * conflicting definition of struct ethhdr on musl).
++ */
++/* # include <net/ethernet.h> */
+ #endif
+ #include <linux/netlink.h>
+ #include <linux/rtnetlink.h>

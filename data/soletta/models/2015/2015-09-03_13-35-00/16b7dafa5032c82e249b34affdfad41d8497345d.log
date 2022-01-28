@@ -1,0 +1,993 @@
+"2015-09-03 13:35:00 -0300"
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index 51a36907..fab31395 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -299,6 +299,16 @@
+       ],
+       "fragment": "memmem(0, 0, 0, 0);"
+     },
++    {
++      "dependency": "getrandom",
++      "type": "ccode",
++      "headers": [
++        "<linux/random.h>",
++        "<unistd.h>",
++        "<sys/syscall.h>"
++      ],
++      "fragment": "char p; syscall(SYS_getrandom, &p, sizeof(p), GRND_NONBLOCK);"
++    },
+     {
+       "dependency": "decl_ifla_inet6_addr_gen_mode",
+       "type": "ccode",
+diff --git a/src/lib/common/include/sol-platform.h b/src/lib/common/include/sol-platform.h
+index d96627d4..800b9b19 100644
+--- a/src/lib/common/include/sol-platform.h
++++ b/src/lib/common/include/sol-platform.h
+@@ -61,6 +61,22 @@ extern "C" {
+ 
+ const char *sol_platform_get_board_name(void);
+ 
++/**
++ * Retrieves, in @a id, the machine-id present in the file system. The
++ * returned string is assured to be a valid, 16 bytes-long (128 bits)
++ * UUID.
++ *
++ * @param id Where to store the found machine id. It's 33 bytes in lenght
++ *           so it accomodates the maximum lenght case -- 2 * 16
++ *           (chars) + 1 (\0)
++ *
++ * @note: If the environment variable SOL_MACHINE_ID is set and is
++ * properly formatted as a UUID, its value is returned by this call.
++ *
++ * @return 0 on success, negative error code otherwise.
++ */
++int sol_platform_get_machine_id(char id[static 33]);
++
+ enum sol_platform_state {
+     SOL_PLATFORM_STATE_INITIALIZING,
+     SOL_PLATFORM_STATE_RUNNING,
+diff --git a/src/lib/common/sol-platform-impl-contiki.c b/src/lib/common/sol-platform-impl-contiki.c
+index 37e4da84..0ed27cf5 100644
+--- a/src/lib/common/sol-platform-impl-contiki.c
++++ b/src/lib/common/sol-platform-impl-contiki.c
+@@ -95,3 +95,10 @@ sol_platform_impl_set_target(const char *target)
+     SOL_WRN("Not implemented");
+     return -ENOTSUP;
+ }
++
++int
++sol_platform_impl_get_machine_id(char id[static 33])
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
+diff --git a/src/lib/common/sol-platform-impl-dummy.c b/src/lib/common/sol-platform-impl-dummy.c
+index 37e4da84..0ed27cf5 100644
+--- a/src/lib/common/sol-platform-impl-dummy.c
++++ b/src/lib/common/sol-platform-impl-dummy.c
+@@ -95,3 +95,10 @@ sol_platform_impl_set_target(const char *target)
+     SOL_WRN("Not implemented");
+     return -ENOTSUP;
+ }
++
++int
++sol_platform_impl_get_machine_id(char id[static 33])
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
+diff --git a/src/lib/common/sol-platform-impl-linux-micro.c b/src/lib/common/sol-platform-impl-linux-micro.c
+index 4e9b6b9e..73c3b4ed 100644
+--- a/src/lib/common/sol-platform-impl-linux-micro.c
++++ b/src/lib/common/sol-platform-impl-linux-micro.c
+@@ -784,6 +784,41 @@ sol_platform_impl_set_target(const char *target)
+     return 0;
+ }
+ 
++static int
++validate_machine_id(char id[static 33])
++{
++    id[32] = '\0';
++
++    if (!sol_util_uuid_str_valid(id))
++        return -EINVAL;
++
++    return 0;
++}
++
++int
++sol_platform_impl_get_machine_id(char id[static 33])
++{
++    static const char *etc_path = "/etc/machine-id",
++    *run_path = "/run/machine-id";
++    int r;
++
++    r = sol_util_read_file(etc_path, "%33c", id);
++    if (r < 0) {
++        /* We can only tolerate the file not existing or being
++         * malformed on /etc/, otherwise it's got more serious
++         * problems and it's better to fail */
++        if (r == -ENOENT || r == EOF)
++            return r; /* else proceed to run_path */
++    } else
++        return validate_machine_id(id);
++
++    r = sol_util_read_file(run_path, "%33c", id);
++    if (r < 0) {
++        return r;
++    } else
++        return validate_machine_id(id);
++}
++
+ SOL_API void
+ sol_platform_linux_micro_inform_service_state(const char *service, enum sol_platform_service_state state)
+ {
+diff --git a/src/lib/common/sol-platform-impl-riot.c b/src/lib/common/sol-platform-impl-riot.c
+index c5e54e64..e6d4de28 100644
+--- a/src/lib/common/sol-platform-impl-riot.c
++++ b/src/lib/common/sol-platform-impl-riot.c
+@@ -118,3 +118,10 @@ sol_platform_impl_set_target(const char *target)
+     SOL_CRI("Unsupported set target %s.", target);
+     return -ENOTSUP;
+ }
++
++int
++sol_platform_impl_get_machine_id(char id[static 33])
++{
++    SOL_WRN("Not implemented");
++    return -ENOTSUP;
++}
+diff --git a/src/lib/common/sol-platform-impl-systemd.c b/src/lib/common/sol-platform-impl-systemd.c
+index 09f51ebc..2bb928d8 100644
+--- a/src/lib/common/sol-platform-impl-systemd.c
++++ b/src/lib/common/sol-platform-impl-systemd.c
+@@ -442,6 +442,12 @@ sol_platform_impl_set_target(const char *target)
+     return call_manager("StartUnit", target, ".target", params[idx], "set_target");
+ }
+ 
++int
++sol_platform_impl_get_machine_id(char id[static 33])
++{
++    return sol_util_read_file("/etc/machine-id", "%33c", id);
++}
++
+ int
+ sol_platform_impl_init(void)
+ {
+diff --git a/src/lib/common/sol-platform-impl.h b/src/lib/common/sol-platform-impl.h
+index 4d5beb74..b3b02dc0 100644
+--- a/src/lib/common/sol-platform-impl.h
++++ b/src/lib/common/sol-platform-impl.h
+@@ -52,6 +52,8 @@ int sol_platform_impl_restart_service(const char *service) SOL_ATTR_NONNULL(1);
+ 
+ int sol_platform_impl_set_target(const char *target) SOL_ATTR_NONNULL(1);
+ 
++int sol_platform_impl_get_machine_id(char id[static 33]);
++
+ /* callbacks into generic platform abstraction */
+ void sol_platform_inform_state_monitors(enum sol_platform_state state);
+ void sol_platform_inform_service_monitors(const char *service,
+diff --git a/src/lib/common/sol-platform.c b/src/lib/common/sol-platform.c
+index 0bc79cc9..80b8b929 100644
+--- a/src/lib/common/sol-platform.c
++++ b/src/lib/common/sol-platform.c
+@@ -299,6 +299,26 @@ sol_platform_set_target(const char *target)
+     return sol_platform_impl_set_target(target);
+ }
+ 
++SOL_API int
++sol_platform_get_machine_id(char id[static 33])
++{
++#ifdef SOL_PLATFORM_LINUX
++    char *env_id = getenv("SOL_MACHINE_ID");
++
++    if (env_id) {
++        if (strlen(env_id) > 32 || !sol_util_uuid_str_valid(env_id)) {
++            SOL_WRN("Malformed UUID passed on environment variable "
++                "SOL_MACHINE_ID: %s", env_id);
++            return -EINVAL;
++        }
++        memcpy(id, env_id, 33);
++
++        return 0;
++    }
++#endif
++    return sol_platform_impl_get_machine_id(id);
++}
++
+ void
+ sol_platform_inform_state_monitors(enum sol_platform_state state)
+ {
+diff --git a/src/modules/flow/platform/platform.c b/src/modules/flow/platform/platform.c
+index 716c5f1c..6eaa8820 100644
+--- a/src/modules/flow/platform/platform.c
++++ b/src/modules/flow/platform/platform.c
+@@ -194,4 +194,23 @@ platform_service_close(struct sol_flow_node *node, void *data)
+     free(mdata->service_name);
+ }
+ 
++static int
++platform_machine_id_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    int r;
++    char id[33] = { 0 };
++
++    r = sol_platform_get_machine_id(id);
++    if (r < 0) {
++        sol_flow_send_error_packet(node, ENOSYS,
++            "Fail on retrieving machine id -- not available");
++        return 0; /* do not fail to create node */
++    }
++
++    return sol_flow_send_string_packet(node,
++        SOL_FLOW_NODE_TYPE_PLATFORM_MACHINE_ID__OUT__OUT, id);
++}
++
+ #include "platform-gen.c"
+diff --git a/src/modules/flow/platform/platform.json b/src/modules/flow/platform/platform.json
+index ecc0f168..4809df07 100644
+--- a/src/modules/flow/platform/platform.json
++++ b/src/modules/flow/platform/platform.json
+@@ -88,6 +88,22 @@
+       ],
+       "private_data_type": "platform_service_data",
+       "url": "http://solettaproject.org/doc/latest/node_types/platform_service.html"
++    },
++    {
++      "category": "input/sw",
++      "description": "Outputs the machine-id of the system Soletta is being run on. The returned string is assured to be a valid, 16 bytes-long (128 bits) UUID. The output string packet is sent upon node creation.",
++      "methods": {
++        "open": "platform_machine_id_open"
++      },
++      "name": "platform/machine-id",
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "The machine-id (UUID) string",
++          "name": "OUT"
++        }
++      ],
++      "url": "http://solettaproject.org/doc/latest/node_types/platform/machine-id.html"
+     }
+   ]
+ }
+diff --git a/src/modules/flow/string/Makefile b/src/modules/flow/string/Makefile
+index 86d5c280..6061c96b 100644
+--- a/src/modules/flow/string/Makefile
++++ b/src/modules/flow/string/Makefile
+@@ -21,7 +21,7 @@ warning-msg := "You're building the string nodes module without Perl regular exp
+ endif
+ 
+ obj-$(FLOW_NODE_TYPE_STRING) += string.mod
+-obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string-regexp.o
++obj-string-$(FLOW_NODE_TYPE_STRING) := string.json string-regexp.o string-uuid.o
+ 
+ ifeq (y,$(USE_ICU))
+ obj-string-$(FLOW_NODE_TYPE_STRING) += string-icu.o string-replace-icu.o
+diff --git a/src/modules/flow/string/string-ascii.c b/src/modules/flow/string/string-ascii.c
+index 68568146..b5f29caa 100644
+--- a/src/modules/flow/string/string-ascii.c
++++ b/src/modules/flow/string/string-ascii.c
+@@ -42,6 +42,7 @@
+ #include "string-gen.h"
+ #include "string-ascii.h"
+ #include "string-regexp.h"
++#include "string-uuid.h"
+ 
+ struct string_data {
+     int32_t n;
+diff --git a/src/modules/flow/string/string-icu.c b/src/modules/flow/string/string-icu.c
+index 875c6614..1e798fe5 100644
+--- a/src/modules/flow/string/string-icu.c
++++ b/src/modules/flow/string/string-icu.c
+@@ -38,6 +38,7 @@
+ #include "string-gen.h"
+ #include "string-icu.h"
+ #include "string-regexp.h"
++#include "string-uuid.h"
+ 
+ #define MIN(a, b) (((a) < (b)) ? (a) : (b))
+ 
+diff --git a/src/modules/flow/string/string-uuid.c b/src/modules/flow/string/string-uuid.c
+new file mode 100644
+index 00000000..2d4d76ad
+--- /dev/null
++++ b/src/modules/flow/string/string-uuid.c
+@@ -0,0 +1,79 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <ctype.h>
++#include <fcntl.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++
++#include "sol-flow-internal.h"
++#include "sol-platform.h"
++
++#include "string-gen.h"
++#include "string-uuid.h"
++
++int
++string_uuid_gen(struct sol_flow_node *node,
++    void *data,
++    uint16_t port,
++    uint16_t conn_id,
++    const struct sol_flow_packet *packet)
++{
++    int r;
++    char id[37] = { 0 };
++    struct string_uuid_data *mdata = data;
++
++    r = sol_util_uuid_gen(mdata->upcase, mdata->with_hyphens, id);
++    SOL_INT_CHECK(r, < 0, r);
++
++    return sol_flow_send_string_packet(node,
++        SOL_FLOW_NODE_TYPE_STRING_UUID__OUT__OUT, id);
++}
++
++int
++string_uuid_open(struct sol_flow_node *node,
++    void *data,
++    const struct sol_flow_node_options *options)
++{
++    struct string_uuid_data *mdata = data;
++    const struct sol_flow_node_type_string_uuid_options *opts;
++
++    SOL_FLOW_NODE_OPTIONS_SUB_API_CHECK
++        (options, SOL_FLOW_NODE_TYPE_STRING_UUID_OPTIONS_API_VERSION, -EINVAL);
++    opts = (const struct sol_flow_node_type_string_uuid_options *)options;
++
++    mdata->node = node;
++    mdata->with_hyphens = opts->with_hyphens;
++    mdata->upcase = opts->upcase;
++
++    return string_uuid_gen(node, data, 0, 0, NULL);
++}
+diff --git a/src/modules/flow/string/string-uuid.h b/src/modules/flow/string/string-uuid.h
+new file mode 100644
+index 00000000..5dfb1291
+--- /dev/null
++++ b/src/modules/flow/string/string-uuid.h
+@@ -0,0 +1,45 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include "sol-flow.h"
++
++int string_uuid_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options);
++
++int string_uuid_gen(struct sol_flow_node *node, void *data, uint16_t port, uint16_t conn_id, const struct sol_flow_packet *packet);
++
++struct string_uuid_data {
++    struct sol_flow_node *node;
++    bool with_hyphens : 1;
++    bool upcase : 1;
++};
+diff --git a/src/modules/flow/string/string.json b/src/modules/flow/string/string.json
+index e8ee8c67..a09670aa 100644
+--- a/src/modules/flow/string/string.json
++++ b/src/modules/flow/string/string.json
+@@ -505,6 +505,50 @@
+       ],
+       "private_data_type": "string_regexp_replace_data",
+       "url": "http://solettaproject.org/doc/latest/node_types/string/regexp_replace.html"
++    },
++    {
++      "category": "string",
++      "description": "Generate a new universally unique identifier (UUID). The output UUID is 16 bytes (128 bits) long and conforms to v4 UUIDs (generated from randomor pseudo-randomnumbers). The output string packet is sent upon node creation, but new UUIDs can be generated by 'ticks' on the 'GERERATE' input port.",
++      "in_ports": [
++        {
++          "data_type": "any",
++          "description": "Generate a new UUID.",
++          "methods": {
++            "process": "string_uuid_gen"
++          },
++          "name": "GENERATE"
++        }
++      ],
++      "methods": {
++        "open": "string_uuid_open"
++      },
++      "name": "string/uuid",
++      "options": {
++        "members": [
++          {
++            "data_type": "boolean",
++            "default": false,
++            "description": "Whether to put UUID hyphens in the resulting string.",
++            "name": "with_hyphens"
++          },
++          {
++            "data_type": "boolean",
++            "default": false,
++            "description": "Whether to output the UUID string in uppercase",
++            "name": "upcase"
++          }
++        ],
++        "version": 1
++      },
++      "out_ports": [
++        {
++          "data_type": "string",
++          "description": "A new v4 UUID string",
++          "name": "OUT"
++        }
++      ],
++      "private_data_type": "string_uuid_data",
++      "url": "http://solettaproject.org/doc/latest/node_types/string/uuid.html"
+     }
+   ]
+ }
+diff --git a/src/modules/linux-micro/Kconfig b/src/modules/linux-micro/Kconfig
+index 3d984d76..495c2317 100644
+--- a/src/modules/linux-micro/Kconfig
++++ b/src/modules/linux-micro/Kconfig
+@@ -34,6 +34,7 @@ source "src/modules/linux-micro/dbus/Kconfig"
+ source "src/modules/linux-micro/fstab/Kconfig"
+ source "src/modules/linux-micro/hostname/Kconfig"
+ source "src/modules/linux-micro/locale/Kconfig"
++source "src/modules/linux-micro/machine-id/Kconfig"
+ source "src/modules/linux-micro/network-up/Kconfig"
+ source "src/modules/linux-micro/rc-d/Kconfig"
+ source "src/modules/linux-micro/sysctl/Kconfig"
+diff --git a/src/modules/linux-micro/machine-id/Kconfig b/src/modules/linux-micro/machine-id/Kconfig
+new file mode 100644
+index 00000000..c94bd1ec
+--- /dev/null
++++ b/src/modules/linux-micro/machine-id/Kconfig
+@@ -0,0 +1,9 @@
++config LINUX_MICRO_MACHINE_ID
++	tristate "machine-id"
++	depends on LINUX_MICRO
++	default m if MODULES=y
++	help
++            After fstab service is up, this one will start and
++            guarantee the presence and validity of a unique machine
++            identifier in the file system. This UUID is made available
++            for the rest of Soletta by an utility function.
+diff --git a/src/modules/linux-micro/machine-id/Makefile b/src/modules/linux-micro/machine-id/Makefile
+new file mode 100644
+index 00000000..c100cd6f
+--- /dev/null
++++ b/src/modules/linux-micro/machine-id/Makefile
+@@ -0,0 +1,2 @@
++obj-$(LINUX_MICRO_MACHINE_ID) += machine-id.mod
++obj-machine-id-$(LINUX_MICRO_MACHINE_ID) += machine-id.o
+diff --git a/src/modules/linux-micro/machine-id/machine-id.c b/src/modules/linux-micro/machine-id/machine-id.c
+new file mode 100644
+index 00000000..5da48fb5
+--- /dev/null
++++ b/src/modules/linux-micro/machine-id/machine-id.c
+@@ -0,0 +1,207 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <errno.h>
++#include <fcntl.h>
++#include <signal.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#define SOL_LOG_DOMAIN &_log_domain
++#include "sol-log-internal.h"
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "linux-micro-machine-id");
++
++#include "sol-mainloop.h"
++#include "sol-platform-linux-micro.h"
++#include "sol-util.h"
++
++static bool done = false;
++static const char *name;
++
++static void on_fstab_service_state_changed(void *data,
++    const char *service,
++    enum sol_platform_service_state state);
++
++static int
++validate_machine_id(char id[static 33])
++{
++    id[32] = '\0';
++
++    if (!sol_util_uuid_str_valid(id))
++        return -EINVAL;
++
++    return 0;
++}
++
++static int
++write_machine_id(const char *path, char id[static 33])
++{
++    SOL_NULL_CHECK(path, -EINVAL);
++
++    /* add trailing '\n' */
++    return sol_util_write_file(path, "%s\n", id);
++}
++
++static int
++run_do(void)
++{
++    static const char *etc_path = "/etc/machine-id",
++    *run_path = "/run/machine-id";
++    char id[33];
++    int r;
++
++    r = sol_util_read_file(etc_path, "%33c", id);
++    if (r < 0) {
++        /* We can only tolerate the file not existing or being
++         * malformed on /etc/, otherwise it's got more serious
++         * problems and it's better to fail */
++        if (r != -ENOENT && r != EOF)
++            goto err;
++    } else {
++        r = validate_machine_id(id);
++        /* return if OK here */
++        SOL_INT_CHECK(r, == 0, 0);
++    }
++
++    r = sol_util_uuid_gen(false, true, id);
++    SOL_INT_CHECK_GOTO(r, < 0, err);
++
++    if (write_machine_id(etc_path, id) >= 0)
++        goto end;
++
++    /* fallback to /run/ */
++    r = write_machine_id(run_path, id);
++    SOL_INT_CHECK_GOTO(r, < 0, err);
++
++end:
++    sol_platform_linux_micro_inform_service_state
++        (name, SOL_PLATFORM_SERVICE_STATE_ACTIVE);
++    done = true;
++    return 0;
++
++err:
++    sol_platform_linux_micro_inform_service_state
++        (name, SOL_PLATFORM_SERVICE_STATE_FAILED);
++
++    return r;
++}
++
++static void
++on_fstab_service_state_changed(void *data,
++    const char *service,
++    enum sol_platform_service_state state)
++{
++    if (state == SOL_PLATFORM_SERVICE_STATE_ACTIVE)
++        run_do();
++    else if (state == SOL_PLATFORM_SERVICE_STATE_INACTIVE
++        || state == SOL_PLATFORM_SERVICE_STATE_FAILED)
++        sol_platform_linux_micro_inform_service_state
++            (name, SOL_PLATFORM_SERVICE_STATE_FAILED);
++}
++
++static int
++machine_id_start(const struct sol_platform_linux_micro_module *mod,
++    const char *service)
++{
++    int ret = 0;
++    static const char *FSTAB = "fstab";
++    enum sol_platform_service_state state = SOL_PLATFORM_SERVICE_STATE_ACTIVE;
++
++    name = service;
++
++    if (done)
++        return 0;
++
++    /* If fstab is present and functional, wait for it to go up for
++     * this to run. If it's not, try to do machine-id's business
++     * nonetheless */
++    ret = sol_platform_add_service_monitor
++            (on_fstab_service_state_changed, FSTAB, mod);
++    if (ret < 0)
++        return run_do();
++    ret = sol_platform_start_service(FSTAB);
++    if (ret < 0) {
++        sol_platform_del_service_monitor
++            (on_fstab_service_state_changed, FSTAB, NULL);
++        return run_do();
++    }
++
++    state = sol_platform_get_service_state(FSTAB);
++    if (state == SOL_PLATFORM_SERVICE_STATE_ACTIVE)
++        return run_do();
++
++    return 0; /* wait for dep to activate */
++}
++
++static int
++machine_id_stop(const struct sol_platform_linux_micro_module *mod,
++    const char *service,
++    bool force_immediate)
++{
++    static const char *FSTAB = "fstab";
++
++    sol_platform_del_service_monitor
++        (on_fstab_service_state_changed, FSTAB, NULL);
++
++    sol_platform_linux_micro_inform_service_state
++        (name, SOL_PLATFORM_SERVICE_STATE_INACTIVE);
++
++    return 0;
++}
++
++static int
++machine_id_restart(const struct sol_platform_linux_micro_module *mod,
++    const char *service)
++{
++    if (!done)
++        return machine_id_start(mod, service);
++
++    return 0;
++}
++
++static int
++machine_id_init(const struct sol_platform_linux_micro_module *module,
++    const char *service)
++{
++    SOL_LOG_INTERNAL_INIT_ONCE;
++    return 0;
++}
++
++SOL_PLATFORM_LINUX_MICRO_MODULE(MACHINE_ID,
++    .name = "machine_id",
++    .init = machine_id_init,
++    .start = machine_id_start,
++    .stop = machine_id_stop,
++    .restart = machine_id_restart,
++    );
+diff --git a/src/shared/sol-rng.c b/src/shared/sol-rng.c
+index 0de47158..d7da1890 100644
+--- a/src/shared/sol-rng.c
++++ b/src/shared/sol-rng.c
+@@ -62,7 +62,7 @@ getrandom_shim(void *buf, size_t buflen, unsigned int flags)
+     int fd;
+     ssize_t ret;
+ 
+-#ifdef SYS_getrandom
++#ifdef HAVE_GETRANDOM
+     /* No wrappers are commonly available for this system call yet, so
+      * use syscall(2) directly. */
+     long gr_ret = syscall(SYS_getrandom, buf, buflen, flags);
+diff --git a/src/shared/sol-util-contiki.c b/src/shared/sol-util-contiki.c
+index 7f5ddd40..3f3daa0e 100644
+--- a/src/shared/sol-util-contiki.c
++++ b/src/shared/sol-util-contiki.c
+@@ -54,3 +54,14 @@ sol_util_timespec_get_realtime(struct timespec *t)
+     errno = ENOSYS;
+     return -1;
+ }
++
++int
++sol_util_uuid_gen(bool upcase,
++    bool with_hyphens,
++    char id[static 37])
++{
++    //FIXME: use whatever source there is of pseudo-random numbers on
++    //Contiki
++    SOL_WRN("Not implemented");
++    return -ENOSYS;
++}
+diff --git a/src/shared/sol-util-linux.c b/src/shared/sol-util-linux.c
+index b6030017..2ce6b6c2 100644
+--- a/src/shared/sol-util-linux.c
++++ b/src/shared/sol-util-linux.c
+@@ -30,8 +30,17 @@
+  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#include "sol-log.h"
++#include "sol-rng.h"
+ #include "sol-util.h"
+ 
++#include <ctype.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
+ struct timespec
+ sol_util_timespec_get_current(void)
+ {
+@@ -45,3 +54,72 @@ sol_util_timespec_get_realtime(struct timespec *t)
+ {
+     return clock_gettime(CLOCK_REALTIME, t);
+ }
++
++static struct sol_uuid
++assert_uuid_v4(struct sol_uuid id)
++{
++    id.bytes[6] = (id.bytes[6] & 0x0F) | 0x40;
++    id.bytes[8] = (id.bytes[8] & 0x3F) | 0x80;
++
++    return id;
++}
++
++static int
++uuid_gen(struct sol_uuid *ret)
++{
++    struct sol_rng_engine *engine;
++    size_t size;
++
++    SOL_NULL_CHECK(ret, -EINVAL);
++    engine = sol_rng_engine_new(SOL_RNG_ENGINE_IMPL_DEFAULT, 0);
++
++    size = sol_rng_engine_generate_bytes(engine, ret, sizeof(*ret));
++    if (size != sizeof(*ret)) {
++        sol_rng_engine_del(engine);
++        return -EIO;
++    }
++
++    *ret = assert_uuid_v4(*ret);
++
++    sol_rng_engine_del(engine);
++    return 0;
++}
++
++// 37 = 2 * 16 (chars) + 4 (hyphens) + 1 (\0)
++int
++sol_util_uuid_gen(bool upcase,
++    bool with_hyphens,
++    char id[static 37])
++{
++    static struct sol_str_slice hyphen = SOL_STR_SLICE_LITERAL("-");
++    /* hyphens on positions 8, 13, 18, 23 (from 0) */
++    static const int hyphens_pos[] = { 8, 13, 18, 23 };
++    struct sol_uuid uuid = { 0 };
++    unsigned i;
++    int r;
++
++    struct sol_buffer buf = { 0 };
++
++    sol_buffer_init_flags(&buf, id, 37,
++        SOL_BUFFER_FLAGS_MEMORY_NOT_OWNED);
++
++    r = uuid_gen(&uuid);
++    SOL_INT_CHECK(r, < 0, r);
++
++    for (i = 0; i < ARRAY_SIZE(uuid.bytes); i++) {
++        r = sol_buffer_append_printf(&buf, upcase ? "%02hhX" : "%02hhx",
++            uuid.bytes[i]);
++        SOL_INT_CHECK_GOTO(r, < 0, err);
++    }
++
++    if (with_hyphens) {
++        for (i = 0; i < ARRAY_SIZE(hyphens_pos); i++) {
++            r = sol_buffer_insert_slice(&buf, hyphens_pos[i], hyphen);
++            SOL_INT_CHECK_GOTO(r, < 0, err);
++        }
++    }
++
++err:
++    sol_buffer_fini(&buf);
++    return r;
++}
+diff --git a/src/shared/sol-util-riot.c b/src/shared/sol-util-riot.c
+index 1d26f821..678785c9 100644
+--- a/src/shared/sol-util-riot.c
++++ b/src/shared/sol-util-riot.c
+@@ -68,3 +68,14 @@ sol_util_timespec_get_realtime(struct timespec *t)
+     return -1;
+ #endif
+ }
++
++int
++sol_util_uuid_gen(bool upcase,
++    bool with_hyphens,
++    char id[static 37])
++{
++    //FIXME: use whatever source there is of pseudo-random numbers on
++    //Riot
++    SOL_WRN("Not implemented");
++    return -ENOSYS;
++}
+diff --git a/src/shared/sol-util.h b/src/shared/sol-util.h
+index f75bcc08..611a1bde 100644
+--- a/src/shared/sol-util.h
++++ b/src/shared/sol-util.h
+@@ -37,6 +37,7 @@
+ #include "sol-str-slice.h"
+ #include "sol-vector.h"
+ 
++#include <ctype.h>
+ #include <errno.h>
+ #include <inttypes.h>
+ #include <limits.h>
+@@ -121,6 +122,10 @@ double sol_util_strtodn(const char *nptr, char **endptr, ssize_t len, bool use_l
+ /* number of nanoseconds in a microsecond: 1,000,000,000 / 1,000,000 = 1,000 */
+ #define NSEC_PER_USEC 1000ULL
+ 
++struct sol_uuid {
++    uint8_t bytes[16];
++};
++
+ static inline int
+ sol_util_int_compare(const int a, const int b)
+ {
+@@ -302,3 +307,57 @@ sol_util_uint64_add(const uint64_t a, const uint64_t b, uint64_t *out)
+ #endif
+     return 0;
+ }
++
++/**
++ * Generates a new universally unique identifier (UUID), in string
++ * form, which is 16 bytes-long (128 bits) long and conforms to v4
++ * UUIDs (generated from randomor pseudo-randomnumbers).
++ *
++ * @param upcase Whether to generate the UUID in upcase or not
++ * @param with_hyphens Format the resulting UUID string with hyphens
++ *                     (e.g. "de305d54-75b4-431b-adb2-eb6b9e546014") or
++ *                     without them.
++ * @param id Where to store the generated id. It's 37 bytes in lenght
++ *           so it accomodates the maximum lenght case -- 2 * 16
++ *           (chars) + 4 (hyphens) + 1 (\0)
++ *
++ * @return 0 on success, negative error code otherwise.
++ */
++int sol_util_uuid_gen(bool upcase, bool with_hyphens, char id[static 37]);
++
++/**
++ * Checks if a given universally unique identifier (UUID), in string
++ * form, is valid (all upcase/downcase, hyphenated/non-hyphenated
++ * cases included).
++ *
++ * @param str The given UUID
++ *
++ * @return true if it's valid, false otherwise.
++ */
++static inline bool
++sol_util_uuid_str_valid(const char *str)
++{
++    size_t i, len;
++
++    len = strlen(str);
++    if (len == 32) {
++        for (i = 0; i < len; i++) {
++            if (!isxdigit(str[i]))
++                return false;
++        }
++    } else if (len == 36) {
++        char c;
++        for (i = 0; i < len; i++) {
++            c = str[i];
++
++            if (i == 8 || i == 13 || i == 18 || i == 23) {
++                if (c != '-')
++                    return false;
++            } else if (!isxdigit(c))
++                return false;
++        }
++    } else
++        return false;
++
++    return true;
++}
+diff --git a/src/test-fbp/string-regexp-search.fbp b/src/test-fbp/string-regexp-search.fbp
+index b23e0dc9..23d5e592 100644
+--- a/src/test-fbp/string-regexp-search.fbp
++++ b/src/test-fbp/string-regexp-search.fbp
+@@ -84,3 +84,29 @@ str_hello_world OUT -> IN regexp_search_10(string/regexp-search:regexp="(\\p{L}{
+ regexp_search_10 OUT -> IN[0] cmp_10(string/compare)
+ result_world OUT -> IN[1] cmp_10
+ cmp_10 EQUAL -> RESULT result_10(test/result)
++
++_(string/uuid) OUT -> IN regexp_search_11(string/regexp-search:regexp="((?:[a-f]|[0-9]){8})((?:(?:[a-f]|[0-9]){4}){3})((?:[a-f]|[0-9]){12})")
++regexp_search_11 LENGTH -> IN[0] cmp_11(int/equal)
++_(constant/int:value=4) OUT -> IN[1] cmp_11
++cmp_11 OUT -> RESULT result_11(test/result)
++
++_(string/uuid:with_hyphens=false) OUT -> IN regexp_search_12(string/regexp-search:regexp="((?:[a-f]|[0-9]){8})((?:(?:[a-f]|[0-9]){4}){3})((?:[a-f]|[0-9]){12})")
++regexp_search_12 LENGTH -> IN[0] cmp_12(int/equal)
++_(constant/int:value=4) OUT -> IN[1] cmp_12
++cmp_12 OUT -> RESULT result_12(test/result)
++
++_(string/uuid:with_hyphens=true,upcase=true) OUT -> IN regexp_search_13(string/regexp-search:regexp="((?:[A-F]|[0-9]){8}-)((?:(?:[A-F]|[0-9]){4}-){3})((?:[A-F]|[0-9]){12})")
++regexp_search_13 LENGTH -> IN[0] cmp_13(int/equal)
++_(constant/int:value=4) OUT -> IN[1] cmp_13
++cmp_13 OUT -> RESULT result_13(test/result)
++
++_(platform/machine-id) OUT -> IN regexp_search_14(string/regexp-search:regexp="((?:[a-f]|[0-9]){32})")
++regexp_search_14 LENGTH -> IN[0] cmp_14(int/equal)
++_(constant/int:value=2) OUT -> IN[1] cmp_14
++cmp_14 OUT -> RESULT result_14(test/result)
++
++_(platform/machine-id) OUT -> IN regexp_replace_15(string/regexp-replace:regexp="((?:[a-f]|[0-9]){8})((?:(?:[a-f]|[0-9]){4}))((?:(?:[a-f]|[0-9]){4}))((?:(?:[a-f]|[0-9]){4}))((?:[a-f]|[0-9]){12})",to="\\1-\\2-\\3-\\4-\\5")
++regexp_replace_15 OUT -> IN regexp_search_15(string/regexp-search:regexp="((?:[a-f]|[0-9]){8}-)((?:(?:[a-f]|[0-9]){4}-){3})((?:[a-f]|[0-9]){12})")
++regexp_search_15 LENGTH -> IN[0] cmp_15(int/equal)
++_(constant/int:value=4) OUT -> IN[1] cmp_15
++cmp_15 OUT -> RESULT result_15(test/result)

@@ -1,0 +1,549 @@
+"2003-01-21 20:55:56 +0000"
+diff --git a/include/libbb.h b/include/libbb.h
+index d67bf07ec..42e89a5e9 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -277,7 +277,6 @@ extern const char * const gshadow_file;
+ extern const char * const group_file;
+ extern const char * const securetty_file;
+ extern const char * const motd_file;
+-extern const char * const issue_file;
+ extern const char * const _path_login;
+ 
+ #ifdef CONFIG_FEATURE_DEVFS
+@@ -365,4 +364,7 @@ typedef struct llist_s {
+ } llist_t;
+ extern llist_t *llist_add_to(llist_t *old_head, char *new_item);
+ 
++void print_login_issue(const char *issue_file, const char *tty);
++void print_login_prompt(void);
++
+ #endif /* __LIBCONFIG_H__ */
+diff --git a/libbb/Makefile.in b/libbb/Makefile.in
+index c97f7d2b3..08f8028d9 100644
+--- a/libbb/Makefile.in
++++ b/libbb/Makefile.in
+@@ -33,7 +33,7 @@ LIBBB_SRC:= \
+ 	get_last_path_component.c get_line_from_file.c herror_msg.c \
+ 	herror_msg_and_die.c human_readable.c inet_common.c inode_hash.c \
+ 	interface.c isdirectory.c kernel_version.c last_char_is.c libc5.c \
+-	llist_add_to.c loop.c make_directory.c mode_string.c \
++	llist_add_to.c login.c loop.c make_directory.c mode_string.c \
+ 	module_syscalls.c mtab.c mtab_file.c my_getgrgid.c my_getgrnam.c \
+ 	my_getpwnam.c my_getpwnamegid.c my_getpwuid.c obscure.c parse_mode.c \
+ 	parse_number.c perror_msg.c perror_msg_and_die.c print_file.c \
+diff --git a/loginutils/getty.c b/loginutils/getty.c
+index 0f0778caf..1b9c6ac4d 100644
+--- a/loginutils/getty.c
++++ b/loginutils/getty.c
+@@ -73,8 +73,6 @@ extern void updwtmp(const char *filename, const struct utmp *ut);
+ #include <time.h>
+ #endif
+ 
+-#define LOGIN " login: "		/* login prompt */
+-
+ /* Some shorthands for control characters. */
+ 
+ #define CTL(x)		(x ^ 0100)	/* Assumes ASCII dialect */
+@@ -752,142 +750,10 @@ static void auto_baud(struct termio *tp)
+ /* do_prompt - show login prompt, optionally preceded by /etc/issue contents */
+ static void do_prompt(struct options *op, struct termio *tp)
+ {
+-#ifdef	ISSUE
+-	FILE *fd;
+-	int oflag;
+-	int c;
+-	struct utsname uts;
+-
+-	(void) uname(&uts);
+-#endif
+-
+-	(void) write(1, "\r\n", 2);	/* start a new line */
+ #ifdef	ISSUE					/* optional: show /etc/issue */
+-	if ((op->flags & F_ISSUE) && (fd = fopen(op->issue, "r"))) {
+-		oflag = tp->c_oflag;	/* save current setting */
+-		tp->c_oflag |= (ONLCR | OPOST);	/* map NL in output to CR-NL */
+-		(void) ioctl(0, TCSETAW, tp);
+-
+-
+-		while ((c = getc(fd)) != EOF) {
+-			if (c == '\\') {
+-				c = getc(fd);
+-
+-				switch (c) {
+-				case 's':
+-					(void) printf("%s", uts.sysname);
+-					break;
+-
+-				case 'n':
+-					(void) printf("%s", uts.nodename);
+-					break;
+-
+-				case 'r':
+-					(void) printf("%s", uts.release);
+-					break;
+-
+-				case 'v':
+-					(void) printf("%s", uts.version);
+-					break;
+-
+-				case 'm':
+-					(void) printf("%s", uts.machine);
+-					break;
+-
+-				case 'o':
+-				{
+-					char domainname[256];
+-
+-					getdomainname(domainname, sizeof(domainname));
+-					domainname[sizeof(domainname) - 1] = '\0';
+-					printf("%s", domainname);
+-				}
+-					break;
+-
+-				case 'd':
+-				case 't':
+-				{
+-					char *weekday[] = { "Sun", "Mon", "Tue", "Wed", "Thu",
+-						"Fri", "Sat"
+-					};
+-					char *month[] = { "Jan", "Feb", "Mar", "Apr", "May",
+-						"Jun", "Jul", "Aug", "Sep", "Oct",
+-						"Nov", "Dec"
+-					};
+-					time_t now;
+-					struct tm *tm;
+-
+-					(void) time(&now);
+-					tm = localtime(&now);
+-
+-					if (c == 'd')
+-						(void) printf("%s %s %d  %d",
+-									  weekday[tm->tm_wday],
+-									  month[tm->tm_mon], tm->tm_mday,
+-									  tm->tm_year <
+-									  70 ? tm->tm_year +
+-									  2000 : tm->tm_year + 1900);
+-					else
+-						(void) printf("%02d:%02d:%02d", tm->tm_hour,
+-									  tm->tm_min, tm->tm_sec);
+-
+-					break;
+-				}
+-
+-				case 'l':
+-					(void) printf("%s", op->tty);
+-					break;
+-
+-				case 'b':
+-				{
+-					int i;
+-
+-					for (i = 0; speedtab[i].speed; i++) {
+-						if (speedtab[i].code == (tp->c_cflag & CBAUD)) {
+-							printf("%ld", speedtab[i].speed);
+-							break;
+-						}
+-					}
+-					break;
+-				}
+-				case 'u':
+-				case 'U':
+-				{
+-					int users = 0;
+-					struct utmp *ut;
+-
+-					setutent();
+-					while ((ut = getutent()))
+-						if (ut->ut_type == USER_PROCESS)
+-							users++;
+-					endutent();
+-					printf("%d ", users);
+-					if (c == 'U')
+-						printf((users == 1) ? "user" : "users");
+-					break;
+-				}
+-				default:
+-					(void) putchar(c);
+-				}
+-			} else
+-				(void) putchar(c);
+-		}
+-		fflush(stdout);
+-
+-		tp->c_oflag = oflag;	/* restore settings */
+-		(void) ioctl(0, TCSETAW, tp);	/* wait till output is gone */
+-		(void) fclose(fd);
+-	}
+-#endif
+-#ifdef __linux__
+-	{
+-		char hn[MAXHOSTNAMELEN + 1];
+-
+-		(void) gethostname(hn, MAXHOSTNAMELEN);
+-		write(1, hn, strlen(hn));
+-	}
++	print_login_issue(op->issue, op->tty);
+ #endif
+-	(void) write(1, LOGIN, sizeof(LOGIN) - 1);	/* always show login prompt */
++	print_login_prompt();
+ }
+ 
+ /* next_speed - select next baud rate */
+diff --git a/loginutils/login.c b/loginutils/login.c
+index 4a7f13ae8..c1ea165c8 100644
+--- a/loginutils/login.c
++++ b/loginutils/login.c
+@@ -253,20 +253,18 @@ static int login_prompt ( char *buf_name )
+ 	int i;
+ 
+ 	for(i=0; i<EMPTY_USERNAME_COUNT; i++) {
+-	gethostname ( buf, sizeof( buf ));
+-	printf ( "\n%s login: ", buf );
+-	fflush ( stdout );
++		print_login_prompt();
++
++		if ( !fgets ( buf, sizeof( buf ) - 1, stdin ))
++			return 0;
+ 
+-	if ( !fgets ( buf, sizeof( buf ) - 1, stdin ))
+-		return 0;
+-		
+ 		if ( !strchr ( buf, '\n' ))
+-		return 0;
+-	
+-	for ( sp = buf; isspace ( *sp ); sp++ ) { }
+-	for ( ep = sp; isgraph ( *ep ); ep++ ) { }
++			return 0;
++
++		for ( sp = buf; isspace ( *sp ); sp++ ) { }
++		for ( ep = sp; isgraph ( *ep ); ep++ ) { }
+ 
+-	*ep = 0;		
++		*ep = 0;		
+ 		safe_strncpy(buf_name, sp, USERNAME_SIZE);
+ 		if(buf_name[0])
+ 			return 1;
+diff --git a/networking/Config.in b/networking/Config.in
+index bc1178007..ebefd600d 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -315,6 +315,13 @@ config CONFIG_TELNETD
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
++config CONFIG_FEATURE_TELNETD_INETD
++	bool "  Use inetd"
++	default n
++	depends on CONFIG_TELNETD
++	help
++	  Please submit a patch to add help text for this item.
++
+ config CONFIG_TFTP
+ 	bool "tftp"
+ 	default n
+diff --git a/networking/telnetd.c b/networking/telnetd.c
+index d208319a3..d17682eb4 100644
+--- a/networking/telnetd.c
++++ b/networking/telnetd.c
+@@ -1,4 +1,4 @@
+-/* $Id: telnetd.c,v 1.2 2002/11/10 22:26:19 bug1 Exp $
++/* $Id: telnetd.c,v 1.3 2003/01/21 20:55:56 bug1 Exp $
+  *
+  * Simple telnet server
+  * Bjorn Wesen, Axis Communications AB (bjornw@axis.com)
+@@ -48,7 +48,13 @@
+ 
+ #define BUFSIZE 4000
+ 
+-static const char *loginpath = "/bin/sh";
++static const char *loginpath = 
++#ifdef CONFIG_LOGIN
++"/bin/login";
++#else
++"/bin/sh";
++#endif
++static const char *issuefile = "/etc/issue.net";
+ 
+ /* shell name and arguments */
+ 
+@@ -57,8 +63,12 @@ static const char *argv_init[] = {NULL, NULL};
+ /* structure that describes a session */
+ 
+ struct tsession {
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++	int sockfd_read, sockfd_write, ptyfd;
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 	struct tsession *next;
+ 	int sockfd, ptyfd;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 	int shell_pid;
+ 	/* two circular buffers */
+ 	char *buf1, *buf2;
+@@ -204,7 +214,11 @@ send_iac(struct tsession *ts, unsigned char command, int option)
+ 
+ 
+ static struct tsession *
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++make_new_session(void)
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ make_new_session(int sockfd)
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ {
+ 	struct termios termbuf;
+ 	int pty, pid;
+@@ -214,7 +228,12 @@ make_new_session(int sockfd)
+ 	ts->buf1 = (char *)(&ts[1]);
+ 	ts->buf2 = ts->buf1 + BUFSIZE;
+ 
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++	ts->sockfd_read = 0;
++	ts->sockfd_write = 1;
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 	ts->sockfd = sockfd;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ 	ts->rdidx1 = ts->wridx1 = ts->size1 = 0;
+ 	ts->rdidx2 = ts->wridx2 = ts->size2 = 0;
+@@ -278,6 +297,8 @@ make_new_session(int sockfd)
+ 		/*termbuf.c_lflag &= ~ICANON;*/
+ 		tcsetattr(0, TCSANOW, &termbuf);
+ 
++		print_login_issue(issuefile, NULL);
++
+ 		/* exec shell, with correct argv and env */
+ 		execv(loginpath, (char *const *)argv_init);
+ 
+@@ -291,6 +312,7 @@ make_new_session(int sockfd)
+ 	return ts;
+ }
+ 
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ static void
+ free_session(struct tsession *ts)
+ {
+@@ -319,30 +341,44 @@ free_session(struct tsession *ts)
+ 
+ 	free(ts);
+ }
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ int
+ telnetd_main(int argc, char **argv)
+ {
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 	struct sockaddr_in sa;
+ 	int master_fd;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 	fd_set rdfdset, wrfdset;
+ 	int selret;
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 	int on = 1;
+ 	int portnbr = 23;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 	int c;
+-
+-	/* check if user supplied a port number */
++	static const char options[] =
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++		"f:l:";
++#else /* CONFIG_EATURE_TELNETD_INETD */
++		"f:l:p:";
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ 	for (;;) {
+-		c = getopt( argc, argv, "p:l:");
++		c = getopt( argc, argv, options);
+ 		if (c == EOF) break;
+ 		switch (c) {
+-			case 'p':
+-				portnbr = atoi(optarg);
++			case 'f':
++				issuefile = strdup (optarg);
+ 				break;
+ 			case 'l':
+ 				loginpath = strdup (optarg);
+ 				break;
++#ifndef CONFIG_FEATURE_TELNETD_INETD
++			case 'p':
++				portnbr = atoi(optarg);
++				break;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 			default:
+ 				show_usage();
+ 		}
+@@ -353,6 +389,12 @@ telnetd_main(int argc, char **argv)
+ 	}
+ 
+ 	argv_init[0] = loginpath;
++
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++	sessions = make_new_session();
++
++	maxfd = 1;
++#else /* CONFIG_EATURE_TELNETD_INETD */
+ 	sessions = 0;
+ 
+ 	/* Grab a TCP socket.  */
+@@ -382,6 +424,7 @@ telnetd_main(int argc, char **argv)
+ 
+ 
+ 	maxfd = master_fd;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ 	do {
+ 		struct tsession *ts;
+@@ -393,10 +436,14 @@ telnetd_main(int argc, char **argv)
+ 		 * ptys if there is room in their respective session buffers.
+ 		 */
+ 
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 		FD_SET(master_fd, &rdfdset);
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ 		ts = sessions;
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 		while (ts) {
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 			/* buf1 is used from socket to pty
+ 			 * buf2 is used from pty to socket
+ 			 */
+@@ -404,22 +451,33 @@ telnetd_main(int argc, char **argv)
+ 				FD_SET(ts->ptyfd, &wrfdset);  /* can write to pty */
+ 			}
+ 			if (ts->size1 < BUFSIZE) {
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++				FD_SET(ts->sockfd_read, &rdfdset); /* can read from socket */
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 				FD_SET(ts->sockfd, &rdfdset); /* can read from socket */
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 			}
+ 			if (ts->size2 > 0) {
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++				FD_SET(ts->sockfd_write, &wrfdset); /* can write to socket */
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 				FD_SET(ts->sockfd, &wrfdset); /* can write to socket */
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 			}
+ 			if (ts->size2 < BUFSIZE) {
+ 				FD_SET(ts->ptyfd, &rdfdset);  /* can read from pty */
+ 			}
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 			ts = ts->next;
+ 		}
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ 		selret = select(maxfd + 1, &rdfdset, &wrfdset, 0, 0);
+ 
+ 		if (!selret)
+ 			break;
+ 
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 		/* First check for and accept new sessions.  */
+ 		if (FD_ISSET(master_fd, &rdfdset)) {
+ 			int fd, salen;
+@@ -447,9 +505,12 @@ telnetd_main(int argc, char **argv)
+ 
+ 		ts = sessions;
+ 		while (ts) { /* For all sessions...  */
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 			int maxlen, w, r;
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 			struct tsession *next = ts->next; /* in case we free ts. */
+-
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
++			
+ 			if (ts->size1 && FD_ISSET(ts->ptyfd, &wrfdset)) {
+ 				int num_totty;
+ 				char *ptr;
+@@ -459,9 +520,13 @@ telnetd_main(int argc, char **argv)
+ 
+ 				w = write(ts->ptyfd, ptr, num_totty);
+ 				if (w < 0) {
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++					exit(0);
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 					free_session(ts);
+ 					ts = next;
+ 					continue;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 				}
+ 				ts->wridx1 += w;
+ 				ts->size1 -= w;
+@@ -469,31 +534,51 @@ telnetd_main(int argc, char **argv)
+ 					ts->wridx1 = 0;
+ 			}
+ 
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++			if (ts->size2 && FD_ISSET(ts->sockfd_write, &wrfdset)) {
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 			if (ts->size2 && FD_ISSET(ts->sockfd, &wrfdset)) {
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 				/* Write to socket from buffer 2.  */
+ 				maxlen = MIN(BUFSIZE - ts->wridx2, ts->size2);
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++				w = write(ts->sockfd_write, ts->buf2 + ts->wridx2, maxlen);
++				if (w < 0)
++					exit(0);
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 				w = write(ts->sockfd, ts->buf2 + ts->wridx2, maxlen);
+ 				if (w < 0) {
+ 					free_session(ts);
+ 					ts = next;
+ 					continue;
+ 				}
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 				ts->wridx2 += w;
+ 				ts->size2 -= w;
+ 				if (ts->wridx2 == BUFSIZE)
+ 					ts->wridx2 = 0;
+ 			}
+ 
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++			if (ts->size1 < BUFSIZE && FD_ISSET(ts->sockfd_read, &rdfdset)) {
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 			if (ts->size1 < BUFSIZE && FD_ISSET(ts->sockfd, &rdfdset)) {
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 				/* Read from socket to buffer 1. */
+ 				maxlen = MIN(BUFSIZE - ts->rdidx1,
+ 						BUFSIZE - ts->size1);
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++				r = read(ts->sockfd_read, ts->buf1 + ts->rdidx1, maxlen);
++				if (!r || (r < 0 && errno != EINTR))
++					exit(0);
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 				r = read(ts->sockfd, ts->buf1 + ts->rdidx1, maxlen);
+ 				if (!r || (r < 0 && errno != EINTR)) {
+ 					free_session(ts);
+ 					ts = next;
+ 					continue;
+ 				}
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 				if(!*(ts->buf1 + ts->rdidx1 + r - 1)) {
+ 					r--;
+ 					if(!r)
+@@ -511,9 +596,13 @@ telnetd_main(int argc, char **argv)
+ 						BUFSIZE - ts->size2);
+ 				r = read(ts->ptyfd, ts->buf2 + ts->rdidx2, maxlen);
+ 				if (!r || (r < 0 && errno != EINTR)) {
++#ifdef CONFIG_FEATURE_TELNETD_INETD
++					exit(0);
++#else /* CONFIG_FEATURE_TELNETD_INETD */
+ 					free_session(ts);
+ 					ts = next;
+ 					continue;
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 				}
+ 				ts->rdidx2 += r;
+ 				ts->size2 += r;
+@@ -529,8 +618,10 @@ telnetd_main(int argc, char **argv)
+ 				ts->rdidx2 = 0;
+ 				ts->wridx2 = 0;
+ 			}
++#ifndef CONFIG_FEATURE_TELNETD_INETD
+ 			ts = next;
+ 		}
++#endif /* CONFIG_FEATURE_TELNETD_INETD */
+ 
+ 	} while (1);
+ 

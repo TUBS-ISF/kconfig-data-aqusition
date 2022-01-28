@@ -1,0 +1,751 @@
+"2007-02-04 21:25:42 +0000"
+diff --git a/Makefile.in b/Makefile.in
+index eb76a9db6..a3d740f7c 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -57,7 +57,7 @@ headers: include/bits/uClibc_config.h
+ 	$(Q)$(MAKE) headers-y
+ 	$(Q)\
+ 	set -e; \
+-	if [ -f libc/sysdeps/linux/$(TARGET_ARCH)/fpu_control.h ] ; then \
++	if [ -e libc/sysdeps/linux/$(TARGET_ARCH)/fpu_control.h ] ; then \
+ 		$(LN) -fs ../libc/sysdeps/linux/$(TARGET_ARCH)/fpu_control.h include/ ; \
+ 	else \
+ 		$(LN) -fs ../libc/sysdeps/linux/common/fpu_control.h include/ ; \
+diff --git a/Rules.mak b/Rules.mak
+index 294690867..3d3578e0f 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -353,6 +353,10 @@ CFLAGS := -include $(top_builddir)include/libc-symbols.h \
+ 	$(XWARNINGS) $(CPU_CFLAGS) $(SSP_CFLAGS) \
+ 	-fno-builtin -nostdinc -I$(top_builddir)include -I.
+ 
++ifneq ($(strip $(UCLIBC_EXTRA_CFLAGS)),"")
++CFLAGS += $(subst ",, $(UCLIBC_EXTRA_CFLAGS))
++endif
++
+ LDADD_LIBFLOAT=
+ ifeq ($(UCLIBC_HAS_SOFT_FLOAT),y)
+ # If -msoft-float isn't supported, we want an error anyway.
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index b0d1504e9..2b1644e14 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1411,6 +1411,12 @@ config CROSS_COMPILER_PREFIX
+ 	  example, if you run 'arm-linux-uclibc-gcc' to compile something, 
+ 	  then enter 'arm-linux-uclibc-' here.
+ 
++config UCLIBC_EXTRA_CFLAGS
++	string "Enter any extra CFLAGS to use to build uClibc"
++	default ""
++	help
++	  Add any additional CFLAGS to be used to build uClibc.
++
+ config DODEBUG
+ 	bool "Build uClibc with debugging symbols"
+ 	default n
+diff --git a/extra/Configs/Config.powerpc b/extra/Configs/Config.powerpc
+index fab79b135..383b41a6d 100644
+--- a/extra/Configs/Config.powerpc
++++ b/extra/Configs/Config.powerpc
+@@ -17,3 +17,27 @@ config ARCH_CFLAGS
+ 
+ config LIBGCC_CFLAGS
+ 	string
++
++choice
++	prompt "Target Processor Type"
++	default CONFIG_CLASSIC
++	help
++	  This is the processor core of your CPU. This information is used for
++	  determining the correct assembler instructions to use for the core.
++          The default is to build for a classic powerpc.
++
++config CONFIG_CLASSIC
++	bool "CLASSIC"
++        help
++          Classic powerpc architecture.
++
++config CONFIG_E500
++	bool "E500"
++        help
++          e500 v1 and v2 core.
++
++endchoice
++
++
++
++
+diff --git a/libc/sysdeps/linux/Makefile.commonarch b/libc/sysdeps/linux/Makefile.commonarch
+index ea4ba53b3..4ce8452f0 100644
+--- a/libc/sysdeps/linux/Makefile.commonarch
++++ b/libc/sysdeps/linux/Makefile.commonarch
+@@ -23,6 +23,11 @@ objclean-y     += arch_objclean
+ arch_objclean:
+ 	$(RM) $(ARCH_OUT)/*.{o,os} $(CTOR_TARGETS) $(CRTS)
+ 
++ifneq ($(ARCH_FPU_HEADERS),)
++headers-y += arch_fpu_headers
++headers_clean-y += arch_fpu_headers_clean
++endif
++
+ ifneq ($(ARCH_HEADERS),)
+ 
+ ARCH_HEADERS_IN  := $(patsubst %,../libc/sysdeps/linux/$(TARGET_ARCH)/%,$(ARCH_HEADERS))
+diff --git a/libc/sysdeps/linux/powerpc/Makefile.arch b/libc/sysdeps/linux/powerpc/Makefile.arch
+index eaa1cb7f8..0e3799f81 100644
+--- a/libc/sysdeps/linux/powerpc/Makefile.arch
++++ b/libc/sysdeps/linux/powerpc/Makefile.arch
+@@ -11,4 +11,37 @@ SSRC := \
+ 	__longjmp.S setjmp.S bsd-setjmp.S bsd-_setjmp.S brk.S \
+ 	clone.S __uClibc_syscall.S syscall.S vfork.S
+ 
++ARCH_FPU_HEADERS := fpu_control.h
++ARCH_DIR := libc/sysdeps/linux/powerpc
++
++arch_fpu_headers:
++ifeq ($(CONFIG_E500),y)
++	$(LN) -fs e500/fpu_control.h $(ARCH_DIR)
++	$(LN) -fs e500/setjmp.S $(ARCH_DIR)
++	$(LN) -fs e500/__longjmp.S $(ARCH_DIR)
++	$(LN) -fs e500/fenv.h $(ARCH_DIR)/bits
++	$(LN) -fs e500/fenvinline.h $(ARCH_DIR)/bits
++	$(LN) -fs e500/mathinline.h $(ARCH_DIR)/bits
++	$(LN) -fs e500/mathdef.h $(ARCH_DIR)/bits
++	$(LN) -fs ../$(ARCH_DIR)/e500/fenv_top.h $(top_builddir)include/fenv.h
++else
++	$(LN) -fs classic/fpu_control.h $(ARCH_DIR)
++	$(LN) -fs classic/setjmp.S $(ARCH_DIR)
++	$(LN) -fs classic/__longjmp.S $(ARCH_DIR)
++	$(LN) -fs classic/fenv.h $(ARCH_DIR)/bits
++	$(LN) -fs classic/fenvinline.h $(ARCH_DIR)/bits
++	$(LN) -fs classic/mathinline.h $(ARCH_DIR)/bits
++	$(LN) -fs classic/mathdef.h $(ARCH_DIR)/bits
++endif
++
++arch_fpu_headers_clean:
++	$(RM) $(ARCH_DIR)/fpu_control.h
++	$(RM) $(ARCH_DIR)/setjmp.S
++	$(RM) $(ARCH_DIR)/__longjmp.S
++	$(RM) $(ARCH_DIR)/bits/fenv.h
++	$(RM) $(ARCH_DIR)/bits/fenvinline.h
++	$(RM) $(ARCH_DIR)/bits/mathinline.h
++	$(RM) $(ARCH_DIR)/bits/mathdef.h
++	$(RM) include/fenv.h
++
+ include $(top_srcdir)libc/sysdeps/linux/Makefile.commonarch
+diff --git a/libc/sysdeps/linux/powerpc/bits/fenv.h b/libc/sysdeps/linux/powerpc/bits/classic/fenv.h
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/bits/fenv.h
+rename to libc/sysdeps/linux/powerpc/bits/classic/fenv.h
+diff --git a/libc/sysdeps/linux/powerpc/bits/fenvinline.h b/libc/sysdeps/linux/powerpc/bits/classic/fenvinline.h
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/bits/fenvinline.h
+rename to libc/sysdeps/linux/powerpc/bits/classic/fenvinline.h
+diff --git a/libc/sysdeps/linux/powerpc/bits/mathdef.h b/libc/sysdeps/linux/powerpc/bits/classic/mathdef.h
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/bits/mathdef.h
+rename to libc/sysdeps/linux/powerpc/bits/classic/mathdef.h
+diff --git a/libc/sysdeps/linux/powerpc/bits/mathinline.h b/libc/sysdeps/linux/powerpc/bits/classic/mathinline.h
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/bits/mathinline.h
+rename to libc/sysdeps/linux/powerpc/bits/classic/mathinline.h
+diff --git a/libc/sysdeps/linux/powerpc/bits/e500/fenv.h b/libc/sysdeps/linux/powerpc/bits/e500/fenv.h
+new file mode 100644
+index 000000000..41963da38
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/e500/fenv.h
+@@ -0,0 +1,79 @@
++/* Copyright (C) 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _FENV_H
++# error "Never use <bits/fenv.h> directly; include <fenv.h> instead."
++#endif
++
++
++/* Define bits representing the exception.  We use the bit positions of
++   the appropriate bits in the SPEFSCR...  */
++enum
++  {
++    FE_INEXACT = 1 << (63 - 42),
++#define FE_INEXACT	FE_INEXACT
++    FE_INVALID = 1 << (63 - 43),
++#define FE_INVALID	FE_INVALID
++    FE_DIVBYZERO = 1 << (63 - 44),
++#define FE_DIVBYZERO	FE_DIVBYZERO
++    FE_UNDERFLOW = 1 << (63 - 45),
++#define FE_UNDERFLOW	FE_UNDERFLOW
++    FE_OVERFLOW = 1 << (63 - 46)
++#define FE_OVERFLOW	FE_OVERFLOW
++  };
++
++#define FE_ALL_EXCEPT \
++	(FE_INEXACT | FE_DIVBYZERO | FE_UNDERFLOW | FE_OVERFLOW | FE_INVALID)
++
++/* The E500 support all of the four defined rounding modes.  We use
++   the bit pattern in the SPEFSCR as the values for the appropriate
++   macros.  */
++enum
++  {
++    FE_TONEAREST = 0,
++#define FE_TONEAREST	FE_TONEAREST
++    FE_TOWARDZERO = 1,
++#define FE_TOWARDZERO	FE_TOWARDZERO
++    FE_UPWARD = 2,
++#define FE_UPWARD	FE_UPWARD
++    FE_DOWNWARD = 3
++#define FE_DOWNWARD	FE_DOWNWARD
++  };
++
++/* Type representing exception flags.  */
++typedef unsigned int fexcept_t;
++
++typedef double fenv_t;
++
++/* If the default argument is used we use this value.  */
++extern const fenv_t __fe_dfl_env;
++#define FE_DFL_ENV	(&__fe_dfl_env)
++
++#ifdef __USE_GNU
++/* Floating-point environment where all exceptions are enabled.  Note that
++   this is not sufficient to give you SIGFPE.  */
++extern const fenv_t __fe_enabled_env;
++# define FE_ENABLED_ENV	(&__fe_enabled_env)
++
++/* Floating-point environment with all exceptions enabled.  Note that
++   just evaluating this value will set the processor into 'FPU
++   exceptions imprecise recoverable' mode, which may cause a significant
++   performance penalty (but have no other visible effect).  */
++extern const fenv_t *__fe_nomask_env (void);
++# define FE_NOMASK_ENV	(__fe_nomask_env ())
++#endif
+diff --git a/libc/sysdeps/linux/powerpc/bits/e500/fenvinline.h b/libc/sysdeps/linux/powerpc/bits/e500/fenvinline.h
+new file mode 100644
+index 000000000..8dee09d18
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/e500/fenvinline.h
+@@ -0,0 +1,2 @@
++/* We don't need no stinking inline versions.  Life is hard enough as it
++   is with this hybrid soft/hard float business.  */
+diff --git a/libc/sysdeps/linux/powerpc/bits/e500/mathdef.h b/libc/sysdeps/linux/powerpc/bits/e500/mathdef.h
+new file mode 100644
+index 000000000..4a698e96c
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/e500/mathdef.h
+@@ -0,0 +1,84 @@
++/* Copyright (C) 1997,1998,1999,2000,2003 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#if !defined _MATH_H && !defined _COMPLEX_H
++# error "Never use <bits/mathdef.h> directly; include <math.h> instead"
++#endif
++
++
++/* FIXME! This file describes properties of the compiler, not the machine;
++   it should not be part of libc!
++
++   FIXME! This file does not deal with the -fshort-double option of
++   gcc! */
++
++#if defined __USE_ISOC99 && defined _MATH_H && !defined _MATH_H_MATHDEF
++# define _MATH_H_MATHDEF	1
++
++# ifdef __GNUC__
++#  if __STDC__ == 1
++
++/* In GNU or ANSI mode, gcc leaves `float' expressions as-is.  */
++typedef float float_t;		/* `float' expressions are evaluated as
++				   `float'.  */
++typedef double double_t;	/* `double' expressions are evaluated as
++				   `double'.  */
++
++/* Define `INFINITY' as value of type `float'.  */
++# ifndef __UCLIBC__
++#   define INFINITY	HUGE_VALF
++# endif
++
++#  else
++
++/* For `gcc -traditional', `float' expressions are evaluated as `double'. */
++typedef double float_t;		/* `float' expressions are evaluated as
++				   `double'.  */
++typedef double double_t;	/* `double' expressions are evaluated as
++				   `double'.  */
++
++/* Define `INFINITY' as value of type `float'.  */
++# ifndef __UCLIBC__
++#   define INFINITY	HUGE_VALF
++#  endif
++
++#  endif
++# else
++
++/* Wild guess at types for float_t and double_t. */
++typedef double float_t;
++typedef double double_t;
++
++/* Define `INFINITY' as value of type `float'.  */
++# ifndef __UCLIBC__
++#  define INFINITY	HUGE_VALF
++#  endif
++
++# endif
++
++/* The values returned by `ilogb' for 0 and NaN respectively.  */
++# define FP_ILOGB0	(-2147483647)
++# define FP_ILOGBNAN	(2147483647)
++
++#endif	/* ISO C99 */
++
++#ifndef __NO_LONG_DOUBLE_MATH
++/* Signal that we do not really have a `long double'.  The disables the
++   declaration of all the `long double' function variants.  */
++# define __NO_LONG_DOUBLE_MATH	1
++#endif
+diff --git a/libc/sysdeps/linux/powerpc/bits/e500/mathinline.h b/libc/sysdeps/linux/powerpc/bits/e500/mathinline.h
+new file mode 100644
+index 000000000..ebd8ec4a3
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/bits/e500/mathinline.h
+@@ -0,0 +1,2 @@
++/* Inline?  You've got to be kidding me.  We'll take the library functions
++   any day.  */
+diff --git a/libc/sysdeps/linux/powerpc/__longjmp.S b/libc/sysdeps/linux/powerpc/classic/__longjmp.S
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/__longjmp.S
+rename to libc/sysdeps/linux/powerpc/classic/__longjmp.S
+diff --git a/libc/sysdeps/linux/powerpc/fpu_control.h b/libc/sysdeps/linux/powerpc/classic/fpu_control.h
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/fpu_control.h
+rename to libc/sysdeps/linux/powerpc/classic/fpu_control.h
+diff --git a/libc/sysdeps/linux/powerpc/setjmp.S b/libc/sysdeps/linux/powerpc/classic/setjmp.S
+similarity index 100%
+rename from libc/sysdeps/linux/powerpc/setjmp.S
+rename to libc/sysdeps/linux/powerpc/classic/setjmp.S
+diff --git a/libc/sysdeps/linux/powerpc/e500/__longjmp.S b/libc/sysdeps/linux/powerpc/e500/__longjmp.S
+new file mode 100644
+index 000000000..8161f869d
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/e500/__longjmp.S
+@@ -0,0 +1,86 @@
++/* longjmp for PowerPC e500
++   Copyright (C) 1995, 1996, 1997, 1999, 2000, 2004
++   Free Software Foundation, Inc.
++   Contributed by Aldy Hernandez <aldyh@redhat.com>.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <features.h>
++#include "ppc_asm.h"
++#define _ASM
++#define _SETJMP_H
++#include <bits/setjmp.h>
++
++
++#if defined __UCLIBC_HAS_FLOATS__ && ! defined __UCLIBC_HAS_SOFT_FLOAT__
++#define FP(x...) x
++#else
++#define FP(x...)
++#endif
++
++.globl      __longjmp;
++.type      __longjmp, @function;
++.align  2;
++
++__longjmp:    
++	lwz r1,(JB_GPR1*4)(r3)
++	lwz r2,(JB_GPR2*4)(r3)
++	lwz r0,(JB_LR*4)(r3)
++	lwz r14,((JB_GPRS+0)*4)(r3)
++FP(	evldd r14,((JB_FPRS+0*2)*4)(r3))
++	lwz r15,((JB_GPRS+1)*4)(r3)
++FP(	evldd r15,((JB_FPRS+1*2)*4)(r3))
++	lwz r16,((JB_GPRS+2)*4)(r3)
++FP(	evldd r16,((JB_FPRS+2*2)*4)(r3))
++	lwz r17,((JB_GPRS+3)*4)(r3)
++FP(	evldd r17,((JB_FPRS+3*2)*4)(r3))
++	lwz r18,((JB_GPRS+4)*4)(r3)
++FP(	evldd r18,((JB_FPRS+4*2)*4)(r3))
++	lwz r19,((JB_GPRS+5)*4)(r3)
++FP(	evldd r19,((JB_FPRS+5*2)*4)(r3))
++	lwz r20,((JB_GPRS+6)*4)(r3)
++FP(	evldd r20,((JB_FPRS+6*2)*4)(r3))
++	mtlr r0
++	lwz r21,((JB_GPRS+7)*4)(r3)
++FP(	evldd r21,((JB_FPRS+7*2)*4)(r3))
++	lwz r22,((JB_GPRS+8)*4)(r3)
++FP(	evldd r22,((JB_FPRS+8*2)*4)(r3))
++	lwz r0,(JB_CR*4)(r3)
++	lwz r23,((JB_GPRS+9)*4)(r3)
++FP(	evldd r23,((JB_FPRS+9*2)*4)(r3))
++	lwz r24,((JB_GPRS+10)*4)(r3)
++FP(	evldd r24,((JB_FPRS+10*2)*4)(r3))
++	lwz r25,((JB_GPRS+11)*4)(r3)
++FP(	evldd r25,((JB_FPRS+11*2)*4)(r3))
++	mtcrf 0xFF,r0
++	lwz r26,((JB_GPRS+12)*4)(r3)
++FP(	evldd r26,((JB_FPRS+12*2)*4)(r3))
++	lwz r27,((JB_GPRS+13)*4)(r3)
++FP(	evldd r27,((JB_FPRS+13*2)*4)(r3))
++	lwz r28,((JB_GPRS+14)*4)(r3)
++FP(	evldd r28,((JB_FPRS+14*2)*4)(r3))
++	lwz r29,((JB_GPRS+15)*4)(r3)
++FP(	evldd r29,((JB_FPRS+15*2)*4)(r3))
++	lwz r30,((JB_GPRS+16)*4)(r3)
++FP(	evldd r30,((JB_FPRS+16*2)*4)(r3))
++	lwz r31,((JB_GPRS+17)*4)(r3)
++FP(	evldd r31,((JB_FPRS+17*2)*4)(r3))
++	mr r3,r4
++	blr
++.size     __longjmp,.-__longjmp
++
++libc_hidden_def(__longjmp)
+diff --git a/libc/sysdeps/linux/powerpc/e500/fenv_top.h b/libc/sysdeps/linux/powerpc/e500/fenv_top.h
+new file mode 100644
+index 000000000..8a06f024e
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/e500/fenv_top.h
+@@ -0,0 +1,136 @@
++/* Copyright (C) 1997, 1999, 2000 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++/*
++ * ISO C99 7.6: Floating-point environment	<fenv.h>
++ */
++
++#ifndef _FENV_H
++#define _FENV_H	1
++
++#include <features.h>
++
++/* Get the architecture dependend definitions.  The following definitions
++   are expected to be done:
++
++   fenv_t	type for object representing an entire floating-point
++		environment
++
++   FE_DFL_ENV	macro of type pointer to fenv_t to be used as the argument
++		to functions taking an argument of type fenv_t; in this
++		case the default environment will be used
++
++   fexcept_t	type for object representing the floating-point exception
++		flags including status associated with the flags
++
++   The following macros are defined iff the implementation supports this
++   kind of exception.
++   FE_INEXACT		inexact result
++   FE_DIVBYZERO		division by zero
++   FE_UNDERFLOW		result not representable due to underflow
++   FE_OVERFLOW		result not representable due to overflow
++   FE_INVALID		invalid operation
++
++   FE_ALL_EXCEPT	bitwise OR of all supported exceptions
++
++   The next macros are defined iff the appropriate rounding mode is
++   supported by the implementation.
++   FE_TONEAREST		round to nearest
++   FE_UPWARD		round toward +Inf
++   FE_DOWNWARD		round toward -Inf
++   FE_TOWARDZERO	round toward 0
++*/
++#include <bits/fenv.h>
++
++__BEGIN_DECLS
++
++/* Floating-point exception handling.  */
++
++/* Clear the supported exceptions represented by EXCEPTS.  */
++extern int feclearexcept (int __excepts) __THROW;
++
++/* Store implementation-defined representation of the exception flags
++   indicated by EXCEPTS in the object pointed to by FLAGP.  */
++extern int fegetexceptflag (fexcept_t *__flagp, int __excepts) __THROW;
++
++/* Raise the supported exceptions represented by EXCEPTS.  */
++extern int feraiseexcept (int __excepts) __THROW;
++
++/* Set complete status for exceptions indicated by EXCEPTS according to
++   the representation in the object pointed to by FLAGP.  */
++extern int fesetexceptflag (__const fexcept_t *__flagp, int __excepts) __THROW;
++
++/* Determine which of subset of the exceptions specified by EXCEPTS are
++   currently set.  */
++extern int fetestexcept (int __excepts) __THROW;
++
++
++/* Rounding control.  */
++
++/* Get current rounding direction.  */
++extern int fegetround (void) __THROW;
++
++/* Establish the rounding direction represented by ROUND.  */
++extern int fesetround (int __rounding_direction) __THROW;
++
++
++/* Floating-point environment.  */
++
++/* Store the current floating-point environment in the object pointed
++   to by ENVP.  */
++extern int fegetenv (fenv_t *__envp) __THROW;
++
++/* Save the current environment in the object pointed to by ENVP, clear
++   exception flags and install a non-stop mode (if available) for all
++   exceptions.  */
++extern int feholdexcept (fenv_t *__envp) __THROW;
++
++/* Establish the floating-point environment represented by the object
++   pointed to by ENVP.  */
++extern int fesetenv (__const fenv_t *__envp) __THROW;
++
++/* Save current exceptions in temporary storage, install environment
++   represented by object pointed to by ENVP and raise exceptions
++   according to saved exceptions.  */
++extern int feupdateenv (__const fenv_t *__envp) __THROW;
++
++
++/* Include optimization.  */
++#ifdef __OPTIMIZE__
++# include <bits/fenvinline.h>
++#endif
++
++#ifdef __USE_GNU
++
++/* Enable individual exceptions.  Will not enable more exceptions than
++   EXCEPTS specifies.  Returns the previous enabled exceptions if all
++   exceptions are successfully set, otherwise returns -1.  */
++extern int feenableexcept (int __excepts) __THROW;
++
++/* Disable individual exceptions.  Will not disable more exceptions than
++   EXCEPTS specifies.  Returns the previous enabled exceptions if all
++   exceptions are successfully disabled, otherwise returns -1.  */
++extern int fedisableexcept (int __excepts) __THROW;
++
++/* Return enabled exceptions.  */
++extern int fegetexcept (void) __THROW;
++#endif
++
++__END_DECLS
++
++#endif /* fenv.h */
+diff --git a/libc/sysdeps/linux/powerpc/e500/fpu_control.h b/libc/sysdeps/linux/powerpc/e500/fpu_control.h
+new file mode 100644
+index 000000000..10e8506ad
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/e500/fpu_control.h
+@@ -0,0 +1,66 @@
++/* FPU control word definitions.  PowerPC e500 version.
++   Copyright (C) 1996, 1997, 1998, 2004 Free Software Foundation, Inc.
++   This file is part of the GNU C Library.
++   Contributed by Aldy Hernandez <aldyh@redhat.com>, 2004.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#ifndef _FPU_CONTROL_H
++#define _FPU_CONTROL_H
++
++/* rounding control */
++#define _FPU_RC_NEAREST 0x00   /* RECOMMENDED */
++#define _FPU_RC_DOWN    0x03
++#define _FPU_RC_UP      0x02
++#define _FPU_RC_ZERO    0x01
++
++#define _FPU_MASK_NI  0x04 /* non-ieee mode */
++
++/* masking of interrupts */
++#define _FPU_MASK_ZM  0x10 /* zero divide */
++#define _FPU_MASK_OM  0x40 /* overflow */
++#define _FPU_MASK_UM  0x20 /* underflow */
++#define _FPU_MASK_XM  0x08 /* inexact */
++#define _FPU_MASK_IM  0x80 /* invalid operation */
++
++#define _FPU_RESERVED 0xff3fff7f /* These bits are reserved are not changed. */
++
++/* The fdlibm code requires no interrupts for exceptions.  */
++#define _FPU_DEFAULT  0x00000000 /* Default value.  */
++
++/* IEEE:  same as above, but (some) exceptions;
++   we leave the 'inexact' exception off.
++ */
++#define _FPU_IEEE     0x000003c0
++
++/* Type of the control word.  */
++typedef unsigned int fpu_control_t __attribute__ ((__mode__ (__SI__)));
++
++/* Macros for accessing the hardware control word.  */
++#define _FPU_GETCW(__cw) ({ \
++  unsigned int env; \
++  asm volatile ("mfspefscr %0" : "=r" (env)); \
++  (__cw) = env; })
++#define _FPU_SETCW(__cw) ({ \
++  unsigned int env = __cw; \
++  asm volatile ("mtspefscr %0" : : "r" (env)); })
++
++#if 0
++/* Default control word set at startup.  */
++extern fpu_control_t __fpu_control;
++#endif
++
++#endif /* _FPU_CONTROL_H */
+diff --git a/libc/sysdeps/linux/powerpc/e500/setjmp.S b/libc/sysdeps/linux/powerpc/e500/setjmp.S
+new file mode 100644
+index 000000000..6b3bbfbd6
+--- /dev/null
++++ b/libc/sysdeps/linux/powerpc/e500/setjmp.S
+@@ -0,0 +1,84 @@
++/* setjmp for PowerPC e500.
++   Copyright (C) 1995, 1996, 1997, 1999, 2000, 2004
++   Free Software Foundation, Inc.
++   Contributed by Aldy Hernandez <aldyh@redhat.com>.
++   This file is part of the GNU C Library.
++
++   The GNU C Library is free software; you can redistribute it and/or
++   modify it under the terms of the GNU Lesser General Public
++   License as published by the Free Software Foundation; either
++   version 2.1 of the License, or (at your option) any later version.
++
++   The GNU C Library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++   Lesser General Public License for more details.
++
++   You should have received a copy of the GNU Lesser General Public
++   License along with the GNU C Library; if not, write to the Free
++   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++   02111-1307 USA.  */
++
++#include <features.h>
++#include "ppc_asm.h"
++#define _ASM
++#define _SETJMP_H
++#include <bits/setjmp.h>
++
++#if defined __UCLIBC_HAS_FLOATS__ && ! defined __UCLIBC_HAS_SOFT_FLOAT__
++#define FP(x...) x
++#else
++#define FP(x...)
++#endif
++
++.globl      __sigsetjmp;
++.type      __sigsetjmp, @function;
++.align  2;        
++
++__sigsetjmp:   
++	stw  r1,(JB_GPR1*4)(3)
++	mflr r0
++	stw  r2,(JB_GPR2*4)(3)
++	stw  r14,((JB_GPRS+0)*4)(3)
++FP(	evstdd r14,((JB_FPRS+0*2)*4)(3))
++	stw  r0,(JB_LR*4)(3)
++	stw  r15,((JB_GPRS+1)*4)(3)
++FP(	evstdd r15,((JB_FPRS+1*2)*4)(3))
++	mfcr r0
++	stw  r16,((JB_GPRS+2)*4)(3)
++FP(	evstdd r16,((JB_FPRS+2*2)*4)(3))
++	stw  r0,(JB_CR*4)(3)
++	stw  r17,((JB_GPRS+3)*4)(3)
++FP(	evstdd r17,((JB_FPRS+3*2)*4)(3))
++	stw  r18,((JB_GPRS+4)*4)(3)
++FP(	evstdd r18,((JB_FPRS+4*2)*4)(3))
++	stw  r19,((JB_GPRS+5)*4)(3)
++FP(	evstdd r19,((JB_FPRS+5*2)*4)(3))
++	stw  r20,((JB_GPRS+6)*4)(3)
++FP(	evstdd r20,((JB_FPRS+6*2)*4)(3))
++	stw  r21,((JB_GPRS+7)*4)(3)
++FP(	evstdd r21,((JB_FPRS+7*2)*4)(3))
++	stw  r22,((JB_GPRS+8)*4)(3)
++FP(	evstdd r22,((JB_FPRS+8*2)*4)(3))
++	stw  r23,((JB_GPRS+9)*4)(3)
++FP(	evstdd r23,((JB_FPRS+9*2)*4)(3))
++	stw  r24,((JB_GPRS+10)*4)(3)
++FP(	evstdd r24,((JB_FPRS+10*2)*4)(3))
++	stw  r25,((JB_GPRS+11)*4)(3)
++FP(	evstdd r25,((JB_FPRS+11*2)*4)(3))
++	stw  r26,((JB_GPRS+12)*4)(3)
++FP(	evstdd r26,((JB_FPRS+12*2)*4)(3))
++	stw  r27,((JB_GPRS+13)*4)(3)
++FP(	evstdd r27,((JB_FPRS+13*2)*4)(3))
++	stw  r28,((JB_GPRS+14)*4)(3)
++FP(	evstdd r28,((JB_FPRS+14*2)*4)(3))
++	stw  r29,((JB_GPRS+15)*4)(3)
++FP(	evstdd r29,((JB_FPRS+15*2)*4)(3))
++	stw  r30,((JB_GPRS+16)*4)(3)
++FP(	evstdd r30,((JB_FPRS+16*2)*4)(3))
++	stw  r31,((JB_GPRS+17)*4)(3)
++FP(	evstdd r31,((JB_FPRS+17*2)*4)(3))
++
++	b __sigjmp_save@local
++
++.size     __sigsetjmp,.-__sigsetjmp

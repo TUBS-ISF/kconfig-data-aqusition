@@ -1,0 +1,255 @@
+"2011-01-25 23:21:46 +0100"
+diff --git a/Config.in b/Config.in
+index 1109b1016..0ae48e9fe 100644
+--- a/Config.in
++++ b/Config.in
+@@ -284,10 +284,19 @@ config FEATURE_CLEAN_UP
+ 	  Don't enable this unless you have a really good reason to clean
+ 	  things up manually.
+ 
++config FEATURE_UTMP
++	bool "Support utmp file"
++	default y
++	help
++	  The file /var/run/utmp is used to track who is currently logged in.
++	  With this option on, certain applets (getty, login, telnetd etc)
++	  will create and delete entries there.
++	  "who" applet requires this option.
++
+ config FEATURE_WTMP
+ 	bool "Support wtmp file"
+ 	default y
+-	select FEATURE_UTMP
++	depends on FEATURE_UTMP
+ 	help
+ 	  The file /var/run/wtmp is used to track when users have logged into
+ 	  and logged out of the system.
+@@ -295,15 +304,6 @@ config FEATURE_WTMP
+ 	  will append new entries there.
+ 	  "last" applet requires this option.
+ 
+-config FEATURE_UTMP
+-	bool "Support utmp file"
+-	default y
+-	help
+-	  The file /var/run/utmp is used to track who is currently logged in.
+-	  With this option on, certain applets (getty, login, telnetd etc)
+-	  will create and delete entries there.
+-	  "who" applet requires this option.
+-
+ config FEATURE_PIDFILE
+ 	bool "Support writing pidfiles"
+ 	default y
+diff --git a/coreutils/who.c b/coreutils/who.c
+index 8384d9534..ab1e30fc8 100644
+--- a/coreutils/who.c
++++ b/coreutils/who.c
+@@ -19,7 +19,6 @@
+ /* BB_AUDIT SUSv3 _NOT_ compliant -- missing options -b, -d, -l, -m, -p, -q, -r, -s, -t, -T, -u; Missing argument 'file'.  */
+ 
+ #include "libbb.h"
+-#include <utmp.h>
+ 
+ static void idle_string(char *str6, time_t t)
+ {
+diff --git a/include/libbb.h b/include/libbb.h
+index 32e25a8d4..182b47988 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -50,6 +50,9 @@
+ # include <selinux/flask.h>
+ # include <selinux/av_permissions.h>
+ #endif
++#if ENABLE_FEATURE_UTMP
++# include <utmp.h>
++#endif
+ #if ENABLE_LOCALE_SUPPORT
+ # include <locale.h>
+ #else
+diff --git a/init/halt.c b/init/halt.c
+index f853ba4a1..a84a72747 100644
+--- a/init/halt.c
++++ b/init/halt.c
+@@ -74,7 +74,6 @@
+ 
+ #if ENABLE_FEATURE_WTMP
+ #include <sys/utsname.h>
+-#include <utmp.h>
+ 
+ static void write_wtmp(void)
+ {
+diff --git a/init/init.c b/init/init.c
+index d8e180746..586e34a18 100644
+--- a/init/init.c
++++ b/init/init.c
+@@ -115,9 +115,6 @@
+ #ifdef __linux__
+ #include <linux/vt.h>
+ #endif
+-#if ENABLE_FEATURE_UTMP
+-# include <utmp.h> /* DEAD_PROCESS */
+-#endif
+ #include "reboot.h" /* reboot() constants */
+ 
+ /* Used only for sanitizing purposes in set_sane_term() below. On systems where
+diff --git a/libbb/messages.c b/libbb/messages.c
+index 66e466ffa..2acbc3bca 100644
+--- a/libbb/messages.c
++++ b/libbb/messages.c
+@@ -48,15 +48,16 @@ const int const_int_1 = 1;
+  * and it will end up in bss */
+ const int const_int_0 = 0;
+ 
+-#include <utmp.h>
++#if ENABLE_FEATURE_WTMP
+ /* This is usually something like "/var/adm/wtmp" or "/var/log/wtmp" */
+ const char bb_path_wtmp_file[] ALIGN1 =
+-#if defined _PATH_WTMP
++# if defined _PATH_WTMP
+ 	_PATH_WTMP;
+-#elif defined WTMP_FILE
++# elif defined WTMP_FILE
+ 	WTMP_FILE;
+-#else
+-#error unknown path to wtmp file
++# else
++#  error unknown path to wtmp file
++# endif
+ #endif
+ 
+ /* We use it for "global" data via *(struct global*)&bb_common_bufsiz1.
+diff --git a/libbb/utmp.c b/libbb/utmp.c
+index 2bf9c11f2..09443fb6c 100644
+--- a/libbb/utmp.c
++++ b/libbb/utmp.c
+@@ -7,7 +7,6 @@
+  * Licensed under GPLv2, see file LICENSE in this source tree.
+  */
+ #include "libbb.h"
+-#include <utmp.h>
+ 
+ static void touch(const char *filename)
+ {
+diff --git a/loginutils/adduser.c b/loginutils/adduser.c
+index 1a9949e97..d938b80f3 100644
+--- a/loginutils/adduser.c
++++ b/loginutils/adduser.c
+@@ -78,11 +78,11 @@ static void addgroup_wrapper(struct passwd *p, const char *group_name)
+ 	free(cmd);
+ }
+ 
+-static void passwd_wrapper(const char *login) NORETURN;
++static void passwd_wrapper(const char *login_name) NORETURN;
+ 
+-static void passwd_wrapper(const char *login)
++static void passwd_wrapper(const char *login_name)
+ {
+-	BB_EXECLP("passwd", "passwd", login, NULL);
++	BB_EXECLP("passwd", "passwd", login_name, NULL);
+ 	bb_error_msg_and_die("can't execute passwd, you must set password manually");
+ }
+ 
+diff --git a/loginutils/getty.c b/loginutils/getty.c
+index becff5c78..b71d68a1f 100644
+--- a/loginutils/getty.c
++++ b/loginutils/getty.c
+@@ -24,9 +24,6 @@
+ 
+ #include "libbb.h"
+ #include <syslog.h>
+-#if ENABLE_FEATURE_UTMP
+-# include <utmp.h> /* LOGIN_PROCESS */
+-#endif
+ #ifndef IUCLC
+ # define IUCLC 0
+ #endif
+diff --git a/loginutils/login.c b/loginutils/login.c
+index c285b45a1..952b3aadd 100644
+--- a/loginutils/login.c
++++ b/loginutils/login.c
+@@ -4,9 +4,6 @@
+  */
+ #include "libbb.h"
+ #include <syslog.h>
+-#if ENABLE_FEATURE_UTMP
+-# include <utmp.h> /* USER_PROCESS */
+-#endif
+ #include <sys/resource.h>
+ 
+ #if ENABLE_SELINUX
+diff --git a/miscutils/last.c b/miscutils/last.c
+index fec5b70a8..12457b157 100644
+--- a/miscutils/last.c
++++ b/miscutils/last.c
+@@ -8,7 +8,6 @@
+  */
+ 
+ #include "libbb.h"
+-#include <utmp.h>
+ 
+ /* NB: ut_name and ut_user are the same field, use only one name (ut_user)
+  * to reduce confusion */
+diff --git a/miscutils/last_fancy.c b/miscutils/last_fancy.c
+index 7e69fc281..7e61b7691 100644
+--- a/miscutils/last_fancy.c
++++ b/miscutils/last_fancy.c
+@@ -8,7 +8,6 @@
+  */
+ 
+ #include "libbb.h"
+-#include <utmp.h>
+ 
+ /* NB: ut_name and ut_user are the same field, use only one name (ut_user)
+  * to reduce confusion */
+diff --git a/miscutils/runlevel.c b/miscutils/runlevel.c
+index 363e45049..7024361e7 100644
+--- a/miscutils/runlevel.c
++++ b/miscutils/runlevel.c
+@@ -12,7 +12,6 @@
+  * initially busyboxified by Bernhard Reutner-Fischer
+  */
+ #include "libbb.h"
+-#include <utmp.h>
+ 
+ int runlevel_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int runlevel_main(int argc UNUSED_PARAM, char **argv)
+diff --git a/miscutils/wall.c b/miscutils/wall.c
+index eecfc166b..0a2b89e5e 100644
+--- a/miscutils/wall.c
++++ b/miscutils/wall.c
+@@ -7,7 +7,6 @@
+  */
+ 
+ #include "libbb.h"
+-#include <utmp.h>
+ 
+ int wall_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int wall_main(int argc UNUSED_PARAM, char **argv)
+diff --git a/networking/telnetd.c b/networking/telnetd.c
+index 07c6a6a73..eec4417ca 100644
+--- a/networking/telnetd.c
++++ b/networking/telnetd.c
+@@ -31,10 +31,6 @@
+ #endif
+ #include <arpa/telnet.h>
+ 
+-#if ENABLE_FEATURE_UTMP
+-# include <utmp.h> /* LOGIN_PROCESS */
+-#endif
+-
+ 
+ struct tsession {
+ 	struct tsession *next;
+diff --git a/shell/ash.c b/shell/ash.c
+index 298ba3558..0bcbf9028 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -4944,6 +4944,8 @@ stoppedjobs(void)
+  * Code for dealing with input/output redirection.
+  */
+ 
++#undef EMPTY
++#undef CLOSED
+ #define EMPTY -2                /* marks an unused slot in redirtab */
+ #define CLOSED -3               /* marks a slot of previously-closed fd */
+ 

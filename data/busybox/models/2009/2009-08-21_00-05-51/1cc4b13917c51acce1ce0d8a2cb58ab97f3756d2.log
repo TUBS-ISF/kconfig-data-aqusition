@@ -1,0 +1,135 @@
+"2009-08-21 00:05:51 +0200"
+diff --git a/TODO b/TODO
+index 732078da5..0cbca8d8a 100644
+--- a/TODO
++++ b/TODO
+@@ -16,14 +16,10 @@ Rob Landley suggested these:
+   Figure out where we need utf8 support, and add it.
+ 
+   sh
+-    The command shell situation is a big mess.  We have three different
++    The command shell situation is a mess.  We have two different
+     shells that don't really share any code, and the "standalone shell" doesn't
+     work all that well (especially not in a chroot environment), due to apps not
+     being reentrant.
+-    lash is phased out. hush can be configured down to be nearly as small,
+-    but less buggy :)
+-  init
+-    General cleanup (should use ENABLE_FEATURE_INIT_SYSLOG).
+   Do a SUSv3 audit
+     Look at the full Single Unix Specification version 3 (available online at
+     "http://www.opengroup.org/onlinepubs/009695399/nfindex.html") and
+@@ -265,7 +261,7 @@ Minor stuff:
+ ---
+   possible code duplication ingroup() and is_a_group_member()
+ ---
+-  Move __get_hz() to a better place and (re)use it in route.c, ash.c, msh.c
++  Move __get_hz() to a better place and (re)use it in route.c, ash.c
+ ---
+   See grep -r strtod
+   Alot of duplication that wants cleanup.
+diff --git a/include/applets.h b/include/applets.h
+index cb1ed567f..d4fbbc95c 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -347,7 +347,6 @@ IF_SETSID(APPLET(setsid, _BB_DIR_USR_BIN, _BB_SUID_DROP))
+ IF_SETUIDGID(APPLET_ODDNAME(setuidgid, chpst, _BB_DIR_USR_BIN, _BB_SUID_DROP, setuidgid))
+ IF_FEATURE_SH_IS_ASH(APPLET_ODDNAME(sh, ash, _BB_DIR_BIN, _BB_SUID_DROP, sh))
+ IF_FEATURE_SH_IS_HUSH(APPLET_ODDNAME(sh, hush, _BB_DIR_BIN, _BB_SUID_DROP, sh))
+-IF_FEATURE_SH_IS_MSH(APPLET_ODDNAME(sh, msh, _BB_DIR_BIN, _BB_SUID_DROP, sh))
+ IF_SHA1SUM(APPLET_ODDNAME(sha1sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_DROP, sha1sum))
+ IF_SHA256SUM(APPLET_ODDNAME(sha256sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_DROP, sha256sum))
+ IF_SHA512SUM(APPLET_ODDNAME(sha512sum, md5_sha1_sum, _BB_DIR_USR_BIN, _BB_SUID_DROP, sha512sum))
+diff --git a/include/usage.h b/include/usage.h
+index 81ddbd23c..8a5c7a088 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -119,13 +119,10 @@
+ #define ash_full_usage ""
+ #define hush_trivial_usage NOUSAGE_STR
+ #define hush_full_usage ""
++#define lash_trivial_usage NOUSAGE_STR
++#define lash_full_usage ""
+ #define msh_trivial_usage NOUSAGE_STR
+ #define msh_full_usage ""
+-#define bbsh_trivial_usage \
+-       "[FILE]...\n" \
+-       "or: bbsh -c command [args]..."
+-#define bbsh_full_usage "\n\n" \
+-       "The bbsh shell (command interpreter)"
+ 
+ #define awk_trivial_usage \
+        "[OPTIONS] [AWK_PROGRAM] [FILE]..."
+@@ -3904,12 +3901,6 @@
+        "and will not be affected by keyboard signals (Ctrl-C etc).\n" \
+        "See setsid(2) for details." \
+ 
+-#define lash_trivial_usage \
+-       "[FILE]...\n" \
+-       "or: sh -c command [args]..."
+-#define lash_full_usage "\n\n" \
+-       "lash is deprecated, please use hush"
+-
+ #define last_trivial_usage \
+        ""IF_FEATURE_LAST_FANCY("[-HW] [-f file]")
+ #define last_full_usage "\n\n" \
+diff --git a/shell/Config.in b/shell/Config.in
+index 126dba8e5..cf151933b 100644
+--- a/shell/Config.in
++++ b/shell/Config.in
+@@ -24,9 +24,9 @@ config FEATURE_SH_IS_HUSH
+ ####	select LASH
+ ####	bool "lash"
+ 
+-config FEATURE_SH_IS_MSH
+-	select MSH
+-	bool "msh"
++####config FEATURE_SH_IS_MSH
++####	select MSH
++####	bool "msh"
+ 
+ config FEATURE_SH_IS_NONE
+ 	bool "none"
+@@ -260,6 +260,7 @@ config LASH
+ config MSH
+ 	bool "msh (deprecated: please use hush)"
+ 	default n
++	select HUSH
+ 	help
+ 	  msh is deprecated and will be removed, please migrate to hush.
+ 	  If there is a feature msh has but hush does not, please let us know.
+diff --git a/shell/Kbuild b/shell/Kbuild
+index 8b693ecc3..4d4741eff 100644
+--- a/shell/Kbuild
++++ b/shell/Kbuild
+@@ -7,6 +7,5 @@
+ lib-y:=
+ lib-$(CONFIG_ASH)      += ash.o ash_ptr_hack.o
+ lib-$(CONFIG_HUSH)     += hush.o match.o
+-lib-$(CONFIG_MSH)      += msh.o
+ lib-$(CONFIG_CTTYHACK) += cttyhack.o
+ lib-$(CONFIG_SH_MATH_SUPPORT) += math.o
+diff --git a/shell/hush.c b/shell/hush.c
+index 5698bb5a5..7ac29ace2 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -6746,6 +6746,15 @@ int lash_main(int argc, char **argv)
+ }
+ #endif
+ 
++#if ENABLE_MSH
++int msh_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
++int msh_main(int argc, char **argv)
++{
++	//bb_error_msg("msh is deprecated, please use hush instead");
++	return hush_main(argc, argv);
++}
++#endif
++
+ 
+ /*
+  * Built-ins
+diff --git a/shell/msh.c b/shell/msh_unused.c
+similarity index 100%
+rename from shell/msh.c
+rename to shell/msh_unused.c

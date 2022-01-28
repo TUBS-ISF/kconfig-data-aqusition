@@ -1,0 +1,210 @@
+"2016-11-29 08:38:20 +0100"
+diff --git a/Makefile.in b/Makefile.in
+index b79314f34..cb858f6da 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -34,7 +34,6 @@ include $(top_srcdir)ldso/Makefile.in
+ include $(top_srcdir)libcrypt/Makefile.in
+ include $(top_srcdir)libintl/Makefile.in
+ include $(top_srcdir)libm/Makefile.in
+-include $(top_srcdir)libresolv/Makefile.in
+ include $(top_srcdir)libutil/Makefile.in
+ include $(top_srcdir)libpthread/Makefile.in
+ include $(top_srcdir)librt/Makefile.in
+@@ -362,7 +361,7 @@ else
+ 	$(Q)cd $(PREFIX)$(DEVEL_PREFIX)include && $(RM) -f wchar-stub.h
+ endif
+ 
+-EMPTY_LIB_NAMES = dl nsl
++EMPTY_LIB_NAMES = dl nsl resolv
+ ifeq ($(DO_C99_MATH),y)
+ EMPTY_LIB_NAMES += m
+ endif
+@@ -378,9 +377,6 @@ endif
+ ifeq ($(UCLIBC_HAS_LIBUTIL),y)
+ EMPTY_LIB_NAMES += util
+ endif
+-ifeq ($(UCLIBC_HAS_LIBRESOLV_STUB),y)
+-EMPTY_LIB_NAMES += resolv
+-endif
+ ifeq ($(UCLIBC_HAS_GETTEXT_AWARENESS),y)
+ EMPTY_LIB_NAMES += intl
+ endif
+diff --git a/Makerules b/Makerules
+index b169439b0..513aa8f91 100644
+--- a/Makerules
++++ b/Makerules
+@@ -43,7 +43,6 @@ $(eval $(call add_IS_IN_lib,libintl,$(libintl-a-y) $(libintl-so-y)))
+ $(eval $(call add_IS_IN_lib,libm,$(libm-a-y) $(libm-so-y)))
+ $(eval $(call add_IS_IN_lib,libpthread/$(PTNAME),$(libpthread-a-y) $(libpthread-so-y) $(libpthread-nonshared-y)))
+ $(eval $(call add_IS_IN_lib,libpthread/$(PTNAME)_db,$(libthread_db-a-y) $(libthread_db-so-y)))
+-$(eval $(call add_IS_IN_lib,libresolv,$(libresolv-a-y) $(libresolv-so-y)))
+ $(eval $(call add_IS_IN_lib,librt,$(librt-a-y) $(librt-so-y)))
+ $(eval $(call add_IS_IN_lib,libutil,$(libutil-a-y) $(libutil-so-y)))
+ $(eval $(call add_IS_IN_lib,libubacktrace,$(libubacktrace-a-y) $(libubacktrace-so-y)))
+@@ -53,14 +52,14 @@ shared_objs = $(libc-y:.o=.os) $(libc-shared-y) $(libc-nonshared-y) \
+ 	$(libcrypt-so-y) $(libdl-so-y) \
+ 	$(libintl-so-y) $(libm-so-y) \
+ 	$(libpthread-so-y) $(libpthread-nonshared-y) $(libthread_db-so-y) \
+-	$(libresolv-so-y) $(librt-so-y) \
++	$(librt-so-y) \
+ 	$(ldso-y) \
+ 	$(libutil-so-y) $(libubacktrace-so-y) $(libuargp-so-y)
+ 
+ ar_objs =  $(libc-y) $(libc-static-y) $(libcrypt-a-y) \
+ 	$(libdl-a-y) $(libintl-a-y) $(libm-a-y) \
+ 	$(libpthread-a-y) $(libthread_db-a-y) \
+-	$(libresolv-a-y) $(librt-a-y) $(libutil-a-y) $(libubacktrace-a-y) $(libuargp-a-y)
++	$(librt-a-y) $(libutil-a-y) $(libubacktrace-a-y) $(libuargp-a-y)
+ ifeq ($(DOPIC),y)
+ ar_objs := $(ar_objs:.o=.os)
+ endif
+@@ -477,7 +476,7 @@ files.dep := $(libc-a-y) $(libc-so-y) $(libc-nonshared-y) \
+ 	$(libthread_db-a-y) $(libthread_db-so-y) $(libpthread-generated-y) \
+ 	$(START_FILE-libpthread.so) $(END_FILE-libpthread.so) \
+ 	$(PTHREAD_INITFINI:.c=.s) \
+-	$(librt-a-y) $(librt-so-y)  $(libresolv-a-y) $(libresolv-so-y) \
++	$(librt-a-y) $(librt-so-y) \
+ 	$(libcrypt-a-y) $(libcrypt-so-y) $(libutil-a-y) $(libutil-so-y) \
+ 	$(ldso-y) $(libdl-a-y) $(libdl-so-y) \
+ 	$(libubacktrace-a-y) $(libubacktrace-so-y) $(libuargp-so-y) $(libuargp-a-y)
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 68b17aba8..b1ca3fac8 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -1367,11 +1367,6 @@ config UCLIBC_HAS_RESOLVER_SUPPORT
+ 	  ns_name_pack, ns_name_compress, ns_name_skip, dn_skipname,
+ 	  ns_get16, ns_get32, ns_put16, ns_put32
+ 
+-config UCLIBC_HAS_LIBRESOLV_STUB
+-	bool "Provide libresolv stub"
+-	help
+-	  Provide a dummy resolv library.
+-
+ endif
+ 
+ 
+diff --git a/include/libc-symbols.h b/include/libc-symbols.h
+index 21c4ee001..4449b6e6f 100644
+--- a/include/libc-symbols.h
++++ b/include/libc-symbols.h
+@@ -546,24 +546,6 @@ FIXME! - ?
+ # define libm_hidden_data_ver(local, name)
+ #endif
+ 
+-#if defined NOT_IN_libc && defined IS_IN_libresolv
+-# define libresolv_hidden_proto(name, attrs...) hidden_proto (name, ##attrs)
+-# define libresolv_hidden_def(name) hidden_def (name)
+-# define libresolv_hidden_weak(name) hidden_weak (name)
+-# define libresolv_hidden_ver(local, name) hidden_ver (local, name)
+-# define libresolv_hidden_data_def(name) hidden_data_def (name)
+-# define libresolv_hidden_data_weak(name) hidden_data_weak (name)
+-# define libresolv_hidden_data_ver(local, name) hidden_data_ver (local, name)
+-#else
+-# define libresolv_hidden_proto(name, attrs...)
+-# define libresolv_hidden_def(name)
+-# define libresolv_hidden_weak(name)
+-# define libresolv_hidden_ver(local, name)
+-# define libresolv_hidden_data_def(name)
+-# define libresolv_hidden_data_weak(name)
+-# define libresolv_hidden_data_ver(local, name)
+-#endif
+-
+ #if defined NOT_IN_libc && defined IS_IN_librt
+ # define librt_hidden_proto(name, attrs...) hidden_proto (name, ##attrs)
+ # define librt_hidden_def(name) hidden_def (name)
+diff --git a/libc/Makefile.in b/libc/Makefile.in
+index ef7bade56..e550f83a3 100644
+--- a/libc/Makefile.in
++++ b/libc/Makefile.in
+@@ -44,7 +44,6 @@ endif
+ 
+ libc-a-$(HAVE_SHARED) += $(libdl-a-y)
+ libc-a-$(DO_C99_MATH) += $(libm-a-y)
+-libc-a-$(UCLIBC_HAS_LIBRESOLV_STUB) += $(libresolv-a-y)
+ libc-a-$(UCLIBC_HAS_LIBUTIL) += $(libutil-a-y)
+ libc-a-$(UCLIBC_HAS_CRYPT) += $(libcrypt-a-y)
+ libc-a-$(UCLIBC_HAS_ARGP) += $(libuargp-a-y)
+@@ -57,7 +56,6 @@ libc-so-y = $(libc-y:.o=.os) $(libc-shared-y)
+ 
+ libc-so-y += $(libdl-so-y)
+ libc-so-$(DO_C99_MATH) += $(libm-so-y)
+-libc-so-$(UCLIBC_HAS_LIBRESOLV_STUB) += $(libresolv-so-y)
+ libc-so-$(UCLIBC_HAS_LIBUTIL) += $(libutil-so-y)
+ libc-so-$(UCLIBC_HAS_CRYPT) += $(libcrypt-so-y)
+ libc-so-$(UCLIBC_HAS_ARGP) += $(libuargp-so-y)
+diff --git a/libresolv/Makefile b/libresolv/Makefile
+deleted file mode 100644
+index c8dc9b466..000000000
+--- a/libresolv/Makefile
++++ /dev/null
+@@ -1,13 +0,0 @@
+-# Makefile for uClibc
+-#
+-# Copyright (C) 2000-2005 Erik Andersen <andersen@uclibc.org>
+-#
+-# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+-#
+-
+-top_srcdir=../
+-top_builddir=../
+-include $(top_builddir)Rules.mak
+-all: libs
+-include Makefile.in
+-include $(top_srcdir)Makerules
+diff --git a/libresolv/Makefile.in b/libresolv/Makefile.in
+deleted file mode 100644
+index 3425a7c73..000000000
+--- a/libresolv/Makefile.in
++++ /dev/null
+@@ -1,28 +0,0 @@
+-# Makefile for uClibc
+-#
+-# Copyright (C) 2000-2008 Erik Andersen <andersen@uclibc.org>
+-#
+-# Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+-#
+-
+-subdirs += libresolv
+-
+-CFLAGS-libresolv := -DNOT_IN_libc -DIS_IN_libresolv $(SSP_ALL_CFLAGS)
+-
+-libresolv_DIR := $(top_srcdir)libresolv
+-libresolv_OUT := $(top_builddir)libresolv
+-
+-libresolv_SRC := $(libresolv_DIR)/resolv.c
+-libresolv_OBJ := $(patsubst $(libresolv_DIR)/%.c,$(libresolv_OUT)/%.o,$(libresolv_SRC))
+-
+-ifeq ($(DOPIC),y)
+-libresolv-a-y := $(libresolv_OBJ:.o=.os)
+-else
+-libresolv-a-y := $(libresolv_OBJ)
+-endif
+-libresolv-so-y := $(libresolv_OBJ:.o=.os)
+-
+-objclean-y += CLEAN_libresolv
+-
+-CLEAN_libresolv:
+-	$(do_rm) $(addprefix $(libresolv_OUT)/*., o os a)
+diff --git a/libresolv/resolv.c b/libresolv/resolv.c
+deleted file mode 100644
+index 431996962..000000000
+--- a/libresolv/resolv.c
++++ /dev/null
+@@ -1,16 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * libresolv for uClibc
+- *
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-void __stub1(void);
+-void __stub1(void)
+-{
+-	return;
+-}
+-link_warning (__stub1, "the `libresolv' library is a stub.  Do you really need it?")
+-

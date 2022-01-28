@@ -1,0 +1,4183 @@
+"2018-08-20 14:36:18 +0200"
+diff --git a/src/Kconfig b/src/Kconfig
+index 8b04a3d..9f10817 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -2,22 +2,6 @@
+ 
+ mainmenu "Fiasco configuration"
+ 
+-config KERNELVERSION
+-	string
+-	option env="KERNELVERSION"
+-
+-config INCLUDE_PPC32
+-	bool
+-	option env="INCLUDE_PPC32"
+-	help
+-	  Use "INCLUDE_PPC32=y make config" to include ppc32 options.
+-
+-config INCLUDE_SPARC
+-	bool
+-	option env="INCLUDE_SPARC"
+-	help
+-	  Use "INCLUDE_SPARC=y make config" to include sparc options.
+-
+ # generic options that might be selected by platforms etc.
+ config HAS_FPU_OPTION
+ 	bool
+diff --git a/src/Makefile b/src/Makefile
+index 6652608..e560406 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -196,7 +196,7 @@ kconfig_call = $(MAKE) -C $(tooldir)/kconfig O=$(objbase) \
+ 	       KCONFIG_TRISTATE=include/config/tristate.conf \
+ 	       KCONFIG_CONFIG=globalconfig.out \
+ 	       KCONFIG_AUTOCONFIG=include/config/auto.conf \
+-	       KERNELVERSION=SVN MENUCONFIG_COLOR=blackbg \
++	       MENUCONFIG_COLOR=blackbg \
+ 	       INCLUDE_PPC32=$(INCLUDE_PPC32) \
+ 	       INCLUDE_SPARC=$(INCLUDE_SPARC) \
+ 	       fiasco_srcdir=$(srcdir)/..
+diff --git a/src/kern/ppc32/Kconfig b/src/kern/ppc32/Kconfig
+index 662a0cd..4f37add 100644
+--- a/src/kern/ppc32/Kconfig
++++ b/src/kern/ppc32/Kconfig
+@@ -1,7 +1,7 @@
+ # ARCH:         PPC32 ppc32
+ # ARCHDESCR:    PowerPC 32 processor family (Caution: INCOMPLETE!)
+ #
+-# ARCHDEPENDS:  EXPERIMENTAL && INCLUDE_PPC32
++# ARCHDEPENDS:  EXPERIMENTAL && "$(INCLUDE_PPC32)"
+ # ARCHSELECT:   CONTEXT_4K
+ # ARCHSELECT:   BIG_ENDIAN
+ # ARCHSELECT:   HAS_SERIAL_OPTION
+diff --git a/src/kern/sparc/Kconfig b/src/kern/sparc/Kconfig
+index c14ee60..42fb154 100644
+--- a/src/kern/sparc/Kconfig
++++ b/src/kern/sparc/Kconfig
+@@ -1,7 +1,7 @@
+ # ARCH:        SPARC sparc
+ # ARCHDESCR:   SPARC v8 processor family (Caution: EXPERIMENTAL)
+ #
+-# ARCHDEPENDS: EXPERIMENTAL && INCLUDE_SPARC
++# ARCHDEPENDS: EXPERIMENTAL && "$(INCLUDE_SPARC)"
+ # ARCHSELECT:  BIT32
+ # ARCHSELECT:  CONTEXT_4K
+ # ARCHSELECT:  HAS_SERIAL_OPTION
+diff --git a/tool/kconfig/Makefile b/tool/kconfig/Makefile
+index 77d9c71..9345482 100644
+--- a/tool/kconfig/Makefile
++++ b/tool/kconfig/Makefile
+@@ -1,6 +1,6 @@
+ # SPDX-License-Identifier: GPL-2.0
+ VERSION = 4
+-PATCHLEVEL = 17
++PATCHLEVEL = 18
+ SUBLEVEL = 0
+ EXTRAVERSION =
+ NAME = Merciless Moray
+@@ -316,12 +316,9 @@ SUBARCH := $(shell uname -m | sed -e s/i.86/x86/ -e s/x86_64/x86/ \
+ # CROSS_COMPILE can be set on the command line
+ # make CROSS_COMPILE=ia64-linux-
+ # Alternatively CROSS_COMPILE can be set in the environment.
+-# A third alternative is to store a setting in .config so that plain
+-# "make" in the configured kernel build directory always uses that.
+ # Default value for CROSS_COMPILE is not to prefix executables
+ # Note: Some architectures assign CROSS_COMPILE in their arch/*/Makefile
+ ARCH		?= $(SUBARCH)
+-CROSS_COMPILE	?= $(CONFIG_CROSS_COMPILE:"%"=%)
+ 
+ # Architecture as present in compile.h
+ UTS_MACHINE 	:= $(ARCH)
+@@ -356,9 +353,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
+ 	  else if [ -x /bin/bash ]; then echo /bin/bash; \
+ 	  else echo sh; fi ; fi)
+ 
+-HOST_LFS_CFLAGS := $(shell getconf LFS_CFLAGS)
+-HOST_LFS_LDFLAGS := $(shell getconf LFS_LDFLAGS)
+-HOST_LFS_LIBS := $(shell getconf LFS_LIBS)
++HOST_LFS_CFLAGS := $(shell getconf LFS_CFLAGS 2>/dev/null)
++HOST_LFS_LDFLAGS := $(shell getconf LFS_LDFLAGS 2>/dev/null)
++HOST_LFS_LIBS := $(shell getconf LFS_LIBS 2>/dev/null)
+ 
+ HOSTCC       = gcc
+ HOSTCXX      = g++
+@@ -504,12 +501,18 @@ KBUILD_CFLAGS	+= $(call cc-option,-fno-PIE)
+ KBUILD_AFLAGS	+= $(call cc-option,-fno-PIE)
+ 
+ # check for 'asm goto'
+-ifeq ($(call shell-cached,$(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC) $(KBUILD_CFLAGS)), y)
++ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC) $(KBUILD_CFLAGS)), y)
+   CC_HAVE_ASM_GOTO := 1
+   KBUILD_CFLAGS += -DCC_HAVE_ASM_GOTO
+   KBUILD_AFLAGS += -DCC_HAVE_ASM_GOTO
+ endif
+ 
++# The expansion should be delayed until arch/$(SRCARCH)/Makefile is included.
++# Some architectures define CROSS_COMPILE in arch/$(SRCARCH)/Makefile.
++# CC_VERSION_TEXT is referenced from Kconfig (so it needs export),
++# and from include/config/auto.conf.cmd to detect the compiler upgrade.
++CC_VERSION_TEXT = $(shell $(CC) --version | head -n 1)
++
+ ifeq ($(config-targets),1)
+ # ===========================================================================
+ # *config targets only - make sure prerequisites are updated, and descend
+@@ -519,7 +522,7 @@ ifeq ($(config-targets),1)
+ # KBUILD_DEFCONFIG may point out an alternative default configuration
+ # used for 'make defconfig'
+ #adam#include arch/$(SRCARCH)/Makefile
+-export KBUILD_DEFCONFIG KBUILD_KCONFIG
++export KBUILD_DEFCONFIG KBUILD_KCONFIG CC_VERSION_TEXT
+ 
+ config: scripts_basic outputmakefile FORCE
+ 	$(Q)$(MAKE) $(build)=scripts/kconfig $@
+@@ -581,12 +584,32 @@ virt-y		:= virt/
+ endif # KBUILD_EXTMOD
+ 
+ ifeq ($(dot-config),1)
+-# Read in config
+ -include include/config/auto.conf
++endif
++
++# The all: target is the default when no target is given on the
++# command line.
++# This allow a user to issue only 'make' to build a kernel including modules
++# Defaults to vmlinux, but the arch makefile usually adds further targets
++all: vmlinux
+ 
++CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage \
++	$(call cc-option,-fno-tree-loop-im) \
++	$(call cc-disable-warning,maybe-uninitialized,)
++export CFLAGS_GCOV
++
++# The arch Makefile can set ARCH_{CPP,A,C}FLAGS to override the default
++# values of the respective KBUILD_* variables
++ARCH_CPPFLAGS :=
++ARCH_AFLAGS :=
++ARCH_CFLAGS :=
++include arch/$(SRCARCH)/Makefile
++
++ifeq ($(dot-config),1)
+ ifeq ($(KBUILD_EXTMOD),)
+-# Read in dependencies to all Kconfig* files, make sure to run
+-# oldconfig if changes are detected.
++# Read in dependencies to all Kconfig* files, make sure to run syncconfig if
++# changes are detected. This should be included after arch/$(SRCARCH)/Makefile
++# because some architectures define CROSS_COMPILE there.
+ -include include/config/auto.conf.cmd
+ 
+ # To avoid any implicit rule to kick in, define an empty command
+@@ -618,24 +641,6 @@ else
+ include/config/auto.conf: ;
+ endif # $(dot-config)
+ 
+-# The all: target is the default when no target is given on the
+-# command line.
+-# This allow a user to issue only 'make' to build a kernel including modules
+-# Defaults to vmlinux, but the arch makefile usually adds further targets
+-all: vmlinux
+-
+-CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage \
+-	$(call cc-option,-fno-tree-loop-im) \
+-	$(call cc-disable-warning,maybe-uninitialized,)
+-export CFLAGS_GCOV CFLAGS_KCOV
+-
+-# The arch Makefile can set ARCH_{CPP,A,C}FLAGS to override the default
+-# values of the respective KBUILD_* variables
+-ARCH_CPPFLAGS :=
+-ARCH_AFLAGS :=
+-ARCH_CFLAGS :=
+-include arch/$(SRCARCH)/Makefile
+-
+ KBUILD_CFLAGS	+= $(call cc-option,-fno-delete-null-pointer-checks,)
+ KBUILD_CFLAGS	+= $(call cc-disable-warning,frame-address,)
+ KBUILD_CFLAGS	+= $(call cc-disable-warning, format-truncation)
+@@ -676,55 +681,11 @@ ifneq ($(CONFIG_FRAME_WARN),0)
+ KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
+ endif
+ 
+-# This selects the stack protector compiler flag. Testing it is delayed
+-# until after .config has been reprocessed, in the prepare-compiler-check
+-# target.
+-ifdef CONFIG_CC_STACKPROTECTOR_AUTO
+-  stackp-flag := $(call cc-option,-fstack-protector-strong,$(call cc-option,-fstack-protector))
+-  stackp-name := AUTO
+-else
+-ifdef CONFIG_CC_STACKPROTECTOR_REGULAR
+-  stackp-flag := -fstack-protector
+-  stackp-name := REGULAR
+-else
+-ifdef CONFIG_CC_STACKPROTECTOR_STRONG
+-  stackp-flag := -fstack-protector-strong
+-  stackp-name := STRONG
+-else
+-  # If either there is no stack protector for this architecture or
+-  # CONFIG_CC_STACKPROTECTOR_NONE is selected, we're done, and $(stackp-name)
+-  # is empty, skipping all remaining stack protector tests.
+-  #
+-  # Force off for distro compilers that enable stack protector by default.
+-  KBUILD_CFLAGS += $(call cc-option, -fno-stack-protector)
+-endif
+-endif
+-endif
+-# Find arch-specific stack protector compiler sanity-checking script.
+-ifdef stackp-name
+-ifneq ($(stackp-flag),)
+-  stackp-path := $(srctree)/scripts/gcc-$(SRCARCH)_$(BITS)-has-stack-protector.sh
+-  stackp-check := $(wildcard $(stackp-path))
+-  # If the wildcard test matches a test script, run it to check functionality.
+-  ifdef stackp-check
+-    ifneq ($(shell $(CONFIG_SHELL) $(stackp-check) $(CC) $(KBUILD_CPPFLAGS) $(biarch)),y)
+-      stackp-broken := y
+-    endif
+-  endif
+-  ifndef stackp-broken
+-    # If the stack protector is functional, enable code that depends on it.
+-    KBUILD_CPPFLAGS += -DCONFIG_CC_STACKPROTECTOR
+-    # Either we've already detected the flag (for AUTO) or we'll fail the
+-    # build in the prepare-compiler-check rule (for specific flag).
+-    KBUILD_CFLAGS += $(stackp-flag)
+-  else
+-    # We have to make sure stack protector is unconditionally disabled if
+-    # the compiler is broken (in case we're going to continue the build in
+-    # AUTO mode).
+-    KBUILD_CFLAGS += $(call cc-option, -fno-stack-protector)
+-  endif
+-endif
+-endif
++stackp-flags-$(CONFIG_CC_HAS_STACKPROTECTOR_NONE) := -fno-stack-protector
++stackp-flags-$(CONFIG_STACKPROTECTOR)             := -fstack-protector
++stackp-flags-$(CONFIG_STACKPROTECTOR_STRONG)      := -fstack-protector-strong
++
++KBUILD_CFLAGS += $(stackp-flags-y)
+ 
+ ifeq ($(cc-name),clang)
+ KBUILD_CPPFLAGS += $(call cc-option,-Qunused-arguments,)
+@@ -802,13 +763,12 @@ KBUILD_CFLAGS += $(call cc-option, -fno-inline-functions-called-once)
+ endif
+ 
+ ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
+-KBUILD_CFLAGS	+= $(call cc-option,-ffunction-sections,)
+-KBUILD_CFLAGS	+= $(call cc-option,-fdata-sections,)
++KBUILD_CFLAGS_KERNEL	+= $(call cc-option,-ffunction-sections,)
++KBUILD_CFLAGS_KERNEL	+= $(call cc-option,-fdata-sections,)
+ endif
+ 
+ # arch Makefile may override CC so keep this after arch Makefile is included
+-NOSTDINC_FLAGS += -nostdinc -isystem $(call shell-cached,$(CC) -print-file-name=include)
+-CHECKFLAGS     += $(NOSTDINC_FLAGS)
++NOSTDINC_FLAGS += -nostdinc -isystem $(shell $(CC) -print-file-name=include)
+ 
+ # warn about C99 declaration after statement
+ KBUILD_CFLAGS += $(call cc-option,-Wdeclaration-after-statement,)
+@@ -878,6 +838,12 @@ ifeq ($(CONFIG_STRIP_ASM_SYMS),y)
+ LDFLAGS_vmlinux	+= $(call ld-option, -X,)
+ endif
+ 
++# insure the checker run with the right endianness
++CHECKFLAGS += $(if $(CONFIG_CPU_BIG_ENDIAN),-mbig-endian,-mlittle-endian)
++
++# the checker needs the correct machine size
++CHECKFLAGS += $(if $(CONFIG_64BIT),-m64,-m32)
++
+ # Default kernel image to build when no specific target is given.
+ # KBUILD_IMAGE may be overruled on the command line or
+ # set in the environment
+@@ -1103,7 +1069,7 @@ endif
+ # prepare2 creates a makefile if using a separate output directory.
+ # From this point forward, .config has been reprocessed, so any rules
+ # that need to depend on updated CONFIG_* values can be checked here.
+-prepare2: prepare3 prepare-compiler-check outputmakefile asm-generic
++prepare2: prepare3 outputmakefile asm-generic
+ 
+ prepare1: prepare2 $(version_h) $(autoksyms_h) include/generated/utsrelease.h \
+                    include/config/auto.conf
+@@ -1129,43 +1095,6 @@ uapi-asm-generic:
+ PHONY += prepare-objtool
+ prepare-objtool: $(objtool_target)
+ 
+-# Check for CONFIG flags that require compiler support. Abort the build
+-# after .config has been processed, but before the kernel build starts.
+-#
+-# For security-sensitive CONFIG options, we don't want to fallback and/or
+-# silently change which compiler flags will be used, since that leads to
+-# producing kernels with different security feature characteristics
+-# depending on the compiler used. (For example, "But I selected
+-# CC_STACKPROTECTOR_STRONG! Why did it build with _REGULAR?!")
+-PHONY += prepare-compiler-check
+-prepare-compiler-check: FORCE
+-# Make sure compiler supports requested stack protector flag.
+-ifdef stackp-name
+-  # Warn about CONFIG_CC_STACKPROTECTOR_AUTO having found no option.
+-  ifeq ($(stackp-flag),)
+-	@echo CONFIG_CC_STACKPROTECTOR_$(stackp-name): \
+-		  Compiler does not support any known stack-protector >&2
+-  else
+-  # Fail if specifically requested stack protector is missing.
+-  ifeq ($(call cc-option, $(stackp-flag)),)
+-	@echo Cannot use CONFIG_CC_STACKPROTECTOR_$(stackp-name): \
+-		  $(stackp-flag) not supported by compiler >&2 && exit 1
+-  endif
+-  endif
+-endif
+-# Make sure compiler does not have buggy stack-protector support. If a
+-# specific stack-protector was requested, fail the build, otherwise warn.
+-ifdef stackp-broken
+-  ifeq ($(stackp-name),AUTO)
+-	@echo CONFIG_CC_STACKPROTECTOR_$(stackp-name): \
+-                  $(stackp-flag) available but compiler is broken: disabling >&2
+-  else
+-	@echo Cannot use CONFIG_CC_STACKPROTECTOR_$(stackp-name): \
+-                  $(stackp-flag) available but compiler is broken >&2 && exit 1
+-  endif
+-endif
+-	@:
+-
+ # Generate some files
+ # ---------------------------------------------------------------------------
+ 
+@@ -1625,7 +1554,6 @@ clean: $(clean-dirs)
+ 		-o -name '*.asn1.[ch]' \
+ 		-o -name '*.symtypes' -o -name 'modules.order' \
+ 		-o -name modules.builtin -o -name '.tmp_*.o.*' \
+-		-o -name .cache.mk \
+ 		-o -name '*.c.[012]*.*' \
+ 		-o -name '*.ll' \
+ 		-o -name '*.gcno' \) -type f -print | xargs rm -f
+@@ -1763,7 +1691,7 @@ quiet_cmd_rmfiles = $(if $(wildcard $(rm-files)),CLEAN   $(wildcard $(rm-files))
+ # Run depmod only if we have System.map and depmod is executable
+ quiet_cmd_depmod = DEPMOD  $(KERNELRELEASE)
+       cmd_depmod = $(CONFIG_SHELL) $(srctree)/scripts/depmod.sh $(DEPMOD) \
+-                   $(KERNELRELEASE) "$(patsubst y,_,$(CONFIG_HAVE_UNDERSCORE_SYMBOL_PREFIX))"
++                   $(KERNELRELEASE)
+ 
+ # Create temporary dir for module support files
+ # clean it up only when building all modules
+@@ -1784,6 +1712,6 @@ endif	# skip-makefile
+ PHONY += FORCE
+ FORCE:
+ 
+-# Declare the contents of the .PHONY variable as phony.  We keep that
++# Declare the contents of the PHONY variable as phony.  We keep that
+ # information in a variable so we can use it in if_changed and friends.
+ .PHONY: $(PHONY)
+diff --git a/tool/kconfig/README b/tool/kconfig/README
+index 0e59450..5435c1f 100644
+--- a/tool/kconfig/README
++++ b/tool/kconfig/README
+@@ -1,3 +1,3 @@
+ 
+-kconfig taken from vanilla Linux 4.17, and slightly patched.
++kconfig taken from vanilla Linux 4.18, and slightly patched.
+ 
+diff --git a/tool/kconfig/scripts/Kbuild.include b/tool/kconfig/scripts/Kbuild.include
+index 50cee53..86321f0 100644
+--- a/tool/kconfig/scripts/Kbuild.include
++++ b/tool/kconfig/scripts/Kbuild.include
+@@ -8,8 +8,6 @@ squote  := '
+ empty   :=
+ space   := $(empty) $(empty)
+ space_escape := _-_SPACE_-_
+-right_paren := )
+-left_paren := (
+ pound := \#
+ 
+ ###
+@@ -57,7 +55,6 @@ kecho := $($(quiet)kecho)
+ #   to specify a valid file as first prerequisite (often the kbuild file)
+ define filechk
+ 	$(Q)set -e;				\
+-	$(kecho) '  CHK     $@';		\
+ 	mkdir -p $(dir $@);			\
+ 	$(filechk_$(1)) < $< > $@.tmp;		\
+ 	if [ -r $@ ] && cmp -s $@ $@.tmp; then	\
+@@ -83,71 +80,6 @@ cc-cross-prefix =  \
+ 			echo $(c);                                    \
+ 		fi)))
+ 
+-# Tools for caching Makefile variables that are "expensive" to compute.
+-#
+-# Here we want to help deal with variables that take a long time to compute
+-# by making it easy to store these variables in a cache.
+-#
+-# The canonical example here is testing for compiler flags.  On a simple system
+-# each call to the compiler takes 10 ms, but on a system with a compiler that's
+-# called through various wrappers it can take upwards of 100 ms.  If we have
+-# 100 calls to the compiler this can take 1 second (on a simple system) or 10
+-# seconds (on a complicated system).
+-#
+-# The "cache" will be in Makefile syntax and can be directly included.
+-# Any time we try to reference a variable that's not in the cache we'll
+-# calculate it and store it in the cache for next time.
+-
+-# Include values from last time
+-make-cache := $(if $(KBUILD_EXTMOD),$(KBUILD_EXTMOD)/,$(if $(obj),$(obj)/)).cache.mk
+-$(make-cache): ;
+--include $(make-cache)
+-
+-cached-data := $(filter __cached_%, $(.VARIABLES))
+-
+-# If cache exceeds 1000 lines, shrink it down to 500.
+-ifneq ($(word 1000,$(cached-data)),)
+-$(shell tail -n 500 $(make-cache) > $(make-cache).tmp; \
+-	mv $(make-cache).tmp $(make-cache))
+-endif
+-
+-create-cache-dir := $(if $(KBUILD_SRC),$(if $(cache-data),,1))
+-
+-# Usage: $(call __sanitize-opt,Hello=Hola$(comma)Goodbye Adios)
+-#
+-# Convert all '$', ')', '(', '\', '=', ' ', ',', ':' to '_'
+-__sanitize-opt = $(subst $$,_,$(subst $(right_paren),_,$(subst $(left_paren),_,$(subst \,_,$(subst =,_,$(subst $(space),_,$(subst $(comma),_,$(subst :,_,$(1)))))))))
+-
+-# Usage:   $(call shell-cached,shell_command)
+-# Example: $(call shell-cached,md5sum /usr/bin/gcc)
+-#
+-# If we've already seen a call to this exact shell command (even in a
+-# previous invocation of make!) we'll return the value.  If not, we'll
+-# compute it and store the result for future runs.
+-#
+-# This is a bit of voodoo, but basic explanation is that if the variable
+-# was undefined then we'll evaluate the shell command and store the result
+-# into the variable.  We'll then store that value in the cache and finally
+-# output the value.
+-#
+-# NOTE: The $$(2) here isn't actually a parameter to __run-and-store.  We
+-# happen to know that the caller will have their shell command in $(2) so the
+-# result of "call"ing this will produce a reference to that $(2).  The reason
+-# for this strangeness is to avoid an extra level of eval (and escaping) of
+-# $(2).
+-define __run-and-store
+-ifeq ($(origin $(1)),undefined)
+-  $$(eval $(1) := $$(shell $$(2)))
+-ifeq ($(create-cache-dir),1)
+-  $$(shell mkdir -p $(dir $(make-cache)))
+-  $$(eval create-cache-dir :=)
+-endif
+-  $$(shell echo '$(1) := $$($(1))' >> $(make-cache))
+-endif
+-endef
+-__shell-cached = $(eval $(call __run-and-store,$(1)))$($(1))
+-shell-cached = $(call __shell-cached,__cached_$(call __sanitize-opt,$(1)),$(1))
+-
+ # output directory for tests below
+ TMPOUT := $(if $(KBUILD_EXTMOD),$(firstword $(KBUILD_EXTMOD))/)
+ 
+@@ -155,36 +87,30 @@ TMPOUT := $(if $(KBUILD_EXTMOD),$(firstword $(KBUILD_EXTMOD))/)
+ # Usage: option = $(call try-run, $(CC)...-o "$$TMP",option-ok,otherwise)
+ # Exit code chooses option. "$$TMP" serves as a temporary file and is
+ # automatically cleaned up.
+-__try-run = set -e;			\
++try-run = $(shell set -e;		\
+ 	TMP="$(TMPOUT).$$$$.tmp";	\
+ 	TMPO="$(TMPOUT).$$$$.o";	\
+ 	if ($(1)) >/dev/null 2>&1;	\
+ 	then echo "$(2)";		\
+ 	else echo "$(3)";		\
+ 	fi;				\
+-	rm -f "$$TMP" "$$TMPO"
+-
+-try-run = $(shell $(__try-run))
+-
+-# try-run-cached
+-# This works like try-run, but the result is cached.
+-try-run-cached = $(call shell-cached,$(__try-run))
++	rm -f "$$TMP" "$$TMPO")
+ 
+ # as-option
+ # Usage: cflags-y += $(call as-option,-Wa$(comma)-isa=foo,)
+ 
+-as-option = $(call try-run-cached,\
++as-option = $(call try-run,\
+ 	$(CC) $(KBUILD_CFLAGS) $(1) -c -x assembler /dev/null -o "$$TMP",$(1),$(2))
+ 
+ # as-instr
+ # Usage: cflags-y += $(call as-instr,instr,option1,option2)
+ 
+-as-instr = $(call try-run-cached,\
++as-instr = $(call try-run,\
+ 	printf "%b\n" "$(1)" | $(CC) $(KBUILD_AFLAGS) -c -x assembler -o "$$TMP" -,$(2),$(3))
+ 
+ # __cc-option
+ # Usage: MY_CFLAGS += $(call __cc-option,$(CC),$(MY_CFLAGS),-march=winchip-c6,-march=i586)
+-__cc-option = $(call try-run-cached,\
++__cc-option = $(call try-run,\
+ 	$(1) -Werror $(2) $(3) -c -x c /dev/null -o "$$TMP",$(3),$(4))
+ 
+ # Do not attempt to build with gcc plugins during cc-option tests.
+@@ -204,23 +130,23 @@ hostcc-option = $(call __cc-option, $(HOSTCC),\
+ 
+ # cc-option-yn
+ # Usage: flag := $(call cc-option-yn,-march=winchip-c6)
+-cc-option-yn = $(call try-run-cached,\
++cc-option-yn = $(call try-run,\
+ 	$(CC) -Werror $(KBUILD_CPPFLAGS) $(CC_OPTION_CFLAGS) $(1) -c -x c /dev/null -o "$$TMP",y,n)
+ 
+ # cc-disable-warning
+ # Usage: cflags-y += $(call cc-disable-warning,unused-but-set-variable)
+-cc-disable-warning = $(call try-run-cached,\
++cc-disable-warning = $(call try-run,\
+ 	$(CC) -Werror $(KBUILD_CPPFLAGS) $(CC_OPTION_CFLAGS) -W$(strip $(1)) -c -x c /dev/null -o "$$TMP",-Wno-$(strip $(1)))
+ 
+ # cc-name
+ # Expands to either gcc or clang
+-cc-name = $(call shell-cached,$(CC) -v 2>&1 | grep -q "clang version" && echo clang || echo gcc)
++cc-name = $(shell $(CC) -v 2>&1 | grep -q "clang version" && echo clang || echo gcc)
+ 
+ # cc-version
+-cc-version = $(call shell-cached,$(CONFIG_SHELL) $(srctree)/scripts/gcc-version.sh $(CC))
++cc-version = $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-version.sh $(CC))
+ 
+ # cc-fullversion
+-cc-fullversion = $(call shell-cached,$(CONFIG_SHELL) \
++cc-fullversion = $(shell $(CONFIG_SHELL) \
+ 	$(srctree)/scripts/gcc-version.sh -p $(CC))
+ 
+ # cc-ifversion
+@@ -233,21 +159,21 @@ cc-if-fullversion = $(shell [ $(cc-fullversion) $(1) $(2) ] && echo $(3) || echo
+ 
+ # cc-ldoption
+ # Usage: ldflags += $(call cc-ldoption, -Wl$(comma)--hash-style=both)
+-cc-ldoption = $(call try-run-cached,\
++cc-ldoption = $(call try-run,\
+ 	$(CC) $(1) $(KBUILD_CPPFLAGS) $(CC_OPTION_CFLAGS) -nostdlib -x c /dev/null -o "$$TMP",$(1),$(2))
+ 
+ # ld-option
+ # Usage: LDFLAGS += $(call ld-option, -X)
+-ld-option = $(call try-run-cached, $(LD) $(LDFLAGS) $(1) -v,$(1),$(2))
++ld-option = $(call try-run, $(LD) $(LDFLAGS) $(1) -v,$(1),$(2))
+ 
+ # ar-option
+ # Usage: KBUILD_ARFLAGS := $(call ar-option,D)
+ # Important: no spaces around options
+-ar-option = $(call try-run-cached, $(AR) rc$(1) "$$TMP",$(1),$(2))
++ar-option = $(call try-run, $(AR) rc$(1) "$$TMP",$(1),$(2))
+ 
+ # ld-version
+ # Note this is mainly for HJ Lu's 3 number binutil versions
+-ld-version = $(call shell-cached,$(LD) --version | $(srctree)/scripts/ld-version.sh)
++ld-version = $(shell $(LD) --version | $(srctree)/scripts/ld-version.sh)
+ 
+ # ld-ifversion
+ # Usage:  $(call ld-ifversion, -ge, 22252, y)
+@@ -288,7 +214,7 @@ hdr-inst := -f $(srctree)/scripts/Makefile.headersinst obj
+ # Prefix -I with $(srctree) if it is not an absolute path.
+ # skip if -I has no parameter
+ addtree = $(if $(patsubst -I%,%,$(1)), \
+-$(if $(filter-out -I/% -I./% -I../%,$(1)),$(patsubst -I%,-I$(srctree)/%,$(1)),$(1)))
++$(if $(filter-out -I/% -I./% -I../%,$(1)),$(patsubst -I%,-I$(srctree)/%,$(1)),$(1)),$(1))
+ 
+ # Find all -I options and call addtree
+ flags = $(foreach o,$($(1)),$(if $(filter -I%,$(o)),$(call addtree,$(o)),$(o)))
+diff --git a/tool/kconfig/scripts/Makefile.build b/tool/kconfig/scripts/Makefile.build
+index 8bdb1dc..514ed63 100644
+--- a/tool/kconfig/scripts/Makefile.build
++++ b/tool/kconfig/scripts/Makefile.build
+@@ -147,7 +147,6 @@ $(obj)/%.i: $(src)/%.c FORCE
+ cmd_gensymtypes_c =                                                         \
+     $(CPP) -D__GENKSYMS__ $(c_flags) $< |                                   \
+     $(GENKSYMS) $(if $(1), -T $(2))                                         \
+-     $(patsubst y,-s _,$(CONFIG_HAVE_UNDERSCORE_SYMBOL_PREFIX))             \
+      $(patsubst y,-R,$(CONFIG_MODULE_REL_CRCS))                             \
+      $(if $(KBUILD_PRESERVE),-p)                                            \
+      -r $(firstword $(wildcard $(2:.symtypes=.symref) /dev/null))
+@@ -207,6 +206,11 @@ cmd_modversions_c =								\
+ endif
+ 
+ ifdef CONFIG_FTRACE_MCOUNT_RECORD
++# gcc 5 supports generating the mcount tables directly
++ifneq ($(call cc-option,-mrecord-mcount,y),y)
++KBUILD_CFLAGS += -mrecord-mcount
++else
++# else do it all manually
+ ifdef BUILD_C_RECORDMCOUNT
+ ifeq ("$(origin RECORDMCOUNT_WARN)", "command line")
+   RECORDMCOUNT_FLAGS = -w
+@@ -235,6 +239,7 @@ cmd_record_mcount =						\
+ 	     "$(CC_FLAGS_FTRACE)" ]; then			\
+ 		$(sub_cmd_record_mcount)			\
+ 	fi;
++endif # -record-mcount
+ endif # CONFIG_FTRACE_MCOUNT_RECORD
+ 
+ ifdef CONFIG_STACK_VALIDATION
+@@ -355,7 +360,6 @@ cmd_gensymtypes_S =                                                         \
+      sed 's/.*___EXPORT_SYMBOL[[:space:]]*\([a-zA-Z0-9_]*\)[[:space:]]*,.*/EXPORT_SYMBOL(\1);/' ) | \
+     $(CPP) -D__GENKSYMS__ $(c_flags) -xc - |                                \
+     $(GENKSYMS) $(if $(1), -T $(2))                                         \
+-     $(patsubst y,-s _,$(CONFIG_HAVE_UNDERSCORE_SYMBOL_PREFIX))             \
+      $(patsubst y,-R,$(CONFIG_MODULE_REL_CRCS))                             \
+      $(if $(KBUILD_PRESERVE),-p)                                            \
+      -r $(firstword $(wildcard $(2:.symtypes=.symref) /dev/null))
+@@ -487,15 +491,10 @@ targets += $(lib-target)
+ 
+ dummy-object = $(obj)/.lib_exports.o
+ ksyms-lds = $(dot-target).lds
+-ifdef CONFIG_HAVE_UNDERSCORE_SYMBOL_PREFIX
+-ref_prefix = EXTERN(_
+-else
+-ref_prefix = EXTERN(
+-endif
+ 
+ quiet_cmd_export_list = EXPORTS $@
+ cmd_export_list = $(OBJDUMP) -h $< | \
+-	sed -ne '/___ksymtab/s/.*+\([^ ]*\).*/$(ref_prefix)\1)/p' >$(ksyms-lds);\
++	sed -ne '/___ksymtab/s/.*+\([^ ]*\).*/EXTERN(\1)/p' >$(ksyms-lds);\
+ 	rm -f $(dummy-object);\
+ 	echo | $(CC) $(a_flags) -c -o $(dummy-object) -x assembler -;\
+ 	$(LD) $(ld_flags) -r -o $@ -T $(ksyms-lds) $(dummy-object);\
+@@ -591,7 +590,4 @@ endif
+ # We never want them to be removed automatically.
+ .SECONDARY: $(targets)
+ 
+-# Declare the contents of the .PHONY variable as phony.  We keep that
+-# information in a variable se we can use it in if_changed and friends.
+-
+ .PHONY: $(PHONY)
+diff --git a/tool/kconfig/scripts/Makefile.clean b/tool/kconfig/scripts/Makefile.clean
+index 808d09f..17ef94c 100644
+--- a/tool/kconfig/scripts/Makefile.clean
++++ b/tool/kconfig/scripts/Makefile.clean
+@@ -88,7 +88,4 @@ PHONY += $(subdir-ymn)
+ $(subdir-ymn):
+ 	$(Q)$(MAKE) $(clean)=$@
+ 
+-# Declare the contents of the .PHONY variable as phony.  We keep that
+-# information in a variable se we can use it in if_changed and friends.
+-
+ .PHONY: $(PHONY)
+diff --git a/tool/kconfig/scripts/Makefile.lib b/tool/kconfig/scripts/Makefile.lib
+index 5af34a2..1bb594f 100644
+--- a/tool/kconfig/scripts/Makefile.lib
++++ b/tool/kconfig/scripts/Makefile.lib
+@@ -251,6 +251,9 @@ DTC_FLAGS += -Wno-unit_address_vs_reg \
+ 	-Wno-unit_address_format \
+ 	-Wno-avoid_unnecessary_addr_size \
+ 	-Wno-alias_paths \
++	-Wno-graph_child_address \
++	-Wno-graph_port \
++	-Wno-unique_unit_address \
+ 	-Wno-pci_device_reg
+ endif
+ 
+diff --git a/tool/kconfig/scripts/Makefile.modinst b/tool/kconfig/scripts/Makefile.modinst
+index 51ca024..ff5ca98 100644
+--- a/tool/kconfig/scripts/Makefile.modinst
++++ b/tool/kconfig/scripts/Makefile.modinst
+@@ -35,8 +35,4 @@ modinst_dir = $(if $(KBUILD_EXTMOD),$(ext-mod-dir),kernel/$(@D))
+ $(modules):
+ 	$(call cmd,modules_install,$(MODLIB)/$(modinst_dir))
+ 
+-
+-# Declare the contents of the .PHONY variable as phony.  We keep that
+-# information in a variable so we can use it in if_changed and friends.
+-
+ .PHONY: $(PHONY)
+diff --git a/tool/kconfig/scripts/Makefile.modpost b/tool/kconfig/scripts/Makefile.modpost
+index df41744..dd92dbb 100644
+--- a/tool/kconfig/scripts/Makefile.modpost
++++ b/tool/kconfig/scripts/Makefile.modpost
+@@ -149,8 +149,4 @@ ifneq ($(cmd_files),)
+   include $(cmd_files)
+ endif
+ 
+-
+-# Declare the contents of the .PHONY variable as phony.  We keep that
+-# information in a variable se we can use it in if_changed and friends.
+-
+ .PHONY: $(PHONY)
+diff --git a/tool/kconfig/scripts/basic/fixdep.c b/tool/kconfig/scripts/basic/fixdep.c
+index f387538..850966f 100644
+--- a/tool/kconfig/scripts/basic/fixdep.c
++++ b/tool/kconfig/scripts/basic/fixdep.c
+@@ -115,7 +115,7 @@ static void usage(void)
+  */
+ static void print_dep(const char *m, int slen, const char *dir)
+ {
+-	int c, i;
++	int c, prev_c = '/', i;
+ 
+ 	printf("    $(wildcard %s/", dir);
+ 	for (i = 0; i < slen; i++) {
+@@ -124,7 +124,9 @@ static void print_dep(const char *m, int slen, const char *dir)
+ 			c = '/';
+ 		else
+ 			c = tolower(c);
+-		putchar(c);
++		if (c != '/' || prev_c != '/')
++			putchar(c);
++		prev_c = c;
+ 	}
+ 	printf(".h) \\\n");
+ }
+diff --git a/tool/kconfig/scripts/kconfig/.gitignore b/tool/kconfig/scripts/kconfig/.gitignore
+index 2da579e..0aabc1d 100644
+--- a/tool/kconfig/scripts/kconfig/.gitignore
++++ b/tool/kconfig/scripts/kconfig/.gitignore
+@@ -2,9 +2,6 @@
+ # Generated files
+ #
+ *.moc
+-gconf.glade.h
+-*.pot
+-*.mo
+ 
+ #
+ # configuration programs
+@@ -14,4 +11,3 @@ mconf
+ nconf
+ qconf
+ gconf
+-kxgettext
+diff --git a/tool/kconfig/scripts/kconfig/Makefile b/tool/kconfig/scripts/kconfig/Makefile
+index 5def877..a3ac2c9 100644
+--- a/tool/kconfig/scripts/kconfig/Makefile
++++ b/tool/kconfig/scripts/kconfig/Makefile
+@@ -3,7 +3,7 @@
+ # Kernel configuration targets
+ # These targets are used from top-level makefile
+ 
+-PHONY += xconfig gconfig menuconfig config syncconfig update-po-config \
++PHONY += xconfig gconfig menuconfig config syncconfig \
+ 	localmodconfig localyesconfig
+ 
+ ifdef KBUILD_KCONFIG
+@@ -55,29 +55,6 @@ localyesconfig localmodconfig: $(obj)/conf
+ 	fi
+ 	$(Q)rm -f .tmp.config
+ 
+-# Create new linux.pot file
+-# Adjust charset to UTF-8 in .po file to accept UTF-8 in Kconfig files
+-update-po-config: $(obj)/kxgettext $(obj)/gconf.glade.h
+-	$(Q)$(kecho) "  GEN     config.pot"
+-	$(Q)xgettext --default-domain=linux                         \
+-	    --add-comments --keyword=_ --keyword=N_                 \
+-	    --from-code=UTF-8                                       \
+-	    --files-from=$(srctree)/scripts/kconfig/POTFILES.in     \
+-	    --directory=$(srctree) --directory=$(objtree)           \
+-	    --output $(obj)/config.pot
+-	$(Q)sed -i s/CHARSET/UTF-8/ $(obj)/config.pot
+-	$(Q)(for i in `ls $(srctree)/arch/*/Kconfig      \
+-	    $(srctree)/arch/*/um/Kconfig`;               \
+-	    do                                           \
+-		$(kecho) "  GEN     $$i";                    \
+-		$(obj)/kxgettext $$i                     \
+-		     >> $(obj)/config.pot;               \
+-	    done )
+-	$(Q)$(kecho) "  GEN     linux.pot"
+-	$(Q)msguniq --sort-by-file --to-code=UTF-8 $(obj)/config.pot \
+-	    --output $(obj)/linux.pot
+-	$(Q)rm -f $(obj)/config.pot
+-
+ # These targets map 1:1 to the commandline options of 'conf'
+ simple-targets := oldconfig allnoconfig allyesconfig allmodconfig \
+ 	alldefconfig randconfig listnewconfig olddefconfig
+@@ -151,8 +128,7 @@ clean-dirs += tests/.cache
+ # Help text used by make help
+ help:
+ 	@echo  '  config	  - Update current config utilising a line-oriented program'
+-	@echo  '  nconfig         - Update current config utilising a ncurses menu based'
+-	@echo  '                    program'
++	@echo  '  nconfig         - Update current config utilising a ncurses menu based program'
+ 	@echo  '  menuconfig	  - Update current config utilising a menu based program'
+ 	@echo  '  xconfig	  - Update current config utilising a Qt based front-end'
+ 	@echo  '  gconfig	  - Update current config utilising a GTK+ based front-end'
+@@ -172,141 +148,77 @@ help:
+ 	@echo  '  kvmconfig	  - Enable additional options for kvm guest kernel support'
+ 	@echo  '  xenconfig       - Enable additional options for xen dom0 and guest kernel support'
+ 	@echo  '  tinyconfig	  - Configure the tiniest possible kernel'
+-
+-# lxdialog stuff
+-check-lxdialog  := $(srctree)/$(src)/lxdialog/check-lxdialog.sh
+-
+-# Use recursively expanded variables so we do not call gcc unless
+-# we really need to do so. (Do not call gcc as part of make mrproper)
+-HOST_EXTRACFLAGS += $(shell $(CONFIG_SHELL) $(check-lxdialog) -ccflags) \
+-                    -DLOCALE
++	@echo  '  testconfig	  - Run Kconfig unit tests (requires python3 and pytest)'
+ 
+ # ===========================================================================
+ # Shared Makefile for the various kconfig executables:
+ # conf:	  Used for defconfig, oldconfig and related targets
+-# nconf:  Used for the nconfig target.
+-#         Utilizes ncurses
+-# mconf:  Used for the menuconfig target
+-#         Utilizes the lxdialog package
+-# qconf:  Used for the xconfig target
+-#         Based on Qt which needs to be installed to compile it
+-# gconf:  Used for the gconfig target
+-#         Based on GTK+ which needs to be installed to compile it
+ # object files used by all kconfig flavours
+ 
+-lxdialog := lxdialog/checklist.o lxdialog/util.o lxdialog/inputbox.o
+-lxdialog += lxdialog/textbox.o lxdialog/yesno.o lxdialog/menubox.o
+-
+ conf-objs	:= conf.o  zconf.tab.o
+-mconf-objs     := mconf.o zconf.tab.o $(lxdialog)
+-nconf-objs     := nconf.o zconf.tab.o nconf.gui.o
+-kxgettext-objs	:= kxgettext.o zconf.tab.o
+-qconf-cxxobjs	:= qconf.o
+-qconf-objs	:= zconf.tab.o
+-gconf-objs	:= gconf.o zconf.tab.o
+ 
+-hostprogs-y := conf nconf mconf kxgettext qconf gconf
++hostprogs-y := conf
+ 
+ targets		+= zconf.lex.c
+-clean-files	:= qconf.moc .tmp_qtcheck .tmp_gtkcheck
+-clean-files	+= gconf.glade.h
+-clean-files     += config.pot linux.pot
+-
+-# Check that we have the required ncurses stuff installed for lxdialog (menuconfig)
+-PHONY += $(obj)/dochecklxdialog
+-$(addprefix $(obj)/, mconf.o $(lxdialog)): $(obj)/dochecklxdialog
+-$(obj)/dochecklxdialog:
+-	$(Q)$(CONFIG_SHELL) $(check-lxdialog) -check $(HOSTCC) $(HOST_EXTRACFLAGS) $(HOSTLOADLIBES_mconf)
+-
+-always := dochecklxdialog
+-
+-# Add environment specific flags
+-HOST_EXTRACFLAGS += $(shell $(CONFIG_SHELL) $(srctree)/$(src)/check.sh $(HOSTCC) $(HOSTCFLAGS))
+-HOST_EXTRACXXFLAGS += $(shell $(CONFIG_SHELL) $(srctree)/$(src)/check.sh $(HOSTCXX) $(HOSTCXXFLAGS))
+ 
+ # generated files seem to need this to find local include files
+ HOSTCFLAGS_zconf.lex.o	:= -I$(src)
+ HOSTCFLAGS_zconf.tab.o	:= -I$(src)
+ 
+-HOSTLOADLIBES_qconf	= $(KC_QT_LIBS)
+-HOSTCXXFLAGS_qconf.o	= $(KC_QT_CFLAGS)
+-
+-HOSTLOADLIBES_gconf	= `pkg-config --libs gtk+-2.0 gmodule-2.0 libglade-2.0`
+-HOSTCFLAGS_gconf.o	= `pkg-config --cflags gtk+-2.0 gmodule-2.0 libglade-2.0` \
+-                          -Wno-missing-prototypes
+-
+-HOSTLOADLIBES_mconf   = $(shell $(CONFIG_SHELL) $(check-lxdialog) -ldflags $(HOSTCC))
+-
+-HOSTLOADLIBES_nconf	= $(shell \
+-				pkg-config --libs menuw panelw ncursesw 2>/dev/null \
+-				|| pkg-config --libs menu panel ncurses 2>/dev/null \
+-				|| echo "-lmenu -lpanel -lncurses"  )
+-$(obj)/qconf.o: $(obj)/.tmp_qtcheck
+-
+-ifeq ($(MAKECMDGOALS),xconfig)
+-$(obj)/.tmp_qtcheck: $(src)/Makefile
+--include $(obj)/.tmp_qtcheck
+-
+-# Qt needs some extra effort...
+-$(obj)/.tmp_qtcheck:
+-	@set -e; $(kecho) "  CHECK   qt"; \
+-	if pkg-config --exists Qt5Core; then \
+-	    cflags="-std=c++11 -fPIC `pkg-config --cflags Qt5Core Qt5Gui Qt5Widgets`"; \
+-	    libs=`pkg-config --libs Qt5Core Qt5Gui Qt5Widgets`; \
+-	    moc=`pkg-config --variable=host_bins Qt5Core`/moc; \
+-	elif pkg-config --exists QtCore; then \
+-	    cflags=`pkg-config --cflags QtCore QtGui`; \
+-	    libs=`pkg-config --libs QtCore QtGui`; \
+-	    moc=`pkg-config --variable=moc_location QtCore`; \
+-	else \
+-	    echo >&2 "*"; \
+-	    echo >&2 "* Could not find Qt via pkg-config."; \
+-	    echo >&2 "* Please install either Qt 4.8 or 5.x. and make sure it's in PKG_CONFIG_PATH"; \
+-	    echo >&2 "*"; \
+-	    exit 1; \
+-	fi; \
+-	echo "KC_QT_CFLAGS=$$cflags" > $@; \
+-	echo "KC_QT_LIBS=$$libs" >> $@; \
+-	echo "KC_QT_MOC=$$moc" >> $@
+-endif
++# nconf: Used for the nconfig target based on ncurses
++hostprogs-y	+= nconf
++nconf-objs	:= nconf.o zconf.tab.o nconf.gui.o
+ 
+-$(obj)/gconf.o: $(obj)/.tmp_gtkcheck
+-
+-ifeq ($(MAKECMDGOALS),gconfig)
+--include $(obj)/.tmp_gtkcheck
+-
+-# GTK+ needs some extra effort, too...
+-$(obj)/.tmp_gtkcheck:
+-	@if `pkg-config --exists gtk+-2.0 gmodule-2.0 libglade-2.0`; then		\
+-		if `pkg-config --atleast-version=2.0.0 gtk+-2.0`; then			\
+-			touch $@;								\
+-		else									\
+-			echo >&2 "*"; 							\
+-			echo >&2 "* GTK+ is present but version >= 2.0.0 is required.";	\
+-			echo >&2 "*";							\
+-			false;								\
+-		fi									\
+-	else										\
+-		echo >&2 "*"; 								\
+-		echo >&2 "* Unable to find the GTK+ installation. Please make sure that"; 	\
+-		echo >&2 "* the GTK+ 2.0 development package is correctly installed..."; 	\
+-		echo >&2 "* You need gtk+-2.0, glib-2.0 and libglade-2.0."; 		\
+-		echo >&2 "*"; 								\
+-		false;									\
+-	fi
+-endif
++HOSTLOADLIBES_nconf	= $(shell . $(obj)/.nconf-cfg && echo $$libs)
++HOSTCFLAGS_nconf.o	= $(shell . $(obj)/.nconf-cfg && echo $$cflags)
++HOSTCFLAGS_nconf.gui.o	= $(shell . $(obj)/.nconf-cfg && echo $$cflags)
+ 
+-$(obj)/zconf.tab.o: $(obj)/zconf.lex.c
++$(obj)/nconf.o: $(obj)/.nconf-cfg
++
++# mconf: Used for the menuconfig target based on lxdialog
++hostprogs-y	+= mconf
++lxdialog	:= checklist.o inputbox.o menubox.o textbox.o util.o yesno.o
++mconf-objs	:= mconf.o zconf.tab.o $(addprefix lxdialog/, $(lxdialog))
+ 
+-$(obj)/qconf.o: $(obj)/qconf.moc
++HOSTLOADLIBES_mconf = $(shell . $(obj)/.mconf-cfg && echo $$libs)
++$(foreach f, mconf.o $(lxdialog), \
++  $(eval HOSTCFLAGS_$f = $$(shell . $(obj)/.mconf-cfg && echo $$$$cflags)))
++
++$(addprefix $(obj)/, mconf.o $(lxdialog)): $(obj)/.mconf-cfg
++
++# qconf: Used for the xconfig target based on Qt
++hostprogs-y	+= qconf
++qconf-cxxobjs	:= qconf.o
++qconf-objs	:= zconf.tab.o
++
++HOSTLOADLIBES_qconf	= $(shell . $(obj)/.qconf-cfg && echo $$libs)
++HOSTCXXFLAGS_qconf.o	= $(shell . $(obj)/.qconf-cfg && echo $$cflags)
++
++$(obj)/qconf.o: $(obj)/.qconf-cfg $(obj)/qconf.moc
+ 
+ quiet_cmd_moc = MOC     $@
+-      cmd_moc = $(KC_QT_MOC) -i $< -o $@
++      cmd_moc = $(shell . $(obj)/.qconf-cfg && echo $$moc) -i $< -o $@
+ 
+-$(obj)/%.moc: $(src)/%.h $(obj)/.tmp_qtcheck
++$(obj)/%.moc: $(src)/%.h $(obj)/.qconf-cfg
+ 	$(call cmd,moc)
+ 
+-# Extract gconf menu items for i18n support
+-$(obj)/gconf.glade.h: $(obj)/gconf.glade
+-	$(Q)intltool-extract --type=gettext/glade --srcdir=$(srctree) \
+-	$(obj)/gconf.glade
++# gconf: Used for the gconfig target based on GTK+
++hostprogs-y	+= gconf
++gconf-objs	:= gconf.o zconf.tab.o
++
++HOSTLOADLIBES_gconf = $(shell . $(obj)/.gconf-cfg && echo $$libs)
++HOSTCFLAGS_gconf.o  = $(shell . $(obj)/.gconf-cfg && echo $$cflags)
++
++$(obj)/gconf.o: $(obj)/.gconf-cfg
++
++$(obj)/zconf.tab.o: $(obj)/zconf.lex.c
++
++# check if necessary packages are available, and configure build flags
++define filechk_conf_cfg
++	$(CONFIG_SHELL) $<
++endef
++
++$(obj)/.%conf-cfg: $(src)/%conf-cfg.sh FORCE
++	$(call filechk,conf_cfg)
++
++clean-files += .*conf-cfg
+diff --git a/tool/kconfig/scripts/kconfig/conf.c b/tool/kconfig/scripts/kconfig/conf.c
+index 283eeed..671ff53 100644
+--- a/tool/kconfig/scripts/kconfig/conf.c
++++ b/tool/kconfig/scripts/kconfig/conf.c
+@@ -3,7 +3,6 @@
+  * Released under the terms of the GNU GPL v2.0.
+  */
+ 
+-#include <locale.h>
+ #include <ctype.h>
+ #include <limits.h>
+ #include <stdio.h>
+@@ -86,7 +85,7 @@ static int conf_askvalue(struct symbol *sym, const char *def)
+ 	enum symbol_type type = sym_get_type(sym);
+ 
+ 	if (!sym_has_value(sym))
+-		printf(_("(NEW) "));
++		printf("(NEW) ");
+ 
+ 	line[0] = '\n';
+ 	line[1] = 0;
+@@ -133,7 +132,7 @@ static int conf_string(struct menu *menu)
+ 	const char *def;
+ 
+ 	while (1) {
+-		printf("%*s%s ", indent - 1, "", _(menu->prompt->text));
++		printf("%*s%s ", indent - 1, "", menu->prompt->text);
+ 		printf("(%s) ", sym->name);
+ 		def = sym_get_string_value(sym);
+ 		if (sym_get_string_value(sym))
+@@ -166,7 +165,7 @@ static int conf_sym(struct menu *menu)
+ 	tristate oldval, newval;
+ 
+ 	while (1) {
+-		printf("%*s%s ", indent - 1, "", _(menu->prompt->text));
++		printf("%*s%s ", indent - 1, "", menu->prompt->text);
+ 		if (sym->name)
+ 			printf("(%s) ", sym->name);
+ 		putchar('[');
+@@ -251,7 +250,7 @@ static int conf_choice(struct menu *menu)
+ 		case no:
+ 			return 1;
+ 		case mod:
+-			printf("%*s%s\n", indent - 1, "", _(menu_get_prompt(menu)));
++			printf("%*s%s\n", indent - 1, "", menu_get_prompt(menu));
+ 			return 0;
+ 		case yes:
+ 			break;
+@@ -261,7 +260,7 @@ static int conf_choice(struct menu *menu)
+ 	while (1) {
+ 		int cnt, def;
+ 
+-		printf("%*s%s\n", indent - 1, "", _(menu_get_prompt(menu)));
++		printf("%*s%s\n", indent - 1, "", menu_get_prompt(menu));
+ 		def_sym = sym_get_choice_value(sym);
+ 		cnt = def = 0;
+ 		line[0] = 0;
+@@ -269,7 +268,7 @@ static int conf_choice(struct menu *menu)
+ 			if (!menu_is_visible(child))
+ 				continue;
+ 			if (!child->sym) {
+-				printf("%*c %s\n", indent, '*', _(menu_get_prompt(child)));
++				printf("%*c %s\n", indent, '*', menu_get_prompt(child));
+ 				continue;
+ 			}
+ 			cnt++;
+@@ -278,14 +277,14 @@ static int conf_choice(struct menu *menu)
+ 				printf("%*c", indent, '>');
+ 			} else
+ 				printf("%*c", indent, ' ');
+-			printf(" %d. %s", cnt, _(menu_get_prompt(child)));
++			printf(" %d. %s", cnt, menu_get_prompt(child));
+ 			if (child->sym->name)
+ 				printf(" (%s)", child->sym->name);
+ 			if (!sym_has_value(child->sym))
+-				printf(_(" (NEW)"));
++				printf(" (NEW)");
+ 			printf("\n");
+ 		}
+-		printf(_("%*schoice"), indent - 1, "");
++		printf("%*schoice", indent - 1, "");
+ 		if (cnt == 1) {
+ 			printf("[1]: 1\n");
+ 			goto conf_childs;
+@@ -372,7 +371,7 @@ static void conf(struct menu *menu)
+ 			if (prompt)
+ 				printf("%*c\n%*c %s\n%*c\n",
+ 					indent, '*',
+-					indent, '*', _(prompt),
++					indent, '*', prompt,
+ 					indent, '*');
+ 		default:
+ 			;
+@@ -437,7 +436,7 @@ static void check_conf(struct menu *menu)
+ 				}
+ 			} else {
+ 				if (!conf_cnt++)
+-					printf(_("*\n* Restart config...\n*\n"));
++					printf("*\n* Restart config...\n*\n");
+ 				rootEntry = menu_get_parent_menu(menu);
+ 				conf(rootEntry);
+ 			}
+@@ -498,10 +497,6 @@ int main(int ac, char **av)
+ 	const char *name, *defconfig_file = NULL /* gcc uninit */;
+ 	struct stat tmpstat;
+ 
+-	setlocale(LC_ALL, "");
+-	bindtextdomain(PACKAGE, LOCALEDIR);
+-	textdomain(PACKAGE);
+-
+ 	tty_stdio = isatty(0) && isatty(1);
+ 
+ 	while ((opt = getopt_long(ac, av, "s", long_opts, NULL)) != -1) {
+@@ -559,7 +554,7 @@ int main(int ac, char **av)
+ 		}
+ 	}
+ 	if (ac == optind) {
+-		fprintf(stderr, _("%s: Kconfig file missing\n"), av[0]);
++		fprintf(stderr, "%s: Kconfig file missing\n", av[0]);
+ 		conf_usage(progname);
+ 		exit(1);
+ 	}
+@@ -569,12 +564,12 @@ int main(int ac, char **av)
+ 	if (sync_kconfig) {
+ 		name = conf_get_configname();
+ 		if (stat(name, &tmpstat)) {
+-			fprintf(stderr, _("***\n"
++			fprintf(stderr, "***\n"
+ 				"*** Configuration file \"%s\" not found!\n"
+ 				"***\n"
+ 				"*** Please run some configurator (e.g. \"make oldconfig\" or\n"
+ 				"*** \"make menuconfig\" or \"make xconfig\").\n"
+-				"***\n"), name);
++				"***\n", name);
+ 			exit(1);
+ 		}
+ 	}
+@@ -585,9 +580,9 @@ int main(int ac, char **av)
+ 			defconfig_file = conf_get_default_confname();
+ 		if (conf_read(defconfig_file)) {
+ 			fprintf(stderr,
+-				_("***\n"
++				"***\n"
+ 				  "*** Can't find default configuration \"%s\"!\n"
+-				  "***\n"),
++				  "***\n",
+ 				defconfig_file);
+ 			exit(1);
+ 		}
+@@ -611,7 +606,7 @@ int main(int ac, char **av)
+ 		if ((strcmp(name, "") != 0) && (strcmp(name, "1") != 0)) {
+ 			if (conf_read_simple(name, S_DEF_USER)) {
+ 				fprintf(stderr,
+-					_("*** Can't read seed configuration \"%s\"!\n"),
++					"*** Can't read seed configuration \"%s\"!\n",
+ 					name);
+ 				exit(1);
+ 			}
+@@ -628,7 +623,7 @@ int main(int ac, char **av)
+ 		if (conf_read_simple(name, S_DEF_USER) &&
+ 		    conf_read_simple("all.config", S_DEF_USER)) {
+ 			fprintf(stderr,
+-				_("*** KCONFIG_ALLCONFIG set, but no \"%s\" or \"all.config\" file found\n"),
++				"*** KCONFIG_ALLCONFIG set, but no \"%s\" or \"all.config\" file found\n",
+ 				name);
+ 			exit(1);
+ 		}
+@@ -642,7 +637,7 @@ int main(int ac, char **av)
+ 			name = getenv("KCONFIG_NOSILENTUPDATE");
+ 			if (name && *name) {
+ 				fprintf(stderr,
+-					_("\n*** The configuration requires explicit update.\n\n"));
++					"\n*** The configuration requires explicit update.\n\n");
+ 				return 1;
+ 			}
+ 		}
+@@ -694,22 +689,22 @@ int main(int ac, char **av)
+ 		 * All other commands are only used to generate a config.
+ 		 */
+ 		if (conf_get_changed() && conf_write(NULL)) {
+-			fprintf(stderr, _("\n*** Error during writing of the configuration.\n\n"));
++			fprintf(stderr, "\n*** Error during writing of the configuration.\n\n");
+ 			exit(1);
+ 		}
+ 		if (conf_write_autoconf()) {
+-			fprintf(stderr, _("\n*** Error during update of the configuration.\n\n"));
++			fprintf(stderr, "\n*** Error during update of the configuration.\n\n");
+ 			return 1;
+ 		}
+ 	} else if (input_mode == savedefconfig) {
+ 		if (conf_write_defconfig(defconfig_file)) {
+-			fprintf(stderr, _("n*** Error while saving defconfig to: %s\n\n"),
++			fprintf(stderr, "n*** Error while saving defconfig to: %s\n\n",
+ 				defconfig_file);
+ 			return 1;
+ 		}
+ 	} else if (input_mode != listnewconfig) {
+ 		if (conf_write(NULL)) {
+-			fprintf(stderr, _("\n*** Error during writing of the configuration.\n\n"));
++			fprintf(stderr, "\n*** Error during writing of the configuration.\n\n");
+ 			exit(1);
+ 		}
+ 	}
+diff --git a/tool/kconfig/scripts/kconfig/confdata.c b/tool/kconfig/scripts/kconfig/confdata.c
+index df26c7b..39e2097 100644
+--- a/tool/kconfig/scripts/kconfig/confdata.c
++++ b/tool/kconfig/scripts/kconfig/confdata.c
+@@ -30,7 +30,7 @@ static void conf_message(const char *fmt, ...)
+ static const char *conf_filename;
+ static int conf_lineno, conf_warnings;
+ 
+-const char conf_defname[] = "arch/$ARCH/defconfig";
++const char conf_defname[] = "arch/$(ARCH)/defconfig";
+ 
+ static void conf_warning(const char *fmt, ...)
+ {
+@@ -81,39 +81,13 @@ const char *conf_get_autoconfig_name(void)
+ 	return name ? name : "include/config/auto.conf";
+ }
+ 
+-static char *conf_expand_value(const char *in)
+-{
+-	struct symbol *sym;
+-	const char *src;
+-	static char res_value[SYMBOL_MAXLENGTH];
+-	char *dst, name[SYMBOL_MAXLENGTH];
+-
+-	res_value[0] = 0;
+-	dst = name;
+-	while ((src = strchr(in, '$'))) {
+-		strncat(res_value, in, src - in);
+-		src++;
+-		dst = name;
+-		while (isalnum(*src) || *src == '_')
+-			*dst++ = *src++;
+-		*dst = 0;
+-		sym = sym_lookup(name, 0);
+-		sym_calc_value(sym);
+-		strcat(res_value, sym_get_string_value(sym));
+-		in = src;
+-	}
+-	strcat(res_value, in);
+-
+-	return res_value;
+-}
+-
+ char *conf_get_default_confname(void)
+ {
+ 	struct stat buf;
+ 	static char fullname[PATH_MAX+1];
+ 	char *env, *name;
+ 
+-	name = conf_expand_value(conf_defname);
++	name = expand_string(conf_defname);
+ 	env = getenv(SRCTREE);
+ 	if (env) {
+ 		sprintf(fullname, "%s/%s", env, name);
+@@ -274,10 +248,11 @@ int conf_read_simple(const char *name, int def)
+ 			if (expr_calc_value(prop->visible.expr) == no ||
+ 			    prop->expr->type != E_SYMBOL)
+ 				continue;
+-			name = conf_expand_value(prop->expr->left.sym->name);
++			sym_calc_value(prop->expr->left.sym);
++			name = sym_get_string_value(prop->expr->left.sym);
+ 			in = zconf_fopen(name);
+ 			if (in) {
+-				conf_message(_("using defaults found in %s"),
++				conf_message("using defaults found in %s",
+ 					 name);
+ 				goto load;
+ 			}
+@@ -745,7 +720,7 @@ int conf_write(const char *name)
+ 	struct menu *menu;
+ 	const char *basename;
+ 	const char *str;
+-	char dirname[PATH_MAX+1], tmpname[PATH_MAX+1], newname[PATH_MAX+1];
++	char dirname[PATH_MAX+1], tmpname[PATH_MAX+22], newname[PATH_MAX+8];
+ 	char *env;
+ 
+ 	dirname[0] = 0;
+@@ -831,7 +806,7 @@ next:
+ 			return 1;
+ 	}
+ 
+-	conf_message(_("configuration written to %s"), newname);
++	conf_message("configuration written to %s", newname);
+ 
+ 	sym_set_change_count(0);
+ 
+diff --git a/tool/kconfig/scripts/kconfig/expr.h b/tool/kconfig/scripts/kconfig/expr.h
+index 94a383b..f63b41b 100644
+--- a/tool/kconfig/scripts/kconfig/expr.h
++++ b/tool/kconfig/scripts/kconfig/expr.h
+@@ -171,6 +171,9 @@ struct symbol {
+  * config BAZ
+  *         int "BAZ Value"
+  *         range 1..255
++ *
++ * Please, also check zconf.y:print_symbol() when modifying the
++ * list of property types!
+  */
+ enum prop_type {
+ 	P_UNKNOWN,
+diff --git a/tool/kconfig/scripts/kconfig/gconf-cfg.sh b/tool/kconfig/scripts/kconfig/gconf-cfg.sh
+new file mode 100755
+index 0000000..533b3d8
+--- /dev/null
++++ b/tool/kconfig/scripts/kconfig/gconf-cfg.sh
+@@ -0,0 +1,23 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++
++PKG="gtk+-2.0 gmodule-2.0 libglade-2.0"
++
++if ! pkg-config --exists $PKG; then
++	echo >&2 "*"
++	echo >&2 "* Unable to find the GTK+ installation. Please make sure that"
++	echo >&2 "* the GTK+ 2.0 development package is correctly installed."
++	echo >&2 "* You need $PKG"
++	echo >&2 "*"
++	exit 1
++fi
++
++if ! pkg-config --atleast-version=2.0.0 gtk+-2.0; then
++	echo >&2 "*"
++	echo >&2 "* GTK+ is present but version >= 2.0.0 is required."
++	echo >&2 "*"
++	exit 1
++fi
++
++echo cflags=\"$(pkg-config --cflags $PKG)\"
++echo libs=\"$(pkg-config --libs $PKG)\"
+diff --git a/tool/kconfig/scripts/kconfig/gconf.c b/tool/kconfig/scripts/kconfig/gconf.c
+index 29f90d1..9e79258 100644
+--- a/tool/kconfig/scripts/kconfig/gconf.c
++++ b/tool/kconfig/scripts/kconfig/gconf.c
+@@ -137,7 +137,7 @@ void init_main_window(const gchar * glade_file)
+ 
+ 	xml = glade_xml_new(glade_file, "window1", NULL);
+ 	if (!xml)
+-		g_error(_("GUI loading failed !\n"));
++		g_error("GUI loading failed !\n");
+ 	glade_xml_signal_autoconnect(xml);
+ 
+ 	main_wnd = glade_xml_get_widget(xml, "window1");
+@@ -233,7 +233,7 @@ void init_left_tree(void)
+ 
+ 	column = gtk_tree_view_column_new();
+ 	gtk_tree_view_append_column(view, column);
+-	gtk_tree_view_column_set_title(column, _("Options"));
++	gtk_tree_view_column_set_title(column, "Options");
+ 
+ 	renderer = gtk_cell_renderer_toggle_new();
+ 	gtk_tree_view_column_pack_start(GTK_TREE_VIEW_COLUMN(column),
+@@ -276,7 +276,7 @@ void init_right_tree(void)
+ 
+ 	column = gtk_tree_view_column_new();
+ 	gtk_tree_view_append_column(view, column);
+-	gtk_tree_view_column_set_title(column, _("Options"));
++	gtk_tree_view_column_set_title(column, "Options");
+ 
+ 	renderer = gtk_cell_renderer_pixbuf_new();
+ 	gtk_tree_view_column_pack_start(GTK_TREE_VIEW_COLUMN(column),
+@@ -305,7 +305,7 @@ void init_right_tree(void)
+ 
+ 	renderer = gtk_cell_renderer_text_new();
+ 	gtk_tree_view_insert_column_with_attributes(view, -1,
+-						    _("Name"), renderer,
++						    "Name", renderer,
+ 						    "text", COL_NAME,
+ 						    "foreground-gdk",
+ 						    COL_COLOR, NULL);
+@@ -329,7 +329,7 @@ void init_right_tree(void)
+ 						    COL_COLOR, NULL);
+ 	renderer = gtk_cell_renderer_text_new();
+ 	gtk_tree_view_insert_column_with_attributes(view, -1,
+-						    _("Value"), renderer,
++						    "Value", renderer,
+ 						    "text", COL_VALUE,
+ 						    "editable",
+ 						    COL_EDIT,
+@@ -368,7 +368,7 @@ static void text_insert_help(struct menu *menu)
+ {
+ 	GtkTextBuffer *buffer;
+ 	GtkTextIter start, end;
+-	const char *prompt = _(menu_get_prompt(menu));
++	const char *prompt = menu_get_prompt(menu);
+ 	struct gstr help = str_new();
+ 
+ 	menu_get_ext_help(menu, &help);
+@@ -422,7 +422,7 @@ gboolean on_window1_delete_event(GtkWidget * widget, GdkEvent * event,
+ 	if (!conf_get_changed())
+ 		return FALSE;
+ 
+-	dialog = gtk_dialog_new_with_buttons(_("Warning !"),
++	dialog = gtk_dialog_new_with_buttons("Warning !",
+ 					     GTK_WINDOW(main_wnd),
+ 					     (GtkDialogFlags)
+ 					     (GTK_DIALOG_MODAL |
+@@ -436,7 +436,7 @@ gboolean on_window1_delete_event(GtkWidget * widget, GdkEvent * event,
+ 	gtk_dialog_set_default_response(GTK_DIALOG(dialog),
+ 					GTK_RESPONSE_CANCEL);
+ 
+-	label = gtk_label_new(_("\nSave configuration ?\n"));
++	label = gtk_label_new("\nSave configuration ?\n");
+ 	gtk_container_add(GTK_CONTAINER(GTK_DIALOG(dialog)->vbox), label);
+ 	gtk_widget_show(label);
+ 
+@@ -496,7 +496,7 @@ load_filename(GtkFileSelection * file_selector, gpointer user_data)
+ 					     (user_data));
+ 
+ 	if (conf_read(fn))
+-		text_insert_msg(_("Error"), _("Unable to load configuration !"));
++		text_insert_msg("Error", "Unable to load configuration !");
+ 	else
+ 		display_tree(&rootmenu);
+ }
+@@ -505,7 +505,7 @@ void on_load1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ {
+ 	GtkWidget *fs;
+ 
+-	fs = gtk_file_selection_new(_("Load file..."));
++	fs = gtk_file_selection_new("Load file...");
+ 	g_signal_connect(GTK_OBJECT(GTK_FILE_SELECTION(fs)->ok_button),
+ 			 "clicked",
+ 			 G_CALLBACK(load_filename), (gpointer) fs);
+@@ -524,7 +524,7 @@ void on_load1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ void on_save_activate(GtkMenuItem * menuitem, gpointer user_data)
+ {
+ 	if (conf_write(NULL))
+-		text_insert_msg(_("Error"), _("Unable to save configuration !"));
++		text_insert_msg("Error", "Unable to save configuration !");
+ }
+ 
+ 
+@@ -537,7 +537,7 @@ store_filename(GtkFileSelection * file_selector, gpointer user_data)
+ 					     (user_data));
+ 
+ 	if (conf_write(fn))
+-		text_insert_msg(_("Error"), _("Unable to save configuration !"));
++		text_insert_msg("Error", "Unable to save configuration !");
+ 
+ 	gtk_widget_destroy(GTK_WIDGET(user_data));
+ }
+@@ -546,7 +546,7 @@ void on_save_as1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ {
+ 	GtkWidget *fs;
+ 
+-	fs = gtk_file_selection_new(_("Save file as..."));
++	fs = gtk_file_selection_new("Save file as...");
+ 	g_signal_connect(GTK_OBJECT(GTK_FILE_SELECTION(fs)->ok_button),
+ 			 "clicked",
+ 			 G_CALLBACK(store_filename), (gpointer) fs);
+@@ -639,7 +639,7 @@ on_set_option_mode3_activate(GtkMenuItem *menuitem, gpointer user_data)
+ void on_introduction1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ {
+ 	GtkWidget *dialog;
+-	const gchar *intro_text = _(
++	const gchar *intro_text = 
+ 	    "Welcome to gkc, the GTK+ graphical configuration tool\n"
+ 	    "For each option, a blank box indicates the feature is disabled, a\n"
+ 	    "check indicates it is enabled, and a dot indicates that it is to\n"
+@@ -654,7 +654,7 @@ void on_introduction1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ 	    "option.\n"
+ 	    "\n"
+ 	    "Toggling Show Debug Info under the Options menu will show \n"
+-	    "the dependencies, which you can then match by examining other options.");
++	    "the dependencies, which you can then match by examining other options.";
+ 
+ 	dialog = gtk_message_dialog_new(GTK_WINDOW(main_wnd),
+ 					GTK_DIALOG_DESTROY_WITH_PARENT,
+@@ -671,8 +671,8 @@ void on_about1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ {
+ 	GtkWidget *dialog;
+ 	const gchar *about_text =
+-	    _("gkc is copyright (c) 2002 Romain Lievin <roms@lpg.ticalc.org>.\n"
+-	      "Based on the source code from Roman Zippel.\n");
++	    "gkc is copyright (c) 2002 Romain Lievin <roms@lpg.ticalc.org>.\n"
++	      "Based on the source code from Roman Zippel.\n";
+ 
+ 	dialog = gtk_message_dialog_new(GTK_WINDOW(main_wnd),
+ 					GTK_DIALOG_DESTROY_WITH_PARENT,
+@@ -689,9 +689,9 @@ void on_license1_activate(GtkMenuItem * menuitem, gpointer user_data)
+ {
+ 	GtkWidget *dialog;
+ 	const gchar *license_text =
+-	    _("gkc is released under the terms of the GNU GPL v2.\n"
++	    "gkc is released under the terms of the GNU GPL v2.\n"
+ 	      "For more information, please see the source code or\n"
+-	      "visit http://www.fsf.org/licenses/licenses.html\n");
++	      "visit http://www.fsf.org/licenses/licenses.html\n";
+ 
+ 	dialog = gtk_message_dialog_new(GTK_WINDOW(main_wnd),
+ 					GTK_DIALOG_DESTROY_WITH_PARENT,
+@@ -1049,7 +1049,7 @@ static gchar **fill_row(struct menu *menu)
+ 	bzero(row, sizeof(row));
+ 
+ 	row[COL_OPTION] =
+-	    g_strdup_printf("%s %s", _(menu_get_prompt(menu)),
++	    g_strdup_printf("%s %s", menu_get_prompt(menu),
+ 			    sym && !sym_has_value(sym) ? "(NEW)" : "");
+ 
+ 	if (opt_mode == OPT_ALL && !menu_is_visible(menu))
+@@ -1102,7 +1102,7 @@ static gchar **fill_row(struct menu *menu)
+ 
+ 		if (def_menu)
+ 			row[COL_VALUE] =
+-			    g_strdup(_(menu_get_prompt(def_menu)));
++			    g_strdup(menu_get_prompt(def_menu));
+ 	}
+ 	if (sym->flags & SYMBOL_CHOICEVAL)
+ 		row[COL_BTNRAD] = GINT_TO_POINTER(TRUE);
+@@ -1447,10 +1447,6 @@ int main(int ac, char *av[])
+ 	char *env;
+ 	gchar *glade_file;
+ 
+-	bindtextdomain(PACKAGE, LOCALEDIR);
+-	bind_textdomain_codeset(PACKAGE, "UTF-8");
+-	textdomain(PACKAGE);
+-
+ 	/* GTK stuffs */
+ 	gtk_set_locale();
+ 	gtk_init(&ac, &av);
+diff --git a/tool/kconfig/scripts/kconfig/kconf_id.c b/tool/kconfig/scripts/kconfig/kconf_id.c
+index 3ea9c5f..b3e0ea0 100644
+--- a/tool/kconfig/scripts/kconfig/kconf_id.c
++++ b/tool/kconfig/scripts/kconfig/kconf_id.c
+@@ -32,7 +32,6 @@ static struct kconf_id kconf_id_array[] = {
+ 	{ "on",			T_ON,			TF_PARAM },
+ 	{ "modules",		T_OPT_MODULES,		TF_OPTION },
+ 	{ "defconfig_list",	T_OPT_DEFCONFIG_LIST,	TF_OPTION },
+-	{ "env",		T_OPT_ENV,		TF_OPTION },
+ 	{ "allnoconfig_y",	T_OPT_ALLNOCONFIG_Y,	TF_OPTION },
+ };
+ 
+diff --git a/tool/kconfig/scripts/kconfig/lkc.h b/tool/kconfig/scripts/kconfig/lkc.h
+index 15b28d6..b35118a 100644
+--- a/tool/kconfig/scripts/kconfig/lkc.h
++++ b/tool/kconfig/scripts/kconfig/lkc.h
+@@ -8,15 +8,6 @@
+ 
+ #include "expr.h"
+ 
+-#ifndef KBUILD_NO_NLS
+-# include <libintl.h>
+-#else
+-static inline const char *gettext(const char *txt) { return txt; }
+-static inline void textdomain(const char *domainname) {}
+-static inline void bindtextdomain(const char *name, const char *dir) {}
+-static inline char *bind_textdomain_codeset(const char *dn, char *c) { return c; }
+-#endif
+-
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+@@ -29,11 +20,6 @@ extern "C" {
+ #define PACKAGE "linux"
+ #endif
+ 
+-#define LOCALEDIR "/usr/share/locale"
+-
+-#define _(text) gettext(text)
+-#define N_(text) (text)
+-
+ #ifndef CONFIG_
+ #define CONFIG_ "CONFIG_"
+ #endif
+@@ -58,7 +44,6 @@ enum conf_def_mode {
+ 
+ #define T_OPT_MODULES		1
+ #define T_OPT_DEFCONFIG_LIST	2
+-#define T_OPT_ENV		3
+ #define T_OPT_ALLNOCONFIG_Y	4
+ 
+ struct kconf_id {
+@@ -117,6 +102,7 @@ void *xmalloc(size_t size);
+ void *xcalloc(size_t nmemb, size_t size);
+ void *xrealloc(void *p, size_t size);
+ char *xstrdup(const char *s);
++char *xstrndup(const char *s, size_t n);
+ 
+ struct gstr {
+ 	size_t len;
+@@ -134,9 +120,6 @@ void str_printf(struct gstr *gs, const char *fmt, ...);
+ const char *str_get(struct gstr *gs);
+ 
+ /* symbol.c */
+-extern struct expr *sym_env_list;
+-
+-void sym_init(void);
+ void sym_clear_all_valid(void);
+ struct symbol *sym_choice_default(struct symbol *sym);
+ const char *sym_get_string_default(struct symbol *sym);
+diff --git a/tool/kconfig/scripts/kconfig/lkc_proto.h b/tool/kconfig/scripts/kconfig/lkc_proto.h
+index 9dc8abf..a8b7a33 100644
+--- a/tool/kconfig/scripts/kconfig/lkc_proto.h
++++ b/tool/kconfig/scripts/kconfig/lkc_proto.h
+@@ -31,7 +31,6 @@ extern struct symbol * symbol_hash[SYMBOL_HASHSIZE];
+ 
+ struct symbol * sym_lookup(const char *name, int flags);
+ struct symbol * sym_find(const char *name);
+-char *sym_expand_string_value(const char *in);
+ const char * sym_escape_string_value(const char *in);
+ struct symbol ** sym_re_search(const char *pattern);
+ const char * sym_type_name(enum symbol_type type);
+@@ -49,5 +48,19 @@ const char * sym_get_string_value(struct symbol *sym);
+ 
+ const char * prop_get_type_name(enum prop_type type);
+ 
++/* preprocess.c */
++enum variable_flavor {
++	VAR_SIMPLE,
++	VAR_RECURSIVE,
++	VAR_APPEND,
++};
++void env_write_dep(FILE *f, const char *auto_conf_name);
++void variable_add(const char *name, const char *value,
++		  enum variable_flavor flavor);
++void variable_all_del(void);
++char *expand_string(const char *in);
++char *expand_dollar(const char **str);
++char *expand_one_token(const char **str);
++
+ /* expr.c */
+ void expr_print(struct expr *e, void (*fn)(void *, struct symbol *, const char *), void *data, int prevtoken);
+diff --git a/tool/kconfig/scripts/kconfig/lxdialog/checklist.c b/tool/kconfig/scripts/kconfig/lxdialog/checklist.c
+index 8d016fa..2e96323 100644
+--- a/tool/kconfig/scripts/kconfig/lxdialog/checklist.c
++++ b/tool/kconfig/scripts/kconfig/lxdialog/checklist.c
+@@ -103,8 +103,8 @@ static void print_buttons(WINDOW * dialog, int height, int width, int selected)
+ 	int x = width / 2 - 11;
+ 	int y = height - 2;
+ 
+-	print_button(dialog, gettext("Select"), y, x, selected == 0);
+-	print_button(dialog, gettext(" Help "), y, x + 14, selected == 1);
++	print_button(dialog, "Select", y, x, selected == 0);
++	print_button(dialog, " Help ", y, x + 14, selected == 1);
+ 
+ 	wmove(dialog, y, x + 1 + 14 * selected);
+ 	wrefresh(dialog);
+diff --git a/tool/kconfig/scripts/kconfig/lxdialog/dialog.h b/tool/kconfig/scripts/kconfig/lxdialog/dialog.h
+index fcffd5b..0b00be5 100644
+--- a/tool/kconfig/scripts/kconfig/lxdialog/dialog.h
++++ b/tool/kconfig/scripts/kconfig/lxdialog/dialog.h
+@@ -26,16 +26,10 @@
+ #include <string.h>
+ #include <stdbool.h>
+ 
+-#ifndef KBUILD_NO_NLS
+-# include <libintl.h>
+-#else
+-# define gettext(Msgid) ((const char *) (Msgid))
+-#endif
+-
+ #ifdef __sun__
+ #define CURS_MACROS
+ #endif
+-#include CURSES_LOC
++#include <ncurses.h>
+ 
+ /*
+  * Colors in ncurses 1.9.9e do not work properly since foreground and
+diff --git a/tool/kconfig/scripts/kconfig/lxdialog/inputbox.c b/tool/kconfig/scripts/kconfig/lxdialog/inputbox.c
+index d58de1d..fe82ff6 100644
+--- a/tool/kconfig/scripts/kconfig/lxdialog/inputbox.c
++++ b/tool/kconfig/scripts/kconfig/lxdialog/inputbox.c
+@@ -31,8 +31,8 @@ static void print_buttons(WINDOW * dialog, int height, int width, int selected)
+ 	int x = width / 2 - 11;
+ 	int y = height - 2;
+ 
+-	print_button(dialog, gettext("  Ok  "), y, x, selected == 0);
+-	print_button(dialog, gettext(" Help "), y, x + 14, selected == 1);
++	print_button(dialog, "  Ok  ", y, x, selected == 0);
++	print_button(dialog, " Help ", y, x + 14, selected == 1);
+ 
+ 	wmove(dialog, y, x + 1 + 14 * selected);
+ 	wrefresh(dialog);
+diff --git a/tool/kconfig/scripts/kconfig/lxdialog/menubox.c b/tool/kconfig/scripts/kconfig/lxdialog/menubox.c
+index 11ae9ad..d70cab3 100644
+--- a/tool/kconfig/scripts/kconfig/lxdialog/menubox.c
++++ b/tool/kconfig/scripts/kconfig/lxdialog/menubox.c
+@@ -157,11 +157,11 @@ static void print_buttons(WINDOW * win, int height, int width, int selected)
+ 	int x = width / 2 - 28;
+ 	int y = height - 2;
+ 
+-	print_button(win, gettext("Select"), y, x, selected == 0);
+-	print_button(win, gettext(" Exit "), y, x + 12, selected == 1);
+-	print_button(win, gettext(" Help "), y, x + 24, selected == 2);
+-	print_button(win, gettext(" Save "), y, x + 36, selected == 3);
+-	print_button(win, gettext(" Load "), y, x + 48, selected == 4);
++	print_button(win, "Select", y, x, selected == 0);
++	print_button(win, " Exit ", y, x + 12, selected == 1);
++	print_button(win, " Help ", y, x + 24, selected == 2);
++	print_button(win, " Save ", y, x + 36, selected == 3);
++	print_button(win, " Load ", y, x + 48, selected == 4);
+ 
+ 	wmove(win, y, x + 1 + 12 * selected);
+ 	wrefresh(win);
+diff --git a/tool/kconfig/scripts/kconfig/lxdialog/textbox.c b/tool/kconfig/scripts/kconfig/lxdialog/textbox.c
+index 1773319..88d2818 100644
+--- a/tool/kconfig/scripts/kconfig/lxdialog/textbox.c
++++ b/tool/kconfig/scripts/kconfig/lxdialog/textbox.c
+@@ -129,7 +129,7 @@ do_resize:
+ 
+ 	print_title(dialog, title, width);
+ 
+-	print_button(dialog, gettext(" Exit "), height - 2, width / 2 - 4, TRUE);
++	print_button(dialog, " Exit ", height - 2, width / 2 - 4, TRUE);
+ 	wnoutrefresh(dialog);
+ 	getyx(dialog, cur_y, cur_x);	/* Save cursor position */
+ 
+diff --git a/tool/kconfig/scripts/kconfig/lxdialog/yesno.c b/tool/kconfig/scripts/kconfig/lxdialog/yesno.c
+index 676fb2f..cd1223c 100644
+--- a/tool/kconfig/scripts/kconfig/lxdialog/yesno.c
++++ b/tool/kconfig/scripts/kconfig/lxdialog/yesno.c
+@@ -29,8 +29,8 @@ static void print_buttons(WINDOW * dialog, int height, int width, int selected)
+ 	int x = width / 2 - 10;
+ 	int y = height - 2;
+ 
+-	print_button(dialog, gettext(" Yes "), y, x, selected == 0);
+-	print_button(dialog, gettext("  No  "), y, x + 13, selected == 1);
++	print_button(dialog, " Yes ", y, x, selected == 0);
++	print_button(dialog, "  No  ", y, x + 13, selected == 1);
+ 
+ 	wmove(dialog, y, x + 1 + 13 * selected);
+ 	wrefresh(dialog);
+diff --git a/tool/kconfig/scripts/kconfig/mconf-cfg.sh b/tool/kconfig/scripts/kconfig/mconf-cfg.sh
+new file mode 100755
+index 0000000..e6f9fac
+--- /dev/null
++++ b/tool/kconfig/scripts/kconfig/mconf-cfg.sh
+@@ -0,0 +1,44 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++
++PKG="ncursesw"
++PKG2="ncurses"
++
++if pkg-config --exists $PKG; then
++	echo cflags=\"$(pkg-config --cflags $PKG)\"
++	echo libs=\"$(pkg-config --libs $PKG)\"
++	exit 0
++fi
++
++if pkg-config --exists $PKG2; then
++	echo cflags=\"$(pkg-config --cflags $PKG2)\"
++	echo libs=\"$(pkg-config --libs $PKG2)\"
++	exit 0
++fi
++
++# Unfortunately, some distributions (e.g. openSUSE) cannot find ncurses
++# by pkg-config.
++if [ -f /usr/include/ncursesw/ncurses.h ]; then
++	echo cflags=\"-D_GNU_SOURCE -I/usr/include/ncursesw\"
++	echo libs=\"-lncursesw\"
++	exit 0
++fi
++
++if [ -f /usr/include/ncurses/ncurses.h ]; then
++	echo cflags=\"-D_GNU_SOURCE -I/usr/include/ncurses\"
++	echo libs=\"-lncurses\"
++	exit 0
++fi
++
++if [ -f /usr/include/ncurses.h ]; then
++	echo cflags=\"-D_GNU_SOURCE\"
++	echo libs=\"-lncurses\"
++	exit 0
++fi
++
++echo >&2 "*"
++echo >&2 "* Unable to find the ncurses package."
++echo >&2 "* Install ncurses (ncurses-devel or libncurses-dev"
++echo >&2 "* depending on your distribution)."
++echo >&2 "*"
++exit 1
+diff --git a/tool/kconfig/scripts/kconfig/mconf.c b/tool/kconfig/scripts/kconfig/mconf.c
+index c829be8..5294ed1 100644
+--- a/tool/kconfig/scripts/kconfig/mconf.c
++++ b/tool/kconfig/scripts/kconfig/mconf.c
+@@ -17,12 +17,11 @@
+ #include <string.h>
+ #include <signal.h>
+ #include <unistd.h>
+-#include <locale.h>
+ 
+ #include "lkc.h"
+ #include "lxdialog/dialog.h"
+ 
+-static const char mconf_readme[] = N_(
++static const char mconf_readme[] =
+ "Overview\n"
+ "--------\n"
+ "This interface lets you select features and parameters for the build.\n"
+@@ -171,37 +170,37 @@ static const char mconf_readme[] = N_(
+ " blackbg    => selects a color scheme with black background\n"
+ " classic    => theme with blue background. The classic look\n"
+ " bluetitle  => an LCD friendly version of classic. (default)\n"
+-"\n"),
+-menu_instructions[] = N_(
++"\n",
++menu_instructions[] =
+ 	"Arrow keys navigate the menu.  "
+ 	"<Enter> selects submenus ---> (or empty submenus ----).  "
+ 	"Highlighted letters are hotkeys.  "
+ 	"Pressing <Y> includes, <N> excludes, <M> modularizes features.  "
+ 	"Press <Esc><Esc> to exit, <?> for Help, </> for Search.  "
+-	"Legend: [*] built-in  [ ] excluded  <M> module  < > module capable"),
+-radiolist_instructions[] = N_(
++	"Legend: [*] built-in  [ ] excluded  <M> module  < > module capable",
++radiolist_instructions[] =
+ 	"Use the arrow keys to navigate this window or "
+ 	"press the hotkey of the item you wish to select "
+ 	"followed by the <SPACE BAR>. "
+-	"Press <?> for additional information about this option."),
+-inputbox_instructions_int[] = N_(
++	"Press <?> for additional information about this option.",
++inputbox_instructions_int[] =
+ 	"Please enter a decimal value. "
+ 	"Fractions will not be accepted.  "
+-	"Use the <TAB> key to move from the input field to the buttons below it."),
+-inputbox_instructions_hex[] = N_(
++	"Use the <TAB> key to move from the input field to the buttons below it.",
++inputbox_instructions_hex[] =
+ 	"Please enter a hexadecimal value. "
+-	"Use the <TAB> key to move from the input field to the buttons below it."),
+-inputbox_instructions_string[] = N_(
++	"Use the <TAB> key to move from the input field to the buttons below it.",
++inputbox_instructions_string[] =
+ 	"Please enter a string value. "
+-	"Use the <TAB> key to move from the input field to the buttons below it."),
+-setmod_text[] = N_(
++	"Use the <TAB> key to move from the input field to the buttons below it.",
++setmod_text[] =
+ 	"This feature depends on another which has been configured as a module.\n"
+-	"As a result, this feature will be built as a module."),
+-load_config_text[] = N_(
++	"As a result, this feature will be built as a module.",
++load_config_text[] =
+ 	"Enter the name of the configuration file you wish to load.  "
+ 	"Accept the name shown to restore the configuration you "
+-	"last retrieved.  Leave blank to abort."),
+-load_config_help[] = N_(
++	"last retrieved.  Leave blank to abort.",
++load_config_help[] =
+ 	"\n"
+ 	"For various reasons, one may wish to keep several different\n"
+ 	"configurations available on a single machine.\n"
+@@ -211,11 +210,11 @@ load_config_help[] = N_(
+ 	"configuration.\n"
+ 	"\n"
+ 	"If you are uncertain, then you have probably never used alternate\n"
+-	"configuration files. You should therefore leave this blank to abort.\n"),
+-save_config_text[] = N_(
++	"configuration files. You should therefore leave this blank to abort.\n",
++save_config_text[] =
+ 	"Enter a filename to which this configuration should be saved "
+-	"as an alternate.  Leave blank to abort."),
+-save_config_help[] = N_(
++	"as an alternate.  Leave blank to abort.",
++save_config_help[] =
+ 	"\n"
+ 	"For various reasons, one may wish to keep different configurations\n"
+ 	"available on a single machine.\n"
+@@ -225,8 +224,8 @@ save_config_help[] = N_(
+ 	"configuration options you have selected at that time.\n"
+ 	"\n"
+ 	"If you are uncertain what all this means then you should probably\n"
+-	"leave this blank.\n"),
+-search_help[] = N_(
++	"leave this blank.\n",
++search_help[] =
+ 	"\n"
+ 	"Search for symbols and display their relations.\n"
+ 	"Regular expressions are allowed.\n"
+@@ -271,7 +270,7 @@ search_help[] = N_(
+ 	"Examples: USB	=> find all symbols containing USB\n"
+ 	"          ^USB => find all symbols starting with USB\n"
+ 	"          USB$ => find all symbols ending with USB\n"
+-	"\n");
++	"\n";
+ 
+ static int indent;
+ static struct menu *current_menu;
+@@ -400,19 +399,19 @@ static void search_conf(void)
+ 	struct subtitle_part stpart;
+ 
+ 	title = str_new();
+-	str_printf( &title, _("Enter (sub)string or regexp to search for "
+-			      "(with or without \"%s\")"), CONFIG_);
++	str_printf( &title, "Enter (sub)string or regexp to search for "
++			      "(with or without \"%s\")", CONFIG_);
+ 
+ again:
+ 	dialog_clear();
+-	dres = dialog_inputbox(_("Search Configuration Parameter"),
++	dres = dialog_inputbox("Search Configuration Parameter",
+ 			      str_get(&title),
+ 			      10, 75, "");
+ 	switch (dres) {
+ 	case 0:
+ 		break;
+ 	case 1:
+-		show_helptext(_("Search Configuration"), search_help);
++		show_helptext("Search Configuration", search_help);
+ 		goto again;
+ 	default:
+ 		str_free(&title);
+@@ -443,7 +442,7 @@ again:
+ 
+ 		res = get_relations_str(sym_arr, &head);
+ 		set_subtitle();
+-		dres = show_textbox_ext(_("Search Results"), (char *)
++		dres = show_textbox_ext("Search Results", (char *)
+ 					str_get(&res), 0, 0, keys, &vscroll,
+ 					&hscroll, &update_text, (void *)
+ 					&data);
+@@ -491,7 +490,7 @@ static void build_conf(struct menu *menu)
+ 			switch (prop->type) {
+ 			case P_MENU:
+ 				child_count++;
+-				prompt = _(prompt);
++				prompt = prompt;
+ 				if (single_menu_mode) {
+ 					item_make("%s%*c%s",
+ 						  menu->data ? "-->" : "++>",
+@@ -508,7 +507,7 @@ static void build_conf(struct menu *menu)
+ 			case P_COMMENT:
+ 				if (prompt) {
+ 					child_count++;
+-					item_make("   %*c*** %s ***", indent + 1, ' ', _(prompt));
++					item_make("   %*c*** %s ***", indent + 1, ' ', prompt);
+ 					item_set_tag(':');
+ 					item_set_data(menu);
+ 				}
+@@ -516,7 +515,7 @@ static void build_conf(struct menu *menu)
+ 			default:
+ 				if (prompt) {
+ 					child_count++;
+-					item_make("---%*c%s", indent + 1, ' ', _(prompt));
++					item_make("---%*c%s", indent + 1, ' ', prompt);
+ 					item_set_tag(':');
+ 					item_set_data(menu);
+ 				}
+@@ -560,10 +559,10 @@ static void build_conf(struct menu *menu)
+ 			item_set_data(menu);
+ 		}
+ 
+-		item_add_str("%*c%s", indent + 1, ' ', _(menu_get_prompt(menu)));
++		item_add_str("%*c%s", indent + 1, ' ', menu_get_prompt(menu));
+ 		if (val == yes) {
+ 			if (def_menu) {
+-				item_add_str(" (%s)", _(menu_get_prompt(def_menu)));
++				item_add_str(" (%s)", menu_get_prompt(def_menu));
+ 				item_add_str("  --->");
+ 				if (def_menu->list) {
+ 					indent += 2;
+@@ -575,7 +574,7 @@ static void build_conf(struct menu *menu)
+ 		}
+ 	} else {
+ 		if (menu == current_menu) {
+-			item_make("---%*c%s", indent + 1, ' ', _(menu_get_prompt(menu)));
++			item_make("---%*c%s", indent + 1, ' ', menu_get_prompt(menu));
+ 			item_set_tag(':');
+ 			item_set_data(menu);
+ 			goto conf_childs;
+@@ -618,17 +617,17 @@ static void build_conf(struct menu *menu)
+ 				tmp = indent - tmp + 4;
+ 				if (tmp < 0)
+ 					tmp = 0;
+-				item_add_str("%*c%s%s", tmp, ' ', _(menu_get_prompt(menu)),
++				item_add_str("%*c%s%s", tmp, ' ', menu_get_prompt(menu),
+ 					     (sym_has_value(sym) || !sym_is_changable(sym)) ?
+-					     "" : _(" (NEW)"));
++					     "" : " (NEW)");
+ 				item_set_tag('s');
+ 				item_set_data(menu);
+ 				goto conf_childs;
+ 			}
+ 		}
+-		item_add_str("%*c%s%s", indent + 1, ' ', _(menu_get_prompt(menu)),
++		item_add_str("%*c%s%s", indent + 1, ' ', menu_get_prompt(menu),
+ 			  (sym_has_value(sym) || !sym_is_changable(sym)) ?
+-			  "" : _(" (NEW)"));
++			  "" : " (NEW)");
+ 		if (menu->prompt->type == P_MENU) {
+ 			item_add_str("  %s", menu_is_empty(menu) ? "----" : "--->");
+ 			return;
+@@ -665,8 +664,8 @@ static void conf(struct menu *menu, struct menu *active_menu)
+ 			break;
+ 		set_subtitle();
+ 		dialog_clear();
+-		res = dialog_menu(prompt ? _(prompt) : _("Main Menu"),
+-				  _(menu_instructions),
++		res = dialog_menu(prompt ? prompt : "Main Menu",
++				  menu_instructions,
+ 				  active_menu, &s_scroll);
+ 		if (res == 1 || res == KEY_ESC || res == -ERRDISPLAYTOOSMALL)
+ 			break;
+@@ -708,7 +707,7 @@ static void conf(struct menu *menu, struct menu *active_menu)
+ 				show_help(submenu);
+ 			else {
+ 				reset_subtitle();
+-				show_helptext(_("README"), _(mconf_readme));
++				show_helptext("README", mconf_readme);
+ 			}
+ 			break;
+ 		case 3:
+@@ -793,13 +792,13 @@ static void show_help(struct menu *menu)
+ 	help.max_width = getmaxx(stdscr) - 10;
+ 	menu_get_ext_help(menu, &help);
+ 
+-	show_helptext(_(menu_get_prompt(menu)), str_get(&help));
++	show_helptext(menu_get_prompt(menu), str_get(&help));
+ 	str_free(&help);
+ }
+ 
+ static void conf_choice(struct menu *menu)
+ {
+-	const char *prompt = _(menu_get_prompt(menu));
++	const char *prompt = menu_get_prompt(menu);
+ 	struct menu *child;
+ 	struct symbol *active;
+ 
+@@ -814,9 +813,9 @@ static void conf_choice(struct menu *menu)
+ 			if (!menu_is_visible(child))
+ 				continue;
+ 			if (child->sym)
+-				item_make("%s", _(menu_get_prompt(child)));
++				item_make("%s", menu_get_prompt(child));
+ 			else {
+-				item_make("*** %s ***", _(menu_get_prompt(child)));
++				item_make("*** %s ***", menu_get_prompt(child));
+ 				item_set_tag(':');
+ 			}
+ 			item_set_data(child);
+@@ -826,8 +825,8 @@ static void conf_choice(struct menu *menu)
+ 				item_set_tag('X');
+ 		}
+ 		dialog_clear();
+-		res = dialog_checklist(prompt ? _(prompt) : _("Main Menu"),
+-					_(radiolist_instructions),
++		res = dialog_checklist(prompt ? prompt : "Main Menu",
++					radiolist_instructions,
+ 					MENUBOX_HEIGTH_MIN,
+ 					MENUBOX_WIDTH_MIN,
+ 					CHECKLIST_HEIGTH_MIN);
+@@ -868,26 +867,26 @@ static void conf_string(struct menu *menu)
+ 
+ 		switch (sym_get_type(menu->sym)) {
+ 		case S_INT:
+-			heading = _(inputbox_instructions_int);
++			heading = inputbox_instructions_int;
+ 			break;
+ 		case S_HEX:
+-			heading = _(inputbox_instructions_hex);
++			heading = inputbox_instructions_hex;
+ 			break;
+ 		case S_STRING:
+-			heading = _(inputbox_instructions_string);
++			heading = inputbox_instructions_string;
+ 			break;
+ 		default:
+-			heading = _("Internal mconf error!");
++			heading = "Internal mconf error!";
+ 		}
+ 		dialog_clear();
+-		res = dialog_inputbox(prompt ? _(prompt) : _("Main Menu"),
++		res = dialog_inputbox(prompt ? prompt : "Main Menu",
+ 				      heading, 10, 75,
+ 				      sym_get_string_value(menu->sym));
+ 		switch (res) {
+ 		case 0:
+ 			if (sym_set_string_value(menu->sym, dialog_input_result))
+ 				return;
+-			show_textbox(NULL, _("You have made an invalid entry."), 5, 43);
++			show_textbox(NULL, "You have made an invalid entry.", 5, 43);
+ 			break;
+ 		case 1:
+ 			show_help(menu);
+@@ -915,10 +914,10 @@ static void conf_load(void)
+ 				sym_set_change_count(1);
+ 				return;
+ 			}
+-			show_textbox(NULL, _("File does not exist!"), 5, 38);
++			show_textbox(NULL, "File does not exist!", 5, 38);
+ 			break;
+ 		case 1:
+-			show_helptext(_("Load Alternate Configuration"), load_config_help);
++			show_helptext("Load Alternate Configuration", load_config_help);
+ 			break;
+ 		case KEY_ESC:
+ 			return;
+@@ -941,10 +940,10 @@ static void conf_save(void)
+ 				set_config_filename(dialog_input_result);
+ 				return;
+ 			}
+-			show_textbox(NULL, _("Can't create file!  Probably a nonexistent directory."), 5, 60);
++			show_textbox(NULL, "Can't create file!  Probably a nonexistent directory.", 5, 60);
+ 			break;
+ 		case 1:
+-			show_helptext(_("Save Alternate Configuration"), save_config_help);
++			show_helptext("Save Alternate Configuration", save_config_help);
+ 			break;
+ 		case KEY_ESC:
+ 			return;
+@@ -961,8 +960,8 @@ static int handle_exit(void)
+ 	dialog_clear();
+ 	if (conf_get_changed())
+ 		res = dialog_yesno(NULL,
+-				   _("Do you wish to save your new configuration?\n"
+-				     "(Press <ESC><ESC> to continue kernel configuration.)"),
++				   "Do you wish to save your new configuration?\n"
++				     "(Press <ESC><ESC> to continue kernel configuration.)",
+ 				   6, 60);
+ 	else
+ 		res = -1;
+@@ -972,26 +971,26 @@ static int handle_exit(void)
+ 	switch (res) {
+ 	case 0:
+ 		if (conf_write(filename)) {
+-			fprintf(stderr, _("\n\n"
++			fprintf(stderr, "\n\n"
+ 					  "Error while writing of the configuration.\n"
+ 					  "Your configuration changes were NOT saved."
+-					  "\n\n"));
++					  "\n\n");
+ 			return 1;
+ 		}
+ 		/* fall through */
+ 	case -1:
+ 		if (!silent)
+-			printf(_("\n\n"
++			printf("\n\n"
+ 				 "*** End of the configuration.\n"
+ 				 "*** Execute 'make' to start the build or try 'make help'."
+-				 "\n\n"));
++				 "\n\n");
+ 		res = 0;
+ 		break;
+ 	default:
+ 		if (!silent)
+-			fprintf(stderr, _("\n\n"
++			fprintf(stderr, "\n\n"
+ 					  "Your configuration changes were NOT saved."
+-					  "\n\n"));
++					  "\n\n");
+ 		if (res != KEY_ESC)
+ 			res = 0;
+ 	}
+@@ -1009,10 +1008,6 @@ int main(int ac, char **av)
+ 	char *mode;
+ 	int res;
+ 
+-	setlocale(LC_ALL, "");
+-	bindtextdomain(PACKAGE, LOCALEDIR);
+-	textdomain(PACKAGE);
+-
+ 	signal(SIGINT, sig_handler);
+ 
+ 	if (ac > 1 && strcmp(av[1], "-s") == 0) {
+@@ -1031,8 +1026,8 @@ int main(int ac, char **av)
+ 	}
+ 
+ 	if (init_dialog(NULL)) {
+-		fprintf(stderr, N_("Your display is too small to run Menuconfig!\n"));
+-		fprintf(stderr, N_("It must be at least 19 lines by 80 columns.\n"));
++		fprintf(stderr, "Your display is too small to run Menuconfig!\n");
++		fprintf(stderr, "It must be at least 19 lines by 80 columns.\n");
+ 		return 1;
+ 	}
+ 
+diff --git a/tool/kconfig/scripts/kconfig/menu.c b/tool/kconfig/scripts/kconfig/menu.c
+index 5c5c137..379a119 100644
+--- a/tool/kconfig/scripts/kconfig/menu.c
++++ b/tool/kconfig/scripts/kconfig/menu.c
+@@ -214,9 +214,6 @@ void menu_add_option(int token, char *arg)
+ 			zconf_error("trying to redefine defconfig symbol");
+ 		sym_defconfig_list->flags |= SYMBOL_AUTO;
+ 		break;
+-	case T_OPT_ENV:
+-		prop_add_env(arg);
+-		break;
+ 	case T_OPT_ALLNOCONFIG_Y:
+ 		current_entry->sym->flags |= SYMBOL_ALLNOCONFIG_Y;
+ 		break;
+@@ -711,7 +708,7 @@ static void get_prompt_str(struct gstr *r, struct property *prop,
+ 	struct menu *submenu[8], *menu, *location = NULL;
+ 	struct jump_key *jump = NULL;
+ 
+-	str_printf(r, _("Prompt: %s\n"), _(prop->text));
++	str_printf(r, "Prompt: %s\n", prop->text);
+ 	menu = prop->menu->parent;
+ 	for (i = 0; menu != &rootmenu && i < 8; menu = menu->parent) {
+ 		bool accessible = menu_is_visible(menu);
+@@ -744,16 +741,16 @@ static void get_prompt_str(struct gstr *r, struct property *prop,
+ 	}
+ 
+ 	if (i > 0) {
+-		str_printf(r, _("  Location:\n"));
++		str_printf(r, "  Location:\n");
+ 		for (j = 4; --i >= 0; j += 2) {
+ 			menu = submenu[i];
+ 			if (jump && menu == location)
+ 				jump->offset = strlen(r->s);
+ 			str_printf(r, "%*c-> %s", j, ' ',
+-				   _(menu_get_prompt(menu)));
++				   menu_get_prompt(menu));
+ 			if (menu->sym) {
+ 				str_printf(r, " (%s [=%s])", menu->sym->name ?
+-					menu->sym->name : _("<choice>"),
++					menu->sym->name : "<choice>",
+ 					sym_get_string_value(menu->sym));
+ 			}
+ 			str_append(r, "\n");
+@@ -817,23 +814,23 @@ static void get_symbol_str(struct gstr *r, struct symbol *sym,
+ 
+ 	prop = get_symbol_prop(sym);
+ 	if (prop) {
+-		str_printf(r, _("  Defined at %s:%d\n"), prop->menu->file->name,
++		str_printf(r, "  Defined at %s:%d\n", prop->menu->file->name,
+ 			prop->menu->lineno);
+ 		if (!expr_is_yes(prop->visible.expr)) {
+-			str_append(r, _("  Depends on: "));
++			str_append(r, "  Depends on: ");
+ 			expr_gstr_print(prop->visible.expr, r);
+ 			str_append(r, "\n");
+ 		}
+ 	}
+ 
+-	get_symbol_props_str(r, sym, P_SELECT, _("  Selects: "));
++	get_symbol_props_str(r, sym, P_SELECT, "  Selects: ");
+ 	if (sym->rev_dep.expr) {
+ 		expr_gstr_print_revdep(sym->rev_dep.expr, r, yes, "  Selected by [y]:\n");
+ 		expr_gstr_print_revdep(sym->rev_dep.expr, r, mod, "  Selected by [m]:\n");
+ 		expr_gstr_print_revdep(sym->rev_dep.expr, r, no, "  Selected by [n]:\n");
+ 	}
+ 
+-	get_symbol_props_str(r, sym, P_IMPLY, _("  Implies: "));
++	get_symbol_props_str(r, sym, P_IMPLY, "  Implies: ");
+ 	if (sym->implied.expr) {
+ 		expr_gstr_print_revdep(sym->implied.expr, r, yes, "  Implied by [y]:\n");
+ 		expr_gstr_print_revdep(sym->implied.expr, r, mod, "  Implied by [m]:\n");
+@@ -852,7 +849,7 @@ struct gstr get_relations_str(struct symbol **sym_arr, struct list_head *head)
+ 	for (i = 0; sym_arr && (sym = sym_arr[i]); i++)
+ 		get_symbol_str(&res, sym, head);
+ 	if (!i)
+-		str_append(&res, _("No matches found.\n"));
++		str_append(&res, "No matches found.\n");
+ 	return res;
+ }
+ 
+@@ -867,7 +864,7 @@ void menu_get_ext_help(struct menu *menu, struct gstr *help)
+ 			str_printf(help, "%s%s:\n\n", CONFIG_, sym->name);
+ 		help_text = menu_get_help(menu);
+ 	}
+-	str_printf(help, "%s\n", _(help_text));
++	str_printf(help, "%s\n", help_text);
+ 	if (sym)
+ 		get_symbol_str(help, sym, NULL);
+ }
+diff --git a/tool/kconfig/scripts/kconfig/nconf-cfg.sh b/tool/kconfig/scripts/kconfig/nconf-cfg.sh
+new file mode 100644
+index 0000000..42f5ac7
+--- /dev/null
++++ b/tool/kconfig/scripts/kconfig/nconf-cfg.sh
+@@ -0,0 +1,44 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++
++PKG="ncursesw menuw panelw"
++PKG2="ncurses menu panel"
++
++if pkg-config --exists $PKG; then
++	echo cflags=\"$(pkg-config --cflags $PKG)\"
++	echo libs=\"$(pkg-config --libs $PKG)\"
++	exit 0
++fi
++
++if pkg-config --exists $PKG2; then
++	echo cflags=\"$(pkg-config --cflags $PKG2)\"
++	echo libs=\"$(pkg-config --libs $PKG2)\"
++	exit 0
++fi
++
++# Unfortunately, some distributions (e.g. openSUSE) cannot find ncurses
++# by pkg-config.
++if [ -f /usr/include/ncursesw/ncurses.h ]; then
++	echo cflags=\"-D_GNU_SOURCE -I/usr/include/ncursesw\"
++	echo libs=\"-lncursesw -lmenuw -lpanelw\"
++	exit 0
++fi
++
++if [ -f /usr/include/ncurses/ncurses.h ]; then
++	echo cflags=\"-D_GNU_SOURCE -I/usr/include/ncurses\"
++	echo libs=\"-lncurses -lmenu -lpanel\"
++	exit 0
++fi
++
++if [ -f /usr/include/ncurses.h ]; then
++	echo cflags=\"-D_GNU_SOURCE\"
++	echo libs=\"-lncurses -lmenu -lpanel\"
++	exit 0
++fi
++
++echo >&2 "*"
++echo >&2 "* Unable to find the ncurses package."
++echo >&2 "* Install ncurses (ncurses-devel or libncurses-dev"
++echo >&2 "* depending on your distribution)."
++echo >&2 "*"
++exit 1
+diff --git a/tool/kconfig/scripts/kconfig/nconf.c b/tool/kconfig/scripts/kconfig/nconf.c
+index 0031147..97b7844 100644
+--- a/tool/kconfig/scripts/kconfig/nconf.c
++++ b/tool/kconfig/scripts/kconfig/nconf.c
+@@ -15,7 +15,7 @@
+ #include "nconf.h"
+ #include <ctype.h>
+ 
+-static const char nconf_global_help[] = N_(
++static const char nconf_global_help[] =
+ "Help windows\n"
+ "------------\n"
+ "o  Global help:  Unless in a data entry window, pressing <F1> will give \n"
+@@ -130,8 +130,8 @@ static const char nconf_global_help[] = N_(
+ "\n"
+ "Note that this mode can eventually be a little more CPU expensive than\n"
+ "the default mode, especially with a larger number of unfolded submenus.\n"
+-"\n"),
+-menu_no_f_instructions[] = N_(
++"\n",
++menu_no_f_instructions[] =
+ "Legend:  [*] built-in  [ ] excluded  <M> module  < > module capable.\n"
+ "Submenus are designated by a trailing \"--->\", empty ones by \"----\".\n"
+ "\n"
+@@ -147,8 +147,8 @@ menu_no_f_instructions[] = N_(
+ "You do not have function keys support.\n"
+ "Press <1> instead of <F1>, <2> instead of <F2>, etc.\n"
+ "For verbose global help use key <1>.\n"
+-"For help related to the current menu entry press <?> or <h>.\n"),
+-menu_instructions[] = N_(
++"For help related to the current menu entry press <?> or <h>.\n",
++menu_instructions[] =
+ "Legend:  [*] built-in  [ ] excluded  <M> module  < > module capable.\n"
+ "Submenus are designated by a trailing \"--->\", empty ones by \"----\".\n"
+ "\n"
+@@ -163,30 +163,30 @@ menu_instructions[] = N_(
+ "\n"
+ "Pressing <1> may be used instead of <F1>, <2> instead of <F2>, etc.\n"
+ "For verbose global help press <F1>.\n"
+-"For help related to the current menu entry press <?> or <h>.\n"),
+-radiolist_instructions[] = N_(
++"For help related to the current menu entry press <?> or <h>.\n",
++radiolist_instructions[] =
+ "Press <Up>, <Down>, <Home> or <End> to navigate a radiolist, select\n"
+ "with <Space>.\n"
+ "For help related to the current entry press <?> or <h>.\n"
+-"For global help press <F1>.\n"),
+-inputbox_instructions_int[] = N_(
++"For global help press <F1>.\n",
++inputbox_instructions_int[] =
+ "Please enter a decimal value.\n"
+ "Fractions will not be accepted.\n"
+-"Press <Enter> to apply, <Esc> to cancel."),
+-inputbox_instructions_hex[] = N_(
++"Press <Enter> to apply, <Esc> to cancel.",
++inputbox_instructions_hex[] =
+ "Please enter a hexadecimal value.\n"
+-"Press <Enter> to apply, <Esc> to cancel."),
+-inputbox_instructions_string[] = N_(
++"Press <Enter> to apply, <Esc> to cancel.",
++inputbox_instructions_string[] =
+ "Please enter a string value.\n"
+-"Press <Enter> to apply, <Esc> to cancel."),
+-setmod_text[] = N_(
++"Press <Enter> to apply, <Esc> to cancel.",
++setmod_text[] =
+ "This feature depends on another feature which has been configured as a\n"
+-"module.  As a result, the current feature will be built as a module too."),
+-load_config_text[] = N_(
++"module.  As a result, the current feature will be built as a module too.",
++load_config_text[] =
+ "Enter the name of the configuration file you wish to load.\n"
+ "Accept the name shown to restore the configuration you last\n"
+-"retrieved.  Leave empty to abort."),
+-load_config_help[] = N_(
++"retrieved.  Leave empty to abort.",
++load_config_help[] =
+ "For various reasons, one may wish to keep several different\n"
+ "configurations available on a single machine.\n"
+ "\n"
+@@ -194,11 +194,11 @@ load_config_help[] = N_(
+ "default one, entering its name here will allow you to load and modify\n"
+ "that configuration.\n"
+ "\n"
+-"Leave empty to abort.\n"),
+-save_config_text[] = N_(
++"Leave empty to abort.\n",
++save_config_text[] =
+ "Enter a filename to which this configuration should be saved\n"
+-"as an alternate.  Leave empty to abort."),
+-save_config_help[] = N_(
++"as an alternate.  Leave empty to abort.",
++save_config_help[] =
+ "For various reasons, one may wish to keep several different\n"
+ "configurations available on a single machine.\n"
+ "\n"
+@@ -206,8 +206,8 @@ save_config_help[] = N_(
+ "and use the current configuration as an alternate to whatever\n"
+ "configuration options you have selected at that time.\n"
+ "\n"
+-"Leave empty to abort.\n"),
+-search_help[] = N_(
++"Leave empty to abort.\n",
++search_help[] =
+ "Search for symbols (configuration variable names CONFIG_*) and display\n"
+ "their relations.  Regular expressions are supported.\n"
+ "Example:  Search for \"^FOO\".\n"
+@@ -244,7 +244,7 @@ search_help[] = N_(
+ "USB  => find all symbols containing USB\n"
+ "^USB => find all symbols starting with USB\n"
+ "USB$ => find all symbols ending with USB\n"
+-"\n");
++"\n";
+ 
+ struct mitem {
+ 	char str[256];
+@@ -388,7 +388,7 @@ static void print_function_line(void)
+ static void handle_f1(int *key, struct menu *current_item)
+ {
+ 	show_scroll_win(main_window,
+-			_("Global help"), _(nconf_global_help));
++			"Global help", nconf_global_help);
+ 	return;
+ }
+ 
+@@ -403,8 +403,8 @@ static void handle_f2(int *key, struct menu *current_item)
+ static void handle_f3(int *key, struct menu *current_item)
+ {
+ 	show_scroll_win(main_window,
+-			_("Short help"),
+-			_(current_instructions));
++			"Short help",
++			current_instructions);
+ 	return;
+ }
+ 
+@@ -412,7 +412,7 @@ static void handle_f3(int *key, struct menu *current_item)
+ static void handle_f4(int *key, struct menu *current_item)
+ {
+ 	int res = btn_dialog(main_window,
+-			_("Show all symbols?"),
++			"Show all symbols?",
+ 			2,
+ 			"   <Show All>   ",
+ 			"<Don't show all>");
+@@ -653,8 +653,8 @@ static int do_exit(void)
+ 		return 0;
+ 	}
+ 	res = btn_dialog(main_window,
+-			_("Do you wish to save your new configuration?\n"
+-				"<ESC> to cancel and resume nconfig."),
++			"Do you wish to save your new configuration?\n"
++				"<ESC> to cancel and resume nconfig.",
+ 			2,
+ 			"   <save>   ",
+ 			"<don't save>");
+@@ -670,15 +670,15 @@ static int do_exit(void)
+ 		if (res)
+ 			btn_dialog(
+ 				main_window,
+-				_("Error during writing of configuration.\n"
+-				  "Your configuration changes were NOT saved."),
++				"Error during writing of configuration.\n"
++				  "Your configuration changes were NOT saved.",
+ 				  1,
+ 				  "<OK>");
+ 		break;
+ 	default:
+ 		btn_dialog(
+ 			main_window,
+-			_("Your configuration changes were NOT saved."),
++			"Your configuration changes were NOT saved.",
+ 			1,
+ 			"<OK>");
+ 		break;
+@@ -697,12 +697,12 @@ static void search_conf(void)
+ 	int dres;
+ 
+ 	title = str_new();
+-	str_printf( &title, _("Enter (sub)string or regexp to search for "
+-			      "(with or without \"%s\")"), CONFIG_);
++	str_printf( &title, "Enter (sub)string or regexp to search for "
++			      "(with or without \"%s\")", CONFIG_);
+ 
+ again:
+ 	dres = dialog_inputbox(main_window,
+-			_("Search Configuration Parameter"),
++			"Search Configuration Parameter",
+ 			str_get(&title),
+ 			"", &dialog_input_result, &dialog_input_result_len);
+ 	switch (dres) {
+@@ -710,7 +710,7 @@ again:
+ 		break;
+ 	case 1:
+ 		show_scroll_win(main_window,
+-				_("Search Configuration"), search_help);
++				"Search Configuration", search_help);
+ 		goto again;
+ 	default:
+ 		str_free(&title);
+@@ -726,7 +726,7 @@ again:
+ 	res = get_relations_str(sym_arr, NULL);
+ 	free(sym_arr);
+ 	show_scroll_win(main_window,
+-			_("Search Results"), str_get(&res));
++			"Search Results", str_get(&res));
+ 	str_free(&res);
+ 	str_free(&title);
+ }
+@@ -754,7 +754,7 @@ static void build_conf(struct menu *menu)
+ 			switch (ptype) {
+ 			case P_MENU:
+ 				child_count++;
+-				prompt = _(prompt);
++				prompt = prompt;
+ 				if (single_menu_mode) {
+ 					item_make(menu, 'm',
+ 						"%s%*c%s",
+@@ -775,7 +775,7 @@ static void build_conf(struct menu *menu)
+ 					item_make(menu, ':',
+ 						"   %*c*** %s ***",
+ 						indent + 1, ' ',
+-						_(prompt));
++						prompt);
+ 				}
+ 				break;
+ 			default:
+@@ -783,7 +783,7 @@ static void build_conf(struct menu *menu)
+ 					child_count++;
+ 					item_make(menu, ':', "---%*c%s",
+ 						indent + 1, ' ',
+-						_(prompt));
++						prompt);
+ 				}
+ 			}
+ 		} else
+@@ -829,11 +829,11 @@ static void build_conf(struct menu *menu)
+ 		}
+ 
+ 		item_add_str("%*c%s", indent + 1,
+-				' ', _(menu_get_prompt(menu)));
++				' ', menu_get_prompt(menu));
+ 		if (val == yes) {
+ 			if (def_menu) {
+ 				item_add_str(" (%s)",
+-					_(menu_get_prompt(def_menu)));
++					menu_get_prompt(def_menu));
+ 				item_add_str("  --->");
+ 				if (def_menu->list) {
+ 					indent += 2;
+@@ -847,7 +847,7 @@ static void build_conf(struct menu *menu)
+ 		if (menu == current_menu) {
+ 			item_make(menu, ':',
+ 				"---%*c%s", indent + 1,
+-				' ', _(menu_get_prompt(menu)));
++				' ', menu_get_prompt(menu));
+ 			goto conf_childs;
+ 		}
+ 		child_count++;
+@@ -894,17 +894,17 @@ static void build_conf(struct menu *menu)
+ 				if (tmp < 0)
+ 					tmp = 0;
+ 				item_add_str("%*c%s%s", tmp, ' ',
+-						_(menu_get_prompt(menu)),
++						menu_get_prompt(menu),
+ 						(sym_has_value(sym) ||
+ 						 !sym_is_changable(sym)) ? "" :
+-						_(" (NEW)"));
++						" (NEW)");
+ 				goto conf_childs;
+ 			}
+ 		}
+ 		item_add_str("%*c%s%s", indent + 1, ' ',
+-				_(menu_get_prompt(menu)),
++				menu_get_prompt(menu),
+ 				(sym_has_value(sym) || !sym_is_changable(sym)) ?
+-				"" : _(" (NEW)"));
++				"" : " (NEW)");
+ 		if (menu->prompt && menu->prompt->type == P_MENU) {
+ 			item_add_str("  %s", menu_is_empty(menu) ? "----" : "--->");
+ 			return;
+@@ -1086,8 +1086,8 @@ static void conf(struct menu *menu)
+ 		if (!child_count)
+ 			break;
+ 
+-		show_menu(prompt ? _(prompt) : _("Main Menu"),
+-				_(menu_instructions),
++		show_menu(prompt ? prompt : "Main Menu",
++				menu_instructions,
+ 				current_index, &last_top_row);
+ 		keypad((menu_win(curses_menu)), TRUE);
+ 		while (!global_exit) {
+@@ -1227,13 +1227,13 @@ static void show_help(struct menu *menu)
+ 
+ 	help = str_new();
+ 	menu_get_ext_help(menu, &help);
+-	show_scroll_win(main_window, _(menu_get_prompt(menu)), str_get(&help));
++	show_scroll_win(main_window, menu_get_prompt(menu), str_get(&help));
+ 	str_free(&help);
+ }
+ 
+ static void conf_choice(struct menu *menu)
+ {
+-	const char *prompt = _(menu_get_prompt(menu));
++	const char *prompt = menu_get_prompt(menu);
+ 	struct menu *child = NULL;
+ 	struct symbol *active;
+ 	int selected_index = 0;
+@@ -1256,13 +1256,13 @@ static void conf_choice(struct menu *menu)
+ 
+ 			if (child->sym == sym_get_choice_value(menu->sym))
+ 				item_make(child, ':', "<X> %s",
+-						_(menu_get_prompt(child)));
++						menu_get_prompt(child));
+ 			else if (child->sym)
+ 				item_make(child, ':', "    %s",
+-						_(menu_get_prompt(child)));
++						menu_get_prompt(child));
+ 			else
+ 				item_make(child, ':', "*** %s ***",
+-						_(menu_get_prompt(child)));
++						menu_get_prompt(child));
+ 
+ 			if (child->sym == active){
+ 				last_top_row = top_row(curses_menu);
+@@ -1270,8 +1270,8 @@ static void conf_choice(struct menu *menu)
+ 			}
+ 			i++;
+ 		}
+-		show_menu(prompt ? _(prompt) : _("Choice Menu"),
+-				_(radiolist_instructions),
++		show_menu(prompt ? prompt : "Choice Menu",
++				radiolist_instructions,
+ 				selected_index,
+ 				&last_top_row);
+ 		while (!global_exit) {
+@@ -1358,19 +1358,19 @@ static void conf_string(struct menu *menu)
+ 
+ 		switch (sym_get_type(menu->sym)) {
+ 		case S_INT:
+-			heading = _(inputbox_instructions_int);
++			heading = inputbox_instructions_int;
+ 			break;
+ 		case S_HEX:
+-			heading = _(inputbox_instructions_hex);
++			heading = inputbox_instructions_hex;
+ 			break;
+ 		case S_STRING:
+-			heading = _(inputbox_instructions_string);
++			heading = inputbox_instructions_string;
+ 			break;
+ 		default:
+-			heading = _("Internal nconf error!");
++			heading = "Internal nconf error!";
+ 		}
+ 		res = dialog_inputbox(main_window,
+-				prompt ? _(prompt) : _("Main Menu"),
++				prompt ? prompt : "Main Menu",
+ 				heading,
+ 				sym_get_string_value(menu->sym),
+ 				&dialog_input_result,
+@@ -1381,7 +1381,7 @@ static void conf_string(struct menu *menu)
+ 						dialog_input_result))
+ 				return;
+ 			btn_dialog(main_window,
+-				_("You have made an invalid entry."), 0);
++				"You have made an invalid entry.", 0);
+ 			break;
+ 		case 1:
+ 			show_help(menu);
+@@ -1410,11 +1410,11 @@ static void conf_load(void)
+ 				sym_set_change_count(1);
+ 				return;
+ 			}
+-			btn_dialog(main_window, _("File does not exist!"), 0);
++			btn_dialog(main_window, "File does not exist!", 0);
+ 			break;
+ 		case 1:
+ 			show_scroll_win(main_window,
+-					_("Load Alternate Configuration"),
++					"Load Alternate Configuration",
+ 					load_config_help);
+ 			break;
+ 		case KEY_EXIT:
+@@ -1441,13 +1441,13 @@ static void conf_save(void)
+ 				set_config_filename(dialog_input_result);
+ 				return;
+ 			}
+-			btn_dialog(main_window, _("Can't create file! "
+-				"Probably a nonexistent directory."),
++			btn_dialog(main_window, "Can't create file! "
++				"Probably a nonexistent directory.",
+ 				1, "<OK>");
+ 			break;
+ 		case 1:
+ 			show_scroll_win(main_window,
+-				_("Save Alternate Configuration"),
++				"Save Alternate Configuration",
+ 				save_config_help);
+ 			break;
+ 		case KEY_EXIT:
+@@ -1480,10 +1480,6 @@ int main(int ac, char **av)
+ 	int lines, columns;
+ 	char *mode;
+ 
+-	setlocale(LC_ALL, "");
+-	bindtextdomain(PACKAGE, LOCALEDIR);
+-	textdomain(PACKAGE);
+-
+ 	if (ac > 1 && strcmp(av[1], "-s") == 0) {
+ 		/* Silence conf_read() until the real callback is set up */
+ 		conf_set_message_callback(NULL);
+@@ -1541,8 +1537,8 @@ int main(int ac, char **av)
+ 	/* check for KEY_FUNC(1) */
+ 	if (has_key(KEY_F(1)) == FALSE) {
+ 		show_scroll_win(main_window,
+-				_("Instructions"),
+-				_(menu_no_f_instructions));
++				"Instructions",
++				menu_no_f_instructions);
+ 	}
+ 
+ 	conf_set_message_callback(conf_message_callback);
+diff --git a/tool/kconfig/scripts/kconfig/nconf.h b/tool/kconfig/scripts/kconfig/nconf.h
+index 9f6f21d..2b9e19f 100644
+--- a/tool/kconfig/scripts/kconfig/nconf.h
++++ b/tool/kconfig/scripts/kconfig/nconf.h
+@@ -14,7 +14,6 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
+-#include <locale.h>
+ #include <ncurses.h>
+ #include <menu.h>
+ #include <panel.h>
+diff --git a/tool/kconfig/scripts/kconfig/preprocess.c b/tool/kconfig/scripts/kconfig/preprocess.c
+new file mode 100644
+index 0000000..5ca2df7
+--- /dev/null
++++ b/tool/kconfig/scripts/kconfig/preprocess.c
+@@ -0,0 +1,572 @@
++// SPDX-License-Identifier: GPL-2.0
++//
++// Copyright (C) 2018 Masahiro Yamada <yamada.masahiro@socionext.com>
++
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "list.h"
++
++#define ARRAY_SIZE(arr)		(sizeof(arr) / sizeof((arr)[0]))
++
++static char *expand_string_with_args(const char *in, int argc, char *argv[]);
++
++static void __attribute__((noreturn)) pperror(const char *format, ...)
++{
++	va_list ap;
++
++	fprintf(stderr, "%s:%d: ", current_file->name, yylineno);
++	va_start(ap, format);
++	vfprintf(stderr, format, ap);
++	va_end(ap);
++	fprintf(stderr, "\n");
++
++	exit(1);
++}
++
++/*
++ * Environment variables
++ */
++static LIST_HEAD(env_list);
++
++struct env {
++	char *name;
++	char *value;
++	struct list_head node;
++};
++
++static void env_add(const char *name, const char *value)
++{
++	struct env *e;
++
++	e = xmalloc(sizeof(*e));
++	e->name = xstrdup(name);
++	e->value = xstrdup(value);
++
++	list_add_tail(&e->node, &env_list);
++}
++
++static void env_del(struct env *e)
++{
++	list_del(&e->node);
++	free(e->name);
++	free(e->value);
++	free(e);
++}
++
++/* The returned pointer must be freed when done */
++static char *env_expand(const char *name)
++{
++	struct env *e;
++	const char *value;
++
++	if (!*name)
++		return NULL;
++
++	list_for_each_entry(e, &env_list, node) {
++		if (!strcmp(name, e->name))
++			return xstrdup(e->value);
++	}
++
++	value = getenv(name);
++	if (!value)
++		return NULL;
++
++	/*
++	 * We need to remember all referenced environment variables.
++	 * They will be written out to include/config/auto.conf.cmd
++	 */
++	env_add(name, value);
++
++	return xstrdup(value);
++}
++
++void env_write_dep(FILE *f, const char *autoconfig_name)
++{
++	struct env *e, *tmp;
++
++	list_for_each_entry_safe(e, tmp, &env_list, node) {
++		fprintf(f, "ifneq \"$(%s)\" \"%s\"\n", e->name, e->value);
++		fprintf(f, "%s: FORCE\n", autoconfig_name);
++		fprintf(f, "endif\n");
++		env_del(e);
++	}
++}
++
++/*
++ * Built-in functions
++ */
++struct function {
++	const char *name;
++	unsigned int min_args;
++	unsigned int max_args;
++	char *(*func)(int argc, char *argv[]);
++};
++
++static char *do_error_if(int argc, char *argv[])
++{
++	if (!strcmp(argv[0], "y"))
++		pperror("%s", argv[1]);
++
++	return NULL;
++}
++
++static char *do_filename(int argc, char *argv[])
++{
++	return xstrdup(current_file->name);
++}
++
++static char *do_info(int argc, char *argv[])
++{
++	printf("%s\n", argv[0]);
++
++	return xstrdup("");
++}
++
++static char *do_lineno(int argc, char *argv[])
++{
++	char buf[16];
++
++	sprintf(buf, "%d", yylineno);
++
++	return xstrdup(buf);
++}
++
++static char *do_shell(int argc, char *argv[])
++{
++	FILE *p;
++	char buf[256];
++	char *cmd;
++	size_t nread;
++	int i;
++
++	cmd = argv[0];
++
++	p = popen(cmd, "r");
++	if (!p) {
++		perror(cmd);
++		exit(1);
++	}
++
++	nread = fread(buf, 1, sizeof(buf), p);
++	if (nread == sizeof(buf))
++		nread--;
++
++	/* remove trailing new lines */
++	while (nread > 0 && buf[nread - 1] == '\n')
++		nread--;
++
++	buf[nread] = 0;
++
++	/* replace a new line with a space */
++	for (i = 0; i < nread; i++) {
++		if (buf[i] == '\n')
++			buf[i] = ' ';
++	}
++
++	if (pclose(p) == -1) {
++		perror(cmd);
++		exit(1);
++	}
++
++	return xstrdup(buf);
++}
++
++static char *do_warning_if(int argc, char *argv[])
++{
++	if (!strcmp(argv[0], "y"))
++		fprintf(stderr, "%s:%d: %s\n",
++			current_file->name, yylineno, argv[1]);
++
++	return xstrdup("");
++}
++
++static const struct function function_table[] = {
++	/* Name		MIN	MAX	Function */
++	{ "error-if",	2,	2,	do_error_if },
++	{ "filename",	0,	0,	do_filename },
++	{ "info",	1,	1,	do_info },
++	{ "lineno",	0,	0,	do_lineno },
++	{ "shell",	1,	1,	do_shell },
++	{ "warning-if",	2,	2,	do_warning_if },
++};
++
++#define FUNCTION_MAX_ARGS		16
++
++static char *function_expand(const char *name, int argc, char *argv[])
++{
++	const struct function *f;
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(function_table); i++) {
++		f = &function_table[i];
++		if (strcmp(f->name, name))
++			continue;
++
++		if (argc < f->min_args)
++			pperror("too few function arguments passed to '%s'",
++				name);
++
++		if (argc > f->max_args)
++			pperror("too many function arguments passed to '%s'",
++				name);
++
++		return f->func(argc, argv);
++	}
++
++	return NULL;
++}
++
++/*
++ * Variables (and user-defined functions)
++ */
++static LIST_HEAD(variable_list);
++
++struct variable {
++	char *name;
++	char *value;
++	enum variable_flavor flavor;
++	int exp_count;
++	struct list_head node;
++};
++
++static struct variable *variable_lookup(const char *name)
++{
++	struct variable *v;
++
++	list_for_each_entry(v, &variable_list, node) {
++		if (!strcmp(name, v->name))
++			return v;
++	}
++
++	return NULL;
++}
++
++static char *variable_expand(const char *name, int argc, char *argv[])
++{
++	struct variable *v;
++	char *res;
++
++	v = variable_lookup(name);
++	if (!v)
++		return NULL;
++
++	if (argc == 0 && v->exp_count)
++		pperror("Recursive variable '%s' references itself (eventually)",
++			name);
++
++	if (v->exp_count > 1000)
++		pperror("Too deep recursive expansion");
++
++	v->exp_count++;
++
++	if (v->flavor == VAR_RECURSIVE)
++		res = expand_string_with_args(v->value, argc, argv);
++	else
++		res = xstrdup(v->value);
++
++	v->exp_count--;
++
++	return res;
++}
++
++void variable_add(const char *name, const char *value,
++		  enum variable_flavor flavor)
++{
++	struct variable *v;
++	char *new_value;
++	bool append = false;
++
++	v = variable_lookup(name);
++	if (v) {
++		/* For defined variables, += inherits the existing flavor */
++		if (flavor == VAR_APPEND) {
++			flavor = v->flavor;
++			append = true;
++		} else {
++			free(v->value);
++		}
++	} else {
++		/* For undefined variables, += assumes the recursive flavor */
++		if (flavor == VAR_APPEND)
++			flavor = VAR_RECURSIVE;
++
++		v = xmalloc(sizeof(*v));
++		v->name = xstrdup(name);
++		v->exp_count = 0;
++		list_add_tail(&v->node, &variable_list);
++	}
++
++	v->flavor = flavor;
++
++	if (flavor == VAR_SIMPLE)
++		new_value = expand_string(value);
++	else
++		new_value = xstrdup(value);
++
++	if (append) {
++		v->value = xrealloc(v->value,
++				    strlen(v->value) + strlen(new_value) + 2);
++		strcat(v->value, " ");
++		strcat(v->value, new_value);
++		free(new_value);
++	} else {
++		v->value = new_value;
++	}
++}
++
++static void variable_del(struct variable *v)
++{
++	list_del(&v->node);
++	free(v->name);
++	free(v->value);
++	free(v);
++}
++
++void variable_all_del(void)
++{
++	struct variable *v, *tmp;
++
++	list_for_each_entry_safe(v, tmp, &variable_list, node)
++		variable_del(v);
++}
++
++/*
++ * Evaluate a clause with arguments.  argc/argv are arguments from the upper
++ * function call.
++ *
++ * Returned string must be freed when done
++ */
++static char *eval_clause(const char *str, size_t len, int argc, char *argv[])
++{
++	char *tmp, *name, *res, *endptr, *prev, *p;
++	int new_argc = 0;
++	char *new_argv[FUNCTION_MAX_ARGS];
++	int nest = 0;
++	int i;
++	unsigned long n;
++
++	tmp = xstrndup(str, len);
++
++	/*
++	 * If variable name is '1', '2', etc.  It is generally an argument
++	 * from a user-function call (i.e. local-scope variable).  If not
++	 * available, then look-up global-scope variables.
++	 */
++	n = strtoul(tmp, &endptr, 10);
++	if (!*endptr && n > 0 && n <= argc) {
++		res = xstrdup(argv[n - 1]);
++		goto free_tmp;
++	}
++
++	prev = p = tmp;
++
++	/*
++	 * Split into tokens
++	 * The function name and arguments are separated by a comma.
++	 * For example, if the function call is like this:
++	 *   $(foo,$(x),$(y))
++	 *
++	 * The input string for this helper should be:
++	 *   foo,$(x),$(y)
++	 *
++	 * and split into:
++	 *   new_argv[0] = 'foo'
++	 *   new_argv[1] = '$(x)'
++	 *   new_argv[2] = '$(y)'
++	 */
++	while (*p) {
++		if (nest == 0 && *p == ',') {
++			*p = 0;
++			if (new_argc >= FUNCTION_MAX_ARGS)
++				pperror("too many function arguments");
++			new_argv[new_argc++] = prev;
++			prev = p + 1;
++		} else if (*p == '(') {
++			nest++;
++		} else if (*p == ')') {
++			nest--;
++		}
++
++		p++;
++	}
++	new_argv[new_argc++] = prev;
++
++	/*
++	 * Shift arguments
++	 * new_argv[0] represents a function name or a variable name.  Put it
++	 * into 'name', then shift the rest of the arguments.  This simplifies
++	 * 'const' handling.
++	 */
++	name = expand_string_with_args(new_argv[0], argc, argv);
++	new_argc--;
++	for (i = 0; i < new_argc; i++)
++		new_argv[i] = expand_string_with_args(new_argv[i + 1],
++						      argc, argv);
++
++	/* Search for variables */
++	res = variable_expand(name, new_argc, new_argv);
++	if (res)
++		goto free;
++
++	/* Look for built-in functions */
++	res = function_expand(name, new_argc, new_argv);
++	if (res)
++		goto free;
++
++	/* Last, try environment variable */
++	if (new_argc == 0) {
++		res = env_expand(name);
++		if (res)
++			goto free;
++	}
++
++	res = xstrdup("");
++free:
++	for (i = 0; i < new_argc; i++)
++		free(new_argv[i]);
++	free(name);
++free_tmp:
++	free(tmp);
++
++	return res;
++}
++
++/*
++ * Expand a string that follows '$'
++ *
++ * For example, if the input string is
++ *     ($(FOO)$($(BAR)))$(BAZ)
++ * this helper evaluates
++ *     $($(FOO)$($(BAR)))
++ * and returns a new string containing the expansion (note that the string is
++ * recursively expanded), also advancing 'str' to point to the next character
++ * after the corresponding closing parenthesis, in this case, *str will be
++ *     $(BAR)
++ */
++static char *expand_dollar_with_args(const char **str, int argc, char *argv[])
++{
++	const char *p = *str;
++	const char *q;
++	int nest = 0;
++
++	/*
++	 * In Kconfig, variable/function references always start with "$(".
++	 * Neither single-letter variables as in $A nor curly braces as in ${CC}
++	 * are supported.  '$' not followed by '(' loses its special meaning.
++	 */
++	if (*p != '(') {
++		*str = p;
++		return xstrdup("$");
++	}
++
++	p++;
++	q = p;
++	while (*q) {
++		if (*q == '(') {
++			nest++;
++		} else if (*q == ')') {
++			if (nest-- == 0)
++				break;
++		}
++		q++;
++	}
++
++	if (!*q)
++		pperror("unterminated reference to '%s': missing ')'", p);
++
++	/* Advance 'str' to after the expanded initial portion of the string */
++	*str = q + 1;
++
++	return eval_clause(p, q - p, argc, argv);
++}
++
++char *expand_dollar(const char **str)
++{
++	return expand_dollar_with_args(str, 0, NULL);
++}
++
++static char *__expand_string(const char **str, bool (*is_end)(char c),
++			     int argc, char *argv[])
++{
++	const char *in, *p;
++	char *expansion, *out;
++	size_t in_len, out_len;
++
++	out = xmalloc(1);
++	*out = 0;
++	out_len = 1;
++
++	p = in = *str;
++
++	while (1) {
++		if (*p == '$') {
++			in_len = p - in;
++			p++;
++			expansion = expand_dollar_with_args(&p, argc, argv);
++			out_len += in_len + strlen(expansion);
++			out = xrealloc(out, out_len);
++			strncat(out, in, in_len);
++			strcat(out, expansion);
++			free(expansion);
++			in = p;
++			continue;
++		}
++
++		if (is_end(*p))
++			break;
++
++		p++;
++	}
++
++	in_len = p - in;
++	out_len += in_len;
++	out = xrealloc(out, out_len);
++	strncat(out, in, in_len);
++
++	/* Advance 'str' to the end character */
++	*str = p;
++
++	return out;
++}
++
++static bool is_end_of_str(char c)
++{
++	return !c;
++}
++
++/*
++ * Expand variables and functions in the given string.  Undefined variables
++ * expand to an empty string.
++ * The returned string must be freed when done.
++ */
++static char *expand_string_with_args(const char *in, int argc, char *argv[])
++{
++	return __expand_string(&in, is_end_of_str, argc, argv);
++}
++
++char *expand_string(const char *in)
++{
++	return expand_string_with_args(in, 0, NULL);
++}
++
++static bool is_end_of_token(char c)
++{
++	/* Why are '.' and '/' valid characters for symbols? */
++	return !(isalnum(c) || c == '_' || c == '-' || c == '.' || c == '/');
++}
++
++/*
++ * Expand variables in a token.  The parsing stops when a token separater
++ * (in most cases, it is a whitespace) is encountered.  'str' is updated to
++ * point to the next character.
++ *
++ * The returned string must be freed when done.
++ */
++char *expand_one_token(const char **str)
++{
++	return __expand_string(str, is_end_of_token, 0, NULL);
++}
+diff --git a/tool/kconfig/scripts/kconfig/qconf-cfg.sh b/tool/kconfig/scripts/kconfig/qconf-cfg.sh
+new file mode 100755
+index 0000000..0862e15
+--- /dev/null
++++ b/tool/kconfig/scripts/kconfig/qconf-cfg.sh
+@@ -0,0 +1,25 @@
++#!/bin/sh
++# SPDX-License-Identifier: GPL-2.0
++
++PKG="Qt5Core Qt5Gui Qt5Widgets"
++PKG2="QtCore QtGui"
++
++if pkg-config --exists $PKG; then
++	echo cflags=\"-std=c++11 -fPIC $(pkg-config --cflags Qt5Core Qt5Gui Qt5Widgets)\"
++	echo libs=\"$(pkg-config --libs $PKG)\"
++	echo moc=\"$(pkg-config --variable=host_bins Qt5Core)/moc\"
++	exit 0
++fi
++
++if pkg-config --exists $PKG2; then
++	echo cflags=\"$(pkg-config --cflags $PKG2)\"
++	echo libs=\"$(pkg-config --libs $PKG2)\"
++	echo moc=\"$(pkg-config --variable=moc_location QtCore)\"
++	exit 0
++fi
++
++echo >&2 "*"
++echo >&2 "* Could not find Qt via pkg-config."
++echo >&2 "* Please install either Qt 4.8 or 5.x. and make sure it's in PKG_CONFIG_PATH"
++echo >&2 "*"
++exit 1
+diff --git a/tool/kconfig/scripts/kconfig/qconf.cc b/tool/kconfig/scripts/kconfig/qconf.cc
+index ae6c725..ad9c22d 100644
+--- a/tool/kconfig/scripts/kconfig/qconf.cc
++++ b/tool/kconfig/scripts/kconfig/qconf.cc
+@@ -34,10 +34,6 @@
+ #include "qconf.moc"
+ #include "images.c"
+ 
+-#ifdef _
+-# undef _
+-# define _ qgettext
+-#endif
+ 
+ static QApplication *configApp;
+ static ConfigSettings *configSettings;
+@@ -46,12 +42,7 @@ QAction *ConfigMainWindow::saveAction;
+ 
+ static inline QString qgettext(const char* str)
+ {
+-	return QString::fromLocal8Bit(gettext(str));
+-}
+-
+-static inline QString qgettext(const QString& str)
+-{
+-	return QString::fromLocal8Bit(gettext(str.toLatin1()));
++	return QString::fromLocal8Bit(str);
+ }
+ 
+ ConfigSettings::ConfigSettings()
+@@ -127,7 +118,7 @@ void ConfigItem::updateMenu(void)
+ 
+ 	sym = menu->sym;
+ 	prop = menu->prompt;
+-	prompt = _(menu_get_prompt(menu));
++	prompt = qgettext(menu_get_prompt(menu));
+ 
+ 	if (prop) switch (prop->type) {
+ 	case P_MENU:
+@@ -216,7 +207,7 @@ void ConfigItem::updateMenu(void)
+ 		break;
+ 	}
+ 	if (!sym_has_value(sym) && visible)
+-		prompt += _(" (NEW)");
++		prompt += " (NEW)";
+ set_prompt:
+ 	setText(promptColIdx, prompt);
+ }
+@@ -327,7 +318,7 @@ ConfigList::ConfigList(ConfigView* p, const char *name)
+ 	setVerticalScrollMode(ScrollPerPixel);
+ 	setHorizontalScrollMode(ScrollPerPixel);
+ 
+-	setHeaderLabels(QStringList() << _("Option") << _("Name") << "N" << "M" << "Y" << _("Value"));
++	setHeaderLabels(QStringList() << "Option" << "Name" << "N" << "M" << "Y" << "Value");
+ 
+ 	connect(this, SIGNAL(itemSelectionChanged(void)),
+ 		SLOT(updateSelection(void)));
+@@ -883,7 +874,7 @@ void ConfigList::contextMenuEvent(QContextMenuEvent *e)
+ 			QAction *action;
+ 
+ 			headerPopup = new QMenu(this);
+-			action = new QAction(_("Show Name"), this);
++			action = new QAction("Show Name", this);
+ 			  action->setCheckable(true);
+ 			  connect(action, SIGNAL(toggled(bool)),
+ 				  parent(), SLOT(setShowName(bool)));
+@@ -891,7 +882,7 @@ void ConfigList::contextMenuEvent(QContextMenuEvent *e)
+ 				  action, SLOT(setOn(bool)));
+ 			  action->setChecked(showName);
+ 			  headerPopup->addAction(action);
+-			action = new QAction(_("Show Range"), this);
++			action = new QAction("Show Range", this);
+ 			  action->setCheckable(true);
+ 			  connect(action, SIGNAL(toggled(bool)),
+ 				  parent(), SLOT(setShowRange(bool)));
+@@ -899,7 +890,7 @@ void ConfigList::contextMenuEvent(QContextMenuEvent *e)
+ 				  action, SLOT(setOn(bool)));
+ 			  action->setChecked(showRange);
+ 			  headerPopup->addAction(action);
+-			action = new QAction(_("Show Data"), this);
++			action = new QAction("Show Data", this);
+ 			  action->setCheckable(true);
+ 			  connect(action, SIGNAL(toggled(bool)),
+ 				  parent(), SLOT(setShowData(bool)));
+@@ -1086,7 +1077,7 @@ void ConfigInfoView::menuInfo(void)
+ 	if (sym) {
+ 		if (_menu->prompt) {
+ 			head += "<big><b>";
+-			head += print_filter(_(_menu->prompt->text));
++			head += print_filter(_menu->prompt->text);
+ 			head += "</b></big>";
+ 			if (sym->name) {
+ 				head += " (";
+@@ -1117,7 +1108,7 @@ void ConfigInfoView::menuInfo(void)
+ 		str_free(&help_gstr);
+ 	} else if (_menu->prompt) {
+ 		head += "<big><b>";
+-		head += print_filter(_(_menu->prompt->text));
++		head += print_filter(_menu->prompt->text);
+ 		head += "</b></big><br><br>";
+ 		if (showDebug()) {
+ 			if (_menu->prompt->visible.expr) {
+@@ -1152,7 +1143,7 @@ QString ConfigInfoView::debug_info(struct symbol *sym)
+ 		case P_PROMPT:
+ 		case P_MENU:
+ 			debug += QString().sprintf("prompt: <a href=\"m%p\">", prop->menu);
+-			debug += print_filter(_(prop->text));
++			debug += print_filter(prop->text);
+ 			debug += "</a><br>";
+ 			break;
+ 		case P_DEFAULT:
+@@ -1234,7 +1225,7 @@ void ConfigInfoView::expr_print_help(void *data, struct symbol *sym, const char
+ QMenu* ConfigInfoView::createStandardContextMenu(const QPoint & pos)
+ {
+ 	QMenu* popup = Parent::createStandardContextMenu(pos);
+-	QAction* action = new QAction(_("Show Debug Info"), popup);
++	QAction* action = new QAction("Show Debug Info", popup);
+ 	  action->setCheckable(true);
+ 	  connect(action, SIGNAL(toggled(bool)), SLOT(setShowDebug(bool)));
+ 	  connect(this, SIGNAL(showDebugChanged(bool)), action, SLOT(setOn(bool)));
+@@ -1261,11 +1252,11 @@ ConfigSearchWindow::ConfigSearchWindow(ConfigMainWindow* parent, const char *nam
+ 	QHBoxLayout* layout2 = new QHBoxLayout(0);
+ 	layout2->setContentsMargins(0, 0, 0, 0);
+ 	layout2->setSpacing(6);
+-	layout2->addWidget(new QLabel(_("Find:"), this));
++	layout2->addWidget(new QLabel("Find:", this));
+ 	editField = new QLineEdit(this);
+ 	connect(editField, SIGNAL(returnPressed()), SLOT(search()));
+ 	layout2->addWidget(editField);
+-	searchButton = new QPushButton(_("Search"), this);
++	searchButton = new QPushButton("Search", this);
+ 	searchButton->setAutoDefault(false);
+ 	connect(searchButton, SIGNAL(clicked()), SLOT(search()));
+ 	layout2->addWidget(searchButton);
+@@ -1387,44 +1378,44 @@ ConfigMainWindow::ConfigMainWindow(void)
+ 	toolBar = new QToolBar("Tools", this);
+ 	addToolBar(toolBar);
+ 
+-	backAction = new QAction(QPixmap(xpm_back), _("Back"), this);
++	backAction = new QAction(QPixmap(xpm_back), "Back", this);
+ 	  connect(backAction, SIGNAL(triggered(bool)), SLOT(goBack()));
+ 	  backAction->setEnabled(false);
+-	QAction *quitAction = new QAction(_("&Quit"), this);
++	QAction *quitAction = new QAction("&Quit", this);
+ 	quitAction->setShortcut(Qt::CTRL + Qt::Key_Q);
+ 	  connect(quitAction, SIGNAL(triggered(bool)), SLOT(close()));
+-	QAction *loadAction = new QAction(QPixmap(xpm_load), _("&Load"), this);
++	QAction *loadAction = new QAction(QPixmap(xpm_load), "&Load", this);
+ 	loadAction->setShortcut(Qt::CTRL + Qt::Key_L);
+ 	  connect(loadAction, SIGNAL(triggered(bool)), SLOT(loadConfig()));
+-	saveAction = new QAction(QPixmap(xpm_save), _("&Save"), this);
++	saveAction = new QAction(QPixmap(xpm_save), "&Save", this);
+ 	saveAction->setShortcut(Qt::CTRL + Qt::Key_S);
+ 	  connect(saveAction, SIGNAL(triggered(bool)), SLOT(saveConfig()));
+ 	conf_set_changed_callback(conf_changed);
+ 	// Set saveAction's initial state
+ 	conf_changed();
+-	QAction *saveAsAction = new QAction(_("Save &As..."), this);
++	QAction *saveAsAction = new QAction("Save &As...", this);
+ 	  connect(saveAsAction, SIGNAL(triggered(bool)), SLOT(saveConfigAs()));
+-	QAction *searchAction = new QAction(_("&Find"), this);
++	QAction *searchAction = new QAction("&Find", this);
+ 	searchAction->setShortcut(Qt::CTRL + Qt::Key_F);
+ 	  connect(searchAction, SIGNAL(triggered(bool)), SLOT(searchConfig()));
+-	singleViewAction = new QAction(QPixmap(xpm_single_view), _("Single View"), this);
++	singleViewAction = new QAction(QPixmap(xpm_single_view), "Single View", this);
+ 	singleViewAction->setCheckable(true);
+ 	  connect(singleViewAction, SIGNAL(triggered(bool)), SLOT(showSingleView()));
+-	splitViewAction = new QAction(QPixmap(xpm_split_view), _("Split View"), this);
++	splitViewAction = new QAction(QPixmap(xpm_split_view), "Split View", this);
+ 	splitViewAction->setCheckable(true);
+ 	  connect(splitViewAction, SIGNAL(triggered(bool)), SLOT(showSplitView()));
+-	fullViewAction = new QAction(QPixmap(xpm_tree_view), _("Full View"), this);
++	fullViewAction = new QAction(QPixmap(xpm_tree_view), "Full View", this);
+ 	fullViewAction->setCheckable(true);
+ 	  connect(fullViewAction, SIGNAL(triggered(bool)), SLOT(showFullView()));
+ 
+-	QAction *showNameAction = new QAction(_("Show Name"), this);
++	QAction *showNameAction = new QAction("Show Name", this);
+ 	  showNameAction->setCheckable(true);
+ 	  connect(showNameAction, SIGNAL(toggled(bool)), configView, SLOT(setShowName(bool)));
+ 	  showNameAction->setChecked(configView->showName());
+-	QAction *showRangeAction = new QAction(_("Show Range"), this);
++	QAction *showRangeAction = new QAction("Show Range", this);
+ 	  showRangeAction->setCheckable(true);
+ 	  connect(showRangeAction, SIGNAL(toggled(bool)), configView, SLOT(setShowRange(bool)));
+-	QAction *showDataAction = new QAction(_("Show Data"), this);
++	QAction *showDataAction = new QAction("Show Data", this);
+ 	  showDataAction->setCheckable(true);
+ 	  connect(showDataAction, SIGNAL(toggled(bool)), configView, SLOT(setShowData(bool)));
+ 
+@@ -1435,21 +1426,21 @@ ConfigMainWindow::ConfigMainWindow(void)
+ 	connect(optGroup, SIGNAL(triggered(QAction *)), menuView,
+ 		SLOT(setOptionMode(QAction *)));
+ 
+-	configView->showNormalAction = new QAction(_("Show Normal Options"), optGroup);
+-	configView->showAllAction = new QAction(_("Show All Options"), optGroup);
+-	configView->showPromptAction = new QAction(_("Show Prompt Options"), optGroup);
++	configView->showNormalAction = new QAction("Show Normal Options", optGroup);
++	configView->showAllAction = new QAction("Show All Options", optGroup);
++	configView->showPromptAction = new QAction("Show Prompt Options", optGroup);
+ 	configView->showNormalAction->setCheckable(true);
+ 	configView->showAllAction->setCheckable(true);
+ 	configView->showPromptAction->setCheckable(true);
+ 
+-	QAction *showDebugAction = new QAction( _("Show Debug Info"), this);
++	QAction *showDebugAction = new QAction("Show Debug Info", this);
+ 	  showDebugAction->setCheckable(true);
+ 	  connect(showDebugAction, SIGNAL(toggled(bool)), helpText, SLOT(setShowDebug(bool)));
+ 	  showDebugAction->setChecked(helpText->showDebug());
+ 
+-	QAction *showIntroAction = new QAction( _("Introduction"), this);
++	QAction *showIntroAction = new QAction("Introduction", this);
+ 	  connect(showIntroAction, SIGNAL(triggered(bool)), SLOT(showIntro()));
+-	QAction *showAboutAction = new QAction( _("About"), this);
++	QAction *showAboutAction = new QAction("About", this);
+ 	  connect(showAboutAction, SIGNAL(triggered(bool)), SLOT(showAbout()));
+ 
+ 	// init tool bar
+@@ -1463,7 +1454,7 @@ ConfigMainWindow::ConfigMainWindow(void)
+ 	toolBar->addAction(fullViewAction);
+ 
+ 	// create config menu
+-	QMenu* config = menu->addMenu(_("&File"));
++	QMenu* config = menu->addMenu("&File");
+ 	config->addAction(loadAction);
+ 	config->addAction(saveAction);
+ 	config->addAction(saveAsAction);
+@@ -1471,11 +1462,11 @@ ConfigMainWindow::ConfigMainWindow(void)
+ 	config->addAction(quitAction);
+ 
+ 	// create edit menu
+-	QMenu* editMenu = menu->addMenu(_("&Edit"));
++	QMenu* editMenu = menu->addMenu("&Edit");
+ 	editMenu->addAction(searchAction);
+ 
+ 	// create options menu
+-	QMenu* optionMenu = menu->addMenu(_("&Option"));
++	QMenu* optionMenu = menu->addMenu("&Option");
+ 	optionMenu->addAction(showNameAction);
+ 	optionMenu->addAction(showRangeAction);
+ 	optionMenu->addAction(showDataAction);
+@@ -1486,7 +1477,7 @@ ConfigMainWindow::ConfigMainWindow(void)
+ 
+ 	// create help menu
+ 	menu->addSeparator();
+-	QMenu* helpMenu = menu->addMenu(_("&Help"));
++	QMenu* helpMenu = menu->addMenu("&Help");
+ 	helpMenu->addAction(showIntroAction);
+ 	helpMenu->addAction(showAboutAction);
+ 
+@@ -1534,14 +1525,14 @@ void ConfigMainWindow::loadConfig(void)
+ 	if (s.isNull())
+ 		return;
+ 	if (conf_read(QFile::encodeName(s)))
+-		QMessageBox::information(this, "qconf", _("Unable to load configuration!"));
++		QMessageBox::information(this, "qconf", "Unable to load configuration!");
+ 	ConfigView::updateListAll();
+ }
+ 
+ bool ConfigMainWindow::saveConfig(void)
+ {
+ 	if (conf_write(NULL)) {
+-		QMessageBox::information(this, "qconf", _("Unable to save configuration!"));
++		QMessageBox::information(this, "qconf", "Unable to save configuration!");
+ 		return false;
+ 	}
+ 	return true;
+@@ -1723,11 +1714,11 @@ void ConfigMainWindow::closeEvent(QCloseEvent* e)
+ 		e->accept();
+ 		return;
+ 	}
+-	QMessageBox mb("qconf", _("Save configuration?"), QMessageBox::Warning,
++	QMessageBox mb("qconf", "Save configuration?", QMessageBox::Warning,
+ 			QMessageBox::Yes | QMessageBox::Default, QMessageBox::No, QMessageBox::Cancel | QMessageBox::Escape);
+-	mb.setButtonText(QMessageBox::Yes, _("&Save Changes"));
+-	mb.setButtonText(QMessageBox::No, _("&Discard Changes"));
+-	mb.setButtonText(QMessageBox::Cancel, _("Cancel Exit"));
++	mb.setButtonText(QMessageBox::Yes, "&Save Changes");
++	mb.setButtonText(QMessageBox::No, "&Discard Changes");
++	mb.setButtonText(QMessageBox::Cancel, "Cancel Exit");
+ 	switch (mb.exec()) {
+ 	case QMessageBox::Yes:
+ 		if (saveConfig())
+@@ -1746,7 +1737,7 @@ void ConfigMainWindow::closeEvent(QCloseEvent* e)
+ 
+ void ConfigMainWindow::showIntro(void)
+ {
+-	static const QString str = _("Welcome to the qconf graphical configuration tool.\n\n"
++	static const QString str = "Welcome to the qconf graphical configuration tool.\n\n"
+ 		"For each option, a blank box indicates the feature is disabled, a check\n"
+ 		"indicates it is enabled, and a dot indicates that it is to be compiled\n"
+ 		"as a module.  Clicking on the box will cycle through the three states.\n\n"
+@@ -1756,16 +1747,16 @@ void ConfigMainWindow::showIntro(void)
+ 		"options must be enabled to support the option you are interested in, you can\n"
+ 		"still view the help of a grayed-out option.\n\n"
+ 		"Toggling Show Debug Info under the Options menu will show the dependencies,\n"
+-		"which you can then match by examining other options.\n\n");
++		"which you can then match by examining other options.\n\n";
+ 
+ 	QMessageBox::information(this, "qconf", str);
+ }
+ 
+ void ConfigMainWindow::showAbout(void)
+ {
+-	static const QString str = _("qconf is Copyright (C) 2002 Roman Zippel <zippel@linux-m68k.org>.\n"
++	static const QString str = "qconf is Copyright (C) 2002 Roman Zippel <zippel@linux-m68k.org>.\n"
+ 		"Copyright (C) 2015 Boris Barbulovski <bbarbulovski@gmail.com>.\n\n"
+-		"Bug reports and feature request can also be entered at http://bugzilla.kernel.org/\n");
++		"Bug reports and feature request can also be entered at http://bugzilla.kernel.org/\n";
+ 
+ 	QMessageBox::information(this, "qconf", str);
+ }
+@@ -1826,7 +1817,7 @@ static const char *progname;
+ 
+ static void usage(void)
+ {
+-	printf(_("%s [-s] <config>\n").toLatin1().constData(), progname);
++	printf("%s [-s] <config>\n", progname);
+ 	exit(0);
+ }
+ 
+@@ -1835,9 +1826,6 @@ int main(int ac, char** av)
+ 	ConfigMainWindow* v;
+ 	const char *name;
+ 
+-	bindtextdomain(PACKAGE, LOCALEDIR);
+-	textdomain(PACKAGE);
+-
+ 	progname = av[0];
+ 	configApp = new QApplication(ac, av);
+ 	if (ac > 1 && av[1][0] == '-') {
+diff --git a/tool/kconfig/scripts/kconfig/symbol.c b/tool/kconfig/scripts/kconfig/symbol.c
+index f0b2e3b..7c9a88e 100644
+--- a/tool/kconfig/scripts/kconfig/symbol.c
++++ b/tool/kconfig/scripts/kconfig/symbol.c
+@@ -33,33 +33,6 @@ struct symbol *sym_defconfig_list;
+ struct symbol *modules_sym;
+ tristate modules_val;
+ 
+-struct expr *sym_env_list;
+-
+-static void sym_add_default(struct symbol *sym, const char *def)
+-{
+-	struct property *prop = prop_alloc(P_DEFAULT, sym);
+-
+-	prop->expr = expr_alloc_symbol(sym_lookup(def, SYMBOL_CONST));
+-}
+-
+-void sym_init(void)
+-{
+-	struct symbol *sym;
+-	struct utsname uts;
+-	static bool inited = false;
+-
+-	if (inited)
+-		return;
+-	inited = true;
+-
+-	uname(&uts);
+-
+-	sym = sym_lookup("UNAME_RELEASE", 0);
+-	sym->type = S_STRING;
+-	sym->flags |= SYMBOL_AUTO;
+-	sym_add_default(sym, uts.release);
+-}
+-
+ enum symbol_type sym_get_type(struct symbol *sym)
+ {
+ 	enum symbol_type type = sym->type;
+@@ -906,59 +879,6 @@ struct symbol *sym_find(const char *name)
+ 	return symbol;
+ }
+ 
+-/*
+- * Expand symbol's names embedded in the string given in argument. Symbols'
+- * name to be expanded shall be prefixed by a '$'. Unknown symbol expands to
+- * the empty string.
+- */
+-char *sym_expand_string_value(const char *in)
+-{
+-	const char *src;
+-	char *res;
+-	size_t reslen;
+-
+-	/*
+-	 * Note: 'in' might come from a token that's about to be
+-	 * freed, so make sure to always allocate a new string
+-	 */
+-	reslen = strlen(in) + 1;
+-	res = xmalloc(reslen);
+-	res[0] = '\0';
+-
+-	while ((src = strchr(in, '$'))) {
+-		char *p, name[SYMBOL_MAXLENGTH];
+-		const char *symval = "";
+-		struct symbol *sym;
+-		size_t newlen;
+-
+-		strncat(res, in, src - in);
+-		src++;
+-
+-		p = name;
+-		while (isalnum(*src) || *src == '_')
+-			*p++ = *src++;
+-		*p = '\0';
+-
+-		sym = sym_find(name);
+-		if (sym != NULL) {
+-			sym_calc_value(sym);
+-			symval = sym_get_string_value(sym);
+-		}
+-
+-		newlen = strlen(res) + strlen(symval) + strlen(src) + 1;
+-		if (newlen > reslen) {
+-			reslen = newlen;
+-			res = xrealloc(res, reslen);
+-		}
+-
+-		strcat(res, symval);
+-		in = src;
+-	}
+-	strcat(res, in);
+-
+-	return res;
+-}
+-
+ const char *sym_escape_string_value(const char *in)
+ {
+ 	const char *p;
+@@ -1401,32 +1321,3 @@ const char *prop_get_type_name(enum prop_type type)
+ 	}
+ 	return "unknown";
+ }
+-
+-static void prop_add_env(const char *env)
+-{
+-	struct symbol *sym, *sym2;
+-	struct property *prop;
+-	char *p;
+-
+-	sym = current_entry->sym;
+-	sym->flags |= SYMBOL_AUTO;
+-	for_all_properties(sym, prop, P_ENV) {
+-		sym2 = prop_get_symbol(prop);
+-		if (strcmp(sym2->name, env))
+-			menu_warn(current_entry, "redefining environment symbol from %s",
+-				  sym2->name);
+-		return;
+-	}
+-
+-	prop = prop_alloc(P_ENV, sym);
+-	prop->expr = expr_alloc_symbol(sym_lookup(env, SYMBOL_CONST));
+-
+-	sym_env_list = expr_alloc_one(E_LIST, sym_env_list);
+-	sym_env_list->right.sym = sym;
+-
+-	p = getenv(env);
+-	if (p)
+-		sym_add_default(sym, p);
+-	else
+-		menu_warn(current_entry, "environment variable %s undefined", env);
+-}
+diff --git a/tool/kconfig/scripts/kconfig/util.c b/tool/kconfig/scripts/kconfig/util.c
+index c6f6e21..a365594 100644
+--- a/tool/kconfig/scripts/kconfig/util.c
++++ b/tool/kconfig/scripts/kconfig/util.c
+@@ -14,18 +14,16 @@
+ struct file *file_lookup(const char *name)
+ {
+ 	struct file *file;
+-	char *file_name = sym_expand_string_value(name);
+ 
+ 	for (file = file_list; file; file = file->next) {
+ 		if (!strcmp(name, file->name)) {
+-			free(file_name);
+ 			return file;
+ 		}
+ 	}
+ 
+ 	file = xmalloc(sizeof(*file));
+ 	memset(file, 0, sizeof(*file));
+-	file->name = file_name;
++	file->name = xstrdup(name);
+ 	file->next = file_list;
+ 	file_list = file;
+ 	return file;
+@@ -34,8 +32,6 @@ struct file *file_lookup(const char *name)
+ /* write a dependency file as used by kbuild to track dependencies */
+ int file_write_dep(const char *name)
+ {
+-	struct symbol *sym, *env_sym;
+-	struct expr *e;
+ 	struct file *file;
+ 	FILE *out;
+ 
+@@ -54,21 +50,7 @@ int file_write_dep(const char *name)
+ 	fprintf(out, "\n%s: \\\n"
+ 		     "\t$(deps_config)\n\n", conf_get_autoconfig_name());
+ 
+-	expr_list_for_each_sym(sym_env_list, e, sym) {
+-		struct property *prop;
+-		const char *value;
+-
+-		prop = sym_get_env_prop(sym);
+-		env_sym = prop_get_symbol(prop);
+-		if (!env_sym)
+-			continue;
+-		value = getenv(env_sym->name);
+-		if (!value)
+-			value = "";
+-		fprintf(out, "ifneq \"$(%s)\" \"%s\"\n", env_sym->name, value);
+-		fprintf(out, "%s: FORCE\n", conf_get_autoconfig_name());
+-		fprintf(out, "endif\n");
+-	}
++	env_write_dep(out, conf_get_autoconfig_name());
+ 
+ 	fprintf(out, "\n$(deps_config): ;\n");
+ 	fclose(out);
+@@ -165,3 +147,14 @@ char *xstrdup(const char *s)
+ 	fprintf(stderr, "Out of memory.\n");
+ 	exit(1);
+ }
++
++char *xstrndup(const char *s, size_t n)
++{
++	char *p;
++
++	p = strndup(s, n);
++	if (p)
++		return p;
++	fprintf(stderr, "Out of memory.\n");
++	exit(1);
++}
+diff --git a/tool/kconfig/scripts/kconfig/zconf.l b/tool/kconfig/scripts/kconfig/zconf.l
+index 045093d..25bd2b8 100644
+--- a/tool/kconfig/scripts/kconfig/zconf.l
++++ b/tool/kconfig/scripts/kconfig/zconf.l
+@@ -1,13 +1,13 @@
+ %option nostdinit noyywrap never-interactive full ecs
+ %option 8bit nodefault yylineno
+-%option noinput
+-%x COMMAND HELP STRING PARAM
++%x COMMAND HELP STRING PARAM ASSIGN_VAL
+ %{
+ /*
+  * Copyright (C) 2002 Roman Zippel <zippel@linux-m68k.org>
+  * Released under the terms of the GNU GPL v2.0.
+  */
+ 
++#include <assert.h>
+ #include <limits.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -35,6 +35,8 @@ struct buffer *current_buf;
+ 
+ static int last_ts, first_ts;
+ 
++static char *expand_token(const char *in, size_t n);
++static void append_expanded_string(const char *in);
+ static void zconf_endhelp(void);
+ static void zconf_endfile(void);
+ 
+@@ -101,17 +103,28 @@ n	[A-Za-z0-9_-]
+ <COMMAND>{
+ 	{n}+	{
+ 		const struct kconf_id *id = kconf_id_lookup(yytext, yyleng);
+-		BEGIN(PARAM);
+ 		current_pos.file = current_file;
+ 		current_pos.lineno = yylineno;
+ 		if (id && id->flags & TF_COMMAND) {
++			BEGIN(PARAM);
+ 			yylval.id = id;
+ 			return id->token;
+ 		}
+ 		alloc_string(yytext, yyleng);
+ 		yylval.string = text;
+-		return T_WORD;
++		return T_VARIABLE;
+ 	}
++	({n}|$)+	{
++		/* this token includes at least one '$' */
++		yylval.string = expand_token(yytext, yyleng);
++		if (strlen(yylval.string))
++			return T_VARIABLE;
++		free(yylval.string);
++	}
++	"="	{ BEGIN(ASSIGN_VAL); yylval.flavor = VAR_RECURSIVE; return T_ASSIGN; }
++	":="	{ BEGIN(ASSIGN_VAL); yylval.flavor = VAR_SIMPLE; return T_ASSIGN; }
++	"+="	{ BEGIN(ASSIGN_VAL); yylval.flavor = VAR_APPEND; return T_ASSIGN; }
++	[[:blank:]]+
+ 	.	warn_ignored_character(*yytext);
+ 	\n	{
+ 		BEGIN(INITIAL);
+@@ -119,6 +132,16 @@ n	[A-Za-z0-9_-]
+ 	}
+ }
+ 
++<ASSIGN_VAL>{
++	[^[:blank:]\n]+.*	{
++		alloc_string(yytext, yyleng);
++		yylval.string = text;
++		return T_ASSIGN_VAL;
++	}
++	\n	{ BEGIN(INITIAL); return T_EOL; }
++	.
++}
++
+ <PARAM>{
+ 	"&&"	return T_AND;
+ 	"||"	return T_OR;
+@@ -147,6 +170,13 @@ n	[A-Za-z0-9_-]
+ 		yylval.string = text;
+ 		return T_WORD;
+ 	}
++	({n}|[/.$])+	{
++		/* this token includes at least one '$' */
++		yylval.string = expand_token(yytext, yyleng);
++		if (strlen(yylval.string))
++			return T_WORD;
++		free(yylval.string);
++	}
+ 	#.*	/* comment */
+ 	\\\n	;
+ 	[[:blank:]]+
+@@ -157,12 +187,13 @@ n	[A-Za-z0-9_-]
+ }
+ 
+ <STRING>{
+-	[^'"\\\n]+/\n	{
++	"$".*	append_expanded_string(yytext);
++	[^$'"\\\n]+/\n	{
+ 		append_string(yytext, yyleng);
+ 		yylval.string = text;
+ 		return T_WORD_QUOTE;
+ 	}
+-	[^'"\\\n]+	{
++	[^$'"\\\n]+	{
+ 		append_string(yytext, yyleng);
+ 	}
+ 	\\.?/\n	{
+@@ -249,6 +280,58 @@ n	[A-Za-z0-9_-]
+ }
+ 
+ %%
++static char *expand_token(const char *in, size_t n)
++{
++	char *out;
++	int c;
++	char c2;
++	const char *rest, *end;
++
++	new_string();
++	append_string(in, n);
++
++	/* get the whole line because we do not know the end of token. */
++	while ((c = input()) != EOF) {
++		if (c == '\n') {
++			unput(c);
++			break;
++		}
++		c2 = c;
++		append_string(&c2, 1);
++	}
++
++	rest = text;
++	out = expand_one_token(&rest);
++
++	/* push back unused characters to the input stream */
++	end = rest + strlen(rest);
++	while (end > rest)
++		unput(*--end);
++
++	free(text);
++
++	return out;
++}
++
++static void append_expanded_string(const char *str)
++{
++	const char *end;
++	char *res;
++
++	str++;
++
++	res = expand_dollar(&str);
++
++	/* push back unused characters to the input stream */
++	end = str + strlen(str);
++	while (end > str)
++		unput(*--end);
++
++	append_string(res, strlen(res));
++
++	free(res);
++}
++
+ void zconf_starthelp(void)
+ {
+ 	new_string();
+diff --git a/tool/kconfig/scripts/kconfig/zconf.y b/tool/kconfig/scripts/kconfig/zconf.y
+index ad6305b..4b68272 100644
+--- a/tool/kconfig/scripts/kconfig/zconf.y
++++ b/tool/kconfig/scripts/kconfig/zconf.y
+@@ -31,7 +31,7 @@ struct symbol *symbol_hash[SYMBOL_HASHSIZE];
+ static struct menu *current_menu, *current_entry;
+ 
+ %}
+-%expect 32
++%expect 31
+ 
+ %union
+ {
+@@ -41,6 +41,7 @@ static struct menu *current_menu, *current_entry;
+ 	struct expr *expr;
+ 	struct menu *menu;
+ 	const struct kconf_id *id;
++	enum variable_flavor flavor;
+ }
+ 
+ %token <id>T_MAINMENU
+@@ -77,6 +78,9 @@ static struct menu *current_menu, *current_entry;
+ %token T_CLOSE_PAREN
+ %token T_OPEN_PAREN
+ %token T_EOL
++%token <string> T_VARIABLE
++%token <flavor> T_ASSIGN
++%token <string> T_ASSIGN_VAL
+ 
+ %left T_OR
+ %left T_AND
+@@ -92,7 +96,7 @@ static struct menu *current_menu, *current_entry;
+ %type <id> end
+ %type <id> option_name
+ %type <menu> if_entry menu_entry choice_entry
+-%type <string> symbol_option_arg word_opt
++%type <string> symbol_option_arg word_opt assign_val
+ 
+ %destructor {
+ 	fprintf(stderr, "%s:%d: missing end statement for this entry\n",
+@@ -109,7 +113,7 @@ static struct menu *current_menu, *current_entry;
+ %%
+ input: nl start | start;
+ 
+-start: mainmenu_stmt stmt_list | no_mainmenu_stmt stmt_list;
++start: mainmenu_stmt stmt_list | stmt_list;
+ 
+ /* mainmenu entry */
+ 
+@@ -118,19 +122,6 @@ mainmenu_stmt: T_MAINMENU prompt nl
+ 	menu_add_prompt(P_MENU, $2, NULL);
+ };
+ 
+-/* Default main menu, if there's no mainmenu entry */
+-
+-no_mainmenu_stmt: /* empty */
+-{
+-	/*
+-	 * Hack: Keep the main menu title on the heap so we can safely free it
+-	 * later regardless of whether it comes from the 'prompt' in
+-	 * mainmenu_stmt or here
+-	 */
+-	menu_add_prompt(P_MENU, xstrdup("Linux Kernel Configuration"), NULL);
+-};
+-
+-
+ stmt_list:
+ 	  /* empty */
+ 	| stmt_list common_stmt
+@@ -156,6 +147,7 @@ common_stmt:
+ 	| config_stmt
+ 	| menuconfig_stmt
+ 	| source_stmt
++	| assignment_stmt
+ ;
+ 
+ option_error:
+@@ -345,7 +337,7 @@ choice_block:
+ 
+ /* if entry */
+ 
+-if_entry: T_IF expr nl
++if_entry: T_IF expr T_EOL
+ {
+ 	printd(DEBUG_PARSE, "%s:%d:if\n", zconf_curname(), zconf_lineno());
+ 	menu_add_entry(NULL);
+@@ -524,31 +516,42 @@ symbol:	  nonconst_symbol
+ word_opt: /* empty */			{ $$ = NULL; }
+ 	| T_WORD
+ 
++/* assignment statement */
++
++assignment_stmt:  T_VARIABLE T_ASSIGN assign_val T_EOL	{ variable_add($1, $3, $2); free($1); free($3); }
++
++assign_val:
++	/* empty */		{ $$ = xstrdup(""); };
++	| T_ASSIGN_VAL
++;
++
+ %%
+ 
+ void conf_parse(const char *name)
+ {
+-	const char *tmp;
+ 	struct symbol *sym;
+ 	int i;
+ 
+ 	zconf_initscan(name);
+ 
+-	sym_init();
+ 	_menu_init();
+ 
+ 	if (getenv("ZCONF_DEBUG"))
+ 		yydebug = 1;
+ 	yyparse();
++
++	/* Variables are expanded in the parse phase. We can free them here. */
++	variable_all_del();
++
+ 	if (yynerrs)
+ 		exit(1);
+ 	if (!modules_sym)
+ 		modules_sym = sym_find( "n" );
+ 
+-	tmp = rootmenu.prompt->text;
+-	rootmenu.prompt->text = _(rootmenu.prompt->text);
+-	rootmenu.prompt->text = sym_expand_string_value(rootmenu.prompt->text);
+-	free((char*)tmp);
++	if (!menu_has_prompt(&rootmenu)) {
++		current_entry = &rootmenu;
++		menu_add_prompt(P_MENU, "Main menu", NULL);
++	}
+ 
+ 	menu_finalize(&rootmenu);
+ 	for_all_symbols(i, sym) {
+@@ -714,6 +717,10 @@ static void print_symbol(FILE *out, struct menu *menu)
+ 			print_quoted_string(out, prop->text);
+ 			fputc('\n', out);
+ 			break;
++		case P_SYMBOL:
++			fputs( "  symbol ", out);
++			fprintf(out, "%s\n", prop->sym->name);
++			break;
+ 		default:
+ 			fprintf(out, "  unknown prop %d!\n", prop->type);
+ 			break;
+@@ -780,3 +787,4 @@ void zconfdump(FILE *out)
+ #include "expr.c"
+ #include "symbol.c"
+ #include "menu.c"
++#include "preprocess.c"

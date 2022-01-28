@@ -1,0 +1,164 @@
+"2019-03-10 23:00:19 -0500"
+diff --git a/Config.in b/Config.in
+index 2136dae8..16a04f90 100644
+--- a/Config.in
++++ b/Config.in
+@@ -28,11 +28,14 @@ config TOYBOX
+ 	  --help		Show command help (only)
+ 	  --version	Show toybox version (only)
+ 
+-	  The filename "-" means stdin/stdout, "--" stops argument parsing,
+-	  and numerical arguments accept a single letter suffix for
++	  The filename "-" means stdin/stdout, and "--" stops argument parsing.
++
++	  Numerical arguments accept a single letter suffix for
+ 	  kilo, mega, giga, tera, peta, and exabytes, plus an additional
+-	  "d" to indicate decimal 1000's instead of 1024. Durations take
+-          minute, hour, or day suffixes (ala 0.1m = 6s).
++	  "d" to indicate decimal 1000's instead of 1024.
++
++	  Durations can be decimal fractions and accept minute ("m"), hour ("h"),
++	  or day ("d") suffixes (so 0.1m = 6s).
+ 
+ config TOYBOX_SUID
+ 	bool "SUID support"
+diff --git a/tests/timeout.test b/tests/timeout.test
+new file mode 100644
+index 00000000..5ca7cc90
+--- /dev/null
++++ b/tests/timeout.test
+@@ -0,0 +1,19 @@
++#!/bin/bash
++
++[ -f testing.sh ] && . testing.sh
++
++#testing "name" "command" "result" "infile" "stdin"
++
++# timeout's exit value is complicated!
++testcmd "times out" '.1 sleep 100 ; echo $?'  '124\n' '' ''
++testcmd "failure" '-s MONKEY .1 sleep 100 2>/dev/null ; echo $?' '125\n' '' ''
++testcmd "can't execute" '.1 / 2>/dev/null ; echo $?' '126\n' '' ''
++testcmd "can't find" '.1 /does/not/exist 2>/dev/null ; echo $?' '127\n' '' ''
++testcmd "custom signal" '-s 3 .1 sleep 100; echo $?' '124\n' '' ''
++testcmd "killed" '-s 9 .1 sleep 100; echo $?' '137\n' '' ''
++testcmd "TERM" '-s TERM .1 sleep 100; echo $?' '124\n' '' ''
++testcmd "exit 0" '.1 true ; echo $?' '0\n' '' ''
++testcmd "exit 1" '.1 false ; echo $?' '1\n' '' ''
++
++testcmd "--preserve-status" '--preserve-status .1 sleep 100 ; echo $?' '143\n' '' ''
++testcmd "--preserve-status killed" '--preserve-status -s 9 .1 sleep 100 ; echo $?' '137\n' '' ''
+diff --git a/toys/other/timeout.c b/toys/other/timeout.c
+index 4c5bc48d..20722b7e 100644
+--- a/toys/other/timeout.c
++++ b/toys/other/timeout.c
+@@ -4,24 +4,26 @@
+  *
+  * No standard
+ 
+-USE_TIMEOUT(NEWTOY(timeout, "<2^vk:s: ", TOYFLAG_USR|TOYFLAG_BIN))
++USE_TIMEOUT(NEWTOY(timeout, "<2^(foreground)(preserve-status)vk:s(signal):", TOYFLAG_USR|TOYFLAG_BIN))
+ 
+ config TIMEOUT
+   bool "timeout"
+   default y
+   depends on TOYBOX_FLOAT
+   help
+-    usage: timeout [-k LENGTH] [-s SIGNAL] LENGTH COMMAND...
++    usage: timeout [-k DURATION] [-s SIGNAL] DURATION COMMAND...
+ 
+     Run command line as a child process, sending child a signal if the
+     command doesn't exit soon enough.
+ 
+-    Length can be a decimal fraction. An optional suffix can be "m"
++    DURATION can be a decimal fraction. An optional suffix can be "m"
+     (minutes), "h" (hours), "d" (days), or "s" (seconds, the default).
+ 
+     -s	Send specified signal (default TERM)
+     -k	Send KILL signal if child still running this long after first signal
+     -v	Verbose
++    --foreground       Don't create new process group
++    --preserve-status  Exit with the child's exit status
+ */
+ 
+ #define FOR_timeout
+@@ -38,10 +40,11 @@ GLOBALS(
+ 
+ static void handler(int i)
+ {
+-  if (toys.optflags & FLAG_v)
++  if (FLAG(v))
+     fprintf(stderr, "timeout pid %d signal %d\n", TT.pid, TT.nextsig);
++
+   kill(TT.pid, TT.nextsig);
+-  
++
+   if (TT.k) {
+     TT.k = 0;
+     TT.nextsig = SIGKILL;
+@@ -63,6 +66,11 @@ void xparsetimeval(char *s, struct timeval *tv)
+ 
+ void timeout_main(void)
+ {
++  // If timeout fails to parse its arguments, it exits with 125.
++  // TODO: this and grep both have a bug where built-in error checking like
++  // "too few arguments" will exit 1 instead of the custom value.
++  toys.exitval = 125;
++
+   // Parse early to get any errors out of the way.
+   xparsetimeval(*toys.optargs, &TT.itv.it_value);
+   if (TT.k) xparsetimeval(TT.k, &TT.ktv);
+@@ -71,10 +79,24 @@ void timeout_main(void)
+   if (TT.s && -1 == (TT.nextsig = sig_to_num(TT.s)))
+     error_exit("bad -s: '%s'", TT.s);
+ 
+-  if (!(TT.pid = XVFORK())) xexec(toys.optargs+1);
+-  else {
++  if (!FLAG(foreground)) setpgid(0, 0);
++
++  if (!(TT.pid = XVFORK())) {
++    char **argv = toys.optargs+1;
++
++    execvp(argv[0], argv);
++    perror_msg("failed to run '%s'", argv[0]);
++    toys.exitval = (errno == ENOENT) ? 127 : 126;
++    _xexit();
++  } else {
++    int status;
++
+     xsignal(SIGALRM, handler);
+     setitimer(ITIMER_REAL, &TT.itv, (void *)toybuf);
+-    toys.exitval = xwaitpid(TT.pid);
++
++    while (-1 == waitpid(TT.pid, &status, 0) && errno == EINTR);
++    if (WIFEXITED(status)) toys.exitval = WEXITSTATUS(status);
++    else if (WTERMSIG(status)==SIGKILL) toys.exitval = 137;
++    else toys.exitval = FLAG(preserve_status) ? 128+WTERMSIG(status) : 124;
+   }
+ }
+diff --git a/toys/posix/sleep.c b/toys/posix/sleep.c
+index 0381c107..846df80c 100644
+--- a/toys/posix/sleep.c
++++ b/toys/posix/sleep.c
+@@ -11,18 +11,12 @@ config SLEEP
+   bool "sleep"
+   default y
+   help
+-    usage: sleep LENGTH
++    usage: sleep DURATION
+ 
+-    Wait before exiting. An optional suffix can be "m" (minutes), "h" (hours),
+-    "d" (days), or "s" (seconds, the default).
++    Wait before exiting.
+ 
+-
+-config SLEEP_FLOAT
+-  bool
+-  default y
+-  depends on SLEEP && TOYBOX_FLOAT
+-  help
+-    Length can be a decimal fraction.
++    DURATION can be a decimal fraction. An optional suffix can be "m"
++    (minutes), "h" (hours), "d" (days), or "s" (seconds, the default).
+ */
+ 
+ #include "toys.h"

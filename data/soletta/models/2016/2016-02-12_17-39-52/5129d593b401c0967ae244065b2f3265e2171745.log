@@ -1,0 +1,864 @@
+"2016-02-12 17:39:52 +0200"
+diff --git a/.gitignore b/.gitignore
+index 7accab47..522f6815 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -21,3 +21,6 @@ Kconfig.gen
+ /build/
+ /include/
+ config.log*
++/node_modules/
++/bindings/nodejs/generated/main.cc
++/bindings/nodejs/generated/main.h
+diff --git a/Kconfig b/Kconfig
+index 63a54bb0..6a47d273 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -218,3 +218,12 @@ menu "Test suite"
+ depends on FEATURE_RUNNABLE_PROGRAMS
+ source "src/test/Kconfig"
+ endmenu
++
++menu "Bindings"
++config USE_NODEJS
++	bool "Node.js bindings"
++	depends on HAVE_NODEJS && HAVE_NODEJS_NPM
++	default n
++	help
++		Enable Node.js bindings
++endmenu
+diff --git a/Makefile b/Makefile
+index 2de10294..8d69f0fa 100644
+--- a/Makefile
++++ b/Makefile
+@@ -20,6 +20,30 @@ include $(top_srcdir)tools/build/Makefile.vars
+ 
+ include $(top_srcdir)tools/build/Makefile.common
+ 
++ifneq ($(USE_NODEJS),)
++
++bins-out += nodejs_bindings
++
++nodejs_bindings: $(SOL_LIB_OUTPUT)
++	# Install dependencies without building the package
++	@ npm install --ignore-scripts
++
++	# Build the package without clobbering build/
++	@ \
++		SOLETTA_CFLAGS="$(addprefix -I,$(abspath $(HEADERDIRS)))" \
++		SOLETTA_LIBS="$(FIND_LIBRARY_LDFLAGS)" \
++		NODE_GYP="$$(if test -x "$$(which node-gyp 2> /dev/null)"; then \
++				echo "$$(which node-gyp)"; \
++			elif test -x "$$(dirname $$(which node))/../lib/node_modules/npm/bin/node-gyp-bin/node-gyp"; then \
++				echo "$$(dirname $$(which node))/../lib/node_modules/npm/bin/node-gyp-bin/node-gyp"; \
++			fi)"; \
++		( SOLETTA_CFLAGS="$${SOLETTA_CFLAGS}" SOLETTA_LIBS="$${SOLETTA_LIBS}" $${NODE_GYP} configure && \
++		SOLETTA_CFLAGS="$${SOLETTA_CFLAGS}" SOLETTA_LIBS="$${SOLETTA_LIBS}" $${NODE_GYP} build )
++
++PHONY += nodejs_bindings
++
++endif
++
+ # kconfig interface rules
+ ifeq (help, $(filter help,$(MAKECMDGOALS)))
+ help: soletta_help
+diff --git a/binding.gyp b/binding.gyp
+new file mode 100644
+index 00000000..ce332fbb
+--- /dev/null
++++ b/binding.gyp
+@@ -0,0 +1,62 @@
++{
++	"variables": {
++		"BUILD_SOLETTA": '<!(sh bindings/nodejs/establish-flags.sh BUILD_SOLETTA)',
++		"SOLETTA_CFLAGS": [ '<!@(sh bindings/nodejs/establish-flags.sh SOLETTA_CFLAGS)' ],
++		"SOLETTA_LIBS": [ '<!@(sh bindings/nodejs/establish-flags.sh SOLETTA_LIBS)' ]
++	},
++	"conditions": [
++		[ "'<(BUILD_SOLETTA)'=='true'", {
++			"targets": [
++				{
++					"target_name": "csdk",
++					"type": "none",
++					"actions": [ {
++						"action_name": "build-csdk",
++						"message": "Building C SDK",
++						"outputs": [ "build/soletta_sysroot" ],
++						"inputs": [ "" ],
++						"action": [ "sh", "bindings/nodejs/build-for-npm.sh" ]
++					} ]
++				}
++			]
++		}, {
++			"targets": [
++				{
++					"target_name": "collectbindings",
++					"type": "none",
++					"actions": [ {
++						"action_name": "collectbindings",
++						"message": "Collecting bindings",
++						"outputs": [ "bindings/nodejs/generated/main.cc" ],
++						"inputs": [
++							"bindings/nodejs/generated/main.cc.prologue",
++							"bindings/nodejs/generated/main.cc.epilogue",
++						],
++						"action": [
++							"sh",
++							"-c",
++							'./bindings/nodejs/generate-main.sh <(SOLETTA_CFLAGS)'
++						]
++					} ]
++				},
++				{
++					"target_name": "soletta",
++					"sources": [
++						"bindings/nodejs/generated/main.cc",
++						"bindings/nodejs/src/data.cc",
++						"bindings/nodejs/src/functions/simple.cc"
++					],
++					"include_dirs": [
++						"<!(node -e \"require('nan')\")"
++					],
++					"cflags": [ '<(SOLETTA_CFLAGS)' ],
++					"xcode_settings": {
++						"OTHER_CFLAGS": [ '<(SOLETTA_CFLAGS)' ]
++					},
++					"libraries": [ '<(SOLETTA_LIBS)' ],
++					"dependencies": [ "collectbindings" ]
++				}
++			]
++		} ]
++	]
++}
+diff --git a/bindings/nodejs/build-for-npm.sh b/bindings/nodejs/build-for-npm.sh
+new file mode 100644
+index 00000000..8e46a34d
+--- /dev/null
++++ b/bindings/nodejs/build-for-npm.sh
+@@ -0,0 +1,48 @@
++#!/bin/sh
++
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++if test "x${V}x" != "xx"; then
++	set -x
++fi
++
++# Node.js seems to poison these
++unset PYTHON || exit 1
++unset PYTHON_PATH || exit 1
++
++# Configure with defaults
++make alldefconfig || exit 1
++
++if test "x${npm_config_debug}x" = "xtruex"; then
++	sed -i .config -r -e 's/(# )?CONFIG_CFLAGS.*$/CONFIG_CFLAGS="-g -O0"/'
++fi
++
++USE_NODEJS="y" RPATH="y" make || exit 1
+diff --git a/bindings/nodejs/establish-flags.sh b/bindings/nodejs/establish-flags.sh
+new file mode 100755
+index 00000000..554f03ca
+--- /dev/null
++++ b/bindings/nodejs/establish-flags.sh
+@@ -0,0 +1,56 @@
++#!/bin/sh
++
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# Helper script for binding.gyp that determines whether we need to build
++# soletta first, and that attempts to establish CFLAGS and LIBS for the
++# Node.js bindings.
++
++BUILD_SOLETTA="false"
++
++# If we do not find adequate soletta CFLAGS or LIBS, try pkg-config
++if test "x${SOLETTA_CFLAGS}x" = "xx" -o "x${SOLETTA_LIBS}x" = "xx"; then
++	SOLETTA_CFLAGS="$(pkg-config --cflags soletta 2>/dev/null)"
++	SOLETTA_LIBS="$(pkg-config --libs soletta 2>/dev/null)"
++fi
++
++# If we still don't have soletta CFLAGS or LIBS, we need to build soletta
++if test "x${SOLETTA_CFLAGS}x" = "xx" -o "x${SOLETTA_LIBS}x" = "xx"; then
++	BUILD_SOLETTA="true"
++fi
++
++if test "x${1}x" = "xBUILD_SOLETTAx"; then
++	echo "${BUILD_SOLETTA}"
++elif test "x${1}x" = "xSOLETTA_CFLAGSx"; then
++	echo "${SOLETTA_CFLAGS}"
++elif test "x${1}x" = "xSOLETTA_LIBSx"; then
++	echo "${SOLETTA_LIBS}"
++fi
+diff --git a/bindings/nodejs/generate-main.sh b/bindings/nodejs/generate-main.sh
+new file mode 100755
+index 00000000..71826764
+--- /dev/null
++++ b/bindings/nodejs/generate-main.sh
+@@ -0,0 +1,132 @@
++#!/bin/sh
++
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++if test "x${V}x" != "xx"; then
++	set -x
++fi
++
++SOLETTA_SEARCH_PATHS=$(node -p '
++	( "'"$(echo "$@" | sed 's/"/\\"/g')"'"
++		.match( /-I\s*\S+/g ) || [] )
++		.map( function( item ) {
++			return item.replace( /-I\s*/, "" );
++		} )
++		.join( " " );
++')
++
++cat bindings/nodejs/generated/main.cc.prologue > bindings/nodejs/generated/main.cc || exit 1
++cat bindings/nodejs/generated/main.h.prologue > bindings/nodejs/generated/main.h || exit 1
++
++# Add constants and enums from selected files
++FILES=\
++'sol-platform.h'
++
++for file in $FILES; do
++	echo "#include <$file>" >> bindings/nodejs/generated/main.h
++	for path in $SOLETTA_SEARCH_PATHS; do
++		if test -f $path/$file; then
++			cat $path/$file | awk '
++				BEGIN {
++					enum_values[0] = 0;
++					delete enum_values[0];
++					enum_name = "";
++					inside_enum = 0;
++					new_enum = 0;
++					last_line_was_blank=0;
++				}
++				/^#define/ {
++					if ( NF > 2 && $2 ~ /^[A-Za-z_][_A-Za-z0-9]*$/ ) {
++						print "  SET_CONSTANT_" ( ( substr($3, 1, 1) == "\"" ) ? "STRING": "NUMBER" ) "(target, " $2 ");" >> "bindings/nodejs/generated/main.cc"
++						last_line_was_blank = 0;
++					}
++				}
++				/^(typedef\s+)?enum\s+[^{]*{$/ {
++					enum_name = ( $2 == "enum" ) ? $3 : $2;
++					gsub(/{/, "", enum_name);
++					inside_enum = 1;
++					new_enum = 1;
++				}
++				/\s*}\s*(\S*)?\s*;\s*$/ {
++					if ( inside_enum == 1 ) {
++						if ( enum_name == "" ) {
++							enum_name = $0;
++							gsub(/(\s|[};])/, "", enum_name);
++						}
++						if ( enum_name != "" ) {
++							if ( last_line_was_blank == 0 ) {
++								print "" >> "bindings/nodejs/generated/main.cc"
++							}
++							print "  Local<Object> bind_" enum_name " = Nan::New<Object>();" >> "bindings/nodejs/generated/main.cc"
++							for ( enum_value in enum_values ) {
++								print "  SET_CONSTANT_NUMBER(bind_" enum_name ", " enum_value ");" >> "bindings/nodejs/generated/main.cc"
++							}
++							for ( enum_value in enum_values ) {
++								delete enum_values[ enum_value ];
++							}
++							print "  SET_CONSTANT_OBJECT(target, " enum_name ");" >> "bindings/nodejs/generated/main.cc"
++							print "" >> "bindings/nodejs/generated/main.cc"
++							last_line_was_blank = 1;
++						}
++						enum_name = "";
++						inside_enum = 0;
++					}
++				}
++				{
++					if ( new_enum == 1 ) {
++						new_enum = 0;
++					}
++					else
++					if ( inside_enum == 1 ) {
++						enum_member = $1;
++						gsub( /,/, "", enum_member );
++						if ( enum_member ~ /[A-Za-z][A-Za-z0-9]*/ ) {
++							enum_values[ enum_member ] = 0;
++						}
++					}
++				}
++			'
++		fi
++	done
++done
++
++echo "" >> "bindings/nodejs/generated/main.h"
++
++# Add all the bound functions
++find bindings/nodejs/src -type f | while read filename; do
++	cat "${filename}" | grep '^NAN_METHOD' | while read method; do
++		echo "${method}" | sed 's/).*$/);/' >> bindings/nodejs/generated/main.h
++		echo "${method}" | sed -r 's/^\s*NAN_METHOD\s*\(\s*bind_([^)]*).*$/  SET_FUNCTION(target, \1);/' >> bindings/nodejs/generated/main.cc
++	done
++done
++
++cat bindings/nodejs/generated/main.cc.epilogue >> bindings/nodejs/generated/main.cc || exit 1
++cat bindings/nodejs/generated/main.h.epilogue >> bindings/nodejs/generated/main.h || exit 1
+diff --git a/bindings/nodejs/generated/main.cc.epilogue b/bindings/nodejs/generated/main.cc.epilogue
+new file mode 100644
+index 00000000..361e71d6
+--- /dev/null
++++ b/bindings/nodejs/generated/main.cc.epilogue
+@@ -0,0 +1,3 @@
++}
++
++NODE_MODULE(soletta, Init)
+diff --git a/bindings/nodejs/generated/main.cc.prologue b/bindings/nodejs/generated/main.cc.prologue
+new file mode 100644
+index 00000000..9bc4ef80
+--- /dev/null
++++ b/bindings/nodejs/generated/main.cc.prologue
+@@ -0,0 +1,12 @@
++#include <v8.h>
++#include <node.h>
++#include <nan.h>
++
++using namespace v8;
++
++#include "main.h"
++#include "../src/common.h"
++
++NAN_MODULE_INIT(Init) {
++
++  // Constant and enum declarations generated by parsing header files appear below
+diff --git a/bindings/nodejs/generated/main.h.epilogue b/bindings/nodejs/generated/main.h.epilogue
+new file mode 100644
+index 00000000..944478cb
+--- /dev/null
++++ b/bindings/nodejs/generated/main.h.epilogue
+@@ -0,0 +1,2 @@
++
++#endif /* ndef __SOLETTA_JS_MAIN_H__ */
+diff --git a/bindings/nodejs/generated/main.h.prologue b/bindings/nodejs/generated/main.h.prologue
+new file mode 100644
+index 00000000..2f4ffa8f
+--- /dev/null
++++ b/bindings/nodejs/generated/main.h.prologue
+@@ -0,0 +1,7 @@
++#ifndef __SOLETTA_JS_MAIN_H__
++#define __SOLETTA_JS_MAIN_H__
++
++#include <v8.h>
++#include <node.h>
++#include <nan.h>
++
+diff --git a/bindings/nodejs/src/common.h b/bindings/nodejs/src/common.h
+new file mode 100644
+index 00000000..1f6189fd
+--- /dev/null
++++ b/bindings/nodejs/src/common.h
+@@ -0,0 +1,113 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#ifndef __SOLETTA_NODE_COMMON_H__
++#define __SOLETTA_NODE_COMMON_H__
++
++#define SET_FUNCTION(destination, functionName) \
++    Nan::ForceSet((destination), Nan::New(#functionName).ToLocalChecked(), \
++    Nan::GetFunction(Nan::New<FunctionTemplate>( \
++    bind_ ## functionName)).ToLocalChecked(), \
++    (v8::PropertyAttribute)(v8::DontDelete));
++
++#define SET_CONSTANT_NUMBER(destination, name) \
++    Nan::ForceSet((destination), Nan::New(#name).ToLocalChecked(), \
++    Nan::New((name)), \
++    (v8::PropertyAttribute)(v8::ReadOnly | v8::DontDelete));
++
++#define SET_CONSTANT_STRING(destination, name) \
++    Nan::ForceSet((destination), Nan::New(#name).ToLocalChecked(), \
++    Nan::New((name)).ToLocalChecked(), \
++    (v8::PropertyAttribute)(v8::ReadOnly | v8::DontDelete));
++
++#define SET_CONSTANT_OBJECT(destination, name) \
++    Nan::ForceSet((destination), Nan::New(#name).ToLocalChecked(), \
++    bind_ ## name, \
++    (v8::PropertyAttribute)(v8::ReadOnly | v8::DontDelete));
++
++#define VALIDATE_CALLBACK_RETURN_VALUE_TYPE(value, typecheck, message) \
++    if (!value->typecheck()) { \
++        Nan::ThrowTypeError( \
++            message " callback return value type must satisfy " #typecheck "()"); \
++    }
++
++#define VALIDATE_ARGUMENT_COUNT(args, length) \
++    if ((args).Length() < (length)) { \
++        return Nan::ThrowRangeError("Argument count must be exactly " #length); \
++    }
++
++#define VALIDATE_ARGUMENT_TYPE(args, index, typecheck) \
++    if (!(args)[(index)]->typecheck()) { \
++        return Nan::ThrowTypeError("Argument " #index " must satisfy " #typecheck \
++            "()"); \
++    }
++
++#define VALIDATE_VALUE_TYPE(value, typecheck, message, failReturn) \
++    if (!(value)->typecheck()) { \
++        Nan::ThrowTypeError(message " must satisfy " #typecheck "()"); \
++        return failReturn; \
++    }
++
++#define VALIDATE_VALUE_TYPE_OR_FREE(value, typecheck, message, failReturn, \
++        pointer_to_free, free_function) \
++    if (!(value)->typecheck()) { \
++        Nan::ThrowTypeError(message " must satisfy " #typecheck "()"); \
++        free_function((pointer_to_free)); \
++        return failReturn; \
++    }
++
++#define VALIDATE_ARGUMENT_TYPE_OR_NULL(args, index, typecheck) \
++    if (!((args)[(index)]->typecheck() || (args)[(index)]->IsNull())) { \
++        return Nan::ThrowTypeError("Argument " #index " must satisfy " #typecheck \
++            "() or IsNull()"); \
++    }
++
++#define SET_STRING_IF_NOT_NULL(destination, source, memberName) \
++    if ((source)->memberName) { \
++        Nan::Set((destination), Nan::New(#memberName).ToLocalChecked(), \
++            Nan::New((source)->memberName).ToLocalChecked()); \
++    }
++
++#define SET_VALUE_ON_OBJECT(destination, type, source, memberName) \
++    Nan::Set((destination), Nan::New(#memberName).ToLocalChecked(), \
++    Nan::New<type>((source)->memberName));
++
++#define VALIDATE_AND_ASSIGN(destination, memberName, destinationType, \
++        typecheck, message, failReturn, source, accessor) \
++    Local<Value> memberName = \
++        Nan::Get(source, Nan::New(#memberName).ToLocalChecked()) \
++        .ToLocalChecked(); \
++    VALIDATE_VALUE_TYPE(memberName, typecheck, message "." #memberName, \
++    failReturn); \
++    destination.memberName = (destinationType)memberName->accessor();
++
++#endif /* ndef __SOLETTA_NODE_COMMON_H__ */
+diff --git a/bindings/nodejs/src/data.cc b/bindings/nodejs/src/data.cc
+new file mode 100644
+index 00000000..d4dd6535
+--- /dev/null
++++ b/bindings/nodejs/src/data.cc
+@@ -0,0 +1,81 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <nan.h>
++#include <v8.h>
++#include "data.h"
++#include "common.h"
++
++using namespace v8;
++
++Local<Array> jsArrayFromBytes(unsigned char *bytes, size_t length) {
++  size_t index;
++  Local<Array> returnValue = Nan::New<Array>(length);
++
++  for (index = 0; index < length; index++) {
++    Nan::Set(returnValue, index, Nan::New(bytes[index]));
++  }
++  return returnValue;
++}
++
++bool fillCArrayFromJSArray(unsigned char *bytes, size_t length,
++                                  Local<Array> array) {
++  size_t index, arrayLength;
++
++  arrayLength = array->Length();
++  if (arrayLength != length) {
++    Nan::ThrowError("byte array has the wrong length");
++    return false;
++  }
++
++  for (index = 0; index < length; index++) {
++    Local<Value> byte = Nan::Get(array, index).ToLocalChecked();
++    VALIDATE_VALUE_TYPE(byte, IsUint32, "byte array item", false);
++    bytes[index] = (unsigned char)(byte->Uint32Value());
++  }
++
++  return true;
++}
++
++bool c_StringNew(Local<String> jsString, char **p_string) {
++  size_t length = strlen((const char *)*(String::Utf8Value(jsString)));
++  char *string = (char *)malloc(length + 1);
++  if (!string) {
++    Nan::ThrowError("Failed to allocate memory for C string");
++    return false;
++  }
++  string[length] = 0;
++  strcpy(string, (const char *)*(String::Utf8Value(jsString)));
++
++  *p_string = string;
++  return true;
++}
+diff --git a/bindings/nodejs/src/data.h b/bindings/nodejs/src/data.h
+new file mode 100644
+index 00000000..1d00084b
+--- /dev/null
++++ b/bindings/nodejs/src/data.h
+@@ -0,0 +1,43 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#ifndef __SOLETTA_JS_DATA_H__
++#define __SOLETTA_JS_DATA_H__
++
++#include <v8.h>
++
++v8::Local<v8::Array> jsArrayFromBytes(unsigned char *bytes, size_t length);
++bool fillCArrayFromJSArray(unsigned char *bytes, size_t length,
++    v8::Local<v8::Array> array);
++bool c_StringNew(v8::Local<v8::String> jsString, char **p_string);
++
++#endif /* ndef __SOLETTA_JS_DATA_H__ */
+diff --git a/bindings/nodejs/src/functions/simple.cc b/bindings/nodejs/src/functions/simple.cc
+new file mode 100644
+index 00000000..f44b359d
+--- /dev/null
++++ b/bindings/nodejs/src/functions/simple.cc
+@@ -0,0 +1,52 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <nan.h>
++#include "../common.h"
++
++#include <sol-platform.h>
++
++using namespace v8;
++
++NAN_METHOD(bind_sol_platform_get_machine_id) {
++  VALIDATE_ARGUMENT_COUNT(info, 0);
++
++  const char *machineId = 0;
++
++  machineId = sol_platform_get_machine_id();
++
++  if (machineId) {
++    info.GetReturnValue().Set(Nan::New(machineId).ToLocalChecked());
++  } else {
++    info.GetReturnValue().Set(Nan::Null());
++  }
++}
+diff --git a/data/jsons/dependencies.json b/data/jsons/dependencies.json
+index bb4e27ed..6d7f781d 100644
+--- a/data/jsons/dependencies.json
++++ b/data/jsons/dependencies.json
+@@ -438,6 +438,16 @@
+       "type": "exec",
+       "exec": "genhtml"
+     },
++    {
++      "dependency": "nodejs",
++      "type": "exec",
++      "exec": "node"
++    },
++    {
++      "dependency": "nodejs_npm",
++      "type": "exec",
++      "exec": "npm"
++    },
+     {
+       "dependency": "chrpath",
+       "type": "exec",
+diff --git a/index.js b/index.js
+new file mode 100644
+index 00000000..9fc20d40
+--- /dev/null
++++ b/index.js
+@@ -0,0 +1,2 @@
++// Export low-level bindings for now
++module.exports = require( "./lowlevel" );
+diff --git a/lowlevel.js b/lowlevel.js
+new file mode 100644
+index 00000000..42ccc931
+--- /dev/null
++++ b/lowlevel.js
+@@ -0,0 +1 @@
++module.exports = require( "bindings" )( "soletta" );
+diff --git a/package.json b/package.json
+new file mode 100644
+index 00000000..6a185ea0
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,28 @@
++{
++  "name": "soletta",
++  "version": "0.0.1",
++  "description": "Node.js bindings for Soletta",
++  "main": "index.js",
++  "scripts": {
++    "test": "echo \"Error: no test specified\" && exit 1"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/solettaproject/soletta.git"
++  },
++  "keywords": [
++    "soletta",
++    "IoT",
++    "bindings"
++  ],
++  "author": "",
++  "license": "BSD-3-Clause",
++  "bugs": {
++    "url": "https://github.com/solettaproject/soletta/issues"
++  },
++  "homepage": "https://github.com/solettaproject/soletta#readme",
++  "dependencies": {
++    "bindings": "^1.2.1",
++    "nan": "^2.1.0"
++  }
++}
+diff --git a/tools/build/Makefile.targets b/tools/build/Makefile.targets
+index 5b14bec7..163a0108 100644
+--- a/tools/build/Makefile.targets
++++ b/tools/build/Makefile.targets
+@@ -1,6 +1,15 @@
+ tests: $(SOL_LIB_OUTPUT) $(tests-out) $(modules-out)
+ 
+-check: tests
++CHECK_DEPS := tests
++
++ifneq ($(USE_NODEJS),)
++check-nodejs_bindings: nodejs_bindings
++	node -p 'require( "./lowlevel" ).sol_platform_get_machine_id();'
++CHECK_DEPS += check-nodejs_bindings
++PHONY += check-nodejs_bindings
++endif
++
++check: $(CHECK_DEPS)
+ 	$(Q)$(PYTHON) $(TEST_SUITE_RUN_SCRIPT) --tests="$(tests-out)"
+ 
+ PHONY += tests check
+diff --git a/tools/build/Makefile.vars b/tools/build/Makefile.vars
+index 47b3f0dc..52bae6b5 100644
+--- a/tools/build/Makefile.vars
++++ b/tools/build/Makefile.vars
+@@ -301,16 +301,18 @@ ifneq ($(LDFLAG_SONAME),)
+ LIB_LDFLAGS += -Wl,-soname,$(notdir $(SOL_LIB_SO).$(VERSION_MAJOR))
+ endif
+ 
+-LINKED_OBJS_LDFLAGS := $(addprefix -L,$(LIB_OUTPUTDIR))
+-LINKED_OBJS_LDFLAGS += -lsoletta $(COMMON_LDFLAGS)
++FIND_LIBRARY_LDFLAGS := $(addprefix -L,$(abspath $(LIB_OUTPUTDIR)))
++FIND_LIBRARY_LDFLAGS += -lsoletta
+ 
+ ifeq (y,$(RPATH))
+-LINKED_OBJS_LDFLAGS += -Wl,-R$(abspath $(build_libdir))
++FIND_LIBRARY_LDFLAGS += -Wl,-R$(abspath $(build_libdir))
+ else
+ # make sure we set lib path so internal scripts keep working
+ export LD_LIBRARY_PATH := $(LD_LIBRARY_PATH):$(abspath $(build_libdir))
+ endif
+ 
++LINKED_OBJS_LDFLAGS := $(FIND_LIBRARY_LDFLAGS) $(COMMON_LDFLAGS)
++
+ OBJ_CFLAGS := $(COMMON_CFLAGS) $(COVERAGE_CFLAGS)
+ 
+ MOD_CFLAGS := $(COMMON_CFLAGS) $(COVERAGE_CFLAGS)

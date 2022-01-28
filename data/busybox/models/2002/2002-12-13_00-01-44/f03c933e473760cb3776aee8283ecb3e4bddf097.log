@@ -1,0 +1,299 @@
+"2002-12-13 00:01:44 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 9257fc940..bd2053039 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -368,6 +368,9 @@
+ #ifdef CONFIG_MV
+ 	APPLET(mv, mv_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_NAMEIF
++	APPLET(nameif, nameif_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_NC
+ 	APPLET(nc, nc_main, _BB_DIR_USR_BIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index f484ee9ef..d3c1e5072 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -1453,6 +1453,19 @@
+ #define mv_example_usage \
+ 	"$ mv /tmp/foo /bin/bar\n" 
+ 
++#define nameif_trivial_usage \
++	"[OPTIONS] [{IFNAME MACADDR}]"
++#define nameif_full_usage \
++		"Nameif renaming network interface while it in the down state.\n\n" \
++		"Options:\n" \
++		"\t-c FILE\t\tUse another configuration file (default is /etc/mactab)\n" \
++		"\t-s\t\tUse syslog (LOCAL0 facility).\n" \
++		"\tIFNAME MACADDR\tnew_interface_name interface_mac_address\n" 
++#define nameif_example_usage \
++		"$ nameif -s dmz0 00:A0:C9:8C:F6:3F\n" \
++		" or\n" \
++		"$ nameif -c /etc/my_mactab_file\n" \
++
+ #define nc_trivial_usage \
+ 	"[OPTIONS] [IP] [port]" 
+ #define nc_full_usage \
+diff --git a/networking/Config.in b/networking/Config.in
+index 92467b748..b4b9462c3 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -192,6 +192,20 @@ config CONFIG_IPTUNNEL
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
++config CONFIG_NAMEIF
++	bool "nameif"
++	default n
++	help
++	  nameif used to rename network interface by its MAC address.
++	  Renamed interfaces MUST be in the down state.
++	  It is possible to use file (default: /etc/mactab)
++	  with list of new interface names and MACs.
++	  Maximum interface name length: IF_NAMESIZE = 16
++	  File fields are sepatated by space or tab.
++	  File format:
++	  # Comment
++	  new_interface_name	XX:XX:XX:XX:XX:XX
++
+ config CONFIG_NC
+ 	bool "nc"
+ 	default n
+diff --git a/networking/Makefile.in b/networking/Makefile.in
+index fc6a3b7e0..e72b00194 100644
+--- a/networking/Makefile.in
++++ b/networking/Makefile.in
+@@ -32,6 +32,7 @@ NETWORKING-$(CONFIG_IPADDR)		+= ipaddr.o
+ NETWORKING-$(CONFIG_IPLINK)		+= iplink.o
+ NETWORKING-$(CONFIG_IPROUTE)	+= iproute.o
+ NETWORKING-$(CONFIG_IPTUNNEL)	+= iptunnel.o
++NETWORKING-$(CONFIG_NAMEIF)	+= nameif.o
+ NETWORKING-$(CONFIG_NC)		    += nc.o
+ NETWORKING-$(CONFIG_NETSTAT)	+= netstat.o
+ NETWORKING-$(CONFIG_NSLOOKUP)	+= nslookup.o
+diff --git a/networking/nameif.c b/networking/nameif.c
+new file mode 100644
+index 000000000..1edd64111
+--- /dev/null
++++ b/networking/nameif.c
+@@ -0,0 +1,217 @@
++/* 
++ * nameif.c - Naming Interfaces based on MAC address for busybox.
++ *
++ * Writen 2000 by Andi Kleen.
++ * Busybox port 2002 by Nick Fedchik <nick@fedchik.org.ua>
++ *			Glenn McGrath <bug1@optushome.com.au>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
++ * 02111-1307 USA
++ *
++ */
++
++#include <sys/syslog.h>
++#include <sys/socket.h>
++#include <sys/ioctl.h>
++
++#include <errno.h>
++#include <getopt.h>
++#include <stdlib.h>
++#include <string.h>
++#include <net/if.h>
++#include <netinet/ether.h>
++
++#include "busybox.h"
++
++/* set interface name, from <linux/sockios.h> */
++#define SIOCSIFNAME	0x8923
++/* Octets in one ethernet addr, from <linux/if_ether.h>	 */
++#define ETH_ALEN	6
++
++#ifndef ifr_newname
++#define ifr_newname ifr_ifru.ifru_slave
++#endif
++
++typedef struct mactable_s {
++	struct mactable_s *next;
++	struct mactable_s **pprev;
++	char *ifname;
++	struct ether_addr *mac;
++} mactable_t;
++
++static void serror_msg_and_die(const char use_syslog, const char *s, ...)
++{
++	va_list ap;
++
++	va_start(ap, s);
++
++	if (use_syslog) {
++		openlog("nameif", 0, LOG_LOCAL0);
++		syslog(LOG_ERR, s, ap);
++		closelog();
++	} else {
++		vfprintf(stderr, s, ap);
++		putc('\n', stderr);
++	}
++
++	va_end(ap);
++
++	exit(EXIT_FAILURE);
++}
++
++int nameif_main(int argc, char **argv)
++{
++	mactable_t *clist = NULL;
++	FILE *ifh;
++	char *fname = "/etc/mactab";
++	char *line;
++	unsigned short linenum = 0;
++	unsigned char use_syslog = 0;
++	int ctl_sk = -1;
++	int opt;
++
++	static struct option opts[] = {
++		{"syslog", 0, NULL, 's'},
++		{"configfile", 1, NULL, 'c'},
++		{NULL},
++	};
++
++	while ((opt = getopt_long(argc, argv, "c:s", opts, NULL)) != -1) {
++		switch (opt) {
++		case 'c':
++			fname = optarg;
++			break;
++		case 's':
++			use_syslog = 1;
++			break;
++		default:
++			show_usage();
++		}
++	}
++
++	if ((argc - optind) & 1) {
++		show_usage();
++	}
++
++	if (optind < argc) {
++		while (optind < argc) {
++			struct ether_addr *mac;
++			mactable_t *ch;
++
++			if (strlen(argv[optind]) > IF_NAMESIZE) {
++				serror_msg_and_die(use_syslog, "interface name `%s' too long", argv[optind]);
++			}
++			optind++;
++			mac = ether_aton(argv[optind]);
++			if (mac == NULL) {
++				serror_msg_and_die(use_syslog, "cannot parse MAC %s", argv[optind]);
++			}
++			ch = xcalloc(1, sizeof(mactable_t));
++			ch->ifname = strdup(argv[optind - 1]);
++			ch->mac = xcalloc(1, ETH_ALEN);
++			memcpy(ch->mac, &mac, ETH_ALEN);
++			optind++;
++			if (clist)
++				clist->pprev = &ch->next;
++			ch->next = clist;
++			ch->pprev = &clist;
++			clist = ch;
++		}
++	} else {
++		ifh = xfopen(fname, "r");
++
++		while ((line = get_line_from_file(ifh)) != NULL) {
++			struct ether_addr *mac;
++			mactable_t *ch;
++			char *line_ptr;
++			unsigned short name_length;
++
++			line_ptr = line + strspn(line, " \t");
++			if ((line_ptr[0] == '#') || (line_ptr[0] == '\n'))
++				continue;
++			name_length = strcspn(line_ptr, " \t");
++			if (name_length > IF_NAMESIZE) {
++				serror_msg_and_die(use_syslog, "interface name `%s' too long", argv[optind]); 
++			}
++			ch = xcalloc(1, sizeof(mactable_t));
++			ch->ifname = strndup(line_ptr, name_length);
++			line_ptr += name_length;
++			line_ptr += strspn(line_ptr, " \t");
++			name_length = strspn(line_ptr, "0123456789ABCDEFabcdef:");
++			line_ptr[name_length] = '\0';
++			mac = ether_aton(line_ptr);
++			if (mac == NULL) {
++				serror_msg_and_die(use_syslog,  "cannot parse MAC %s", argv[optind]);
++			}
++			ch->mac = xcalloc(1, ETH_ALEN);
++			memcpy(ch->mac, mac, ETH_ALEN);
++			if (clist)
++				clist->pprev = &ch->next;
++			ch->next = clist;
++			ch->pprev = &clist;
++			clist = ch;
++			free(line);
++		}
++		fclose(ifh);
++	}
++
++	ifh = xfopen("/proc/net/dev", "r");
++	while ((line = get_line_from_file(ifh)) != NULL) {
++		char *line_ptr;
++		unsigned short iface_name_length;
++		struct ifreq ifr;
++		mactable_t *ch = NULL;
++
++		linenum++;
++		if (linenum < 3)
++			continue;
++		line_ptr = line + strspn(line, " \t");
++		if (line_ptr[0] == '\n')
++			continue;
++		iface_name_length = strcspn(line_ptr, ":");
++		if (ctl_sk < 0)
++			ctl_sk = socket(PF_INET, SOCK_DGRAM, 0);
++		memset(&ifr, 0, sizeof(struct ifreq));
++		strncpy(ifr.ifr_name, line_ptr, iface_name_length);
++		if (ioctl(ctl_sk, SIOCGIFHWADDR, &ifr) < 0) {
++			serror_msg_and_die(use_syslog, "cannot change name of %s to %s: %s", ifr.ifr_name, ch->ifname, strerror(errno));
++		}
++		for (ch = clist; ch; ch = ch->next)
++			if (!memcmp(ch->mac, ifr.ifr_hwaddr.sa_data, ETH_ALEN))
++				break;
++		if (ch == NULL) {
++			continue;
++		}
++		strcpy(ifr.ifr_newname, ch->ifname);
++
++		if (ioctl(ctl_sk, SIOCSIFNAME, &ifr) < 0) {;
++			serror_msg_and_die(use_syslog, "cannot change name of %s to %s: %s", ifr.ifr_name, ch->ifname, strerror(errno));
++		}
++		*ch->pprev = ch->next;
++		free(ch);
++		free(line);
++	}
++	fclose(ifh);
++
++	while (clist) {
++		mactable_t *ch;
++
++		ch = clist;
++		clist = clist->next;
++		free(ch);
++	}
++
++	return 0;
++}

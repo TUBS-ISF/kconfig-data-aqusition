@@ -1,0 +1,129 @@
+"2007-10-11 15:36:36 -0500"
+diff --git a/Config.in b/Config.in
+index 4218bcb2..62c2ec0a 100644
+--- a/Config.in
++++ b/Config.in
+@@ -2,6 +2,22 @@ mainmenu "ToyBox Configuration"
+ 
+ menu "Global settings"
+ 
++config HELP
++	bool "help"
++	default y
++	help
++	  usage: help [command]
++
++	  Show usage information for toybox commands.
++
++config HELP_LONG
++	bool "Verbose help text"
++	default y
++	depends on HELP
++	help
++	  Show more than one line of help information per command.
++
++
+ config TOYBOX_FREE
+ 	bool "Free memory unnecessarily"
+ 	default n
+diff --git a/lib/args.c b/lib/args.c
+index 95643c3e..542b8cf0 100644
+--- a/lib/args.c
++++ b/lib/args.c
+@@ -133,6 +133,7 @@ void get_optflags(void)
+ 	long *nextarg = (long *)&toy;
+ 	char *options = toys.which->options;
+ 
++	if (CFG_HELP) toys.exithelp++;
+ 	// Allocate memory for optargs
+ 	maxargs = 0;
+ 	while (toys.argv[maxargs++]);
+@@ -300,6 +301,7 @@ notflag:
+ 		error_exit("Need %d argument%s", minargs, minargs ? "s" : "");
+ 	if (optarg>maxargs)
+ 		error_exit("Max %d argument%s", maxargs, maxargs ? "s" : "");
++	if (CFG_HELP) toys.exithelp = 0;
+ }
+ 
+ // Loop through files listed on the command line
+diff --git a/lib/lib.c b/lib/lib.c
+index 7cb29f8f..fe85c5fe 100644
+--- a/lib/lib.c
++++ b/lib/lib.c
+@@ -55,6 +55,12 @@ void error_exit(char *msg, ...)
+ {
+ 	va_list va;
+ 
++	if (CFG_HELP && toys.exithelp) {
++		*toys.optargs=*toys.argv;
++		help_main();
++		fprintf(stderr,"\n");
++	}
++
+ 	va_start(va, msg);
+ 	verror_msg(msg, 0, va);
+ 	va_end(va);
+@@ -75,12 +81,6 @@ void perror_exit(char *msg, ...)
+ 	exit(toys.exitval);
+ }
+ 
+-// Stub until the online help system goes in.
+-void usage_exit(void)
+-{
+-	exit(1);
+-}
+-
+ // Die unless we can allocate memory.
+ void *xmalloc(size_t size)
+ {
+diff --git a/lib/lib.h b/lib/lib.h
+index 4cc2dac4..6fce34c8 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -45,7 +45,6 @@ void error_msg(char *msg, ...);
+ void perror_msg(char *msg, ...);
+ void error_exit(char *msg, ...);
+ void perror_exit(char *msg, ...);
+-void usage_exit(void);
+ void *xmalloc(size_t size);
+ void *xzalloc(size_t size);
+ void *xrealloc(void *ptr, size_t size);
+diff --git a/toys/Config.in b/toys/Config.in
+index 8c3017cd..e0454229 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -101,22 +101,6 @@ config HELLO
+ 	help
+ 	  A hello world program.  You don't need this.
+ 
+-config HELP
+-	bool "help"
+-	default y
+-	help
+-	  usage: help [command]
+-
+-	  Show usage information for toybox commands.
+-
+-config HELP_LONG
+-	bool "Verbose help text"
+-	default y
+-	depends on HELP
+-	help
+-	  Show more than one line of help information per command.
+-
+-
+ config MDEV
+ 	bool "mdev"
+ 	default n
+diff --git a/toys/help.c b/toys/help.c
+index 6af743fc..4687d0ec 100644
+--- a/toys/help.c
++++ b/toys/help.c
+@@ -28,6 +28,6 @@ int help_main(void)
+ 		s = help_data;
+ 	}
+ 
+-	printf("%s", s);
++	fprintf(toys.exithelp ? stderr : stdout, "%s", s);
+ 	return 0;
+ }

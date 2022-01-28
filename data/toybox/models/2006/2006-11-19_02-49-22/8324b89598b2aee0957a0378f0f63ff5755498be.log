@@ -1,0 +1,556 @@
+"2006-11-19 02:49:22 -0500"
+diff --git a/Config.in b/Config.in
+index b26f94ba..51b3cdaf 100644
+--- a/Config.in
++++ b/Config.in
+@@ -12,6 +12,12 @@ config TOYS_FREE
+ 	  without a real OS (ala newlib+libgloss), enable this to make toybox
+ 	  clean up after itself.
+ 
++config DEBUG
++	bool "Debugging tests"
++	default n
++	help
++	  Enable extra checks for debugging purposes.
++
+ endmenu
+ 
+ source toys/Config.in
+diff --git a/lib/args.c b/lib/args.c
+new file mode 100644
+index 00000000..09b04d83
+--- /dev/null
++++ b/lib/args.c
+@@ -0,0 +1,284 @@
++/* vi: set sw=4 ts=4 :
++ * args.c - Command line argument parsing.
++ *
++ * Copyright 2006 Rob Landley <rob@landley.net>
++ */
++
++#include "toys.h"
++
++// Design goals:
++//   Don't use getopt()
++//   Don't permute original arguments.
++//   handle --long gracefully "(noshort)a(along)b(blong1)(blong2)"
++//   After each argument:
++//       Note that pointer and long are always the same size, even on 64 bit.
++//     : plus a string argument, keep most recent if more than one
++//     * plus a string argument, appended to a list
++//     ? plus a signed long argument (TODO: Bounds checking?)
++//     @ plus an occurrence counter (which is a long)
++//     | this is required.  If more than one marked, only one required.
++//     (longopt)
++//     +X enabling this enables X (switch on)
++//     ~X enabling this disables X (switch off)
++//       x~x means toggle x, I.E. specifying it again switches it off.
++//     !X die with error if X already set (x!x die if x supplied twice)
++//     [yz] needs at least one of y or z.
++//   at the beginning:
++//     + stop at first nonoption argument
++//     ? return array of remaining arguments in first vararg
++//     <0 at least # leftover arguments needed (default 0)
++//     >9 at most # leftover arguments needed (default MAX_INT)
++//     # don't show_usage() on unknown argument.
++//     & first argument has imaginary dash (ala tar/ps)
++//       If given twice, all arguments have imaginary dash
++
++// Notes from getopt man page
++//   - and -- cannot be arguments.
++//     -- force end of arguments
++//     - is a synonym for stdin in file arguments
++//   -abc means -a -b -c
++
++/* This uses a getopt-like option string, but not getopt() itself.
++ * 
++ *   Each option in options corresponds to a bit position in the return
++ * value (last argument is (1<<0), the next to last is (1<<1) and so on.
++ * If the option isn't seen in argv its bit is 0.  Options which have an
++ * argument use the next vararg.  (So varargs used by options go from left to
++ * right, but bits set by arguments go from right to left.)
++ *
++ * Example:
++ *   get_optflags("ab:c:d", NULL, &bstring, &cstring);
++ *   argv = ["command", "-b", "fruit", "-d"]
++ *   flags = 5, bstring="fruit", cstring=NULL;
++ */
++
++struct opts {
++	struct opts *next;
++	char c;
++	int type;
++	int shift;
++	void *arg;
++};
++
++struct getoptflagstate
++{
++	int argc;
++	char *arg;
++	struct opts *opts, *this;
++	int noerror, nodash_now;
++};
++
++static struct getoptflagstate gof;
++
++// Returns zero if it didn't consume the rest of the current -abcdef
++static int gotflag(void)
++{
++	char *arg = NULL;
++	int type;
++	int ret = 0;
++
++	// Did we recognize this option?
++	if (!gof.this && !gof.noerror) error_exit("Unknown option %s\n", gof.arg);
++	else toys.optflags |= 1 << gof.this->shift;
++
++	// Does this option take an argument?
++	gof.arg++;
++	if (gof.this->type & 255) {
++		// Make "tar xCjfv blah1 blah2 thingy" work like
++		// "tar -x -C blah1 -j -f blah2 -v thingy"
++		if (!gof.nodash_now && !*gof.arg) {
++			gof.arg = toys.argv[++gof.argc];
++			if (!gof.arg) error_exit("Missing argument");
++		} else {
++			arg = gof.arg;
++			ret++;
++		}
++	} else gof.this = NULL;
++
++	// If the last option had an argument, grab it.
++	if (!gof.this)  return 0;
++	type = gof.this->type & 255;
++	if (!gof.arg && !(gof.arg = toys.argv[++gof.argc]))
++		error_exit("Missing argument");
++	if (type == ':') gof.this->arg = arg;
++	else if (type == '*') {
++		struct arg_list *temp, **list;
++		list = (struct arg_list **)gof.this->arg;
++		temp = xmalloc(sizeof(struct arg_list));
++		temp->arg = arg;
++		temp->next = *list;
++		*list = temp;
++	} else if (type == '?') {
++	} else if (type == '@') {
++	}
++
++	return ret;
++}
++
++// Fill out toys.optflags and toys.optargs.  This isn't reentrant because
++// we don't bzero(&gof, sizeof(gof));
++
++void get_optflags(void)
++{
++	int stopearly = 0, optarg = 0, nodash = 0, minargs = 0, maxargs = INT_MAX;
++	struct longopts {
++		struct longopts *next;
++		struct opts *opt;
++		char *str;
++		int len;
++	} *longopts = NULL;
++	long *nextarg = (long *)&toy;
++	char *options = toys.which->options;
++
++	// Parse leading special behavior indicators
++	for (;;) {
++		if (*options == '+') stopearly++;
++		else if (*options == '<') minargs=*(++options)-'0';
++		else if (*options == '>') maxargs=*(++options)-'0';
++		else if (*options == '#') gof.noerror++;
++		else if (*options == '&') nodash++;
++		else break;
++		options++;
++	}
++
++	// Parse rest of opts into array
++	while (*options) {
++
++		// Allocate a new option entry when necessary
++		if (!gof.this) {
++			gof.this = xzalloc(sizeof(struct opts));
++			gof.this->next = gof.opts;
++			gof.opts = gof.this;
++		}
++		// Each option must start with (or an option character.  (Bare
++		// longopts only come at the start of the string.)
++		if (*options == '(') {
++			char *end;
++			struct longopts *lo = xmalloc(sizeof(struct longopts));
++
++			// Find the end of the longopt
++			for (end = ++options; *end && *end != ')'; end++);
++			if (CFG_DEBUG && !*end) error_exit("Unterminated optstring");
++
++			// Allocate and init a new struct longopts
++			lo = xmalloc(sizeof(struct longopts));
++			lo->next = longopts;
++			lo->opt = gof.this;
++			lo->str = options;
++			lo->len = end-options;
++			longopts = lo;
++			options = end;
++
++			// For leading longopts (with no corresponding short opt), note
++			// that this option struct has been used.
++			gof.this->shift++;
++
++		// If this is the start of a new option that wasn't a longopt,
++
++		} else if (index(":*?@", *options)) {
++			gof.this->type |= *options;
++			// Pointer and long guaranteed to be the same size by LP64.
++			*(++nextarg) = 0;
++			gof.this->arg = (void *)nextarg;
++		} else if (*options == '|') {
++		} else if (*options == '+') {
++		} else if (*options == '~') {
++		} else if (*options == '!') {
++		} else if (*options == '[') {
++
++		// At this point, we've hit the end of the previous option.  The
++		// current character is the start of a new option.  If we've already
++		// assigned an option to this struct, loop to allocate a new one.
++		// (It'll get back here afterwards.)
++		} else if(gof.this->shift || gof.this->c) {
++			gof.this = NULL;
++			continue;
++
++		// Claim this option, loop to see what's after it.
++		} else gof.this->c = *options;
++
++		options++;
++	}
++
++	// Initialize shift bits (have to calculate this ahead of time because
++	// longopts jump into the middle of the list), and allocate space to
++	// store optargs.
++	gof.argc = 0;
++	for (gof.this = gof.opts; gof.this; gof.this = gof.this->next)
++		gof.this->shift = gof.argc++;
++	toys.optargs = xzalloc(sizeof(char *)*(++gof.argc));
++
++	// Iterate through command line arguments, skipping argv[0]
++	for (gof.argc=1; toys.argv[gof.argc]; gof.argc++) {
++		char *arg = toys.argv[gof.argc];
++
++		// Parse this argument
++		if (stopearly>1) goto notflag;
++
++		gof.nodash_now = 0;
++
++		// Various things with dashes
++		if (*arg == '-') {
++
++			// Handle -
++			if (!arg[1]) goto notflag;
++			arg++;
++			if (*arg=='-') {
++				struct longopts *lo;
++
++				arg++;
++				// Handle --
++				if (!*arg) {
++					stopearly += 2;
++					goto notflag;
++				}
++				// Handle --longopt
++
++				for (lo = longopts; lo; lo = lo->next) {
++					if (!strncmp(arg, lo->str, lo->len)) {
++						if (arg[lo->len]) {
++							if (arg[lo->len]=='='
++								&& (lo->opt->type & 255))
++							{
++								arg += lo->len;
++							} else continue;
++
++						// *options should be nul, this makes sure
++						// that the while (*arg) loop terminates;
++						} arg = options-1;
++						gof.this = lo->opt;
++						break;
++					}
++				}
++				// Long option parsed, jump to option handling.
++				gotflag();
++				continue;
++			}
++
++		// Handle things that don't start with a dash.
++		} else {
++			if (nodash && (nodash>1 || gof.argc == 1)) gof.nodash_now = 1;
++			else goto notflag;
++		}
++
++		// At this point, we have the args part of -args.  Loop through
++		// each entry (could be -abc meaning -a -b -c)
++		while (*arg) {
++			// Identify next option char.
++			for (gof.this = gof.opts; gof.this && *arg != gof.this->c;
++					gof.this = gof.this->next);
++			if (gotflag()) break;
++			arg++;
++		}
++		continue;
++
++		// Not a flag, save value in toys.optargs[]
++notflag:
++		if (stopearly) stopearly++;
++		toys.optargs[optarg++] = toys.argv[gof.argc];
++	}
++
++	// Sanity check
++	if (optarg<minargs) error_exit("Need %d arguments", minargs);
++	if (optarg>maxargs) error_exit("Max %d arguments", maxargs);
++}
+diff --git a/lib/lib.h b/lib/lib.h
+index d013af9d..013e4919 100644
+--- a/lib/lib.h
++++ b/lib/lib.h
+@@ -13,6 +13,14 @@ struct string_list {
+ 	char str[0];
+ };
+ 
++struct arg_list {
++	struct arg_list *next;
++	char *arg;
++};
++
++// args.c
++void get_optflags(void);
++
+ // functions.c
+ void verror_msg(char *msg, int err, va_list va);
+ void error_msg(char *msg, ...);
+diff --git a/main.c b/main.c
+index 89977f69..20f4cf4b 100644
+--- a/main.c
++++ b/main.c
+@@ -51,6 +51,7 @@ void toy_init(struct toy_list *which, char *argv[])
+ 	toys.which = which;
+ 	toys.argv = argv;
+ 	toys.exitval = 1;
++	if (which->options) get_optflags();
+ }
+ 
+ // Run a toy.
+diff --git a/toys.h b/toys.h
+index 003a827c..67cc2757 100644
+--- a/toys.h
++++ b/toys.h
+@@ -38,7 +38,11 @@ void toy_exec(char *argv[]);
+ extern struct toy_context {
+ 	struct toy_list *which;  // Which entry in toy_list is this one?
+ 	int exitval;             // Value error_exit feeds to exit()
+-	int optflags;            // Command line option flags
+ 	char **argv;             // Command line arguments
+-	char buf[4096];
++	unsigned optflags;       // Command line option flags from get_optflags()
++	char **optargs;          // Arguments left over from get_optflags()
+ } toys;
++
++// One big temporary buffer, for use by applets (not library functions).
++
++char buf[4096];
+diff --git a/toys/Config.in b/toys/Config.in
+index 2120636c..77e59e4d 100644
+--- a/toys/Config.in
++++ b/toys/Config.in
+@@ -161,7 +161,7 @@ config TOYSH_BUILTINS
+ 	  unset, read, alias.
+ 
+ config WHICH
+-	bool "Which"
++	bool "which"
+ 	default n
+ 	help
+ 	  usage: which [-a] filename ...
+diff --git a/toys/df.c b/toys/df.c
+index cbebd157..d4528f96 100644
+--- a/toys/df.c
++++ b/toys/df.c
+@@ -34,14 +34,13 @@ static void show_mt(struct mtab_list *mt)
+ 	// Figure out how much total/used/free space this filesystem has,
+ 	// forcing 64-bit math because filesystems are big now.
+ 	block = mt->statvfs.f_bsize ? : 1;
+-
+ 	size = (long)((block * mt->statvfs.f_blocks) / toy.df.units);
+ 	used = (long)((block * (mt->statvfs.f_blocks-mt->statvfs.f_bfree))
+ 			/ toy.df.units);
+ 	avail = (long)((block
+ 				* (getuid() ? mt->statvfs.f_bavail : mt->statvfs.f_bfree))
+ 			/ toy.df.units);
+-	percent = 100-(long)((100*(uint64_t)avail)/size);
++	percent = size ? 100-(long)((100*(uint64_t)avail)/size) : 0;
+ 
+ 	// Figure out appropriate spacing
+ 	len = 25 - strlen(mt->device);
+@@ -58,10 +57,6 @@ static void show_mt(struct mtab_list *mt)
+ int df_main(void)
+ {
+ 	struct mtab_list *mt, *mt2, *mtlist;
+-	char **argv;
+-
+-	// get_optflags("Pkt:a",&(toy.df.fstype));
+-	argv = NULL;
+ 
+ 	// Handle -P and -k
+ 	toy.df.units = 1024;
+@@ -75,14 +70,14 @@ int df_main(void)
+ 	mtlist = getmountlist(1);
+ 
+ 	// If we have a list of filesystems on the command line, loop through them.
+-	if (argv) {
+-		char *next;
++	if (*toys.optargs) {
++		char **next;
+ 
+-		for(next = *argv; *next; next++) {
++		for(next = toys.optargs; *next; next++) {
+ 			struct stat st;
+ 
+ 			// Stat it (complain if we can't).
+-			if(!stat(next, &st)) {
++			if(!stat(*next, &st)) {
+ 				perror_msg("`%s'", next);
+ 				toys.exitval = 1;
+ 				continue;
+@@ -117,9 +112,7 @@ int df_main(void)
+ 		}
+ 	}
+ 
+-	if (CFG_TOYS_FREE) {
+-		llist_free(mtlist, NULL);
+-		free(argv);
+-	}
++	if (CFG_TOYS_FREE) llist_free(mtlist, NULL);
++
+ 	return 0;
+ }
+diff --git a/toys/toylist.h b/toys/toylist.h
+index 87716b0f..a0eef1c1 100644
+--- a/toys/toylist.h
++++ b/toys/toylist.h
+@@ -10,15 +10,15 @@
+ #ifdef FROM_MAIN
+ #undef NEWTOY
+ #undef OLDTOY
+-#define NEWTOY(name, flags) {#name, name##_main, flags},
+-#define OLDTOY(name, oldname, flags) {#name, oldname##_main, flags},
++#define NEWTOY(name, opts, flags) {#name, name##_main, opts, flags},
++#define OLDTOY(name, oldname, opts, flags) {#name, oldname##_main, opts, flags},
+ 
+ // When #included from toys.h, provide function declarations and structs.
+ // The #else is because main.c #includes this file twice.
+ 
+ #else
+-#define NEWTOY(name, flags) int name##_main(void);
+-#define OLDTOY(name, oldname, flags)
++#define NEWTOY(name, opts, flags) int name##_main(void);
++#define OLDTOY(name, oldname, opts, flags)
+ 
+ struct df_data {
+ 	struct string_list *fstype;
+@@ -39,6 +39,7 @@ union toy_union {
+ extern struct toy_list {
+ 	char *name;
+ 	int (*toy_main)(void);
++	char *options;
+ 	int flags;
+ } toy_list[];
+ 
+@@ -48,15 +49,15 @@ extern struct toy_list {
+ 
+ // This one is out of order on purpose.
+ 
+-NEWTOY(toybox, 0)
++NEWTOY(toybox, NULL, 0)
+ 
+ // The rest of these are alphabetical, for binary search.
+ 
+-USE_TOYSH(NEWTOY(cd, TOYFLAG_NOFORK))
+-USE_DF(NEWTOY(df, TOYFLAG_USR|TOYFLAG_SBIN))
+-USE_TOYSH(NEWTOY(exit, TOYFLAG_NOFORK))
+-USE_HELLO(NEWTOY(hello, TOYFLAG_NOFORK|TOYFLAG_USR))
+-USE_PWD(NEWTOY(pwd, TOYFLAG_BIN))
+-USE_TOYSH(OLDTOY(sh, toysh, TOYFLAG_BIN))
+-USE_TOYSH(NEWTOY(toysh, TOYFLAG_BIN))
+-USE_WHICH(NEWTOY(which, TOYFLAG_USR|TOYFLAG_BIN))
++USE_TOYSH(NEWTOY(cd, NULL, TOYFLAG_NOFORK))
++USE_DF(NEWTOY(df, "Pkt:a", TOYFLAG_USR|TOYFLAG_SBIN))
++USE_TOYSH(NEWTOY(exit, NULL, TOYFLAG_NOFORK))
++USE_HELLO(NEWTOY(hello, NULL, TOYFLAG_NOFORK|TOYFLAG_USR))
++USE_PWD(NEWTOY(pwd, NULL, TOYFLAG_BIN))
++USE_TOYSH(OLDTOY(sh, toysh, "c:i", TOYFLAG_BIN))
++USE_TOYSH(NEWTOY(toysh, "c:i", TOYFLAG_BIN))
++USE_WHICH(NEWTOY(which, "a", TOYFLAG_USR|TOYFLAG_BIN))
+diff --git a/toys/toysh.c b/toys/toysh.c
+index 7ac430c9..074907ef 100644
+--- a/toys/toysh.c
++++ b/toys/toysh.c
+@@ -125,12 +125,15 @@ static void run_pipeline(struct pipeline *line)
+ 	tl = toy_find(cmd->argv[0]);
+ 	// Is this command a builtin that should run in this process?
+ 	if (tl && (tl->flags & TOYFLAG_NOFORK)) {
+-		struct toy_list *which = toys.which;
+-		char **argv = toys.argv;
++		struct toy_context temp;
+ 
++		// This fakes lots of what toybox_main() does.
++		memcpy(&temp, &toys, sizeof(struct toy_context));
++		bzero(&toys, sizeof(struct toy_context));
+ 		toy_init(tl, cmd->argv);
+ 		cmd->pid = tl->toy_main();
+-		toy_init(which, argv);
++		free(toys.optargs);
++		memcpy(&toys, &temp, sizeof(struct toy_context));
+ 	} else {
+ 		int status;
+ 
+@@ -196,8 +199,10 @@ int toysh_main(void)
+ 	char *command=NULL;
+ 	FILE *f;
+ 
+-	// TODO get_optflags(argv, "c:", &command);
+-
++	// Set up signal handlers and grab control of this tty.
++	if (CFG_TOYSH_TTY) {
++		if (isatty(0)) toys.optflags |= 1;
++	}
+ 	f = toys.argv[1] ? xfopen(toys.argv[1], "r") : NULL;
+ 	if (command) handle(command);
+ 	else {
+diff --git a/toys/which.c b/toys/which.c
+index 6d00bc82..16e19d00 100644
+--- a/toys/which.c
++++ b/toys/which.c
+@@ -7,7 +7,6 @@
+ 
+ #include "toys.h"
+ 
+-#define OPTIONS "a"
+ #define OPT_a   1
+ 
+ // Find an exectuable file either at a path with a slash in it (absolute or
+@@ -55,16 +54,12 @@ static int which_in_path(char *filename)
+ 
+ int which_main(void)
+ {
+-	char **argv;
+ 	int rc = 0;
+ 
+-	// get_optflags(OPTIONS);
+-	argv = toys.argv+1;
+-
+-	if (!*argv) rc++;
++	if (!*toys.optargs) rc++;
+ 	else {
+ 		int i;
+-		for (i=0; argv[i]; i++)	rc |= which_in_path(argv[i]);
++		for (i=0; toys.optargs[i]; i++) rc |= which_in_path(toys.optargs[i]);
+ 	}
+ 	// if (CFG_TOYS_FREE) free(argv);
+ 

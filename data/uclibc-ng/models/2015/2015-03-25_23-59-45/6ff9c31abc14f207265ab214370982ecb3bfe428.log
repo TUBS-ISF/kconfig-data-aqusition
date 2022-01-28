@@ -1,0 +1,820 @@
+"2015-03-25 23:59:45 +0100"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 7546e96ea..1ef13667f 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -701,23 +701,23 @@ config COMPAT_ATEXIT
+ 	  else you will be missing atexit() until you rebuild all apps.
+ 
+ config UCLIBC_HAS_UTMPX
+-       bool "utmpx based support for tracking login/logouts to/from the system"
+-	   depends on UCLIBC_HAS_UTMP # TODO, remove this, it's backward
+-       help
+-         Answer y to enable support for accessing user accounting database.
+-         It can be used to track all login/logout to the system.
++	bool "utmpx based support for tracking login/logouts to/from the system"
++	help
++	  Answer y to enable support for accessing user accounting database.
++	  It can be used to track all login/logout to the system.
+ 
+ config UCLIBC_HAS_UTMP
+-       bool "utmp support (XPG2, SVr4 compat)"
+-       help
+-         Answer y to enable legacy SVID support for accessing
+-		 user accounting database:
++	bool "utmp support (XPG2 compat, SVr4 compat)"
++	#depends on UCLIBC_HAS_UTMPX # for educational purposes..
++	help
++	  Answer y to enable legacy SVID support for accessing
++	  user accounting database:
+ 		   getutent(), getutid(), getutline(), pututline(),
+ 		   setutent(), endutent(), utmpname() in utmp.h
+-         It can be used to track all login/logout to the system.
++	  It can be used to track all login/logout to the system.
+ 
+-         If unsure, just answer N and use utmpx.h and corresponding
+-		 POSIX functions.
++	  If unsure, answer N and use corresponding POSIX functions
++	  from utmpx.h
+ 
+ config UCLIBC_SUSV2_LEGACY
+ 	bool "Enable SuSv2 LEGACY functions"
+diff --git a/include/internal/utmp.h b/include/internal/utmp.h
+new file mode 100644
+index 000000000..49f96b4d8
+--- /dev/null
++++ b/include/internal/utmp.h
+@@ -0,0 +1,92 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * internal helper for utmp and utmpx handling
++ *
++ * Copyright (C) 2015 by Bernhard Reutner-Fischer
++ *
++ * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
++ */
++#ifndef __INTERNAL_UTMP_H
++#define __INTERNAL_UTMP_H
++
++#include <utmpx.h>
++#include <utmp.h>
++
++/* Note: _PATH_UTMPX == _PATH_UTMP */
++
++#if (defined __UCLIBC_HAS_UTMPX__ && defined __UCLIBC_HAS_UTMP__) \
++	|| !defined __UCLIBC_HAS_UTMP__
++/* implement the X and alias the non-X */
++# define __set_unlocked __setutxent_unlocked
++# define set setutxent
++# define __get_unlocked __getutxent_unlocked
++# define get getutxent
++# define end endutxent
++# define __getid_unlocked __getutxid_unlocked
++# define getid getutxid
++# define getline getutxline
++# define putline pututxline
++# define name utmpxname
++# define updw updwtmpx
++# define UT utmpx
++# ifndef __DEFAULT_PATH_UTMP
++#  define __DEFAULT_PATH_UTMP _PATH_UTMPX
++# endif
++# if defined __UCLIBC_HAS_UTMP__
++#  define other(n,a) strong_alias_untyped(n,a)
++# else
++#  define other(n,a) /* nothing */
++# endif
++#elif defined __UCLIBC_HAS_UTMP__
++# define __set_unlocked __setutent_unlocked
++# define set setutent
++# define __get_unlocked __getutent_unlocked
++# define get getutent
++# define end endutent
++# define __getid_unlocked __getutid_unlocked
++# define getid getutid
++# define getline getutline
++# define putline pututline
++# define name utmpname
++# define updw updwtmp
++# define UT utmp
++# ifndef __DEFAULT_PATH_UTMP
++#  define __DEFAULT_PATH_UTMP _PATH_UTMP
++# endif
++# define other(n,a) /* nothing */
++#else
++#error You are supposed to either have UTMP or UTMPX or both here
++#endif
++
++/* not used in libc_hidden_proto(setutxent) */
++/* not used in libc_hidden_proto(endutxent) */
++/* not used in libc_hidden_proto(getutxent) */
++/* not used in libc_hidden_proto(getutxid) */
++/* not used in libc_hidden_proto(getutxline) */
++/* not used in libc_hidden_proto(pututxline) */
++/* not used in libc_hidden_proto(utmpxname) */
++/* not used in libc_hidden_proto(updwtmpx) */
++
++/* not used in libc_hidden_proto(setutent) */
++/* not used in libc_hidden_proto(endutent) */
++/* not used in libc_hidden_proto(getutent) */
++/* not used in libc_hidden_proto(getutid) */
++/* not used in libc_hidden_proto(getutline) */
++/* not used in libc_hidden_proto(pututline) */
++/* not used in libc_hidden_proto(utmpname) */
++/* not used in libc_hidden_proto(updwtmp) */
++
++#ifdef IS_IN_libutil
++# if (defined __UCLIBC_HAS_UTMPX__ && defined __UCLIBC_HAS_UTMP__) \
++	|| !defined __UCLIBC_HAS_UTMP__
++	/* monkey-patch to use the POSIX interface */
++#  define setutent setutxent
++#  define getutline getutxline
++#  define pututline pututxline
++#  define endutent endutxent
++#  define updwtmp updwtmpx
++# endif
++#endif /* IS_IN_libutil */
++
++#endif /* __INTERNAL_UTMP_H */
++
+diff --git a/include/pty.h b/include/pty.h
+index 26c3011c6..f23a260ae 100644
+--- a/include/pty.h
++++ b/include/pty.h
+@@ -32,6 +32,7 @@ __BEGIN_DECLS
+    ends in AMASTER and ASLAVE.  */
+ extern int openpty (int *__amaster, int *__aslave, char *__name,
+ 		    struct termios *__termp, struct winsize *__winp) __THROW;
++libutil_hidden_proto(openpty)
+ 
+ /* Create child process and establish the slave pseudo terminal as the
+    child's controlling terminal.  */
+diff --git a/include/utmp.h b/include/utmp.h
+index 754f76781..8ecbb54e7 100644
+--- a/include/utmp.h
++++ b/include/utmp.h
+@@ -40,7 +40,7 @@ __BEGIN_DECLS
+ /* Make FD be the controlling terminal, stdin, stdout, and stderr;
+    then close FD.  Returns 0 on success, nonzero on error.  */
+ extern int login_tty (int __fd) __THROW;
+-
++libutil_hidden_proto(login_tty)
+ 
+ /* Write the given entry into utmp and wtmp.  */
+ extern void login (const struct utmp *__entry) __THROW;
+@@ -56,37 +56,29 @@ extern void logwtmp (const char *__ut_line, const char *__ut_name,
+ /* Append entry UTMP to the wtmp-like file WTMP_FILE.  */
+ extern void updwtmp (const char *__wtmp_file, const struct utmp *__utmp)
+      __THROW;
+-libc_hidden_proto(updwtmp)
+ 
+ /* Change name of the utmp file to be examined.  */
+ extern int utmpname (const char *__file) __THROW;
+-libc_hidden_proto(utmpname)
+ 
+ /* Read next entry from a utmp-like file.  */
+ extern struct utmp *getutent (void) __THROW;
+-libc_hidden_proto(getutent)
+ 
+ /* Reset the input stream to the beginning of the file.  */
+ extern void setutent (void) __THROW;
+-libc_hidden_proto(setutent)
+ 
+ /* Close the current open file.  */
+ extern void endutent (void) __THROW;
+-libc_hidden_proto(endutent)
+ 
+ /* Search forward from the current point in the utmp file until the
+    next entry with a ut_type matching ID->ut_type.  */
+ extern struct utmp *getutid (const struct utmp *__id) __THROW;
+-libc_hidden_proto(getutid)
+ 
+ /* Search forward from the current point in the utmp file until the
+    next entry with a ut_line matching LINE->ut_line.  */
+ extern struct utmp *getutline (const struct utmp *__line) __THROW;
+-libc_hidden_proto(getutline)
+ 
+ /* Write out entry pointed to by UTMP_PTR into the utmp file.  */
+ extern struct utmp *pututline (const struct utmp *__utmp_ptr) __THROW;
+-libc_hidden_proto(pututline)
+ 
+ 
+ #if 0 /* def	__USE_MISC */
+diff --git a/libc/misc/utmp/Makefile.in b/libc/misc/utmp/Makefile.in
+index 715341c85..6c54ade96 100644
+--- a/libc/misc/utmp/Makefile.in
++++ b/libc/misc/utmp/Makefile.in
+@@ -8,9 +8,7 @@
+ subdirs += libc/misc/utmp
+ 
+ CSRC-y :=
+-CSRC-$(if $(findstring y,$(UCLIBC_HAS_UTMP)$(UCLIBC_HAS_UTMPX)),y) += wtent.c
+-CSRC-$(UCLIBC_HAS_UTMP) += utent.c
+-CSRC-$(UCLIBC_HAS_UTMPX) += utxent.c
++CSRC-$(if $(findstring y,$(UCLIBC_HAS_UTMP)$(UCLIBC_HAS_UTMPX)),y) += utent.c
+ 
+ MISC_UTMP_DIR := $(top_srcdir)libc/misc/utmp
+ MISC_UTMP_OUT := $(top_builddir)libc/misc/utmp
+diff --git a/libc/misc/utmp/utent.c b/libc/misc/utmp/utent.c
+index a258cb46d..3671bb05c 100644
+--- a/libc/misc/utmp/utent.c
++++ b/libc/misc/utmp/utent.c
+@@ -19,7 +19,7 @@
+ #include <paths.h>
+ #include <errno.h>
+ #include <string.h>
+-#include <utmp.h>
++#include "internal/utmp.h"
+ #include <not-cancel.h>
+ #include <bits/uClibc_mutex.h>
+ 
+@@ -27,17 +27,17 @@ __UCLIBC_MUTEX_STATIC(utmplock, PTHREAD_MUTEX_INITIALIZER);
+ 
+ /* Some global crap */
+ static int static_fd = -1;
+-static struct utmp static_utmp;
+-static const char default_file_name[] = _PATH_UTMP;
+-static const char *static_ut_name = default_file_name;
++static struct UT static_utmp;
++static const char default_file[] = __DEFAULT_PATH_UTMP;
++static const char *current_file = default_file;
+ 
+ /* This function must be called with the LOCK held */
+-static void __setutent_unlocked(void)
++static void __set_unlocked(void)
+ {
+ 	if (static_fd < 0) {
+-		static_fd = open_not_cancel_2(static_ut_name, O_RDWR | O_CLOEXEC);
++		static_fd = open_not_cancel_2(current_file, O_RDWR | O_CLOEXEC);
+ 		if (static_fd < 0) {
+-			static_fd = open_not_cancel_2(static_ut_name, O_RDONLY | O_CLOEXEC);
++			static_fd = open_not_cancel_2(current_file, O_RDONLY | O_CLOEXEC);
+ 			if (static_fd < 0) {
+ 				return; /* static_fd remains < 0 */
+ 			}
+@@ -51,22 +51,23 @@ static void __setutent_unlocked(void)
+ 	lseek(static_fd, 0, SEEK_SET);
+ }
+ #if defined __UCLIBC_HAS_THREADS__
+-void setutent(void)
++void set(void)
+ {
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+-	__setutent_unlocked();
++	__set_unlocked();
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+ }
+ #else
+-strong_alias(__setutent_unlocked,setutent)
++strong_alias(__set_unlocked,set)
+ #endif
+-libc_hidden_def(setutent)
++/* not used in libc_hidden_def(set) */
++other(setutxent,setutent)
+ 
+ /* This function must be called with the LOCK held */
+-static struct utmp *__getutent_unlocked(void)
++static struct UT *__get_unlocked(void)
+ {
+ 	if (static_fd < 0) {
+-		__setutent_unlocked();
++		__set_unlocked();
+ 		if (static_fd < 0)
+ 			return NULL;
+ 	}
+@@ -79,21 +80,22 @@ static struct utmp *__getutent_unlocked(void)
+ 	return NULL;
+ }
+ #if defined __UCLIBC_HAS_THREADS__
+-struct utmp *getutent(void)
++struct UT *get(void)
+ {
+-	struct utmp *ret;
++	struct UT *ret;
+ 
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+-	ret = __getutent_unlocked();
++	ret = __get_unlocked();
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+ 	return ret;
+ }
+ #else
+-strong_alias(__getutent_unlocked,getutent)
++strong_alias(__get_unlocked,get)
+ #endif
+-libc_hidden_def(getutent)
++/* not used in libc_hidden_def(get) */
++other(getutxent,getutent)
+ 
+-void endutent(void)
++void end(void)
+ {
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+ 	if (static_fd >= 0)
+@@ -101,12 +103,13 @@ void endutent(void)
+ 	static_fd = -1;
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+ }
+-libc_hidden_def(endutent)
++/* not used in libc_hidden_def(end) */
++other(endutxent,endutent)
+ 
+ /* This function must be called with the LOCK held */
+-static struct utmp *__getutid_unlocked(const struct utmp *utmp_entry)
++static struct UT *__getid_unlocked(const struct UT *utmp_entry)
+ {
+-	struct utmp *lutmp;
++	struct UT *lutmp;
+ 	unsigned type;
+ 
+ 	/* We use the fact that constants we are interested in are: */
+@@ -114,7 +117,7 @@ static struct utmp *__getutid_unlocked(const struct utmp *utmp_entry)
+ 	type = utmp_entry->ut_type - 1;
+ 	type /= 4;
+ 
+-	while ((lutmp = __getutent_unlocked()) != NULL) {
++	while ((lutmp = __get_unlocked()) != NULL) {
+ 		if (type == 0 && lutmp->ut_type == utmp_entry->ut_type)	{
+ 			/* one of RUN_LVL, BOOT_TIME, NEW_TIME, OLD_TIME */
+ 			return lutmp;
+@@ -130,26 +133,27 @@ static struct utmp *__getutid_unlocked(const struct utmp *utmp_entry)
+ 	return NULL;
+ }
+ #if defined __UCLIBC_HAS_THREADS__
+-struct utmp *getutid(const struct utmp *utmp_entry)
++struct UT *getid(const struct UT *utmp_entry)
+ {
+-	struct utmp *ret;
++	struct UT *ret;
+ 
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+-	ret = __getutid_unlocked(utmp_entry);
++	ret = __getid_unlocked(utmp_entry);
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+ 	return ret;
+ }
+ #else
+-strong_alias(__getutid_unlocked,getutid)
++strong_alias(__getid_unlocked,getid)
+ #endif
+-libc_hidden_def(getutid)
++/* not used in libc_hidden_def(getid) */
++other(getutxid,getutid)
+ 
+-struct utmp *getutline(const struct utmp *utmp_entry)
++struct UT *getline(const struct UT *utmp_entry)
+ {
+-	struct utmp *lutmp;
++	struct UT *lutmp;
+ 
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+-	while ((lutmp = __getutent_unlocked()) != NULL) {
++	while ((lutmp = __get_unlocked()) != NULL) {
+ 		if (lutmp->ut_type == USER_PROCESS || lutmp->ut_type == LOGIN_PROCESS) {
+ 			if (strncmp(lutmp->ut_line, utmp_entry->ut_line,
+ 						sizeof(lutmp->ut_line)) == 0) {
+@@ -160,39 +164,41 @@ struct utmp *getutline(const struct utmp *utmp_entry)
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+ 	return lutmp;
+ }
+-libc_hidden_def(getutline)
++/* libc_hidden_def(getline) */
++other(getutxline,getutline)
+ 
+-struct utmp *pututline(const struct utmp *utmp_entry)
++struct UT *putline(const struct UT *utmp_entry)
+ {
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+ 	/* Ignore the return value.  That way, if they've already positioned
+ 	   the file pointer where they want it, everything will work out. */
+-	lseek(static_fd, (off_t) - sizeof(struct utmp), SEEK_CUR);
++	lseek(static_fd, (off_t) - sizeof(struct UT), SEEK_CUR);
+ 
+-	if (__getutid_unlocked(utmp_entry) != NULL)
+-		lseek(static_fd, (off_t) - sizeof(struct utmp), SEEK_CUR);
++	if (__getid_unlocked(utmp_entry) != NULL)
++		lseek(static_fd, (off_t) - sizeof(struct UT), SEEK_CUR);
+ 	else
+ 		lseek(static_fd, (off_t) 0, SEEK_END);
+-	if (write(static_fd, utmp_entry, sizeof(struct utmp))
+-			!= sizeof(struct utmp))
++	if (write(static_fd, utmp_entry, sizeof(struct UT))
++			!= sizeof(struct UT))
+ 		utmp_entry = NULL;
+ 
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+-	return (struct utmp *)utmp_entry;
++	return (struct UT *)utmp_entry;
+ }
+-libc_hidden_def(pututline)
++/* not used in libc_hidden_def(putline) */
++other(pututxline,pututline)
+ 
+-int utmpname(const char *new_ut_name)
++int name(const char *new_file)
+ {
+ 	__UCLIBC_MUTEX_LOCK(utmplock);
+-	if (new_ut_name != NULL) {
+-		if (static_ut_name != default_file_name)
+-			free((char *)static_ut_name);
+-		static_ut_name = strdup(new_ut_name);
+-		if (static_ut_name == NULL) {
++	if (new_file != NULL) {
++		if (current_file != default_file)
++			free((char *)current_file);
++		current_file = strdup(new_file);
++		if (current_file == NULL) {
+ 			/* We should probably whine about out-of-memory
+ 			 * errors here...  Instead just reset to the default */
+-			static_ut_name = default_file_name;
++			current_file = default_file;
+ 		}
+ 	}
+ 
+@@ -201,6 +207,23 @@ int utmpname(const char *new_ut_name)
+ 		static_fd = -1;
+ 	}
+ 	__UCLIBC_MUTEX_UNLOCK(utmplock);
+-	return 0; /* or maybe return -(static_ut_name != new_ut_name)? */
++	return 0; /* or maybe return -(current_file != new_file)? */
+ }
+-libc_hidden_def(utmpname)
++/* not used in libc_hidden_def(name) */
++other(utmpxname,utmpname)
++
++void updw(const char *wtmp_file, const struct UT *lutmp)
++{
++	int fd;
++
++	fd = open_not_cancel_2(wtmp_file, O_APPEND | O_WRONLY);
++	if (fd >= 0) {
++		if (lockf(fd, F_LOCK, 0) == 0) {
++			write_not_cancel(fd, lutmp, sizeof(struct UT));
++			lockf(fd, F_ULOCK, 0);
++			close_not_cancel_no_status(fd);
++		}
++	}
++}
++/* not used in libc_hidden_def(updw) */
++other(updwtmpx,updwtmp)
+diff --git a/libc/misc/utmp/utxent.c b/libc/misc/utmp/utxent.c
+deleted file mode 100644
+index c32e4da49..000000000
+--- a/libc/misc/utmp/utxent.c
++++ /dev/null
+@@ -1,108 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * utexent.c : Support for accessing user accounting database.
+- * Copyright (C) 2010 STMicroelectronics Ltd.
+- *
+- * Author: Salvatore Cro <salvatore.cro@st.com>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- *
+- */
+-
+-#include <features.h>
+-#include <string.h>
+-#include <utmpx.h>
+-#include <utmp.h>
+-
+-void setutxent(void)
+-{
+-	setutent ();
+-}
+-
+-void endutxent(void)
+-{
+-	endutent ();
+-}
+-
+-struct utmpx *getutxent(void)
+-{
+-	return (struct utmpx *) getutent ();
+-}
+-
+-struct utmpx *getutxid(const struct utmpx *utmp_entry)
+-{
+-	return (struct utmpx *) getutid ((const struct utmp *) utmp_entry);
+-}
+-
+-struct utmpx *getutxline(const struct utmpx *utmp_entry)
+-{
+-	return (struct utmpx *) getutline ((const struct utmp *) utmp_entry);
+-}
+-
+-struct utmpx *pututxline (const struct utmpx *utmp_entry)
+-{
+-	return (struct utmpx *) pututline ((const struct utmp *) utmp_entry);
+-}
+-
+-int utmpxname (const char *new_ut_name)
+-{
+-	return utmpname (new_ut_name);
+-}
+-
+-void updwtmpx (const char *wtmpx_file, const struct utmpx *utmpx)
+-{
+-	updwtmp (wtmpx_file, (const struct utmp *) utmpx);
+-}
+-
+-/* Copy the information in UTMPX to UTMP. */
+-void getutmp (const struct utmpx *utmpx, struct utmp *utmp)
+-{
+-#if _HAVE_UT_TYPE - 0
+-	utmp->ut_type = utmpx->ut_type;
+-#endif
+-#if _HAVE_UT_PID - 0
+-	utmp->ut_pid = utmpx->ut_pid;
+-#endif
+-	memcpy (utmp->ut_line, utmpx->ut_line, sizeof (utmp->ut_line));
+-	memcpy (utmp->ut_user, utmpx->ut_user, sizeof (utmp->ut_user));
+-#if _HAVE_UT_ID - 0
+-	memcpy (utmp->ut_id, utmpx->ut_id, sizeof (utmp->ut_id));
+-#endif
+-#if _HAVE_UT_HOST - 0
+-	memcpy (utmp->ut_host, utmpx->ut_host, sizeof (utmp->ut_host));
+-#endif
+-#if _HAVE_UT_TV - 0
+-	utmp->ut_tv.tv_sec = utmpx->ut_tv.tv_sec;
+-	utmp->ut_tv.tv_usec = utmpx->ut_tv.tv_usec;
+-#else
+-	utmp->ut_time = utmpx->ut_time;
+-#endif
+-}
+-
+-/* Copy the information in UTMP to UTMPX. */
+-void getutmpx (const struct utmp *utmp, struct utmpx *utmpx)
+-{
+-	memset (utmpx, 0, sizeof (struct utmpx));
+-
+-#if _HAVE_UT_TYPE - 0
+-	utmpx->ut_type = utmp->ut_type;
+-#endif
+-#if _HAVE_UT_PID - 0
+-	utmpx->ut_pid = utmp->ut_pid;
+-#endif
+-	memcpy (utmpx->ut_line, utmp->ut_line, sizeof (utmp->ut_line));
+-	memcpy (utmpx->ut_user, utmp->ut_user, sizeof (utmp->ut_user));
+-#if _HAVE_UT_ID - 0
+-	memcpy (utmpx->ut_id, utmp->ut_id, sizeof (utmp->ut_id));
+-#endif
+-#if _HAVE_UT_HOST - 0
+-	memcpy (utmpx->ut_host, utmp->ut_host, sizeof (utmp->ut_host));
+-#endif
+-#if _HAVE_UT_TV - 0
+-	utmpx->ut_tv.tv_sec = utmp->ut_tv.tv_sec;
+-	utmpx->ut_tv.tv_usec = utmp->ut_tv.tv_usec;
+-#else
+-	utmpx->ut_time = utmp->ut_time;
+-#endif
+-}
+-
+diff --git a/libc/misc/utmp/wtent.c b/libc/misc/utmp/wtent.c
+deleted file mode 100644
+index 30939ea43..000000000
+--- a/libc/misc/utmp/wtent.c
++++ /dev/null
+@@ -1,50 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * Copyright (C) 2000-2006 Erik Andersen <andersen@uclibc.org>
+- *
+- * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
+- */
+-
+-/* wtmp support rubbish (i.e. complete crap) */
+-
+-#include <string.h>
+-#include <sys/time.h>
+-#include <time.h>
+-#include <unistd.h>
+-#include <utmp.h>
+-#include <fcntl.h>
+-#include <sys/file.h>
+-#include <not-cancel.h>
+-
+-#if 0
+-/* This is enabled in uClibc/libutil/logwtmp.c */
+-void logwtmp (const char *line, const char *name, const char *host)
+-{
+-    struct utmp lutmp;
+-    memset(&lutmp, 0, sizeof(lutmp));
+-
+-    lutmp.ut_type = (name && *name) ? USER_PROCESS : DEAD_PROCESS;
+-    lutmp.ut_pid = getpid();
+-    strncpy(lutmp.ut_line, line, sizeof(lutmp.ut_line)-1);
+-    strncpy(lutmp.ut_name, name, sizeof(lutmp.ut_name)-1);
+-    strncpy(lutmp.ut_host, host, sizeof(lutmp.ut_host)-1);
+-    gettimeofday(&(lutmp.ut_tv), NULL);
+-
+-    updwtmp(_PATH_WTMP, &lutmp);
+-}
+-#endif
+-
+-void updwtmp(const char *wtmp_file, const struct utmp *lutmp)
+-{
+-    int fd;
+-
+-    fd = open_not_cancel_2(wtmp_file, O_APPEND | O_WRONLY);
+-    if (fd >= 0) {
+-	if (lockf(fd, F_LOCK, 0) == 0) {
+-	    write_not_cancel(fd, lutmp, sizeof(struct utmp));
+-	    lockf(fd, F_ULOCK, 0);
+-	    close_not_cancel_no_status(fd);
+-	}
+-    }
+-}
+-libc_hidden_def(updwtmp)
+diff --git a/libc/sysdeps/linux/sh/bits/atomic.h b/libc/sysdeps/linux/sh/bits/atomic.h
+index 745c85c1d..18ae9ea77 100644
+--- a/libc/sysdeps/linux/sh/bits/atomic.h
++++ b/libc/sysdeps/linux/sh/bits/atomic.h
+@@ -68,6 +68,12 @@ typedef uintmax_t uatomic_max_t;
+       r1:     saved stack pointer
+ */
+ 
++#if __GNUC_PREREQ (4, 7)
++# define rNOSP "u"
++#else
++# define rNOSP "r"
++#endif
++
+ /* Avoid having lots of different versions of compare and exchange,
+    by having this one complicated version. Parameters:
+       bwl:     b, w or l for 8, 16 and 32 bit versions.
+@@ -94,7 +100,7 @@ typedef uintmax_t uatomic_max_t;
+         movt %0\n\
+      .endif\n"					\
+ 	: "=&r" (__arch_result)			\
+-	: "r" (mem), "r" (newval), "r" (oldval)	\
++	: rNOSP (mem), rNOSP (newval), rNOSP (oldval)	\
+ 	: "r0", "r1", "t", "memory");		\
+      __arch_result; })
+ 
+@@ -150,7 +156,7 @@ typedef uintmax_t uatomic_max_t;
+ 	mov." #bwl " %1,@%2\n\
+      1: mov r1,r15"			\
+ 	: "=&r" (old), "=&r"(new)	\
+-	: "r" (mem), "r" (value)	\
++	: rNOSP (mem), rNOSP (value)	\
+ 	: "r0", "r1", "memory");	\
+     })
+ 
+@@ -194,7 +200,7 @@ typedef uintmax_t uatomic_max_t;
+ 	mov." #bwl " %0,@%1\n\
+      1: mov r1,r15"			\
+ 	: "=&r" (__new)			\
+-	: "r" (mem), "r" (__value)	\
++	: rNOSP (mem), rNOSP (__value)	\
+ 	: "r0", "r1", "memory");	\
+      __new;				\
+   })
+diff --git a/libutil/forkpty.c b/libutil/forkpty.c
+index ec490f053..24643330c 100644
+--- a/libutil/forkpty.c
++++ b/libutil/forkpty.c
+@@ -22,9 +22,6 @@
+ #include <utmp.h>
+ #include <pty.h>
+ 
+-libutil_hidden_proto(openpty)
+-libutil_hidden_proto(login_tty)
+-
+ int
+ forkpty (int *amaster, char *name, struct termios *termp, struct winsize *winp)
+ {
+diff --git a/libutil/login.c b/libutil/login.c
+index 4007e4c7e..971997d4a 100644
+--- a/libutil/login.c
++++ b/libutil/login.c
+@@ -3,7 +3,7 @@
+ #include <string.h>
+ #include <unistd.h>
+ #include <stdlib.h>
+-#include <utmp.h>
++#include "internal/utmp.h"
+ 
+ /* Write the given entry into utmp and wtmp.
+  * Note: the match in utmp is done against ut_id field,
+@@ -11,7 +11,7 @@
+  */
+ void login(const struct utmp *entry)
+ {
+-	struct utmp copy;
++	struct UT copy;
+ 	char tty_name[sizeof(copy.ut_line) + 6];
+ 	int fd;
+ 
+@@ -20,7 +20,7 @@ void login(const struct utmp *entry)
+ // (if there is such a field) with the value USER_PROCESS,
+ // and fills the field ut->ut_pid (if there is such a field)
+ // with the process ID of the calling process.
+-	copy = *entry;
++	copy = *((const struct UT *)(entry));
+ #if _HAVE_UT_TYPE - 0
+ 	copy.ut_type = USER_PROCESS;
+ #endif
+diff --git a/libutil/login_tty.c b/libutil/login_tty.c
+index 3979adcec..366585834 100644
+--- a/libutil/login_tty.c
++++ b/libutil/login_tty.c
+@@ -36,7 +36,6 @@
+ #include <fcntl.h>
+ #include <utmp.h>
+ 
+-libutil_hidden_proto(login_tty)
+ int login_tty(int fd)
+ {
+ 	(void) setsid();
+diff --git a/libutil/logout.c b/libutil/logout.c
+index 45804552d..0181e23aa 100644
+--- a/libutil/logout.c
++++ b/libutil/logout.c
+@@ -18,14 +18,14 @@
+ 
+ #include <errno.h>
+ #include <string.h>
+-#include <utmp.h>
+ #include <sys/time.h>
++#include "internal/utmp.h"
+ 
+ int
+ logout (const char *line)
+ {
+-  struct utmp tmp;
+-  struct utmp *ut;
++  struct UT tmp;
++  struct UT *ut;
+   int result = 0;
+ 
+   /* if (utmpname (_PATH_UTMP) == -1) return 0; - why?
+diff --git a/libutil/logwtmp.c b/libutil/logwtmp.c
+index 6a53b5ff1..99b772fc4 100644
+--- a/libutil/logwtmp.c
++++ b/libutil/logwtmp.c
+@@ -9,13 +9,13 @@
+ #include <sys/time.h>
+ #include <time.h>
+ #include <unistd.h>
+-#include <utmp.h>
+ #include <fcntl.h>
+ #include <sys/file.h>
++#include "internal/utmp.h"
+ 
+ void logwtmp(const char *line, const char *name, const char *host)
+ {
+-    struct utmp lutmp;
++    struct UT lutmp;
+     memset(&lutmp, 0, sizeof(lutmp));
+ 
+     lutmp.ut_type = (name && *name) ? USER_PROCESS : DEAD_PROCESS;
+@@ -36,20 +36,3 @@ void logwtmp(const char *line, const char *name, const char *host)
+ 
+     updwtmp(_PATH_WTMP, &lutmp);
+ }
+-
+-#if 0
+-/* This is enabled in uClibc/libc/misc/utmp/wtent.c */
+-void updwtmp(const char *wtmp_file, const struct utmp *lutmp)
+-{
+-    int fd;
+-
+-    fd = open(wtmp_file, O_APPEND | O_WRONLY);
+-    if (fd >= 0) {
+-	if (lockf(fd, F_LOCK, 0) == 0) {
+-	    write(fd, lutmp, sizeof(*lutmp));
+-	    lockf(fd, F_ULOCK, 0);
+-	    close(fd);
+-	}
+-    }
+-}
+-#endif
+diff --git a/libutil/openpty.c b/libutil/openpty.c
+index bd8b8d9a4..848dc8d38 100644
+--- a/libutil/openpty.c
++++ b/libutil/openpty.c
+@@ -84,7 +84,6 @@ pts_name (int fd, char **pts, size_t buf_len)
+ /* Create pseudo tty master slave pair and set terminal attributes
+    according to TERMP and WINP.  Return handles for both ends in
+    AMASTER and ASLAVE, and return the name of the slave end in NAME.  */
+-libutil_hidden_proto(openpty)
+ int
+ openpty (int *amaster, int *aslave, char *name, struct termios *termp,
+ 	 struct winsize *winp)
+diff --git a/test/misc/Makefile.in b/test/misc/Makefile.in
+index 2fb9652fd..09f631fe3 100644
+--- a/test/misc/Makefile.in
++++ b/test/misc/Makefile.in
+@@ -20,6 +20,10 @@ ifeq ($(UCLIBC_HAS_UTMPX),)
+ TESTS_DISABLED += tst-utmpx
+ endif
+ 
++ifeq ($(UCLIBC_HAS_UTMP),)
++TESTS_DISABLED += tst-utmp
++endif
++
+ DODIFF_dirent    := 1
+ DODIFF_dirent64  := 1
+ DODIFF_tst-statfs := 1

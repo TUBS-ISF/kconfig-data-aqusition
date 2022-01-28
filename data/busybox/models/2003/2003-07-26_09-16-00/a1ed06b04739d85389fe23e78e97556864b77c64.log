@@ -1,0 +1,398 @@
+"2003-07-26 09:16:00 +0000"
+diff --git a/debianutils/Config.in b/debianutils/Config.in
+index 108cc5388..8bdb91f26 100644
+--- a/debianutils/Config.in
++++ b/debianutils/Config.in
+@@ -33,6 +33,14 @@ config CONFIG_RUN_PARTS
+ 	  Unless you know that run-parts is used in some of your scripts
+ 	  you can safely say N here.
+ 
++config CONFIG_START_STOP_DAEMON
++	bool "start-stop-daemon"
++	default y
++	help
++	  start-stop-daemon is used to control the creation and
++	  termination of system-level processes, usually the ones
++	  started during the startup of the system.
++
+ config CONFIG_WHICH
+ 	bool "which"
+ 	default n
+diff --git a/debianutils/Makefile.in b/debianutils/Makefile.in
+index 313faa0de..8ca05c738 100644
+--- a/debianutils/Makefile.in
++++ b/debianutils/Makefile.in
+@@ -27,6 +27,7 @@ DEBIANUTILS-y:=
+ DEBIANUTILS-$(CONFIG_MKTEMP)		+= mktemp.o
+ DEBIANUTILS-$(CONFIG_READLINK)		+= readlink.o
+ DEBIANUTILS-$(CONFIG_RUN_PARTS)		+= run_parts.o
++DEBIANUTILS-$(CONFIG_START_STOP_DAEMON)	+= start_stop_daemon.o
+ DEBIANUTILS-$(CONFIG_WHICH)		+= which.o
+ 
+ libraries-y+=$(DEBIANUTILS_DIR)$(DEBIANUTILS_AR)
+diff --git a/debianutils/run_parts.c b/debianutils/run_parts.c
+index a941e1fc8..98fd58887 100644
+--- a/debianutils/run_parts.c
++++ b/debianutils/run_parts.c
+@@ -54,6 +54,13 @@
+ 
+ #include "libbb.h"
+ 
++static const struct option runparts_long_options[] = {
++	{ "test",		0,		NULL,		't' },
++	{ "umask",		1,		NULL,		'u' },
++	{ "arg",		1,		NULL,		'a' },
++	{ 0,			0,		0,			0 }
++};
++
+ /* run_parts_main */
+ /* Process options */
+ int run_parts_main(int argc, char **argv)
+@@ -65,32 +72,31 @@ int run_parts_main(int argc, char **argv)
+ 
+ 	umask(022);
+ 
+-	while ((opt = getopt(argc, argv, "tu:a:")) != -1) {
++	while ((opt = getopt_long (argc, argv, "tu:a:",
++					runparts_long_options, NULL)) > 0)
++	{
+ 		switch (opt) {
+-		case 't':		/* Enable test mode */
+-			test_mode = 1;
+-			break;
+-		case 'u':		/* Set the umask of the programs executed */
+-			/* Check and set the umask of the program executed. As stated in the original
+-			 * run-parts, the octal conversion in libc is not foolproof; it will take the 
+-			 * 8 and 9 digits under some circumstances. We'll just have to live with it.
+-			 */
+-			{
+-				const unsigned int mask = (unsigned int) strtol(optarg, NULL, 8);
+-				if (mask > 07777) {
+-					bb_perror_msg_and_die("bad umask value");
+-				}
+-				umask(mask);
+-			}
+-			break;
+-		case 'a':		/* Pass an argument to the programs */
+-			/* Add an argument to the commands that we will call.
+-			 * Called once for every argument. */
+-			args = xrealloc(args, (argcount + 2) * (sizeof(char *)));
+-			args[argcount++] = optarg;
+-			break;
+-		default:
+-			bb_show_usage();
++			/* Enable test mode */
++			case 't':
++				test_mode++;
++				break;
++			/* Set the umask of the programs executed */
++			case 'u':
++				/* Check and set the umask of the program executed. As stated in the original
++				 * run-parts, the octal conversion in libc is not foolproof; it will take the 
++				 * 8 and 9 digits under some circumstances. We'll just have to live with it.
++				 */
++				umask(bb_xgetlarg(optarg, 8, 0, 07777));
++				break;
++			/* Pass an argument to the programs */
++			case 'a':
++				/* Add an argument to the commands that we will call.
++				 * Called once for every argument. */
++				args = xrealloc(args, (argcount + 2) * (sizeof(char *)));
++				args[argcount++] = optarg;
++				break;
++			default:
++				bb_show_usage();
+ 		}
+ 	}
+ 
+diff --git a/init/Config.in b/init/Config.in
+index af7aac833..eb4211386 100644
+--- a/init/Config.in
++++ b/init/Config.in
+@@ -85,15 +85,6 @@ config CONFIG_MSVC
+ 	help
+ 	  msvc is used to start and stop processes controlled by minit
+ 
+-# Should start-stop-daemon be moved under debianutils?
+-config CONFIG_START_STOP_DAEMON
+-	bool "start-stop-daemon"
+-	default y
+-	help
+-	  start-stop-daemon is used to control the creation and
+-	  termination of system-level processes, usually the ones
+-	  started during the startup of the system.
+-
+ config CONFIG_MESG
+ 	bool "mesg"
+ 	default y
+diff --git a/init/Makefile.in b/init/Makefile.in
+index b1f464d19..1b13f693b 100644
+--- a/init/Makefile.in
++++ b/init/Makefile.in
+@@ -31,7 +31,6 @@ INIT-$(CONFIG_MSVC)			+= msvc.o
+ INIT-$(CONFIG_PIDFILEHACK)		+= pidfilehack.o
+ INIT-$(CONFIG_POWEROFF)			+= poweroff.o
+ INIT-$(CONFIG_REBOOT)			+= reboot.o
+-INIT-$(CONFIG_START_STOP_DAEMON)	+= start_stop_daemon.o
+ 
+ ifeq ($(CONFIG_HALT), y)
+ CONFIG_INIT_SHARED=y
+diff --git a/init/start_stop_daemon.c b/init/start_stop_daemon.c
+deleted file mode 100644
+index 482078e6e..000000000
+--- a/init/start_stop_daemon.c
++++ /dev/null
+@@ -1,253 +0,0 @@
+-/* vi: set sw=4 ts=4: */
+-/*
+- * Mini start-stop-daemon implementation(s) for busybox
+- *
+- * Written by Marek Michalkiewicz <marekm@i17linuxb.ists.pwr.wroc.pl>,
+- * public domain.
+- * Adapted for busybox David Kimdon <dwhedon@gordian.com>
+- */
+-
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <stdarg.h>
+-#include <signal.h>
+-#include <errno.h>
+-#include <sys/stat.h>
+-#include <dirent.h>
+-#include <unistd.h>
+-#include <getopt.h>
+-
+-#include "busybox.h"
+-#include "pwd_.h"
+-
+-static int start = 0;
+-static int stop = 0;
+-static int fork_before_exec = 0;
+-static int signal_nr = 15;
+-static int user_id = -1;
+-static char *userspec = NULL;
+-static char *cmdname = NULL;
+-static char *execname = NULL;
+-static char *startas = NULL;
+-
+-typedef struct pid_list {
+-	struct pid_list *next;
+-	int pid;
+-} pid_list;
+-
+-static pid_list *found = NULL;
+-
+-static inline void
+-push(int pid)
+-{
+-	pid_list *p;
+-
+-	p = xmalloc(sizeof(*p));
+-	p->next = found;
+-	p->pid = pid;
+-	found = p;
+-}
+-
+-static int
+-pid_is_exec(int pid, const char *exec)
+-{
+-	char buf[PATH_MAX];
+-	FILE *fp;
+-
+-	sprintf(buf, "/proc/%d/cmdline", pid);
+-	fp = fopen(buf, "r");
+-	if (fp && fgets (buf, sizeof (buf), fp) ) {
+-		fclose(fp);
+-	    if (strncmp (buf, exec, strlen(exec)) == 0)
+-		return 1;
+-	}
+-	return 0;
+-}
+-
+-
+-static int
+-pid_is_user(int pid, int uid)
+-{
+-	struct stat sb;
+-	char buf[32];
+-
+-	sprintf(buf, "/proc/%d", pid);
+-	if (stat(buf, &sb) != 0)
+-		return 0;
+-	return (sb.st_uid == uid);
+-}
+-
+-
+-static int
+-pid_is_cmd(int pid, const char *name)
+-{
+-	char buf[32];
+-	FILE *f;
+-	int c;
+-
+-	sprintf(buf, "/proc/%d/stat", pid);
+-	f = fopen(buf, "r");
+-	if (!f)
+-		return 0;
+-	while ((c = getc(f)) != EOF && c != '(')
+-		;
+-	if (c != '(') {
+-		fclose(f);
+-		return 0;
+-	}
+-	/* this hopefully handles command names containing ')' */
+-	while ((c = getc(f)) != EOF && c == *name)
+-		name++;
+-	fclose(f);
+-	return (c == ')' && *name == '\0');
+-}
+-
+-
+-static void
+-check(int pid)
+-{
+-	if (execname && !pid_is_exec(pid, execname)) {
+-		return;
+-	}
+-	if (userspec && !pid_is_user(pid, user_id)) {
+-		return;
+-	}
+-	if (cmdname && !pid_is_cmd(pid, cmdname)) {
+-		return;
+-	}
+-	push(pid);
+-}
+-
+-
+-
+-static void
+-do_procfs(void)
+-{
+-	DIR *procdir;
+-	struct dirent *entry;
+-	int foundany, pid;
+-
+-	procdir = opendir("/proc");
+-	if (!procdir)
+-		bb_perror_msg_and_die ("opendir /proc");
+-
+-	foundany = 0;
+-	while ((entry = readdir(procdir)) != NULL) {
+-		if (sscanf(entry->d_name, "%d", &pid) != 1)
+-			continue;
+-		foundany++;
+-		check(pid);
+-	}
+-	closedir(procdir);
+-	if (!foundany)
+-		bb_error_msg_and_die ("nothing in /proc - not mounted?");
+-}
+-
+-
+-static void
+-do_stop(void)
+-{
+-	char what[1024];
+-	pid_list *p;
+-	int killed = 0;
+-
+-	if (cmdname)
+-		strcpy(what, cmdname);
+-	else if (execname)
+-		strcpy(what, execname);
+-	else if (userspec)
+-		sprintf(what, "process(es) owned by `%s'", userspec);
+-	else
+-		bb_error_msg_and_die ("internal error, please report");
+-
+-	if (!found) {
+-		printf("no %s found; none killed.\n", what);
+-		return;
+-	}
+-	for (p = found; p; p = p->next) {
+-		if (kill(p->pid, signal_nr) == 0) {
+-			p->pid = -p->pid;
+-			killed++;
+-		} else {
+-			bb_perror_msg("warning: failed to kill %d:", p->pid);
+-		}
+-	}
+-	if (killed) {
+-		printf("stopped %s (pid", what);
+-		for (p = found; p; p = p->next)
+-			if(p->pid < 0)
+-				printf(" %d", -p->pid);
+-		printf(").\n");
+-	}
+-}
+-
+-
+-static const struct option ssd_long_options[] = {
+-	{ "stop",		0,		NULL,		'K' },
+-	{ "start",		0,		NULL,		'S' },
+-	{ "background",	0,		NULL,		'b' },
+-	{ "startas",	1,		NULL,		'a' },
+-	{ "name",		1,		NULL,		'n' },
+-	{ "signal",		1,		NULL,		's' },
+-	{ "user",		1,		NULL,		'u' },
+-	{ "exec",		1,		NULL,		'x' },
+-	{ 0,			0,		0,			0 }
+-};
+-
+-int
+-start_stop_daemon_main(int argc, char **argv)
+-{
+-	int flags;
+-	char *signame;
+-	bb_applet_long_options = ssd_long_options;
+-
+-	flags = bb_getopt_ulflags(argc, argv, "KSba:n:s:u:x:", 
+-			&startas, &cmdname, &signame, &userspec, &execname);
+-
+-	/* Be sneaky and avoid branching */
+-	stop = (flags & 1);
+-	start = (flags & 2);
+-	fork_before_exec = (flags & 4);
+-
+-	signal_nr = bb_xgetlarg(signame, 10, 0, NSIG);
+-
+-	if (start == stop)
+-		bb_error_msg_and_die ("need exactly one of -S or -K");
+-
+-	if (!execname && !userspec)
+-		bb_error_msg_and_die ("need at least one of -x or -u");
+-
+-	if (!startas)
+-		startas = execname;
+-
+-	if (start && !startas)
+-		bb_error_msg_and_die ("-S needs -x or -a");
+-
+-	argc -= optind;
+-	argv += optind;
+-
+-	if (userspec && sscanf(userspec, "%d", &user_id) != 1)
+-		user_id = my_getpwnam(userspec);
+-
+-	do_procfs();
+-
+-	if (stop) {
+-		do_stop();
+-		return EXIT_SUCCESS;
+-	}
+-
+-	if (found) {
+-		printf("%s already running.\n%d\n", execname ,found->pid);
+-		return EXIT_SUCCESS;
+-	}
+-	*--argv = startas;
+-	if (fork_before_exec) {
+-		if (daemon(0, 0) == -1)
+-			bb_perror_msg_and_die ("unable to fork");
+-	}
+-	setsid();
+-	execv(startas, argv);
+-	bb_perror_msg_and_die ("unable to start %s", startas);
+-}
+-

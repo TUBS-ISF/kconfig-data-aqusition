@@ -1,0 +1,2304 @@
+"2004-08-21 21:19:29 +0000"
+diff --git a/Makefile b/Makefile
+index 670fb548d..caa01b32e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -344,6 +344,12 @@ allyesconfig: extra/config/conf
+ 	$(RM) -r include/bits
+ 	$(INSTALL) -d include/bits
+ 	@./extra/config/conf -y extra/Configs/Config.in
++	sed -i -e "s/^DODEBUG=.*/# DODEBUG is not set/" .config
++	sed -i -e "s/^DOASSERTS=.*/# DOASSERTS is not set/" .config
++	sed -i -e "s/^SUPPORT_LD_DEBUG_EARLY=.*/# SUPPORT_LD_DEBUG_EARLY is not set/" .config
++	sed -i -e "s/^SUPPORT_LD_DEBUG=.*/# SUPPORT_LD_DEBUG is not set/" .config
++	sed -i -e "s/^UCLIBC_MJN3_ONLY=.*/# UCLIBC_MJN3_ONLY is not set/" .config
++	@./extra/config/conf -o extra/Configs/Config.in
+ 
+ allnoconfig: extra/config/conf
+ 	$(RM) -r include/bits
+diff --git a/debian/config b/debian/config
+index f7f7fcf5e..5bbd52996 100644
+--- a/debian/config
++++ b/debian/config
+@@ -44,7 +44,6 @@ BUILD_UCLIBC_LDSO=y
+ LDSO_LDD_SUPPORT=y
+ UCLIBC_CTOR_DTOR=y
+ # UCLIBC_PROPOLICE is not set
+-# UCLIBC_PROFILING is not set
+ # HAS_NO_THREADS is not set
+ UCLIBC_HAS_THREADS=y
+ PTHREADS_DEBUG_SUPPORT=y
+diff --git a/docs/Glibc_vs_uClibc_Differences.txt b/docs/Glibc_vs_uClibc_Differences.txt
+index 0b78bf970..1983f45ba 100644
+--- a/docs/Glibc_vs_uClibc_Differences.txt
++++ b/docs/Glibc_vs_uClibc_Differences.txt
+@@ -175,3 +175,34 @@ glibc bugs that Ulrich Drepper has refused to acknowledge or comment on
+    and explicit UNDEFINED rules.
+ 
+ More to follow as I think of it...
++
++
++
++
++Profiling:
++-------------------------------------------------------------------
++
++uClibc no longer supports 'gcc -fprofile-arcs  -pg' style profiling, which
++causes your application to generate a 'gmon.out' file that can then be analyzed
++by 'gprof'.  Not only does this require explicit extra support in uClibc, it
++requires that you rebuild everything with profiling support.  There is both a
++size and performance penalty to profiling your applications this way, as well
++as Heisenberg effects, where the act of measuring changes what is measured.
++
++These exist a number of less invasive alternatives that do not require your to
++specially instrument your application, and recompile and relink everything.
++
++Many people have had good results using the combination of Valgrind
++to generate profiling information and KCachegrind for analysis:
++      http://developer.kde.org/~sewardj/
++      http://kcachegrind.sourceforge.net/
++
++The OProfile system-wide profiler is another alternative:
++      http://oprofile.sourceforge.net/
++
++Prospect is another alternative based on OProfile:
++      http://prospect.sourceforge.net/
++
++And the Linux Trace Toolkit (LTT) is also a fine tool:
++    http://www.opersys.com/LTT/
++
+diff --git a/extra/Configs/Config.frv.default b/extra/Configs/Config.frv.default
+index eba75fe70..58eda348d 100644
+--- a/extra/Configs/Config.frv.default
++++ b/extra/Configs/Config.frv.default
+@@ -50,7 +50,6 @@ UCLIBC_PIE_SUPPORT=y
+ LDSO_LDD_SUPPORT=y
+ UCLIBC_CTOR_DTOR=y
+ # UCLIBC_PROPOLICE is not set
+-# UCLIBC_PROFILING is not set
+ # HAS_NO_THREADS is not set
+ UCLIBC_HAS_THREADS=y
+ PTHREADS_DEBUG_SUPPORT=y
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index b1624dafd..be80a3a7d 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -251,43 +251,6 @@ config UCLIBC_PROPOLICE
+ 	  gcc version, were __guard and __stack_smash_handler are removed from libgcc.
+ 	  Most people will answer N.
+ 
+-config UCLIBC_PROFILING
+-	bool "Support gprof profiling"
+-	default y
+-	help
+-	  If you wish to build uClibc with support for application profiling
+-	  using the gprof tool, then you should enable this feature.  Then in
+-	  addition to building uClibc with profiling support, you will also
+-	  need to recompile all your shared libraries with the profiling
+-	  enabled version of uClibc.  To add profiling support to your
+-	  applications, you must compile things using the gcc options
+-	  "-fprofile-arcs  -pg".  Then when you run your applications, a
+-	  gmon.out file will be generated which can then be analyzed by
+-	  'gprof'.  
+-
+-	  These exist a number of less invasive alternatives that do not
+-	  require your to specially instrument your application, and recompile
+-	  and relink everything.  
+-	  
+-	  Many people have had good results using the combination of Valgrind 
+-	  to generate profiling information and KCachegrind for analysis:
+-		  http://developer.kde.org/~sewardj/
+-		  http://kcachegrind.sourceforge.net/
+-
+-	  The OProfile system-wide profiler is another alternative:
+-		  http://oprofile.sourceforge.net/
+-
+-	  Prospect is another alternative based on OProfile:
+-		  http://prospect.sourceforge.net/
+-
+-	  And the Linux Trace Toolkit (LTT) is also a fine tool:
+-		http://www.opersys.com/LTT/
+-
+-	  If none of these tools do what you need, you can of course enable
+-	  this option, rebuild everything, and use 'gprof'.  There is both a
+-	  size and performance penalty to profiling your applications this way,
+-	  so most people should answer N.
+-
+ config HAS_NO_THREADS
+ 	bool
+ 	default n
+diff --git a/include/sys/gmon.h b/include/sys/gmon.h
+deleted file mode 100644
+index f29b410d3..000000000
+--- a/include/sys/gmon.h
++++ /dev/null
+@@ -1,201 +0,0 @@
+-/*-
+- * Copyright (c) 1982, 1986, 1992, 1993
+- *	The Regents of the University of California.  All rights reserved.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions
+- * are met:
+- * 1. Redistributions of source code must retain the above copyright
+- *    notice, this list of conditions and the following disclaimer.
+- * 2. Redistributions in binary form must reproduce the above copyright
+- *    notice, this list of conditions and the following disclaimer in the
+- *    documentation and/or other materials provided with the distribution.
+- * 4. Neither the name of the University nor the names of its contributors
+- *    may be used to endorse or promote products derived from this software
+- *    without specific prior written permission.
+- *
+- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+- * SUCH DAMAGE.
+- *
+- *	@(#)gmon.h	8.2 (Berkeley) 1/4/94
+- */
+-
+-#ifndef	_SYS_GMON_H
+-#define	_SYS_GMON_H	1
+-
+-#include <features.h>
+-
+-#include <sys/types.h>
+-
+-/*
+- * See gmon_out.h for gmon.out format.
+- */
+-
+-/* structure emitted by "gcc -a".  This must match struct bb in
+-   gcc/libgcc2.c.  It is OK for gcc to declare a longer structure as
+-   long as the members below are present.  */
+-struct __bb
+-{
+-  long			zero_word;
+-  const char		*filename;
+-  long			*counts;
+-  long			ncounts;
+-  struct __bb		*next;
+-  const unsigned long	*addresses;
+-};
+-
+-extern struct __bb *__bb_head;
+-
+-/*
+- * histogram counters are unsigned shorts (according to the kernel).
+- */
+-#define	HISTCOUNTER	unsigned short
+-
+-/*
+- * fraction of text space to allocate for histogram counters here, 1/2
+- */
+-#define	HISTFRACTION	2
+-
+-/*
+- * Fraction of text space to allocate for from hash buckets.
+- * The value of HASHFRACTION is based on the minimum number of bytes
+- * of separation between two subroutine call points in the object code.
+- * Given MIN_SUBR_SEPARATION bytes of separation the value of
+- * HASHFRACTION is calculated as:
+- *
+- *	HASHFRACTION = MIN_SUBR_SEPARATION / (2 * sizeof(short) - 1);
+- *
+- * For example, on the VAX, the shortest two call sequence is:
+- *
+- *	calls	$0,(r0)
+- *	calls	$0,(r0)
+- *
+- * which is separated by only three bytes, thus HASHFRACTION is
+- * calculated as:
+- *
+- *	HASHFRACTION = 3 / (2 * 2 - 1) = 1
+- *
+- * Note that the division above rounds down, thus if MIN_SUBR_FRACTION
+- * is less than three, this algorithm will not work!
+- *
+- * In practice, however, call instructions are rarely at a minimal
+- * distance.  Hence, we will define HASHFRACTION to be 2 across all
+- * architectures.  This saves a reasonable amount of space for
+- * profiling data structures without (in practice) sacrificing
+- * any granularity.
+- */
+-#define	HASHFRACTION	2
+-
+-/*
+- * Percent of text space to allocate for tostructs.
+- * This is a heuristic; we will fail with a warning when profiling programs
+- * with a very large number of very small functions, but that's
+- * normally OK.
+- * 2 is probably still a good value for normal programs.
+- * Profiling a test case with 64000 small functions will work if
+- * you raise this value to 3 and link statically (which bloats the
+- * text size, thus raising the number of arcs expected by the heuristic).
+- */
+-#define ARCDENSITY	3
+-
+-/*
+- * Always allocate at least this many tostructs.  This
+- * hides the inadequacy of the ARCDENSITY heuristic, at least
+- * for small programs.
+- */
+-#define MINARCS		50
+-
+-/*
+- * The type used to represent indices into gmonparam.tos[].
+- */
+-#define	ARCINDEX	u_long
+-
+-/* 
+- * Maximum number of arcs we want to allow.
+- * Used to be max representable value of ARCINDEX minus 2, but now 
+- * that ARCINDEX is a long, that's too large; we don't really want 
+- * to allow a 48 gigabyte table.
+- * The old value of 1<<16 wasn't high enough in practice for large C++
+- * programs; will 1<<20 be adequate for long?  FIXME
+- */
+-#define MAXARCS		(1 << 20)
+-
+-struct tostruct {
+-	u_long		selfpc;
+-	long		count;
+-	ARCINDEX	link;
+-};
+-
+-/*
+- * a raw arc, with pointers to the calling site and
+- * the called site and a count.
+- */
+-struct rawarc {
+-	u_long	raw_frompc;
+-	u_long	raw_selfpc;
+-	long	raw_count;
+-};
+-
+-/*
+- * general rounding functions.
+- */
+-#define ROUNDDOWN(x,y)	(((x)/(y))*(y))
+-#define ROUNDUP(x,y)	((((x)+(y)-1)/(y))*(y))
+-
+-/*
+- * The profiling data structures are housed in this structure.
+- */
+-struct gmonparam {
+-	long int	state;
+-	u_short		*kcount;
+-	u_long		kcountsize;
+-	ARCINDEX	*froms;
+-	u_long		fromssize;
+-	struct tostruct	*tos;
+-	u_long		tossize;
+-	ARCINDEX        tolimit;
+-	u_long		lowpc;
+-	u_long		highpc;
+-	u_long		textsize;
+-	u_long		hashfraction;
+-	long		log_hashfraction;
+-};
+-
+-/*
+- * Possible states of profiling.
+- */
+-#define	GMON_PROF_ON	0
+-#define	GMON_PROF_BUSY	1
+-#define	GMON_PROF_ERROR	2
+-#define	GMON_PROF_OFF	3
+-
+-/*
+- * Sysctl definitions for extracting profiling information from the kernel.
+- */
+-#define	GPROF_STATE	0	/* int: profiling enabling variable */
+-#define	GPROF_COUNT	1	/* struct: profile tick count buffer */
+-#define	GPROF_FROMS	2	/* struct: from location hash bucket */
+-#define	GPROF_TOS	3	/* struct: destination/count structure */
+-#define	GPROF_GMONPARAM	4	/* struct: profiling parameters (see above) */
+-
+-__BEGIN_DECLS
+-
+-/* Set up data structures and start profiling.  */
+-extern void __monstartup (u_long __lowpc, u_long __highpc) __THROW;
+-extern void monstartup (u_long __lowpc, u_long __highpc) __THROW;
+-
+-/* Clean up profiling and write out gmon.out.  */
+-extern void _mcleanup (void) __THROW;
+-
+-__END_DECLS
+-
+-#endif /* sys/gmon.h */
+diff --git a/include/sys/gmon_out.h b/include/sys/gmon_out.h
+deleted file mode 100644
+index 6fa09e864..000000000
+--- a/include/sys/gmon_out.h
++++ /dev/null
+@@ -1,80 +0,0 @@
+-/* Copyright (C) 1996, 1997 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by David Mosberger <davidm@cs.arizona.edu>.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-/* This file specifies the format of gmon.out files.  It should have
+-   as few external dependencies as possible as it is going to be included
+-   in many different programs.  That is, minimize the number of #include's.
+-
+-   A gmon.out file consists of a header (defined by gmon_hdr) followed by
+-   a sequence of records.  Each record starts with a one-byte tag
+-   identifying the type of records, followed by records specific data. */
+-
+-#ifndef _SYS_GMON_OUT_H
+-#define _SYS_GMON_OUT_H	1
+-
+-#include <features.h>
+-
+-#define	GMON_MAGIC	"gmon"	/* magic cookie */
+-#define GMON_VERSION	1	/* version number */
+-
+-/* For profiling shared object we need a new format.  */
+-#define GMON_SHOBJ_VERSION	0x1ffff
+-
+-__BEGIN_DECLS
+-
+-/*
+- * Raw header as it appears on file (without padding).  This header
+- * always comes first in gmon.out and is then followed by a series
+- * records defined below.
+- */
+-struct gmon_hdr
+-  {
+-    char cookie[4];
+-    char version[4];
+-    char spare[3 * 4];
+-  };
+-
+-/* types of records in this file: */
+-typedef enum
+-  {
+-    GMON_TAG_TIME_HIST = 0,
+-    GMON_TAG_CG_ARC = 1,
+-    GMON_TAG_BB_COUNT = 2
+-  } GMON_Record_Tag;
+-
+-struct gmon_hist_hdr
+-  {
+-    char low_pc[sizeof (char *)];	/* base pc address of sample buffer */
+-    char high_pc[sizeof (char *)];	/* max pc address of sampled buffer */
+-    char hist_size[4];			/* size of sample buffer */
+-    char prof_rate[4];			/* profiling clock rate */
+-    char dimen[15];			/* phys. dim., usually "seconds" */
+-    char dimen_abbrev;			/* usually 's' for "seconds" */
+-  };
+-
+-struct gmon_cg_arc_record
+-  {
+-    char from_pc[sizeof (char *)];	/* address within caller's body */
+-    char self_pc[sizeof (char *)];	/* address within callee's body */
+-    char count[4];			/* number of arc traversals */
+-  };
+-
+-__END_DECLS
+-
+-#endif /* sys/gmon_out.h */
+diff --git a/libc/sysdeps/linux/alpha/__longjmp.S b/libc/sysdeps/linux/alpha/__longjmp.S
+index 2db4e22e9..b78489f53 100644
+--- a/libc/sysdeps/linux/alpha/__longjmp.S
++++ b/libc/sysdeps/linux/alpha/__longjmp.S
+@@ -29,16 +29,7 @@
+ 
+ __longjmp:
+ 	.frame $30 , 0, $26
+-#ifdef PROF
+-	ldgp    gp, 0(pv)
+-	.set noat
+-	lda     AT, _mcount
+-	jsr     AT, (AT), _mcount
+-	.set at
+-	.prologue 1
+-#else
+ 	.prologue 0
+-#endif
+ 
+ 	mov     $17, $0
+ 	ldq     $9, JB_S0*8(a0)
+diff --git a/libc/sysdeps/linux/alpha/bits/machine-gmon.h b/libc/sysdeps/linux/alpha/bits/machine-gmon.h
+deleted file mode 100644
+index 5f5522c0b..000000000
+--- a/libc/sysdeps/linux/alpha/bits/machine-gmon.h
++++ /dev/null
+@@ -1,26 +0,0 @@
+-/* Machine-specific calling sequence for `mcount' profiling function.  alpha
+-   Copyright (C) 1995, 1996, 1997 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#define _MCOUNT_DECL(from, self) \
+- void __mcount (u_long from, u_long self)
+-
+-/* Call __mcount with our the return PC for our caller, and the return
+-   PC our caller will return to.  Empty since we use an assembly stub
+-   instead. */
+-#define MCOUNT
+diff --git a/libc/sysdeps/linux/alpha/brk.S b/libc/sysdeps/linux/alpha/brk.S
+index 8c70a0ce5..4e15518d2 100644
+--- a/libc/sysdeps/linux/alpha/brk.S
++++ b/libc/sysdeps/linux/alpha/brk.S
+@@ -46,12 +46,6 @@ __brk:
+     .frame $30 ,   8 , $26
+ 	ldgp	$29, 0($27)
+ 	subq	$30, 8, $30
+-#ifdef PROF
+-	.set noat
+-	lda	AT, _mcount
+-	jsr	AT, (AT), _mcount
+-	.set at
+-#endif
+ 	.prologue 1
+ 
+ 	/* Save the requested brk across the system call.  */
+diff --git a/libc/sysdeps/linux/alpha/clone.S b/libc/sysdeps/linux/alpha/clone.S
+index b17a5ec68..396816184 100644
+--- a/libc/sysdeps/linux/alpha/clone.S
++++ b/libc/sysdeps/linux/alpha/clone.S
+@@ -44,16 +44,7 @@
+ 
+ __clone:
+ 	.frame $30 , 0, $26
+-#ifdef PROF
+-	ldgp	gp,0(pv)
+-	.set noat
+-	lda	AT, _mcount
+-	jsr	AT, (AT), _mcount
+-	.set at
+-	.prologue 1
+-#else
+ 	.prologue 0
+-#endif
+ 
+ 	/* Sanity check arguments.  */
+ 	ldiq	v0,EINVAL
+@@ -78,10 +69,8 @@ __clone:
+ 
+ 	/* Something bad happened -- no child created */
+ $error:
+-#ifndef PROF
+ 	br	gp,1f
+ 1:	ldgp	gp,0(gp)
+-#endif
+ 	jmp	zero,__syscall_error
+ 
+ .end __clone
+diff --git a/libc/sysdeps/linux/alpha/divrem.h b/libc/sysdeps/linux/alpha/divrem.h
+index d22759e40..ca3db4b49 100644
+--- a/libc/sysdeps/linux/alpha/divrem.h
++++ b/libc/sysdeps/linux/alpha/divrem.h
+@@ -130,22 +130,6 @@
+ UFUNC_NAME:
+ 	lda	sp, -STACK(sp)
+ 	.frame	sp, STACK, retaddr, 0
+-#ifdef PROF
+-	stq	ra, 0(sp)
+-	stq	pv, 8(sp)
+-	stq	gp, 16(sp)
+-
+-	br	AT, 1f
+-1:	ldgp	gp, 0(AT)
+-
+-	mov	retaddr, ra
+-	lda	AT, _mcount
+-	jsr	AT, (AT), _mcount
+-
+-	ldq	ra, 0(sp)
+-	ldq	pv, 8(sp)
+-	ldq	gp, 16(sp)
+-#endif
+ 	.prologue 0
+ 
+ $udiv:
+@@ -216,21 +200,6 @@ $divbyzero:
+ SFUNC_NAME:
+ 	lda	sp, -STACK(sp)
+ 	.frame	sp, STACK, retaddr, 0
+-#ifdef PROF
+-	stq	ra, 0(sp)
+-	stq	pv, 8(sp)
+-	stq	gp, 16(sp)
+-
+-	br	AT, 1f
+-1:	ldgp	gp, 0(AT)
+-
+-	mov	retaddr, ra
+-	jsr	AT, _mcount
+-
+-	ldq	ra, 0(sp)
+-	ldq	pv, 8(sp)
+-	ldq	gp, 16(sp)
+-#endif
+ 	.prologue 0
+ 
+ 	or	arg1, arg2, AT
+diff --git a/libc/sysdeps/linux/alpha/setjmp.S b/libc/sysdeps/linux/alpha/setjmp.S
+index 69649eeab..105cc8292 100644
+--- a/libc/sysdeps/linux/alpha/setjmp.S
++++ b/libc/sysdeps/linux/alpha/setjmp.S
+@@ -34,12 +34,6 @@ $sigsetjmp_local:
+        .frame  $26, 16, $26, 0
+        stq     $26, 0($30)
+        .mask   0x04000000, -16
+-#ifdef PROF
+-	.set noat
+-	lda	AT, _mcount
+-	jsr	AT, (AT), _mcount
+-	.set at
+-#endif
+ 	.prologue 1
+ 
+ 	stq	$9, JB_S0*8(a0)
+diff --git a/libc/sysdeps/linux/arm/Makefile b/libc/sysdeps/linux/arm/Makefile
+index f2582e1a8..6a80686a7 100644
+--- a/libc/sysdeps/linux/arm/Makefile
++++ b/libc/sysdeps/linux/arm/Makefile
+@@ -21,7 +21,7 @@ include $(TOPDIR)Rules.mak
+ ASFLAGS=$(CFLAGS)
+ 
+ CRT0_SRC = crt0.S
+-CRT0_OBJ = crt0.o crt1.o gcrt1.o
++CRT0_OBJ = crt0.o crt1.o
+ CRT0_DEPS=gmon-start.S
+ CTOR_TARGETS=$(TOPDIR)lib/crti.o $(TOPDIR)lib/crtn.o
+ 
+@@ -54,12 +54,6 @@ $(COBJS): %.o : %.c
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-gmon-start.S: ../common/gmon-start.c
+-	$(CC) $(CFLAGS) -c $< -S -o $*.S
+-gcrt1.o: $(CRT0_DEPS)
+-endif
+-
+ ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
+ crti.o: crti.S
+ 	$(CC) $(CFLAGS) -c crti.S -o crti.o
+diff --git a/libc/sysdeps/linux/arm/bits/machine-gmon.h b/libc/sysdeps/linux/arm/bits/machine-gmon.h
+deleted file mode 100644
+index 039dfd951..000000000
+--- a/libc/sysdeps/linux/arm/bits/machine-gmon.h
++++ /dev/null
+@@ -1,67 +0,0 @@
+-/* Machine-dependent definitions for profiling support.  ARM version.
+-   Copyright (C) 1996, 1997, 1998 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-/* GCC for the ARM cannot compile __builtin_return_address(N) for N != 0, 
+-   so we must use an assembly stub.  */
+-
+-#include <sysdep.h>
+-#ifndef NO_UNDERSCORES
+-/* The asm symbols for C functions are `_function'.
+-   The canonical name for the counter function is `mcount', no _.  */
+-void _mcount (void) asm ("mcount");
+-#else
+-/* The canonical name for the function is `_mcount' in both C and asm,
+-   but some old asm code might assume it's `mcount'.  */
+-void _mcount (void);
+-weak_alias (_mcount, mcount)
+-#endif
+-
+-static void mcount_internal (u_long frompc, u_long selfpc);
+-
+-#define _MCOUNT_DECL(frompc, selfpc) \
+-static void mcount_internal (u_long frompc, u_long selfpc)
+-
+-/* This macro/func MUST save r0, r1 because the compiler inserts
+-	blind calls to _mount(), ignoring the fact that _mcount may
+-	clobber registers; therefore, _mcount may NOT clobber registers */
+-/* if (this_fp!=0) {
+-	r0 = this_fp
+-	r1 = this_lr
+-  	r1 = [r1-4] which is caller's lr 
+-	if (r1!=0) 
+-		r1 = caller's lr
+-	call mcount_internal(this_lr, caller's_lr)
+-   }
+-*/
+-
+-#define MCOUNT								\
+-void _mcount (void)							\
+-{									\
+-  __asm__("stmdb	sp!, {r0, r1, r2, r3};"				\
+-	  "movs		fp, fp;"				      	\
+-          "moveq	r1, #0;"					\
+-	  "ldrne	r1, [fp, $-4];"					\
+-	  "ldrne	r0, [fp, $-12];"				\
+-	  "movnes	r0, r0;"					\
+-	  "ldrne	r0, [r0, $-4];"					\
+-	  "movs		r0, r0;"					\
+-	  "blne		mcount_internal;"				\
+-	  "ldmia	sp!, {r0, r1, r2, r3}");			\
+-}
+-
+diff --git a/libc/sysdeps/linux/arm/crt0.S b/libc/sysdeps/linux/arm/crt0.S
+index 6704a81e2..455d35d2d 100644
+--- a/libc/sysdeps/linux/arm/crt0.S
++++ b/libc/sysdeps/linux/arm/crt0.S
+@@ -92,7 +92,7 @@ _start:
+ 	ldr r2,[sp, #8]
+ #endif
+ 
+-#if (defined L_crt1 || defined L_gcrt1 ) && defined __UCLIBC_CTOR_DTOR__
++#if (defined L_crt1 ) && defined __UCLIBC_CTOR_DTOR__
+ 	/* Store the address of _init in r3 as an argument to main() */
+ 	ldr r3, =_init
+ 
+@@ -123,11 +123,6 @@ _start:
+ 	.long 2,0,0
+ 3:	.align 4
+ 
+-#if defined L_gcrt1 && defined __UCLIBC_PROFILING__
+-# include "./gmon-start.S"
+-#endif
+-
+-
+ /* Define a symbol for the first piece of initialized data.  */
+ 	.data
+ 	.globl __data_start
+diff --git a/libc/sysdeps/linux/common/Makefile b/libc/sysdeps/linux/common/Makefile
+index 1256e2376..1930351fb 100644
+--- a/libc/sysdeps/linux/common/Makefile
++++ b/libc/sysdeps/linux/common/Makefile
+@@ -57,9 +57,6 @@ CSRC=	__rt_sigtimedwait.c __socketcall.c __syscall_fcntl.c \
+ ifneq ($(strip $(EXCLUDE_BRK)),y)
+ CSRC+=sbrk.c
+ endif
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-CSRC+=gmon.c
+-endif
+ ifeq ($(strip $(UCLIBC_PROPOLICE)),y)
+ CSRC+=ssp.c
+ endif
+diff --git a/libc/sysdeps/linux/common/bits/dlfcn.h b/libc/sysdeps/linux/common/bits/dlfcn.h
+index e96b5c17a..75122a98a 100644
+--- a/libc/sysdeps/linux/common/bits/dlfcn.h
++++ b/libc/sysdeps/linux/common/bits/dlfcn.h
+@@ -40,25 +40,3 @@
+ /* Do not delete object when closed.  */
+ #define RTLD_NODELETE	0x01000
+ 
+-#ifdef __USE_GNU
+-/* To support profiling of shared objects it is a good idea to call
+-   the function found using `dlsym' using the following macro since
+-   these calls do not use the PLT.  But this would mean the dynamic
+-   loader has no chance to find out when the function is called.  The
+-   macro applies the necessary magic so that profiling is possible.
+-   Rewrite
+-	foo = (*fctp) (arg1, arg2);
+-   into
+-        foo = DL_CALL_FCT (fctp, (arg1, arg2));
+-*/
+-# define DL_CALL_FCT(fctp, args) \
+-  (_dl_mcount_wrapper_check ((void *) (fctp)), (*(fctp)) args)
+-
+-__BEGIN_DECLS
+-
+-/* This function calls the profiling functions.  */
+-extern void _dl_mcount_wrapper_check (void *__selfpc) __THROW;
+-
+-__END_DECLS
+-
+-#endif
+diff --git a/libc/sysdeps/linux/common/bits/machine-gmon.h b/libc/sysdeps/linux/common/bits/machine-gmon.h
+deleted file mode 100644
+index 7dd36308b..000000000
+--- a/libc/sysdeps/linux/common/bits/machine-gmon.h
++++ /dev/null
+@@ -1,58 +0,0 @@
+-/* Machine-dependent definitions for profiling support.  Generic GCC 2 version.
+-   Copyright (C) 1996, 1997, 2000 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-/* GCC version 2 gives us a perfect magical function to get
+-   just the information we need:
+-     void *__builtin_return_address (unsigned int N)
+-   returns the return address of the frame N frames up.  */
+-
+-/* Be warned that GCC cannot usefully compile __builtin_return_address(N)
+-   for N != 0 on all machines.  In this case, you may have to write
+-   your own version of _mcount().  */
+-
+-#if __GNUC__ < 2
+- #error "This file uses __builtin_return_address, a GCC 2 extension."
+-#endif
+-
+-#include <sysdep.h>
+-#ifndef NO_UNDERSCORES
+-/* The asm symbols for C functions are `_function'.
+-   The canonical name for the counter function is `mcount', no _.  */
+-void _mcount (void) asm ("mcount");
+-#else
+-/* The canonical name for the function is `_mcount' in both C and asm,
+-   but some old asm code might assume it's `mcount'.  */
+-void _mcount (void);
+-weak_alias (_mcount, mcount)
+-#endif
+-
+-static void mcount_internal (u_long frompc, u_long selfpc);
+-
+-#define _MCOUNT_DECL(frompc, selfpc) \
+-static inline void mcount_internal (u_long frompc, u_long selfpc)
+-
+-#ifndef RETURN_ADDRESS
+-#define RETURN_ADDRESS(n) __builtin_return_address(n)
+-#endif
+-
+-#define MCOUNT \
+-void _mcount (void)							      \
+-{									      \
+-  mcount_internal ((u_long) RETURN_ADDRESS (1), (u_long) RETURN_ADDRESS (0)); \
+-}
+diff --git a/libc/sysdeps/linux/common/gmon-start.c b/libc/sysdeps/linux/common/gmon-start.c
+deleted file mode 100644
+index 6878a7a71..000000000
+--- a/libc/sysdeps/linux/common/gmon-start.c
++++ /dev/null
+@@ -1,58 +0,0 @@
+-/* Code to enable profiling at program startup.
+-   Copyright (C) 1995,1996,1997,2000,2001,2002 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <features.h>
+-#include <stdlib.h>
+-#include <unistd.h>
+-#include <sys/types.h>
+-#include <sys/gmon.h>
+-
+-#ifdef __UCLIBC_PROFILING__
+-
+-/* Beginning and end of our code segment. We cannot declare them
+-   as the external functions since we want the addresses of those
+-   labels. Taking the address of a function may have different
+-   meanings on different platforms. */
+-
+-extern void _start;
+-extern void etext;
+-
+-
+-void __gmon_start__ (void)
+-{
+-#ifdef __UCLIBC_CTOR_DTOR__
+-    /* Protect from being called more than once.  Since crti.o is linked
+-       into every shared library, each of their init functions will call us.  */
+-    static int called;
+-
+-    if (called)
+-	return;
+-
+-    called = 1;
+-#endif
+-
+-    /* Start keeping profiling records.  */
+-    monstartup ((u_long) &_start, (u_long) &etext);
+-
+-    /* Call _mcleanup before exiting; it will write out gmon.out from the
+-       collected data.  */
+-    atexit (&_mcleanup);
+-}
+-#endif
+-
+diff --git a/libc/sysdeps/linux/common/gmon.c b/libc/sysdeps/linux/common/gmon.c
+deleted file mode 100644
+index a3444a28e..000000000
+--- a/libc/sysdeps/linux/common/gmon.c
++++ /dev/null
+@@ -1,640 +0,0 @@
+-/*-
+- * Copyright (c) 1983, 1992, 1993
+- *	The Regents of the University of California.  All rights reserved.
+- *
+- * Redistribution and use in source and binary forms, with or without
+- * modification, are permitted provided that the following conditions
+- * are met:
+- * 1. Redistributions of source code must retain the above copyright
+- *    notice, this list of conditions and the following disclaimer.
+- * 2. Redistributions in binary form must reproduce the above copyright
+- *    notice, this list of conditions and the following disclaimer in the
+- *    documentation and/or other materials provided with the distribution.
+- * 4. Neither the name of the University nor the names of its contributors
+- *    may be used to endorse or promote products derived from this software
+- *    without specific prior written permission.
+- *
+- * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+- * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+- * SUCH DAMAGE.
+- */
+-
+-#include <features.h>
+-#include <sys/param.h>
+-#include <sys/time.h>
+-#include <sys/gmon.h>
+-#include <sys/gmon_out.h>
+-#include <sys/uio.h>
+-
+-#include <errno.h>
+-#include <stdio.h>
+-#include <fcntl.h>
+-#include <unistd.h>
+-
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <unistd.h>
+-#include <signal.h>
+-#include <sys/time.h>
+-#include <sys/types.h>
+-
+-#ifdef __UCLIBC_PROFILING__
+-
+-/*  Head of basic-block list or NULL. */
+-struct __bb *__bb_head;
+-
+-struct gmonparam _gmonparam = { state: GMON_PROF_OFF };
+-
+-/*
+- * See profil(2) where this is described:
+- */
+-static int	s_scale;
+-#define		SCALE_1_TO_1	0x10000L
+-
+-#define ERR(s) write (STDERR_FILENO, s, sizeof (s) - 1)
+-
+-void moncontrol __P ((int mode));
+-static void write_hist __P ((int fd));
+-static void write_call_graph __P ((int fd));
+-static void write_bb_counts __P ((int fd));
+-
+-/*
+- * Control profiling
+- *	profiling is what mcount checks to see if
+- *	all the data structures are ready.
+- */
+-void moncontrol (int mode)
+-{
+-    struct gmonparam *p = &_gmonparam;
+-
+-    /* Don't change the state if we ran into an error.  */
+-    if (p->state == GMON_PROF_ERROR)
+-	return;
+-
+-    if (mode)
+-    {
+-	/* start */
+-	profil((void *) p->kcount, p->kcountsize, p->lowpc, s_scale);
+-	p->state = GMON_PROF_ON;
+-    }
+-    else
+-    {
+-	/* stop */
+-	profil(NULL, 0, 0, 0);
+-	p->state = GMON_PROF_OFF;
+-    }
+-}
+-
+-
+-void monstartup (u_long lowpc, u_long highpc)
+-{
+-    register int o;
+-    char *cp;
+-    struct gmonparam *p = &_gmonparam;
+-
+-    /*
+-     * round lowpc and highpc to multiples of the density we're using
+-     * so the rest of the scaling (here and in gprof) stays in ints.
+-     */
+-    p->lowpc = ROUNDDOWN(lowpc, HISTFRACTION * sizeof(HISTCOUNTER));
+-    p->highpc = ROUNDUP(highpc, HISTFRACTION * sizeof(HISTCOUNTER));
+-    p->textsize = p->highpc - p->lowpc;
+-    p->kcountsize = p->textsize / HISTFRACTION;
+-    p->hashfraction = HASHFRACTION;
+-    p->log_hashfraction = -1;
+-    /* The following test must be kept in sync with the corresponding
+-       test in mcount.c.  */
+-    if ((HASHFRACTION & (HASHFRACTION - 1)) == 0) {
+-	/* if HASHFRACTION is a power of two, mcount can use shifting
+-	   instead of integer division.  Precompute shift amount. */
+-	p->log_hashfraction = ffs(p->hashfraction * sizeof(*p->froms)) - 1;
+-    }
+-    p->fromssize = p->textsize / HASHFRACTION;
+-    p->tolimit = p->textsize * ARCDENSITY / 100;
+-    if (p->tolimit < MINARCS)
+-	p->tolimit = MINARCS;
+-    else if (p->tolimit > MAXARCS)
+-	p->tolimit = MAXARCS;
+-    p->tossize = p->tolimit * sizeof(struct tostruct);
+-
+-    cp = calloc (p->kcountsize + p->fromssize + p->tossize, 1);
+-    if (! cp)
+-    {
+-	ERR("monstartup: out of memory\n");
+-	p->tos = NULL;
+-	p->state = GMON_PROF_ERROR;
+-	return;
+-    }
+-    p->tos = (struct tostruct *)cp;
+-    cp += p->tossize;
+-    p->kcount = (HISTCOUNTER *)cp;
+-    cp += p->kcountsize;
+-    p->froms = (ARCINDEX *)cp;
+-
+-    p->tos[0].link = 0;
+-
+-    o = p->highpc - p->lowpc;
+-    if (p->kcountsize < (u_long) o)
+-    {
+-#ifndef hp300
+-	s_scale = ((float)p->kcountsize / o ) * SCALE_1_TO_1;
+-#else
+-	/* avoid floating point operations */
+-	int quot = o / p->kcountsize;
+-
+-	if (quot >= 0x10000)
+-	    s_scale = 1;
+-	else if (quot >= 0x100)
+-	    s_scale = 0x10000 / quot;
+-	else if (o >= 0x800000)
+-	    s_scale = 0x1000000 / (o / (p->kcountsize >> 8));
+-	else
+-	    s_scale = 0x1000000 / ((o << 8) / p->kcountsize);
+-#endif
+-    } else
+-	s_scale = SCALE_1_TO_1;
+-
+-    moncontrol(1);
+-}
+-
+-
+-/* Return frequency of ticks reported by profil. */
+-static int profile_frequency (void)
+-{
+-    /*
+-     * Discover the tick frequency of the machine if something goes wrong,
+-     * we return 0, an impossible hertz.
+-     */
+-    struct itimerval tim;
+-
+-    tim.it_interval.tv_sec = 0;
+-    tim.it_interval.tv_usec = 1;
+-    tim.it_value.tv_sec = 0;
+-    tim.it_value.tv_usec = 0;
+-    setitimer(ITIMER_REAL, &tim, 0);
+-    setitimer(ITIMER_REAL, 0, &tim);
+-    if (tim.it_interval.tv_usec < 2)
+-	return 0;
+-    return (1000000 / tim.it_interval.tv_usec);
+-}
+-
+-
+-static void write_hist (int fd)
+-{
+-    u_char tag = GMON_TAG_TIME_HIST;
+-    struct gmon_hist_hdr thdr __attribute__ ((aligned (__alignof__ (char *))));
+-
+-    if (_gmonparam.kcountsize > 0)
+-    {
+-	struct iovec iov[3] =
+-	{
+-	    { &tag, sizeof (tag) },
+-	    { &thdr, sizeof (struct gmon_hist_hdr) },
+-	    { _gmonparam.kcount, _gmonparam.kcountsize }
+-	};
+-
+-	*(char **) thdr.low_pc = (char *) _gmonparam.lowpc;
+-	*(char **) thdr.high_pc = (char *) _gmonparam.highpc;
+-	*(int32_t *) thdr.hist_size = (_gmonparam.kcountsize
+-		/ sizeof (HISTCOUNTER));
+-	*(int32_t *) thdr.prof_rate = profile_frequency ();
+-	strncpy (thdr.dimen, "seconds", sizeof (thdr.dimen));
+-	thdr.dimen_abbrev = 's';
+-
+-	writev (fd, iov, 3);
+-    }
+-}
+-
+-
+-static void write_call_graph (int fd)
+-{
+-#define NARCS_PER_WRITEV	32
+-    u_char tag = GMON_TAG_CG_ARC;
+-    struct gmon_cg_arc_record raw_arc[NARCS_PER_WRITEV]
+-	__attribute__ ((aligned (__alignof__ (char*))));
+-    ARCINDEX from_index, to_index, from_len;
+-    u_long frompc;
+-    struct iovec iov[2 * NARCS_PER_WRITEV];
+-    int nfilled;
+-
+-    for (nfilled = 0; nfilled < NARCS_PER_WRITEV; ++nfilled)
+-    {
+-	iov[2 * nfilled].iov_base = &tag;
+-	iov[2 * nfilled].iov_len = sizeof (tag);
+-
+-	iov[2 * nfilled + 1].iov_base = &raw_arc[nfilled];
+-	iov[2 * nfilled + 1].iov_len = sizeof (struct gmon_cg_arc_record);
+-    }
+-
+-    nfilled = 0;
+-    from_len = _gmonparam.fromssize / sizeof (*_gmonparam.froms);
+-    for (from_index = 0; from_index < from_len; ++from_index)
+-    {
+-	if (_gmonparam.froms[from_index] == 0)
+-	    continue;
+-
+-	frompc = _gmonparam.lowpc;
+-	frompc += (from_index * _gmonparam.hashfraction
+-		* sizeof (*_gmonparam.froms));
+-	for (to_index = _gmonparam.froms[from_index];
+-		to_index != 0;
+-		to_index = _gmonparam.tos[to_index].link)
+-	{
+-	    struct arc
+-	    {
+-		char *frompc;
+-		char *selfpc;
+-		int32_t count;
+-	    }
+-	    arc;
+-
+-	    arc.frompc = (char *) frompc;
+-	    arc.selfpc = (char *) _gmonparam.tos[to_index].selfpc;
+-	    arc.count  = _gmonparam.tos[to_index].count;
+-	    memcpy (raw_arc + nfilled, &arc, sizeof (raw_arc [0]));
+-
+-	    if (++nfilled == NARCS_PER_WRITEV)
+-	    {
+-		writev (fd, iov, 2 * nfilled);
+-		nfilled = 0;
+-	    }
+-	}
+-    }
+-    if (nfilled > 0)
+-	writev (fd, iov, 2 * nfilled);
+-}
+-
+-
+-static void write_bb_counts (int fd)
+-{
+-    struct __bb *grp;
+-    u_char tag = GMON_TAG_BB_COUNT;
+-    size_t ncounts;
+-    size_t i;
+-
+-    struct iovec bbhead[2] =
+-    {
+-	{ &tag, sizeof (tag) },
+-	{ &ncounts, sizeof (ncounts) }
+-    };
+-    struct iovec bbbody[8];
+-    size_t nfilled;
+-
+-    for (i = 0; i < (sizeof (bbbody) / sizeof (bbbody[0])); i += 2)
+-    {
+-	bbbody[i].iov_len = sizeof (grp->addresses[0]);
+-	bbbody[i + 1].iov_len = sizeof (grp->counts[0]);
+-    }
+-
+-    /* Write each group of basic-block info (all basic-blocks in a
+-       compilation unit form a single group). */
+-
+-    for (grp = __bb_head; grp; grp = grp->next)
+-    {
+-	ncounts = grp->ncounts;
+-	writev (fd, bbhead, 2);
+-	for (nfilled = i = 0; i < ncounts; ++i)
+-	{
+-	    if (nfilled > (sizeof (bbbody) / sizeof (bbbody[0])) - 2)
+-	    {
+-		writev (fd, bbbody, nfilled);
+-		nfilled = 0;
+-	    }
+-
+-	    bbbody[nfilled++].iov_base = (char *) &grp->addresses[i];
+-	    bbbody[nfilled++].iov_base = &grp->counts[i];
+-	}
+-	if (nfilled > 0)
+-	    writev (fd, bbbody, nfilled);
+-    }
+-}
+-
+-
+-static void write_gmon (void)
+-{
+-    struct gmon_hdr ghdr __attribute__ ((aligned (__alignof__ (int))));
+-    int fd = -1;
+-    char *env;
+-
+-#ifndef O_NOFOLLOW
+-# define O_NOFOLLOW	0
+-#endif
+-
+-    env = getenv ("GMON_OUT_PREFIX");
+-    if (env != NULL 
+-#if 0
+-	    && !__libc_enable_secure
+-#endif
+-	    )
+-    {
+-	size_t len = strlen (env);
+-	char buf[len + 20];
+-	sprintf (buf, "%s.%u", env, getpid ());
+-	fd = open (buf, O_CREAT|O_TRUNC|O_WRONLY|O_NOFOLLOW, 0666);
+-    }
+-
+-    if (fd == -1)
+-    {
+-	fd = open ("gmon.out", O_CREAT|O_TRUNC|O_WRONLY|O_NOFOLLOW, 0666);
+-	if (fd < 0)
+-	{
+-	    char buf[300];
+-	    int errnum = errno;
+-	    fprintf (stderr, "_mcleanup: gmon.out: %s\n",
+-		    strerror_r (errnum, buf, sizeof buf));
+-	    return;
+-	}
+-    }
+-
+-    /* write gmon.out header: */
+-    memset (&ghdr, '\0', sizeof (struct gmon_hdr));
+-    memcpy (&ghdr.cookie[0], GMON_MAGIC, sizeof (ghdr.cookie));
+-    *(int32_t *) ghdr.version = GMON_VERSION;
+-    write (fd, &ghdr, sizeof (struct gmon_hdr));
+-
+-    /* write PC histogram: */
+-    write_hist (fd);
+-
+-    /* write call-graph: */
+-    write_call_graph (fd);
+-
+-    /* write basic-block execution counts: */
+-    write_bb_counts (fd);
+-
+-    close (fd);
+-}
+-
+-
+-void write_profiling (void)
+-{
+-    int save = _gmonparam.state;
+-    _gmonparam.state = GMON_PROF_OFF;
+-    if (save == GMON_PROF_ON)
+-	write_gmon ();
+-    _gmonparam.state = save;
+-}
+-
+-
+-void _mcleanup (void)
+-{
+-    moncontrol (0);
+-
+-    if (_gmonparam.state != GMON_PROF_ERROR)
+-	write_gmon ();
+-
+-    /* free the memory. */
+-    if (_gmonparam.tos != NULL)
+-	free (_gmonparam.tos);
+-}
+-
+-#ifndef SIGPROF
+-
+-/* Enable statistical profiling, writing samples of the PC into at most
+-   SIZE bytes of SAMPLE_BUFFER; every processor clock tick while profiling
+-   is enabled, the system examines the user PC and increments
+-   SAMPLE_BUFFER[((PC - OFFSET) / 2) * SCALE / 65536].  If SCALE is zero,
+-   disable profiling.  Returns zero on success, -1 on error.  */
+-
+-int profil (u_short *sample_buffer, size_t size, size_t offset, u_int scale)
+-{
+-    if (scale == 0)
+-	/* Disable profiling.  */
+-	return 0;
+-
+-    __set_errno (ENOSYS);
+-    return -1;
+-}
+-
+-#else
+-
+-static u_short *samples;
+-static size_t nsamples;
+-static size_t pc_offset;
+-static u_int pc_scale;
+-
+-static inline void profil_count (void *pc)
+-{
+-    size_t i = (pc - pc_offset - (void *) 0) / 2;
+-
+-    if (sizeof (unsigned long long int) > sizeof (size_t))
+-	i = (unsigned long long int) i * pc_scale / 65536;
+-    else
+-	i = i / 65536 * pc_scale + i % 65536 * pc_scale / 65536;
+-
+-    if (i < nsamples)
+-	++samples[i];
+-}
+-
+-/* Get the machine-dependent definition of `profil_counter', the signal
+-   handler for SIGPROF.  It calls `profil_count' (above) with the PC of the
+-   interrupted code.  */
+-#include <bits/profil-counter.h>
+-
+-/* Enable statistical profiling, writing samples of the PC into at most
+-   SIZE bytes of SAMPLE_BUFFER; every processor clock tick while profiling
+-   is enabled, the system examines the user PC and increments
+-   SAMPLE_BUFFER[((PC - OFFSET) / 2) * SCALE / 65536].  If SCALE is zero,
+-   disable profiling.  Returns zero on success, -1 on error.  */
+-
+-int profil (u_short *sample_buffer, size_t size, size_t offset, u_int scale)
+-{
+-    static struct sigaction oact;
+-    static struct itimerval otimer;
+-    struct sigaction act;
+-    struct itimerval timer;
+-
+-    if (sample_buffer == NULL)
+-    {
+-	/* Disable profiling.  */
+-	if (samples == NULL)
+-	    /* Wasn't turned on.  */
+-	    return 0;
+-
+-	if (setitimer (ITIMER_PROF, &otimer, NULL) < 0)
+-	    return -1;
+-	samples = NULL;
+-	return sigaction (SIGPROF, &oact, NULL);
+-    }
+-
+-    if (samples)
+-    {
+-	/* Was already turned on.  Restore old timer and signal handler
+-	   first.  */
+-	if (setitimer (ITIMER_PROF, &otimer, NULL) < 0
+-		|| sigaction (SIGPROF, &oact, NULL) < 0)
+-	    return -1;
+-    }
+-
+-    samples = sample_buffer;
+-    nsamples = size / sizeof *samples;
+-    pc_offset = offset;
+-    pc_scale = scale;
+-
+-    act.sa_handler = (__sighandler_t) &profil_counter;
+-    act.sa_flags = SA_RESTART;
+-    __sigfillset (&act.sa_mask);
+-    if (sigaction (SIGPROF, &act, &oact) < 0)
+-	return -1;
+-
+-    timer.it_value.tv_sec = 0;
+-    timer.it_value.tv_usec = 1;
+-    timer.it_interval = timer.it_value;
+-    return setitimer (ITIMER_PROF, &timer, &otimer);
+-}
+-
+-#endif
+-
+-
+-/* This file provides the machine-dependent definitions of the _MCOUNT_DECL
+-   and MCOUNT macros.  */
+-#include <bits/machine-gmon.h>
+-#include <bits/atomicity.h>
+-
+-/*
+- * mcount is called on entry to each function compiled with the profiling
+- * switch set.  _mcount(), which is declared in a machine-dependent way
+- * with _MCOUNT_DECL, does the actual work and is either inlined into a
+- * C routine or called by an assembly stub.  In any case, this magic is
+- * taken care of by the MCOUNT definition in <machine/profile.h>.
+- *
+- * _mcount updates data structures that represent traversals of the
+- * program's call graph edges.  frompc and selfpc are the return
+- * address and function address that represents the given call graph edge.
+- *
+- * Note: the original BSD code used the same variable (frompcindex) for
+- * both frompcindex and frompc.  Any reasonable, modern compiler will
+- * perform this optimization.
+- */
+-_MCOUNT_DECL(frompc, selfpc)	/* _mcount; may be static, inline, etc */
+-{
+-	register ARCINDEX *frompcindex;
+-	register struct tostruct *top, *prevtop;
+-	register struct gmonparam *p;
+-	register ARCINDEX toindex;
+-	int i;
+-
+-	p = &_gmonparam;
+-	/*
+-	 * check that we are profiling
+-	 * and that we aren't recursively invoked.
+-	 */
+-	if (! compare_and_swap (&p->state, GMON_PROF_ON, GMON_PROF_BUSY))
+-	  return;
+-
+-	/*
+-	 * check that frompcindex is a reasonable pc value.
+-	 * for example:	signal catchers get called from the stack,
+-	 *		not from text space.  too bad.
+-	 */
+-	frompc -= p->lowpc;
+-	if (frompc > p->textsize)
+-		goto done;
+-
+-	/* The following test used to be
+-		if (p->log_hashfraction >= 0)
+-	   But we can simplify this if we assume the profiling data
+-	   is always initialized by the functions in gmon.c.  But
+-	   then it is possible to avoid a runtime check and use the
+-	   smae `if' as in gmon.c.  So keep these tests in sync.  */
+-	if ((HASHFRACTION & (HASHFRACTION - 1)) == 0) {
+-	  /* avoid integer divide if possible: */
+-	    i = frompc >> p->log_hashfraction;
+-	} else {
+-	    i = frompc / (p->hashfraction * sizeof(*p->froms));
+-	}
+-	frompcindex = &p->froms[i];
+-	toindex = *frompcindex;
+-	if (toindex == 0) {
+-		/*
+-		 *	first time traversing this arc
+-		 */
+-		toindex = ++p->tos[0].link;
+-		if (toindex >= p->tolimit)
+-			/* halt further profiling */
+-			goto overflow;
+-
+-		*frompcindex = toindex;
+-		top = &p->tos[toindex];
+-		top->selfpc = selfpc;
+-		top->count = 1;
+-		top->link = 0;
+-		goto done;
+-	}
+-	top = &p->tos[toindex];
+-	if (top->selfpc == selfpc) {
+-		/*
+-		 * arc at front of chain; usual case.
+-		 */
+-		top->count++;
+-		goto done;
+-	}
+-	/*
+-	 * have to go looking down chain for it.
+-	 * top points to what we are looking at,
+-	 * prevtop points to previous top.
+-	 * we know it is not at the head of the chain.
+-	 */
+-	for (; /* goto done */; ) {
+-		if (top->link == 0) {
+-			/*
+-			 * top is end of the chain and none of the chain
+-			 * had top->selfpc == selfpc.
+-			 * so we allocate a new tostruct
+-			 * and link it to the head of the chain.
+-			 */
+-			toindex = ++p->tos[0].link;
+-			if (toindex >= p->tolimit)
+-				goto overflow;
+-
+-			top = &p->tos[toindex];
+-			top->selfpc = selfpc;
+-			top->count = 1;
+-			top->link = *frompcindex;
+-			*frompcindex = toindex;
+-			goto done;
+-		}
+-		/*
+-		 * otherwise, check the next arc on the chain.
+-		 */
+-		prevtop = top;
+-		top = &p->tos[top->link];
+-		if (top->selfpc == selfpc) {
+-			/*
+-			 * there it is.
+-			 * increment its count
+-			 * move it to the head of the chain.
+-			 */
+-			top->count++;
+-			toindex = prevtop->link;
+-			prevtop->link = top->link;
+-			top->link = *frompcindex;
+-			*frompcindex = toindex;
+-			goto done;
+-		}
+-
+-	}
+-done:
+-	p->state = GMON_PROF_ON;
+-	return;
+-overflow:
+-	p->state = GMON_PROF_ERROR;
+-	return;
+-}
+-
+-/*
+- * Actual definition of mcount function.  Defined in <machine/profile.h>,
+- * which is included by <sys/gmon.h>.
+- */
+-MCOUNT
+-
+-#endif
+-
+diff --git a/libc/sysdeps/linux/cris/bits/machine-gmon.h b/libc/sysdeps/linux/cris/bits/machine-gmon.h
+deleted file mode 100644
+index 2f36a34d6..000000000
+--- a/libc/sysdeps/linux/cris/bits/machine-gmon.h
++++ /dev/null
+@@ -1,28 +0,0 @@
+-/* PowerPC-specific implementation of profiling support.
+-   Copyright (C) 1997, 2001 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-void __mcount_internal (unsigned long frompc, unsigned long selfpc);
+-
+-#define _MCOUNT_DECL(frompc, selfpc) \
+-void __mcount_internal (unsigned long frompc, unsigned long selfpc)
+-
+-
+-/* Define MCOUNT as empty since we have the implementation in another
+-   file.  FIXME: Just stubs, currently.  */
+-#define MCOUNT
+diff --git a/libc/sysdeps/linux/cris/sysdep.h b/libc/sysdeps/linux/cris/sysdep.h
+index cc86d3702..b441ff122 100644
+--- a/libc/sysdeps/linux/cris/sysdep.h
++++ b/libc/sysdeps/linux/cris/sysdep.h
+@@ -110,30 +110,8 @@
+   PLTJUMP (__syscall_error)               @ \
+   END (name)
+ 
+-/* If compiled for profiling, call `_mcount' at the start of each function.
+-   FIXME: Note that profiling is not actually implemented.  This is just
+-   example code which might not even compile, though it is believed to be
+-   correct.  */
+-#ifdef	PROF
+-#define CALL_MCOUNT \
+-  push	$srp						@ \
+-  push	$r9						@ \
+-  push	$r10						@ \
+-  push	$r11						@ \
+-  push	$r12						@ \
+-  push	$r13						@ \
+-  SETUP_PIC						@ \
+-  PLTCALL (_mcount)					@ \
+-  TEARDOWN_PIC						@ \
+-  pop	$r13						@ \
+-  pop	$r12						@ \
+-  pop	$r11						@ \
+-  pop	$r10						@ \
+-  pop	$r9						@ \
+-  pop	$srp
+-#else
++/* If compiled for profiling, do nothing */
+ #define CALL_MCOUNT		/* Do nothing.  */
+-#endif
+ 
+ 
+ #endif /* __ASSEMBLER__ */
+diff --git a/libc/sysdeps/linux/frv/Makefile b/libc/sysdeps/linux/frv/Makefile
+index 8e000b41b..43752beec 100644
+--- a/libc/sysdeps/linux/frv/Makefile
++++ b/libc/sysdeps/linux/frv/Makefile
+@@ -22,16 +22,13 @@ include $(TOPDIR)Rules.mak
+ ASFLAGS=$(CFLAGS)
+ 
+ CRT0_SRC = crt0.S
+-CRT0_OBJ = crt0.o crt1.o # gcrt1.o
++CRT0_OBJ = crt0.o crt1.o
+ SCRT0_OBJ = $(patsubst %,S%, $(CRT0_OBJ))
+ CRT0_DEPS=gmon-start.S
+ 
+ CTOR_TARGETS = crti.o crtn.o
+ 
+ SSRC=__longjmp.S setjmp.S clone.S vfork.S
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-SSRC+=mcount.S
+-endif
+ SOBJS=$(patsubst %.S,%.o, $(SSRC))
+ 
+ CSRC=mmap.c sysdep.c syscall.c brk.c sbrk.c __init_brk.c dl-iterate-phdr.c
+@@ -74,13 +71,6 @@ $(COBJS): %.o : %.c
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-SAFECFLAGS := $(filter-out -g,$(CFLAGS))
+-gmon-start.S: ../common/gmon-start.c
+-	$(CC) $(SAFECFLAGS) -c $< -S -o $*.S
+-gcrt1.o: $(CRT0_DEPS)
+-endif
+-
+ headers:
+ 	$(LN) -fs ../libc/sysdeps/linux/frv/link.h $(TOPDIR)/include/
+ 
+diff --git a/libc/sysdeps/linux/frv/crt0.S b/libc/sysdeps/linux/frv/crt0.S
+index bd1030963..2bed69314 100644
+--- a/libc/sysdeps/linux/frv/crt0.S
++++ b/libc/sysdeps/linux/frv/crt0.S
+@@ -86,7 +86,7 @@ _start:
+ 	mov	gr0, fp
+ 	movgs	gr0, lr
+ 
+-#if (defined L_crt1 || defined L_gcrt1 || defined L_Scrt1) && defined __UCLIBC_CTOR_DTOR__
++#if (defined L_crt1 || defined L_Scrt1) && defined __UCLIBC_CTOR_DTOR__
+ 	/* Pass .init and .fini arguments to __uClibc_start_main().  */
+ 	sethi.p	#gotfuncdeschi(_init), gr11
+ 	sethi	#gotfuncdeschi(_fini), gr12
+@@ -105,10 +105,6 @@ _start:
+ 	jmpl	@(gr0,gr0)
+ .size _start,.-_start
+ 
+-#if defined L_gcrt1 && defined __UCLIBC_PROFILING__
+-# include "./gmon-start.S"
+-#endif
+-
+ /* Define a symbol for the first piece of initialized data.  */
+ 	.data
+ 	.globl __data_start
+diff --git a/libc/sysdeps/linux/i386/Makefile b/libc/sysdeps/linux/i386/Makefile
+index c7f88b681..9b2a36290 100644
+--- a/libc/sysdeps/linux/i386/Makefile
++++ b/libc/sysdeps/linux/i386/Makefile
+@@ -21,7 +21,7 @@ include $(TOPDIR)Rules.mak
+ ASFLAGS=$(CFLAGS)
+ 
+ CRT0_SRC = crt0.S
+-CRT0_OBJ = crt0.o crt1.o gcrt1.o
++CRT0_OBJ = crt0.o crt1.o
+ ifeq ($(strip $(UCLIBC_PIE_SUPPORT)),y)
+ CRT0_OBJ += Scrt0.o Scrt1.o
+ endif
+@@ -30,9 +30,6 @@ CTOR_TARGETS=$(TOPDIR)lib/crti.o $(TOPDIR)lib/crtn.o
+ 
+ SSRC=__longjmp.S vfork.S clone.S setjmp.S bsd-setjmp.S \
+ 	bsd-_setjmp.S syscall.S mmap64.S
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-SSRC+=mcount.S
+-endif
+ SOBJS=$(patsubst %.S,%.o, $(SSRC))
+ 
+ CSRC=brk.c sigaction.c
+@@ -67,12 +64,6 @@ $(COBJS): %.o : %.c
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-gmon-start.S: ../common/gmon-start.c
+-	$(CC) $(CFLAGS) -c $< -S -o $*.S
+-gcrt1.o: $(CRT0_DEPS)
+-endif
+-
+ ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
+ crti.o: crti.S
+ 	$(CC) $(CFLAGS) -c crti.S -o crti.o
+diff --git a/libc/sysdeps/linux/i386/bits/machine-gmon.h b/libc/sysdeps/linux/i386/bits/machine-gmon.h
+deleted file mode 100644
+index 841518f06..000000000
+--- a/libc/sysdeps/linux/i386/bits/machine-gmon.h
++++ /dev/null
+@@ -1,41 +0,0 @@
+-/* i386-specific implementation of profiling support.
+-   Copyright (C) 1997, 2002 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1997.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <sysdep.h>
+-
+-/* We need a special version of the `mcount' function since for ix86 it
+-   must not clobber any register.  This has several reasons:
+-     - there is a bug in gcc as of version 2.7.2.2 which prohibits the
+-       use of profiling together with nested functions
+-     - the ELF `fixup' function uses GCC's regparm feature
+-     - some (future) systems might want to pass parameters in registers.  */
+-
+-/* We must not pollute the global namespace.  */
+-#define mcount_internal __mcount_internal
+-
+-extern void mcount_internal (u_long frompc, u_long selfpc);
+-
+-#define _MCOUNT_DECL(frompc, selfpc) \
+-void __attribute__ (( regparm (2) )) mcount_internal (u_long frompc, u_long selfpc)
+-
+-
+-/* Define MCOUNT as empty since we have the implementation in another
+-   file.  */
+-#define MCOUNT
+diff --git a/libc/sysdeps/linux/i386/crt0.S b/libc/sysdeps/linux/i386/crt0.S
+index 213df9094..98baa257b 100644
+--- a/libc/sysdeps/linux/i386/crt0.S
++++ b/libc/sysdeps/linux/i386/crt0.S
+@@ -82,7 +82,7 @@ _start:
+ 	addl $_GLOBAL_OFFSET_TABLE_+[.-.L0],%edx
+ #endif
+ 
+-#if (defined L_crt1 || defined L_Scrt1 || defined L_gcrt1 ) && defined __UCLIBC_CTOR_DTOR__
++#if (defined L_crt1 || defined L_Scrt1) && defined __UCLIBC_CTOR_DTOR__
+ 	/* Push .init and .fini arguments to __uClibc_start_main() on the stack */
+ #ifdef L_Scrt1
+ 	pushl _fini@GOT(%edx)
+@@ -129,7 +129,3 @@ __data_start:
+ 	.weak data_start
+ 	data_start = __data_start
+ 
+-#if defined L_gcrt1 && defined __UCLIBC_PROFILING__
+-# include "./gmon-start.S"
+-#endif
+-
+diff --git a/libc/sysdeps/linux/i386/mcount.S b/libc/sysdeps/linux/i386/mcount.S
+deleted file mode 100644
+index 704a7b851..000000000
+--- a/libc/sysdeps/linux/i386/mcount.S
++++ /dev/null
+@@ -1,54 +0,0 @@
+-/* i386-specific implemetation of profiling support.
+-   Copyright (C) 1997, 2002 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-   Contributed by Ulrich Drepper <drepper@cygnus.com>, 1997.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-
+-/* We need a special version of the `mcount' function since for ix86 it
+-   must not clobber any register.  This has several reasons:
+-     - there is a bug in gcc as of version 2.7.2.2 which prohibits the
+-       use of profiling together with nested functions
+-     - the ELF `fixup' function uses GCC's regparm feature
+-     - some (future) systems might want to pass parameters in registers.  */
+-
+-        .globl _mcount
+-	.type _mcount,@function;
+-	.align 1<<4
+-_mcount:
+-	/* Save the caller-clobbered registers.  */
+-	pushl %eax
+-	pushl %ecx
+-	pushl %edx
+-
+-	movl 12(%esp), %edx
+-	movl 4(%ebp), %eax
+-
+-	/* No need to access the PLT or GOT, __mcount_internal is an
+-	   internal function and we can make a relative call.  */
+-	call __mcount_internal
+-
+-	/* Pop the saved registers.  Please note that `mcount' has no
+-	   return value.  */
+-	popl %edx
+-	popl %ecx
+-	popl %eax
+-	ret
+-	.size _mcount,.-_mcount;
+-
+-#undef mcount
+-.weak mcount ; mcount = _mcount
+diff --git a/libc/sysdeps/linux/mips/bits/dlfcn.h b/libc/sysdeps/linux/mips/bits/dlfcn.h
+index c5b4c5950..55e68e91e 100644
+--- a/libc/sysdeps/linux/mips/bits/dlfcn.h
++++ b/libc/sysdeps/linux/mips/bits/dlfcn.h
+@@ -40,25 +40,3 @@
+ /* Do not delete object when closed.  */
+ #define RTLD_NODELETE	0x01000
+ 
+-#ifdef __USE_GNU
+-/* To support profiling of shared objects it is a good idea to call
+-   the function found using `dlsym' using the following macro since
+-   these calls do not use the PLT.  But this would mean the dynamic
+-   loader has no chance to find out when the function is called.  The
+-   macro applies the necessary magic so that profiling is possible.
+-   Rewrite
+-	foo = (*fctp) (arg1, arg2);
+-   into
+-        foo = DL_CALL_FCT (fctp, (arg1, arg2));
+-*/
+-# define DL_CALL_FCT(fctp, args) \
+-  (_dl_mcount_wrapper_check ((void *) (fctp)), (*(fctp)) args)
+-
+-__BEGIN_DECLS
+-
+-/* This function calls the profiling functions.  */
+-extern void _dl_mcount_wrapper_check (void *__selfpc) __THROW;
+-
+-__END_DECLS
+-
+-#endif
+diff --git a/libc/sysdeps/linux/mips/bits/machine-gmon.h b/libc/sysdeps/linux/mips/bits/machine-gmon.h
+deleted file mode 100644
+index 6bece2be5..000000000
+--- a/libc/sysdeps/linux/mips/bits/machine-gmon.h
++++ /dev/null
+@@ -1,73 +0,0 @@
+-/* Machine-specific calling sequence for `mcount' profiling function.  MIPS
+-   Copyright (C) 1996, 1997, 2000, 2001, 2002 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#if __GNUC__ < 3 || (__GNUC__ == 3 && __GNUC_MINOR__ <= 1)
+-#define _MCOUNT_DECL(frompc,selfpc) \
+-static void __mcount (u_long frompc, u_long selfpc)
+-#else
+-#define _MCOUNT_DECL(frompc,selfpc) \
+-static void __attribute_used__ __mcount (u_long frompc, u_long selfpc)
+-#endif
+-
+-/* Call __mcount with our the return PC for our caller,
+-   and the return PC our caller will return to.  */
+-#ifdef __PIC__
+-#define CPLOAD ".cpload $25;"
+-#define CPRESTORE ".cprestore 44\n\t"
+-#else
+-#define CPLOAD
+-#define CPRESTORE
+-#endif
+-
+-#define MCOUNT asm(\
+-	".globl _mcount;\n\t" \
+-	".align 2;\n\t" \
+-	".type _mcount,@function;\n\t" \
+-	".ent _mcount\n\t" \
+-        "_mcount:\n\t" \
+-        ".frame $sp,44,$31\n\t" \
+-        ".set noreorder;\n\t" \
+-        ".set noat;\n\t" \
+-        CPLOAD \
+-	"subu $29,$29,48;\n\t" \
+-	CPRESTORE \
+-        "sw $4,24($29);\n\t" \
+-        "sw $5,28($29);\n\t" \
+-        "sw $6,32($29);\n\t" \
+-        "sw $7,36($29);\n\t" \
+-        "sw $2,40($29);\n\t" \
+-        "sw $1,16($29);\n\t" \
+-        "sw $31,20($29);\n\t" \
+-        "move $5,$31;\n\t" \
+-        "move $4,$1;\n\t" \
+-        "jal __mcount;\n\t" \
+-        "nop;\n\t" \
+-        "lw $4,24($29);\n\t" \
+-        "lw $5,28($29);\n\t" \
+-        "lw $6,32($29);\n\t" \
+-        "lw $7,36($29);\n\t" \
+-        "lw $2,40($29);\n\t" \
+-        "lw $31,20($29);\n\t" \
+-        "lw $1,16($29);\n\t" \
+-        "addu $29,$29,56;\n\t" \
+-        "j $31;\n\t" \
+-        "move $31,$1;\n\t" \
+-        ".set reorder;\n\t" \
+-        ".set at\n\t" \
+-        ".end _mcount");
+diff --git a/libc/sysdeps/linux/mips/clone.S b/libc/sysdeps/linux/mips/clone.S
+index 4091f6b65..3b879040a 100644
+--- a/libc/sysdeps/linux/mips/clone.S
++++ b/libc/sysdeps/linux/mips/clone.S
+@@ -45,12 +45,6 @@ __clone:
+ #else
+ 	subu		sp,32
+ #endif
+-#ifdef PROF
+-	.set		noat
+-	move		$1,ra
+-	jal		_mcount
+-	.set		at
+-#endif
+ 
+ 
+ 	/* Sanity check arguments.  */
+diff --git a/libc/sysdeps/linux/mips/pipe.S b/libc/sysdeps/linux/mips/pipe.S
+index 63e039ff5..c3afae550 100644
+--- a/libc/sysdeps/linux/mips/pipe.S
++++ b/libc/sysdeps/linux/mips/pipe.S
+@@ -10,13 +10,6 @@
+         .globl  pipe
+         .ent    pipe, 0
+ pipe:
+-#ifdef PROF
+-        .set            noat
+-        move            $1,ra
+-        subu            sp,sp,8         # _mcount pops 2 words from  stack
+-        jal             _mcount
+-        .set            at
+-#endif
+         addiu   sp,sp,-24
+         sw      a0,16(sp)
+         li      v0,__NR_pipe
+diff --git a/libc/sysdeps/linux/powerpc/Makefile b/libc/sysdeps/linux/powerpc/Makefile
+index 5365e3f38..93f447137 100644
+--- a/libc/sysdeps/linux/powerpc/Makefile
++++ b/libc/sysdeps/linux/powerpc/Makefile
+@@ -21,15 +21,12 @@ include $(TOPDIR)Rules.mak
+ ASFLAGS=$(CFLAGS)
+ 
+ CRT0_SRC = crt0.S
+-CRT0_OBJ = crt0.o crt1.o gcrt1.o
++CRT0_OBJ = crt0.o crt1.o
+ CRT0_DEPS=gmon-start.S
+ CTOR_TARGETS=$(TOPDIR)lib/crti.o $(TOPDIR)lib/crtn.o
+ 
+ SSRC=__longjmp.S setjmp.S bsd-setjmp.S bsd-_setjmp.S brk.S \
+ 	clone.S __uClibc_syscall.S syscall.S
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-SSRC+=mcount.S
+-endif
+ SOBJS=$(patsubst %.S,%.o, $(SSRC))
+ 
+ CSRC=mmap.c vfork.c __syscall_error.c pread_write.c ioctl.c
+@@ -57,12 +54,6 @@ $(COBJS): %.o : %.c
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-gmon-start.S: ../common/gmon-start.c
+-	$(CC) $(CFLAGS) -c $< -S -o $*.S
+-gcrt1.o: $(CRT0_DEPS)
+-endif
+-
+ 
+ ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
+ crti.o: crti.S
+diff --git a/libc/sysdeps/linux/powerpc/bits/machine-gmon.h b/libc/sysdeps/linux/powerpc/bits/machine-gmon.h
+deleted file mode 100644
+index b0f3d8130..000000000
+--- a/libc/sysdeps/linux/powerpc/bits/machine-gmon.h
++++ /dev/null
+@@ -1,31 +0,0 @@
+-/* PowerPC-specific implementation of profiling support.
+-   Copyright (C) 1997 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-/* We need a special version of the `mcount' function because it has
+-   to preserve more registers than your usual function.  */
+-
+-void __mcount_internal (unsigned long frompc, unsigned long selfpc);
+-
+-#define _MCOUNT_DECL(frompc, selfpc) \
+-void __mcount_internal (unsigned long frompc, unsigned long selfpc)
+-
+-
+-/* Define MCOUNT as empty since we have the implementation in another
+-   file.  */
+-#define MCOUNT
+diff --git a/libc/sysdeps/linux/powerpc/crt0.S b/libc/sysdeps/linux/powerpc/crt0.S
+index c3b903e1e..114ffa093 100644
+--- a/libc/sysdeps/linux/powerpc/crt0.S
++++ b/libc/sysdeps/linux/powerpc/crt0.S
+@@ -68,7 +68,7 @@ _start:
+ 	add	r5,r5,r4
+ 
+ 	/* Ok, now run uClibc's main() -- shouldn't return */
+-#if (defined L_crt1 || defined L_gcrt1 ) && defined __UCLIBC_CTOR_DTOR__
++#if (defined L_crt1) && defined __UCLIBC_CTOR_DTOR__
+ 	lis     r6,_init@ha	# load top 16 bits
+ 	addi    r6,r6,_init@l	# load bottom 16 bits
+ 	lis     r7,_fini@ha	# load top 16 bits of &msg
+@@ -87,7 +87,3 @@ __data_start:
+ 	.weak data_start
+ 	data_start = __data_start
+ 
+-#if defined L_gcrt1 && defined __UCLIBC_PROFILING__
+-# include "./gmon-start.S"
+-#endif
+-
+diff --git a/libc/sysdeps/linux/powerpc/mcount.S b/libc/sysdeps/linux/powerpc/mcount.S
+deleted file mode 100644
+index 303a0dd53..000000000
+--- a/libc/sysdeps/linux/powerpc/mcount.S
++++ /dev/null
+@@ -1,100 +0,0 @@
+-/* PowerPC-specific implementation of profiling support.
+-   Copyright (C) 1997, 1999 Free Software Foundation, Inc.
+-   This file is part of the GNU C Library.
+-
+-   The GNU C Library is free software; you can redistribute it and/or
+-   modify it under the terms of the GNU Lesser General Public
+-   License as published by the Free Software Foundation; either
+-   version 2.1 of the License, or (at your option) any later version.
+-
+-   The GNU C Library is distributed in the hope that it will be useful,
+-   but WITHOUT ANY WARRANTY; without even the implied warranty of
+-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-   Lesser General Public License for more details.
+-
+-   You should have received a copy of the GNU Lesser General Public
+-   License along with the GNU C Library; if not, write to the Free
+-   Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+-   02111-1307 USA.  */
+-
+-#include <features.h>
+-#include "ppc_asm.h"
+-
+-/* This would be bad.  */
+-#ifdef PROF
+-#undef PROF
+-#endif
+-
+-
+-/* We do profiling as described in the SYSV ELF ABI, _mcount is called
+-   with the address of a data word in r0 (that is different for every
+-   routine, initialised to 0, and otherwise unused).  The caller has put
+-   the address the caller will return to in the usual place on the stack,
+-   4(r1).  _mcount is responsible for ensuring that when it returns no
+-   argument-passing registers are disturbed, and that the LR is set back
+-   to (what the caller sees as) 4(r1).
+-
+-   This is intended so that the following code can be inserted at the
+-   front of any routine without changing the routine:
+-
+-	.data
+-	.align	2
+-   0:	.long	0
+-	.previous
+-	mflr	r0
+-	lis	r11,0b@ha
+-	stw	r0,4(r1)
+-	addi	r0,r11,0b@l
+-	bl	_mcount
+-*/
+-
+-
+-.globl      _mcount;
+-.type      _mcount, @function;
+-.align  2;
+-
+-_mcount:
+-	stwu	r1,-48(r1)
+-/* We need to save the parameter-passing registers.  */
+-	stw	r3, 12(r1)
+-	stw	r4, 16(r1)
+-	stw	r5, 20(r1)
+-	stw	r6, 24(r1)
+-	mflr	r4
+-	lwz	r3, 52(r1)
+-	mfcr	r5
+-	stw	r7, 28(r1)
+-	stw	r8, 32(r1)
+-	stw	r9, 36(r1)
+-	stw	r10,40(r1)
+-	stw	r4, 44(r1)
+-	stw	r5,  8(r1)
+-#ifdef __PIC__
+-	bl	__mcount_internal@plt
+-#else
+-	bl	__mcount_internal
+-#endif
+-	nop
+- /* Restore the registers...  */
+-	lwz     r6,  8(r1)
+-	lwz	r0, 44(r1)
+-	lwz	r3, 12(r1)
+-	mtctr	r0
+-	lwz	r4, 16(r1)
+-	mtcrf	0xff,r6
+-	lwz	r5, 20(r1)
+-	lwz	r6, 24(r1)
+-	lwz	r0, 52(r1)
+-	lwz	r7, 28(r1)
+-	lwz	r8, 32(r1)
+-	mtlr	r0
+-	lwz	r9, 36(r1)
+-	lwz	r10,40(r1)
+- /* ...unwind the stack frame, and return to your usual programming.  */
+-	addi	r1,r1,48
+-	bctr
+-	.size _mcount,.-_mcount;
+-
+-#undef mcount
+-.weak mcount ; mcount = _mcount
+-
+diff --git a/libc/sysdeps/linux/sh/Makefile b/libc/sysdeps/linux/sh/Makefile
+index fa87f3ae2..5382d5b5a 100644
+--- a/libc/sysdeps/linux/sh/Makefile
++++ b/libc/sysdeps/linux/sh/Makefile
+@@ -24,7 +24,7 @@ CFLAGS+= -I../
+ SFLAGS= $(CFLAGS) -D__ASSEMBLER__
+ 
+ CRT0_SRC = crt0.S
+-CRT0_OBJ = crt0.o crt1.o gcrt1.o
++CRT0_OBJ = crt0.o crt1.o
+ CRT0_DEPS=gmon-start.S
+ CTOR_TARGETS=$(TOPDIR)lib/crti.o $(TOPDIR)lib/crtn.o
+ 
+@@ -56,12 +56,6 @@ $(COBJS): %.o : %.c
+ 	$(CC) $(CFLAGS) -c $< -o $@
+ 	$(STRIPTOOL) -x -R .note -R .comment $*.o
+ 
+-ifeq ($(strip $(UCLIBC_PROFILING)),y)
+-gmon-start.S: ../common/gmon-start.c
+-	$(CC) $(CFLAGS) -c $< -S -o $*.S
+-gcrt1.o: $(CRT0_DEPS)
+-endif
+-
+ ifeq ($(strip $(UCLIBC_CTOR_DTOR)),y)
+ crti.o: crti.S
+ 	$(CC) $(CFLAGS) -c crti.S -o crti.o
+diff --git a/libc/sysdeps/linux/sh/bits/machine-gmon.h b/libc/sysdeps/linux/sh/bits/machine-gmon.h
+deleted file mode 100644
+index f2ef019c7..000000000
+--- a/libc/sysdeps/linux/sh/bits/machine-gmon.h
++++ /dev/null
+@@ -1,83 +0,0 @@
+-/* Machine-dependent definitions for profiling support.  SH version.
+- *
+- * Copyright (C) 2003 Stefan Allius <allius@atecom.com>
+- *
+- * This program is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU Library General Public
+- * License as published by the Free Software Foundation; either
+- * version 2 of the License, or (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+- * Library General Public License for more details.
+- *
+- * You should have received a copy of the GNU Library General Public
+- * License along with this program; if not, write to the Free
+- * Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+- * 02111-1307 USA
+- */
+-
+-#define mcount_internal __mcount_internal
+-
+-#define _MCOUNT_DECL(frompc, selfpc) \
+-static void __attribute_used__ mcount_internal (u_long frompc, u_long selfpc)
+-
+-/*
+- * This mcount implementation expect the 'frompc' return address on
+- * the stack and the 'selfpc' return address in register pr.
+- *
+- * Your compiler should include some stuff like this at each function
+- * entry:
+- *
+- *	mov.l	1f,r1
+- *	sts.l	pr,@-r15
+- *	mova	2f,r0
+- *	jmp	@r1
+- *	 lds	r0,pr
+- *	.align	2
+- * 1:	.long	mcount
+- * 2:	lds.l	@r15+,pr
+- *
+- * or for PIC:
+- *
+- *	mov.l	3f,r1
+- *	mova	3f,r0
+- *	add	r1,r0
+- *	mov.l	1f,r1
+- *	mov.l	@(r0,r1),r1
+- *	sts.l	pr,@-r15
+- *	mova	2f,r0
+- *	jmp	@r1
+- *	 lds	r0,pr
+- *	.align	2
+- * 1:	.long	mcount@GOT
+- * 3:	.long	_GLOBAL_OFFSET_TABLE_
+- * 2:	lds.l	@r15+,pr
+- *
+- *
+- * This ABI will be supported by GCC version 3.3 or newer!
+- */
+-#define MCOUNT asm(\
+-	".align 4\n\t" \
+-	".globl _mcount\n\t" \
+-	".type _mcount,@function\n" \
+-        "_mcount:\n\t" \
+-	"mov.l r4,  @-r15\n\t" \
+-	"mov.l r5,  @-r15\n\t" \
+-	"mov.l r6,  @-r15\n\t" \
+-	"mov.l r7,  @-r15\n\t" \
+-	"sts.l pr,  @-r15\n\t" \
+-	"sts   pr, r5\n\t" \
+-	"bsr __mcount_internal\n\t" \
+-	" mov.l @(5*4,r15), r4\n\t" \
+-	"lds.l @r15+, pr\n\t" \
+-	"mov.l @r15+, r7\n\t" \
+-	"mov.l @r15+, r6\n\t" \
+-	"mov.l @r15+, r5\n\t" \
+-	"rts\n\t" \
+-	" mov.l @r15+, r4\n\t" \
+-	".size _mcount,.-_mcount;\n\t" \
+-	".weak mcount;\n\t" \
+-	" mcount = _mcount;");
+-
+diff --git a/libc/sysdeps/linux/sh/crt0.S b/libc/sysdeps/linux/sh/crt0.S
+index f5efe35e1..6851698d5 100644
+--- a/libc/sysdeps/linux/sh/crt0.S
++++ b/libc/sysdeps/linux/sh/crt0.S
+@@ -76,7 +76,7 @@ _start_end:
+ L_main:
+ 	.long   __uClibc_main /* in libuClibc.*.so */
+ 
+-#else /* (L_crt1 || L_gcrt1) && __UCLIBC_CTOR_DTOR__ */
++#else /* (L_crt1) && __UCLIBC_CTOR_DTOR__ */
+ 	/* Push the finip argument to __uClibc_start_main() onto the stack */
+ 	mov.l L_fini,r6
+ 	mov.l r6,@-r15
+@@ -141,7 +141,3 @@ __fpscr_values:
+        .long   0x80000
+ #endif
+ 
+-#if defined L_gcrt1 && defined __UCLIBC_PROFILING__
+-# include "./gmon-start.S"
+-#endif
+-

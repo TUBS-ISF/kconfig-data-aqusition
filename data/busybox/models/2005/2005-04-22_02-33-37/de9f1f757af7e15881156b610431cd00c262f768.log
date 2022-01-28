@@ -1,0 +1,3164 @@
+"2005-04-22 02:33:37 +0000"
+diff --git a/include/applets.h b/include/applets.h
+index 462d91801..5ecdf7949 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -89,6 +89,9 @@
+ #ifdef CONFIG_CAT
+ 	APPLET(cat, cat_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_CHATTR
++	APPLET(chattr, chattr_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_CHGRP
+ 	APPLET(chgrp, chgrp_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
+@@ -359,6 +362,9 @@
+ #ifdef CONFIG_LS
+ 	APPLET(ls, ls_main, _BB_DIR_BIN, _BB_SUID_NEVER)
+ #endif
++#ifdef CONFIG_LSATTR
++	APPLET(lsattr, lsattr_main, _BB_DIR_BIN, _BB_SUID_NEVER)
++#endif
+ #ifdef CONFIG_LSMOD
+ 	APPLET(lsmod, lsmod_main, _BB_DIR_SBIN, _BB_SUID_NEVER)
+ #endif
+diff --git a/include/usage.h b/include/usage.h
+index 33ead14f5..cc2aa3274 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -120,6 +120,30 @@
+ 	"$ cat /proc/uptime\n" \
+ 	"110716.72 17.67"
+ 
++#define chattr_trivial_usage \
++	"[-R] [-+=AacDdijsStTu] [-v version] files..."
++#define chattr_full_usage \
++	"change file attributes on an ext2 fs\n\n" \
++	"Modifiers:\n" \
++	"\t-\tremove attributes\n" \
++	"\t+\tadd attributes\n" \
++	"\t=\tset attributes\n" \
++	"Attributes:\n" \
++	"\tA\tdon't track atime\n" \
++	"\ta\tappend mode only\n" \
++	"\tc\tenable compress\n" \
++	"\tD\twrite dir contents synchronously\n" \
++	"\td\tdo not backup with dump\n" \
++	"\ti\tcannot be modified (immutable)\n" \
++	"\tj\twrite all data to journal first\n" \
++	"\ts\tzero disk storage when deleted\n" \
++	"\tS\twrite file contents synchronously\n" \
++	"\tt\tdisable tail-merging of partial blocks with other files\n" \
++	"\tu\tallow file to be undeleted\n" \
++	"Options:\n" \
++	"\t-R\trecursively list subdirectories\n" \
++	"\t-v\tset the file's version/generation number\n"
++
+ #define chgrp_trivial_usage \
+ 	"[OPTION]... GROUP FILE..."
+ #define chgrp_full_usage \
+@@ -1553,6 +1577,17 @@
+ 	USAGE_SELINUX("\t-k\tprint security context\n") \
+ 	USAGE_SELINUX("\t-K\tprint security context in long format\n")
+ 
++#define lsattr_trivial_usage \
++	"[-Radlv] [files...]"
++#define lsattr_full_usage \
++	"list file attributes on an ext2 fs\n\n" \
++	"Options:\n" \
++	"\t-R\trecursively list subdirectories\n" \
++	"\t-a\tdo not hide entries starting with .\n" \
++	"\t-d\tlist directory entries instead of contents\n" \
++	"\t-l\tprint long flag names\n" \
++	"\t-v\tlist the file's version/generation number\n"
++
+ #define lsmod_trivial_usage \
+ 	""
+ #define lsmod_full_usage \
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 24d548726..65ac62ed8 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -5,6 +5,17 @@
+ 
+ menu "Linux System Utilities"
+ 
++config CONFIG_CHATTR
++	bool "chattr"
++	default n
++	help
++	  chattr changes the file attributes on a second extended file system.
++
++config CONFIG_LSATTR
++	bool "lsattr"
++	default n
++	help
++	  lsattr lists the file attributes on a second extended file system.
+ 
+ config CONFIG_DMESG
+ 	bool "dmesg"
+@@ -27,7 +38,6 @@ config CONFIG_FBSET
+ 	  interface to access a graphics display.  Enable this option
+ 	  if you wish to enable the 'fbset' utility.
+ 
+-
+ config CONFIG_FEATURE_FBSET_FANCY
+ 	bool "  Turn on extra fbset options"
+ 	default n
+diff --git a/util-linux/Makefile.in b/util-linux/Makefile.in
+index 0172b3562..034794a8d 100644
+--- a/util-linux/Makefile.in
++++ b/util-linux/Makefile.in
+@@ -24,6 +24,7 @@ endif
+ srcdir=$(top_srcdir)/util-linux
+ 
+ UTILLINUX-:=
++UTILLINUX-$(CONFIG_CHATTR)		+=chattr.o e2p.o
+ UTILLINUX-$(CONFIG_DMESG)		+=dmesg.o
+ UTILLINUX-$(CONFIG_FBSET)		+=fbset.o
+ UTILLINUX-$(CONFIG_FDFLUSH)		+=fdflush.o
+@@ -35,6 +36,7 @@ UTILLINUX-$(CONFIG_GETOPT)		+=getopt.o
+ UTILLINUX-$(CONFIG_HEXDUMP)		+=hexdump.o
+ UTILLINUX-$(CONFIG_HWCLOCK)		+=hwclock.o
+ UTILLINUX-$(CONFIG_LOSETUP)		+=losetup.o
++UTILLINUX-$(CONFIG_LSATTR)		+=lsattr.o e2p.o
+ UTILLINUX-$(CONFIG_MKFS_MINIX)		+=mkfs_minix.o
+ UTILLINUX-$(CONFIG_MKSWAP)		+=mkswap.o
+ UTILLINUX-$(CONFIG_MORE)		+=more.o
+@@ -53,6 +55,15 @@ $(UTILLINUX_DIR)$(UTILLINUX_AR): $(patsubst %,$(UTILLINUX_DIR)%, $(UTILLINUX-y))
+ $(UTILLINUX_DIR)%.o: $(srcdir)/%.c
+ 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c -o $@ $<
+ 
++E2P_SRC_LIST := \
++	fgetflags.c fsetflags.c \
++	fgetversion.c fsetversion.c \
++	pf.c iod.c
++E2P_SRC := $(patsubst %, $(UTILLINUX_DIR)/e2p/%, $(E2P_SRC_LIST))
++$(UTILLINUX_DIR)e2p.o: $(E2P_SRC)
++	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -o $@ -c $(E2P_SRC) \
++		-DHAVE_ERRNO_H=1 -DHAVE_UNISTD_H=1 -DHAVE_EXT2_IOCTLS=1 -DHAVE_EXT2_IOCTLS=1
++
+ ifneq ($(strip $(CONFIG_LFS)),y)
+ ifeq ($(strip $(FDISK_SUPPORT_LARGE_DISKS)),y)
+ 
+@@ -63,4 +74,3 @@ $(UTILLINUX_DIR)fdisk.o: $(srcdir)/fdisk.c
+ 
+ endif
+ endif
+-
+diff --git a/util-linux/chattr.c b/util-linux/chattr.c
+new file mode 100644
+index 000000000..74209d586
+--- /dev/null
++++ b/util-linux/chattr.c
+@@ -0,0 +1,307 @@
++/*
++ * chattr.c		- Change file attributes on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ * 93/11/13	- Replace stat() calls by lstat() to avoid loops
++ * 94/02/27	- Integrated in Ted's distribution
++ * 98/12/29	- Ignore symlinks when working recursively (G M Sipe)
++ * 98/12/29	- Display version info only when -V specified (G M Sipe)
++ */
++
++#include <sys/types.h>
++#include <dirent.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <string.h>
++#include <errno.h>
++#include <sys/param.h>
++#include <sys/stat.h>
++#include "ext2_fs.h"
++
++#ifdef __GNUC__
++#define EXT2FS_ATTR(x) __attribute__(x)
++#else
++#define EXT2FS_ATTR(x)
++#endif
++
++#ifndef S_ISLNK			/* So we can compile even with gcc-warn */
++# ifdef __S_IFLNK
++#  define S_ISLNK(mode)	 __S_ISTYPE((mode), __S_IFLNK)
++# else
++#  define S_ISLNK(mode)  0
++# endif
++#endif
++
++#include "e2fsbb.h"
++#include "e2p/e2p.h"
++
++#define main chattr_main
++
++static int add;
++static int rem;
++static int set;
++static int set_version;
++
++static unsigned long version;
++
++static int recursive;
++static int verbose;
++
++static unsigned long af;
++static unsigned long rf;
++static unsigned long sf;
++
++#ifdef _LFS64_LARGEFILE
++#define LSTAT		lstat64
++#define STRUCT_STAT	struct stat64
++#else
++#define LSTAT		lstat
++#define STRUCT_STAT	struct stat
++#endif
++
++#if 0
++static void fatal_error(const char * fmt_string, int errcode)
++{
++	fprintf (stderr, fmt_string, program_name);
++	exit (errcode);
++}
++
++#define usage() fatal_error(_("usage: %s [-RV] [-+=AacDdijsSu] [-v version] files...\n"), \
++			     1)
++#endif
++
++struct flags_char {
++	unsigned long	flag;
++	char 		optchar;
++};
++
++static const struct flags_char flags_array[] = {
++	{ EXT2_NOATIME_FL, 'A' },
++	{ EXT2_SYNC_FL, 'S' },
++	{ EXT2_DIRSYNC_FL, 'D' },
++	{ EXT2_APPEND_FL, 'a' },
++	{ EXT2_COMPR_FL, 'c' },
++	{ EXT2_NODUMP_FL, 'd' },
++	{ EXT2_IMMUTABLE_FL, 'i' },
++	{ EXT3_JOURNAL_DATA_FL, 'j' },
++	{ EXT2_SECRM_FL, 's' },
++	{ EXT2_UNRM_FL, 'u' },
++	{ EXT2_NOTAIL_FL, 't' },
++	{ EXT2_TOPDIR_FL, 'T' },
++	{ 0, 0 }
++};
++
++static unsigned long get_flag(char c)
++{
++	const struct flags_char *fp;
++	
++	for (fp = flags_array; fp->flag != 0; fp++) {
++		if (fp->optchar == c)
++			return fp->flag;
++	}
++	return 0;
++}
++
++
++static int decode_arg (int * i, int argc, char ** argv)
++{
++	char * p;
++	char * tmp;
++	unsigned long fl;
++
++	switch (argv[*i][0])
++	{
++	case '-':
++		for (p = &argv[*i][1]; *p; p++) {
++			if (*p == 'R') {
++				recursive = 1;
++				continue;
++			}
++			if (*p == 'V') {
++				verbose = 1;
++				continue;
++			}
++			if (*p == 'v') {
++				(*i)++;
++				if (*i >= argc)
++					usage ();
++				version = strtol (argv[*i], &tmp, 0);
++				if (*tmp) {
++					com_err (program_name, 0,
++						 _("bad version - %s\n"), 
++						 argv[*i]);
++					usage ();
++				}
++				set_version = 1;
++				continue;
++			}
++			if ((fl = get_flag(*p)) == 0)
++				usage();
++			rf |= fl;
++			rem = 1;
++		}
++		break;
++	case '+':
++		add = 1;
++		for (p = &argv[*i][1]; *p; p++) {
++			if ((fl = get_flag(*p)) == 0)
++				usage();
++			af |= fl;
++		}
++		break;
++	case '=':
++		set = 1;
++		for (p = &argv[*i][1]; *p; p++) {
++			if ((fl = get_flag(*p)) == 0)
++				usage();
++			sf |= fl;
++		}
++		break;
++	default:
++		return EOF;
++		break;
++	}
++	return 1;
++}
++
++static int chattr_dir_proc (const char *, struct dirent *, void *);
++
++static void change_attributes (const char * name)
++{
++	unsigned long flags;
++	STRUCT_STAT	st;
++
++	if (LSTAT (name, &st) == -1) {
++		com_err (program_name, errno, _("while trying to stat %s"), 
++			 name);
++		return;
++	}
++	if (S_ISLNK(st.st_mode) && recursive)
++		return;
++
++	/* Don't try to open device files, fifos etc.  We probably
++           ought to display an error if the file was explicitly given
++           on the command line (whether or not recursive was
++           requested).  */
++	if (!S_ISREG(st.st_mode) && !S_ISLNK(st.st_mode) &&
++	    !S_ISDIR(st.st_mode))
++		return;
++
++	if (set) {
++		if (verbose) {
++			printf (_("Flags of %s set as "), name);
++			print_flags (stdout, sf, 0);
++			printf ("\n");
++		}
++		if (fsetflags (name, sf) == -1)
++			perror (name);
++	} else {
++		if (fgetflags (name, &flags) == -1)
++			com_err (program_name, errno,
++			         _("while reading flags on %s"), name);
++		else {
++			if (rem)
++				flags &= ~rf;
++			if (add)
++				flags |= af;
++			if (verbose) {
++				printf (_("Flags of %s set as "), name);
++				print_flags (stdout, flags, 0);
++				printf ("\n");
++			}
++			if (!S_ISDIR(st.st_mode))
++				flags &= ~EXT2_DIRSYNC_FL;
++			if (fsetflags (name, flags) == -1)
++				com_err (program_name, errno,
++				         _("while setting flags on %s"), name);
++		}
++	}
++	if (set_version) {
++		if (verbose)
++			printf (_("Version of %s set as %lu\n"), name, version);
++		if (fsetversion (name, version) == -1)
++			com_err (program_name, errno,
++			         _("while setting version on %s"), name);
++	}
++	if (S_ISDIR(st.st_mode) && recursive)
++		iterate_on_dir (name, chattr_dir_proc, NULL);
++}
++
++static int chattr_dir_proc (const char * dir_name, struct dirent * de,
++			    void * private EXT2FS_ATTR((unused)))
++{
++	if (strcmp (de->d_name, ".") && strcmp (de->d_name, "..")) {
++	        char *path;
++
++		path = malloc(strlen (dir_name) + 1 + strlen (de->d_name) + 1);
++		if (!path)
++			fatal_error(_("Couldn't allocate path variable "
++				    "in chattr_dir_proc"), 1);
++		sprintf (path, "%s/%s", dir_name, de->d_name);
++		change_attributes (path);
++		free(path);
++	}
++	return 0;
++}
++
++int main (int argc, char ** argv)
++{
++	int i, j;
++	int end_arg = 0;
++
++#ifdef ENABLE_NLS
++	setlocale(LC_MESSAGES, "");
++	setlocale(LC_CTYPE, "");
++	bindtextdomain(NLS_CAT_NAME, LOCALEDIR);
++	textdomain(NLS_CAT_NAME);
++#endif
++#if 0
++	if (argc && *argv)
++		program_name = *argv;
++#endif
++	i = 1;
++	while (i < argc && !end_arg) {
++		/* '--' arg should end option processing */
++		if (strcmp(argv[i], "--") == 0) {
++			i++;
++			end_arg = 1;
++		} else if (decode_arg (&i, argc, argv) == EOF)
++			end_arg = 1;
++		else
++			i++;
++	}
++	if (i >= argc)
++		usage ();
++	if (set && (add || rem)) {
++		fputs(_("= is incompatible with - and +\n"), stderr);
++		exit (1);
++	}
++	if ((rf & af) != 0) {
++		fputs("Can't both set and unset same flag.\n", stderr);
++		exit (1);
++	}
++	if (!(add || rem || set || set_version)) {
++		fputs(_("Must use '-v', =, - or +\n"), stderr);
++		exit (1);
++	}
++#if 0
++	if (verbose)
++		fprintf (stderr, "chattr %s (%s)\n",
++			 E2FSPROGS_VERSION, E2FSPROGS_DATE);
++#endif
++	for (j = i; j < argc; j++)
++		change_attributes (argv[j]);
++	exit(0);
++}
+diff --git a/util-linux/e2fsbb.h b/util-linux/e2fsbb.h
+new file mode 100644
+index 000000000..46690a65d
+--- /dev/null
++++ b/util-linux/e2fsbb.h
+@@ -0,0 +1,22 @@
++/*
++ * File: e2fsbb.h
++ *
++ * Redefine a bunch of e2fsprogs stuff to use busybox routines
++ * instead.  This makes upgrade between e2fsprogs versions easy.
++ */
++
++#ifndef __E2FSBB_H__
++#define __E2FSBB_H__ 1
++
++#include "libbb.h"
++
++#define _(x) x
++
++#define com_err(w, c, fmt, args...) bb_error_msg(fmt, ## args)
++
++#define fputs(msg, fd) bb_error_msg(msg)
++#define fatal_error(msg, err) bb_error_msg_and_die(msg)
++#define usage() bb_show_usage()
++#define perror(msg) bb_perror_msg(msg)
++
++#endif /* __E2FSBB_H__ */
+diff --git a/util-linux/e2p/README b/util-linux/e2p/README
+new file mode 100644
+index 000000000..5a3318420
+--- /dev/null
++++ b/util-linux/e2p/README
+@@ -0,0 +1,24 @@
++ ------
++ ABOUT:
++ ------
++
++This is a straight rip from the e2fsprogs pkg.
++
++These files are used to support other misc progs ripped out of e2fsprogs 
++and included in busybox.
++
++ -------
++ UPDATE:
++ -------
++
++Simply copy the 'e2p' dir from e2fsprogs/lib/ and then delete the extra 
++files we don't need (Makefile.in, e2p.pc.in, etc...).  Update the e2p.h 
++file to look for "../ext2_fs.h" instead of <ext2fs/ext2_fs.h>.  Finally, 
++remove the _LARGEFILE* define's from the few source files that use it 
++since we'll be appending it ourselves to CFLAGS when we compile.
++
++ ------
++ STAMP:
++ ------
++
++Last ripped from the e2fsprogs-1.37 release.
+diff --git a/util-linux/e2p/e2p.h b/util-linux/e2p/e2p.h
+new file mode 100644
+index 000000000..40c9fa25a
+--- /dev/null
++++ b/util-linux/e2p/e2p.h
+@@ -0,0 +1,52 @@
++#include <sys/types.h>		/* Needed by dirent.h on netbsd */
++#include <stdio.h>
++#include <dirent.h>
++
++#include "../ext2_fs.h"
++
++#define E2P_FEATURE_COMPAT	0
++#define E2P_FEATURE_INCOMPAT	1
++#define E2P_FEATURE_RO_INCOMPAT	2
++
++
++/* `options' for print_flags() */
++
++#define PFOPT_LONG  1 /* Must be 1 for compatibility with `int long_format'. */
++
++
++int fgetflags (const char * name, unsigned long * flags);
++int fgetversion (const char * name, unsigned long * version);
++int fsetflags (const char * name, unsigned long flags);
++int fsetversion (const char * name, unsigned long version);
++int getflags (int fd, unsigned long * flags);
++int getversion (int fd, unsigned long * version);
++int iterate_on_dir (const char * dir_name,
++		    int (*func) (const char *, struct dirent *, void *),
++		    void * private);
++void list_super(struct ext2_super_block * s);
++void list_super2(struct ext2_super_block * s, FILE *f);
++void print_fs_errors (FILE * f, unsigned short errors);
++void print_flags (FILE * f, unsigned long flags, unsigned options);
++void print_fs_state (FILE * f, unsigned short state);
++int setflags (int fd, unsigned long flags);
++int setversion (int fd, unsigned long version);
++
++const char *e2p_feature2string(int compat, unsigned int mask);
++int e2p_string2feature(char *string, int *compat, unsigned int *mask);
++int e2p_edit_feature(const char *str, __u32 *compat_array, __u32 *ok_array);
++
++int e2p_is_null_uuid(void *uu);
++void e2p_uuid_to_str(void *uu, char *out);
++const char *e2p_uuid2str(void *uu);
++
++const char *e2p_hash2string(int num);
++int e2p_string2hash(char *string);
++
++const char *e2p_mntopt2string(unsigned int mask);
++int e2p_string2mntopt(char *string, unsigned int *mask);
++int e2p_edit_mntopts(const char *str, __u32 *mntopts, __u32 ok);
++
++unsigned long parse_num_blocks(const char *arg, int log_block_size);
++
++char *e2p_os2string(int os_type);
++int e2p_string2os(char *str);
+diff --git a/util-linux/e2p/feature.c b/util-linux/e2p/feature.c
+new file mode 100644
+index 000000000..ef11d93b7
+--- /dev/null
++++ b/util-linux/e2p/feature.c
+@@ -0,0 +1,190 @@
++/*
++ * feature.c --- convert between features and strings
++ * 
++ * Copyright (C) 1999  Theodore Ts'o <tytso@mit.edu>
++ * 
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ * 
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <errno.h>
++
++#include "e2p.h"
++
++struct feature {
++	int		compat;
++	unsigned int	mask;
++	const char	*string;
++};
++
++static struct feature feature_list[] = {
++	{	E2P_FEATURE_COMPAT, EXT2_FEATURE_COMPAT_DIR_PREALLOC,
++			"dir_prealloc" },
++	{	E2P_FEATURE_COMPAT, EXT3_FEATURE_COMPAT_HAS_JOURNAL,
++			"has_journal" },
++	{	E2P_FEATURE_COMPAT, EXT2_FEATURE_COMPAT_IMAGIC_INODES,
++			"imagic_inodes" },
++	{	E2P_FEATURE_COMPAT, EXT2_FEATURE_COMPAT_EXT_ATTR,
++			"ext_attr" },
++	{	E2P_FEATURE_COMPAT, EXT2_FEATURE_COMPAT_DIR_INDEX,
++			"dir_index" },
++	{	E2P_FEATURE_COMPAT, EXT2_FEATURE_COMPAT_RESIZE_INODE,
++			"resize_inode" },
++	{	E2P_FEATURE_RO_INCOMPAT, EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER,
++			"sparse_super" },
++	{	E2P_FEATURE_RO_INCOMPAT, EXT2_FEATURE_RO_COMPAT_LARGE_FILE,
++			"large_file" },
++	{	E2P_FEATURE_INCOMPAT, EXT2_FEATURE_INCOMPAT_COMPRESSION,
++			"compression" },
++	{	E2P_FEATURE_INCOMPAT, EXT2_FEATURE_INCOMPAT_FILETYPE,
++			"filetype" },
++	{	E2P_FEATURE_INCOMPAT, EXT3_FEATURE_INCOMPAT_RECOVER,
++			"needs_recovery" },
++	{	E2P_FEATURE_INCOMPAT, EXT3_FEATURE_INCOMPAT_JOURNAL_DEV,
++			"journal_dev" },
++	{	E2P_FEATURE_INCOMPAT, EXT3_FEATURE_INCOMPAT_EXTENTS,
++			"extents" },
++	{	E2P_FEATURE_INCOMPAT, EXT2_FEATURE_INCOMPAT_META_BG,
++			"meta_bg" },
++	{	0, 0, 0 },
++};
++
++const char *e2p_feature2string(int compat, unsigned int mask)
++{
++	struct feature  *f;
++	static char buf[20];
++	char	fchar;
++	int	fnum;
++
++	for (f = feature_list; f->string; f++) {
++		if ((compat == f->compat) &&
++		    (mask == f->mask))
++			return f->string;
++	}
++	switch (compat) {
++	case  E2P_FEATURE_COMPAT:
++		fchar = 'C';
++		break;
++	case E2P_FEATURE_INCOMPAT:
++		fchar = 'I';
++		break;
++	case E2P_FEATURE_RO_INCOMPAT:
++		fchar = 'R';
++		break;
++	default:
++		fchar = '?';
++		break;
++	}
++	for (fnum = 0; mask >>= 1; fnum++);
++	sprintf(buf, "FEATURE_%c%d", fchar, fnum);
++	return buf;
++}
++
++int e2p_string2feature(char *string, int *compat_type, unsigned int *mask)
++{
++	struct feature  *f;
++	char		*eptr;
++	int		num;
++
++	for (f = feature_list; f->string; f++) {
++		if (!strcasecmp(string, f->string)) {
++			*compat_type = f->compat;
++			*mask = f->mask;
++			return 0;
++		}
++	}
++	if (strncasecmp(string, "FEATURE_", 8))
++		return 1;
++
++	switch (string[8]) {
++	case 'c':
++	case 'C':
++		*compat_type = E2P_FEATURE_COMPAT;
++		break;
++	case 'i':
++	case 'I':
++		*compat_type = E2P_FEATURE_INCOMPAT;
++		break;
++	case 'r':
++	case 'R':
++		*compat_type = E2P_FEATURE_RO_INCOMPAT;
++		break;
++	default:
++		return 1;
++	}
++	if (string[9] == 0)
++		return 1;
++	num = strtol(string+9, &eptr, 10);
++	if (num > 32 || num < 0)
++		return 1;
++	if (*eptr)
++		return 1;
++	*mask = 1 << num;
++	return 0;
++}
++
++static char *skip_over_blanks(char *cp)
++{
++	while (*cp && isspace(*cp))
++		cp++;
++	return cp;
++}
++
++static char *skip_over_word(char *cp)
++{
++	while (*cp && !isspace(*cp) && *cp != ',')
++		cp++;
++	return cp;
++}
++
++/*
++ * Edit a feature set array as requested by the user.  The ok_array,
++ * if set, allows the application to limit what features the user is
++ * allowed to set or clear using this function.
++ */
++int e2p_edit_feature(const char *str, __u32 *compat_array, __u32 *ok_array)
++{
++	char	*cp, *buf, *next;
++	int	neg;
++	unsigned int	mask;
++	int		compat_type;
++
++	buf = malloc(strlen(str)+1);
++	if (!buf)
++		return 1;
++	strcpy(buf, str);
++	cp = buf;
++	while (cp && *cp) {
++		neg = 0;
++		cp = skip_over_blanks(cp);
++		next = skip_over_word(cp);
++		if (*next == 0)
++			next = 0;
++		else
++			*next = 0;
++		switch (*cp) {
++		case '-':
++		case '^':
++			neg++;
++		case '+':
++			cp++;
++			break;
++		}
++		if (e2p_string2feature(cp, &compat_type, &mask))
++			return 1;
++		if (ok_array && !(ok_array[compat_type] & mask))
++			return 1;
++		if (neg)
++			compat_array[compat_type] &= ~mask;
++		else
++			compat_array[compat_type] |= mask;
++		cp = next ? next+1 : 0;
++	}
++	return 0;
++}
++
+diff --git a/util-linux/e2p/fgetflags.c b/util-linux/e2p/fgetflags.c
+new file mode 100644
+index 000000000..6db729e08
+--- /dev/null
++++ b/util-linux/e2p/fgetflags.c
+@@ -0,0 +1,92 @@
++/*
++ * fgetflags.c		- Get a file flags on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#if HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++#include <sys/types.h>
++#include <sys/stat.h>
++#if HAVE_EXT2_IOCTLS
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#endif
++
++#include "e2p.h"
++
++#ifdef O_LARGEFILE
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK|O_LARGEFILE)
++#else
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK)
++#endif
++
++int fgetflags (const char * name, unsigned long * flags)
++{
++	struct stat buf;
++#if HAVE_STAT_FLAGS && !(APPLE_DARWIN && HAVE_EXT2_IOCTLS)
++
++	if (stat (name, &buf) == -1)
++		return -1;
++
++	*flags = 0;
++#ifdef UF_IMMUTABLE
++	if (buf.st_flags & UF_IMMUTABLE)
++		*flags |= EXT2_IMMUTABLE_FL;
++#endif
++#ifdef UF_APPEND
++	if (buf.st_flags & UF_APPEND)
++		*flags |= EXT2_APPEND_FL;
++#endif
++#ifdef UF_NODUMP
++	if (buf.st_flags & UF_NODUMP)
++		*flags |= EXT2_NODUMP_FL;
++#endif
++
++	return 0;
++#else
++#if HAVE_EXT2_IOCTLS
++	int fd, r, f, save_errno = 0;
++
++	if (!stat(name, &buf) &&
++	    !S_ISREG(buf.st_mode) && !S_ISDIR(buf.st_mode)) {
++		goto notsupp;
++	}
++#if !APPLE_DARWIN
++	fd = open (name, OPEN_FLAGS);
++	if (fd == -1)
++		return -1;
++	r = ioctl (fd, EXT2_IOC_GETFLAGS, &f);
++	if (r == -1)
++		save_errno = errno;
++	*flags = f;
++	close (fd);
++	if (save_errno)
++		errno = save_errno;
++	return r;
++#else
++   f = -1;
++   save_errno = syscall(SYS_fsctl, name, EXT2_IOC_GETFLAGS, &f, 0);
++   *flags = f;
++   return (save_errno);
++#endif
++#endif /* HAVE_EXT2_IOCTLS */
++#endif
++notsupp:
++	errno = EOPNOTSUPP;
++	return -1;
++}
+diff --git a/util-linux/e2p/fgetversion.c b/util-linux/e2p/fgetversion.c
+new file mode 100644
+index 000000000..351a7d5d0
+--- /dev/null
++++ b/util-linux/e2p/fgetversion.c
+@@ -0,0 +1,62 @@
++/*
++ * fgetversion.c	- Get a file version on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#if HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++#include <fcntl.h>
++#include <sys/ioctl.h>
++
++#include "e2p.h"
++
++#ifdef O_LARGEFILE
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK|O_LARGEFILE)
++#else
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK)
++#endif
++
++int fgetversion (const char * name, unsigned long * version)
++{
++#if HAVE_EXT2_IOCTLS
++#if !APPLE_DARWIN
++	int fd, r, ver, save_errno = 0;
++
++	fd = open (name, OPEN_FLAGS);
++	if (fd == -1)
++		return -1;
++	r = ioctl (fd, EXT2_IOC_GETVERSION, &ver);
++	if (r == -1)
++		save_errno = errno;
++	*version = ver;
++	close (fd);
++	if (save_errno)
++		errno = save_errno;
++	return r;
++#else
++   int ver=-1, err;
++   err = syscall(SYS_fsctl, name, EXT2_IOC_GETVERSION, &ver, 0);
++   *version = ver;
++   return(err);
++#endif
++#else /* ! HAVE_EXT2_IOCTLS */
++	extern int errno;
++	errno = EOPNOTSUPP;
++	return -1;
++#endif /* ! HAVE_EXT2_IOCTLS */
++}
+diff --git a/util-linux/e2p/fsetflags.c b/util-linux/e2p/fsetflags.c
+new file mode 100644
+index 000000000..40e7292dd
+--- /dev/null
++++ b/util-linux/e2p/fsetflags.c
+@@ -0,0 +1,96 @@
++/*
++ * fsetflags.c		- Set a file flags on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#if HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++#include <sys/types.h>
++#include <sys/stat.h>
++#if HAVE_EXT2_IOCTLS
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#endif
++
++#include "e2p.h"
++
++/* 
++ * Deal with lame glibc's that define this function without actually 
++ * implementing it.  Can you say "attractive nuisance", boys and girls?
++ * I knew you could!
++ */
++#ifdef __linux__
++#undef HAVE_CHFLAGS
++#endif
++
++#ifdef O_LARGEFILE
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK|O_LARGEFILE)
++#else
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK)
++#endif
++
++int fsetflags (const char * name, unsigned long flags)
++{
++	struct stat buf;
++#if HAVE_CHFLAGS && !(APPLE_DARWIN && HAVE_EXT2_IOCTLS)
++	unsigned long bsd_flags = 0;
++
++#ifdef UF_IMMUTABLE
++	if (flags & EXT2_IMMUTABLE_FL)
++		bsd_flags |= UF_IMMUTABLE;
++#endif
++#ifdef UF_APPEND
++	if (flags & EXT2_APPEND_FL)
++		bsd_flags |= UF_APPEND;
++#endif
++#ifdef UF_NODUMP
++	if (flags & EXT2_NODUMP_FL)
++		bsd_flags |= UF_NODUMP;
++#endif
++
++	return chflags (name, bsd_flags);
++#else
++#if HAVE_EXT2_IOCTLS
++	int fd, r, f, save_errno = 0;
++
++	if (!stat(name, &buf) &&
++	    !S_ISREG(buf.st_mode) && !S_ISDIR(buf.st_mode)) {
++		goto notsupp;
++	}
++#if !APPLE_DARWIN
++	fd = open (name, OPEN_FLAGS);
++	if (fd == -1)
++		return -1;
++	f = (int) flags;
++	r = ioctl (fd, EXT2_IOC_SETFLAGS, &f);
++	if (r == -1)
++		save_errno = errno;
++	close (fd);
++	if (save_errno)
++		errno = save_errno;
++#else
++   f = (int) flags;
++   return syscall(SYS_fsctl, name, EXT2_IOC_SETFLAGS, &f, 0);
++#endif
++	return r;
++#endif /* HAVE_EXT2_IOCTLS */
++#endif
++notsupp:
++	errno = EOPNOTSUPP;
++	return -1;
++}
+diff --git a/util-linux/e2p/fsetversion.c b/util-linux/e2p/fsetversion.c
+new file mode 100644
+index 000000000..93243d6e0
+--- /dev/null
++++ b/util-linux/e2p/fsetversion.c
+@@ -0,0 +1,60 @@
++/*
++ * fsetversion.c	- Set a file version on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#if HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++#include <fcntl.h>
++#include <sys/ioctl.h>
++
++#include "e2p.h"
++
++#ifdef O_LARGEFILE
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK|O_LARGEFILE)
++#else
++#define OPEN_FLAGS (O_RDONLY|O_NONBLOCK)
++#endif
++
++int fsetversion (const char * name, unsigned long version)
++{
++#if HAVE_EXT2_IOCTLS
++#if !APPLE_DARWIN
++	int fd, r, ver, save_errno = 0;
++
++	fd = open (name, OPEN_FLAGS);
++	if (fd == -1)
++		return -1;
++	ver = (int) version;
++	r = ioctl (fd, EXT2_IOC_SETVERSION, &ver);
++	if (r == -1)
++		save_errno = errno;
++	close (fd);
++	if (save_errno)
++		errno = save_errno;
++	return r;
++#else
++   int ver = (int)version;
++   return syscall(SYS_fsctl, name, EXT2_IOC_SETVERSION, &ver, 0);
++#endif
++#else /* ! HAVE_EXT2_IOCTLS */
++	extern int errno;
++	errno = EOPNOTSUPP;
++	return -1;
++#endif /* ! HAVE_EXT2_IOCTLS */
++}
+diff --git a/util-linux/e2p/getflags.c b/util-linux/e2p/getflags.c
+new file mode 100644
+index 000000000..acf7a122b
+--- /dev/null
++++ b/util-linux/e2p/getflags.c
+@@ -0,0 +1,66 @@
++/*
++ * getflags.c		- Get a file flags on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#include <sys/types.h>
++#include <sys/stat.h>
++#if HAVE_EXT2_IOCTLS
++#include <sys/ioctl.h>
++#endif
++
++#include "e2p.h"
++
++int getflags (int fd, unsigned long * flags)
++{
++	struct stat buf;
++#if HAVE_STAT_FLAGS
++
++	if (fstat (fd, &buf) == -1)
++		return -1;
++
++	*flags = 0;
++#ifdef UF_IMMUTABLE
++	if (buf.st_flags & UF_IMMUTABLE)
++		*flags |= EXT2_IMMUTABLE_FL;
++#endif
++#ifdef UF_APPEND
++	if (buf.st_flags & UF_APPEND)
++		*flags |= EXT2_APPEND_FL;
++#endif
++#ifdef UF_NODUMP
++	if (buf.st_flags & UF_NODUMP)
++		*flags |= EXT2_NODUMP_FL;
++#endif
++
++	return 0;
++#else
++#if HAVE_EXT2_IOCTLS
++	int r, f;
++	
++	if (!fstat(fd, &buf) &&
++	    !S_ISREG(buf.st_mode) && !S_ISDIR(buf.st_mode))
++		goto notsupp;
++	r = ioctl (fd, EXT2_IOC_GETFLAGS, &f);
++	*flags = f;
++	return r;
++#endif /* HAVE_EXT2_IOCTLS */
++#endif
++notsupp:
++	errno = EOPNOTSUPP;
++	return -1;
++}
+diff --git a/util-linux/e2p/getversion.c b/util-linux/e2p/getversion.c
+new file mode 100644
+index 000000000..38b7d0fb0
+--- /dev/null
++++ b/util-linux/e2p/getversion.c
+@@ -0,0 +1,37 @@
++/*
++ * getversion.c		- Get a file version on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#include <sys/ioctl.h>
++
++#include "e2p.h"
++
++int getversion (int fd, unsigned long * version)
++{
++#if HAVE_EXT2_IOCTLS
++	int	r, ver;
++	
++	r = ioctl (fd, EXT2_IOC_GETVERSION, &ver);
++	*version = ver;
++	return 0;
++#else /* ! HAVE_EXT2_IOCTLS */
++	extern int errno;
++	errno = EOPNOTSUPP;
++	return -1;
++#endif /* ! HAVE_EXT2_IOCTLS */
++}
+diff --git a/util-linux/e2p/hashstr.c b/util-linux/e2p/hashstr.c
+new file mode 100644
+index 000000000..b257eb26c
+--- /dev/null
++++ b/util-linux/e2p/hashstr.c
+@@ -0,0 +1,70 @@
++/*
++ * feature.c --- convert between features and strings
++ * 
++ * Copyright (C) 1999  Theodore Ts'o <tytso@mit.edu>
++ * 
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ * 
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <errno.h>
++
++#include "e2p.h"
++
++struct hash {
++	int		num;
++	const char	*string;
++};
++
++static struct hash hash_list[] = {
++	{	EXT2_HASH_LEGACY, 	"legacy" },
++	{	EXT2_HASH_HALF_MD4, 	"half_md4" },
++	{	EXT2_HASH_TEA, 		"tea" },
++	{	0, 0 },
++};
++
++const char *e2p_hash2string(int num)
++{
++	struct hash  *p;
++	static char buf[20];
++
++	for (p = hash_list; p->string; p++) {
++		if (num == p->num)
++			return p->string;
++	}
++	sprintf(buf, "HASHALG_%d", num);
++	return buf;
++}
++
++/*
++ * Returns the hash algorithm, or -1 on error
++ */
++int e2p_string2hash(char *string)
++{
++	struct hash	*p;
++	char		*eptr;
++	int		num;
++
++	for (p = hash_list; p->string; p++) {
++		if (!strcasecmp(string, p->string)) {
++			return p->num;
++		}
++	}
++	if (strncasecmp(string, "HASHALG_", 8))
++		return -1;
++
++	if (string[8] == 0)
++		return -1;
++	num = strtol(string+8, &eptr, 10);
++	if (num > 255 || num < 0)
++		return -1;
++	if (*eptr)
++		return -1;
++	return num;
++}
++
+diff --git a/util-linux/e2p/iod.c b/util-linux/e2p/iod.c
+new file mode 100644
+index 000000000..808d3a39d
+--- /dev/null
++++ b/util-linux/e2p/iod.c
+@@ -0,0 +1,72 @@
++/*
++ * iod.c		- Iterate a function on each entry of a directory
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#include "e2p.h"
++#if HAVE_UNISTD_H
++#include <unistd.h>
++#endif
++#include <stdlib.h>
++#include <string.h>
++
++int iterate_on_dir (const char * dir_name,
++		    int (*func) (const char *, struct dirent *, void *),
++		    void * private)
++{
++	DIR * dir;
++	struct dirent *de, *dep;
++	int	max_len = -1, len;
++
++#if HAVE_PATHCONF && defined(_PC_NAME_MAX) 
++	max_len = pathconf(dir_name, _PC_NAME_MAX);
++#endif
++	if (max_len == -1) {
++#ifdef _POSIX_NAME_MAX
++		max_len = _POSIX_NAME_MAX;
++#else
++#ifdef NAME_MAX
++		max_len = NAME_MAX;
++#else
++		max_len = 256;
++#endif /* NAME_MAX */
++#endif /* _POSIX_NAME_MAX */
++	}
++	max_len += sizeof(struct dirent);
++
++	de = malloc(max_len+1);
++	if (!de)
++		return -1;
++	memset(de, 0, max_len+1);
++
++	dir = opendir (dir_name);
++	if (dir == NULL) {
++		free(de);
++		return -1;
++	}
++	while ((dep = readdir (dir))) {
++		len = sizeof(struct dirent);
++#ifdef HAVE_RECLEN_DIRENT
++		if (len < dep->d_reclen)
++			len = dep->d_reclen;
++		if (len > max_len)
++			len = max_len;
++#endif
++		memcpy(de, dep, len);
++		(*func) (dir_name, de, private);
++	}
++	free(de);
++	closedir(dir);
++	return 0;
++}
+diff --git a/util-linux/e2p/ls.c b/util-linux/e2p/ls.c
+new file mode 100644
+index 000000000..e8d9d482d
+--- /dev/null
++++ b/util-linux/e2p/ls.c
+@@ -0,0 +1,276 @@
++/*
++ * ls.c			- List the contents of an ext2fs superblock
++ *
++ * Copyright (C) 1992, 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                                 Laboratoire MASI, Institut Blaise Pascal
++ *                                 Universite Pierre et Marie Curie (Paris VI)
++ *
++ * Copyright (C) 1995, 1996, 1997  Theodore Ts'o <tytso@mit.edu>
++ * 
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++#include <stdio.h>
++#include <sys/types.h>
++#include <string.h>
++#include <grp.h>
++#include <pwd.h>
++#include <time.h>
++
++#include "e2p.h"
++
++static void print_user (unsigned short uid, FILE *f)
++{
++	struct passwd *pw;
++
++	fprintf(f, "%u ", uid);
++	pw = getpwuid (uid);
++	if (pw == NULL)
++		fprintf(f, "(user unknown)\n");
++	else
++		fprintf(f, "(user %s)\n", pw->pw_name);
++}
++
++static void print_group (unsigned short gid, FILE *f)
++{
++	struct group *gr;
++
++	fprintf(f, "%u ", gid);
++	gr = getgrgid (gid);
++	if (gr == NULL)
++		fprintf(f, "(group unknown)\n");
++	else
++		fprintf(f, "(group %s)\n", gr->gr_name);
++}
++
++#define MONTH_INT (86400 * 30)
++#define WEEK_INT (86400 * 7)
++#define DAY_INT	(86400)
++#define HOUR_INT (60 * 60)
++#define MINUTE_INT (60)
++
++static const char *interval_string(unsigned int secs)
++{
++	static char buf[256], tmp[80];
++	int		hr, min, num;
++
++	buf[0] = 0;
++
++	if (secs == 0)
++		return "<none>";
++
++	if (secs >= MONTH_INT) {
++		num = secs / MONTH_INT;
++		secs -= num*MONTH_INT;
++		sprintf(buf, "%d month%s", num, (num>1) ? "s" : "");
++	}
++	if (secs >= WEEK_INT) {
++		num = secs / WEEK_INT;
++		secs -= num*WEEK_INT;
++		sprintf(tmp, "%s%d week%s", buf[0] ? ", " : "",
++			num, (num>1) ? "s" : "");
++		strcat(buf, tmp);
++	}
++	if (secs >= DAY_INT) {
++		num = secs / DAY_INT;
++		secs -= num*DAY_INT;
++		sprintf(tmp, "%s%d day%s", buf[0] ? ", " : "",
++			num, (num>1) ? "s" : "");
++		strcat(buf, tmp);
++	}
++	if (secs > 0) {
++		hr = secs / HOUR_INT;
++		secs -= hr*HOUR_INT;
++		min = secs / MINUTE_INT;
++		secs -= min*MINUTE_INT;
++		sprintf(tmp, "%s%d:%02d:%02d", buf[0] ? ", " : "",
++			hr, min, secs);
++		strcat(buf, tmp);
++	}
++	return buf;
++}
++
++static void print_features(struct ext2_super_block * s, FILE *f)
++{
++#ifdef EXT2_DYNAMIC_REV
++	int	i, j, printed=0;
++	__u32	*mask = &s->s_feature_compat, m;
++
++	fprintf(f, "Filesystem features:     ");
++	for (i=0; i <3; i++,mask++) {
++		for (j=0,m=1; j < 32; j++, m<<=1) {
++			if (*mask & m) {
++				fprintf(f, " %s", e2p_feature2string(i, m));
++				printed++;
++			}
++		}
++	}
++	if (printed == 0)
++		fprintf(f, " (none)");
++	fprintf(f, "\n");
++#endif
++}
++
++static void print_mntopts(struct ext2_super_block * s, FILE *f)
++{
++#ifdef EXT2_DYNAMIC_REV
++	int	i, printed=0;
++	__u32	mask = s->s_default_mount_opts, m;
++
++	fprintf(f, "Default mount options:   ");
++	if (mask & EXT3_DEFM_JMODE) {
++		fprintf(f, " %s", e2p_mntopt2string(mask & EXT3_DEFM_JMODE));
++		printed++;
++	}
++	for (i=0,m=1; i < 32; i++, m<<=1) {
++		if (m & EXT3_DEFM_JMODE)
++			continue;
++		if (mask & m) {
++			fprintf(f, " %s", e2p_mntopt2string(m));
++			printed++;
++		}
++	}
++	if (printed == 0)
++		fprintf(f, " (none)");
++	fprintf(f, "\n");
++#endif
++}
++
++
++#ifndef EXT2_INODE_SIZE
++#define EXT2_INODE_SIZE(s) sizeof(struct ext2_inode)
++#endif
++
++#ifndef EXT2_GOOD_OLD_REV
++#define EXT2_GOOD_OLD_REV 0
++#endif
++
++void list_super2(struct ext2_super_block * sb, FILE *f)
++{
++	int inode_blocks_per_group;
++	char buf[80], *str;
++	time_t	tm;
++
++	inode_blocks_per_group = (((sb->s_inodes_per_group *
++				    EXT2_INODE_SIZE(sb)) +
++				   EXT2_BLOCK_SIZE(sb) - 1) /
++				  EXT2_BLOCK_SIZE(sb));
++	if (sb->s_volume_name[0]) {
++		memset(buf, 0, sizeof(buf));
++		strncpy(buf, sb->s_volume_name, sizeof(sb->s_volume_name));
++	} else
++		strcpy(buf, "<none>");
++	fprintf(f, "Filesystem volume name:   %s\n", buf);
++	if (sb->s_last_mounted[0]) {
++		memset(buf, 0, sizeof(buf));
++		strncpy(buf, sb->s_last_mounted, sizeof(sb->s_last_mounted));
++	} else
++		strcpy(buf, "<not available>");
++	fprintf(f, "Last mounted on:          %s\n", buf);
++	fprintf(f, "Filesystem UUID:          %s\n", e2p_uuid2str(sb->s_uuid));
++	fprintf(f, "Filesystem magic number:  0x%04X\n", sb->s_magic);
++	fprintf(f, "Filesystem revision #:    %d", sb->s_rev_level);
++	if (sb->s_rev_level == EXT2_GOOD_OLD_REV) {
++		fprintf(f, " (original)\n");
++#ifdef EXT2_DYNAMIC_REV
++	} else if (sb->s_rev_level == EXT2_DYNAMIC_REV) {
++		fprintf(f, " (dynamic)\n");
++#endif
++	} else
++		fprintf(f, " (unknown)\n");
++	print_features(sb, f);
++	print_mntopts(sb, f);
++	fprintf(f, "Filesystem state:        ");
++	print_fs_state (f, sb->s_state);
++	fprintf(f, "\n");
++	fprintf(f, "Errors behavior:          ");
++	print_fs_errors(f, sb->s_errors);
++	fprintf(f, "\n");
++	str = e2p_os2string(sb->s_creator_os);
++	fprintf(f, "Filesystem OS type:       %s\n", str);
++	free(str);
++	fprintf(f, "Inode count:              %u\n", sb->s_inodes_count);
++	fprintf(f, "Block count:              %u\n", sb->s_blocks_count);
++	fprintf(f, "Reserved block count:     %u\n", sb->s_r_blocks_count);
++	fprintf(f, "Free blocks:              %u\n", sb->s_free_blocks_count);
++	fprintf(f, "Free inodes:              %u\n", sb->s_free_inodes_count);
++	fprintf(f, "First block:              %u\n", sb->s_first_data_block);
++	fprintf(f, "Block size:               %u\n", EXT2_BLOCK_SIZE(sb));
++	fprintf(f, "Fragment size:            %u\n", EXT2_FRAG_SIZE(sb));
++	if (sb->s_reserved_gdt_blocks)
++		fprintf(f, "Reserved GDT blocks:      %u\n", 
++			sb->s_reserved_gdt_blocks);
++	fprintf(f, "Blocks per group:         %u\n", sb->s_blocks_per_group);
++	fprintf(f, "Fragments per group:      %u\n", sb->s_frags_per_group);
++	fprintf(f, "Inodes per group:         %u\n", sb->s_inodes_per_group);
++	fprintf(f, "Inode blocks per group:   %u\n", inode_blocks_per_group);
++	if (sb->s_first_meta_bg)
++		fprintf(f, "First meta block group:   %u\n",
++			sb->s_first_meta_bg);
++	if (sb->s_mkfs_time) {
++		tm = sb->s_mkfs_time;
++		fprintf(f, "Filesystem created:       %s", ctime(&tm));
++	}
++	tm = sb->s_mtime;
++	fprintf(f, "Last mount time:          %s",
++		sb->s_mtime ? ctime(&tm) : "n/a\n");
++	tm = sb->s_wtime;
++	fprintf(f, "Last write time:          %s", ctime(&tm));
++	fprintf(f, "Mount count:              %u\n", sb->s_mnt_count);
++	fprintf(f, "Maximum mount count:      %d\n", sb->s_max_mnt_count);
++	tm = sb->s_lastcheck;
++	fprintf(f, "Last checked:             %s", ctime(&tm));
++	fprintf(f, "Check interval:           %u (%s)\n", sb->s_checkinterval,
++	       interval_string(sb->s_checkinterval));
++	if (sb->s_checkinterval)
++	{
++		time_t next;
++
++		next = sb->s_lastcheck + sb->s_checkinterval;
++		fprintf(f, "Next check after:         %s", ctime(&next));
++	}
++	fprintf(f, "Reserved blocks uid:      ");
++	print_user(sb->s_def_resuid, f);
++	fprintf(f, "Reserved blocks gid:      ");
++	print_group(sb->s_def_resgid, f);
++	if (sb->s_rev_level >= EXT2_DYNAMIC_REV) {
++		fprintf(f, "First inode:              %d\n", sb->s_first_ino);
++		fprintf(f, "Inode size:		  %d\n", sb->s_inode_size);
++	}
++	if (!e2p_is_null_uuid(sb->s_journal_uuid))
++		fprintf(f, "Journal UUID:             %s\n",
++			e2p_uuid2str(sb->s_journal_uuid));
++	if (sb->s_journal_inum)
++		fprintf(f, "Journal inode:            %u\n",
++			sb->s_journal_inum);
++	if (sb->s_journal_dev)
++		fprintf(f, "Journal device:	          0x%04x\n",
++			sb->s_journal_dev);
++	if (sb->s_last_orphan)
++		fprintf(f, "First orphan inode:       %u\n",
++			sb->s_last_orphan);
++	if ((sb->s_feature_compat & EXT2_FEATURE_COMPAT_DIR_INDEX) ||
++	    sb->s_def_hash_version)
++		fprintf(f, "Default directory hash:   %s\n",
++			e2p_hash2string(sb->s_def_hash_version));
++	if (!e2p_is_null_uuid(sb->s_hash_seed))
++		fprintf(f, "Directory Hash Seed:      %s\n",
++			e2p_uuid2str(sb->s_hash_seed));
++	if (sb->s_jnl_backup_type) {
++		fprintf(f, "Journal backup:           ");
++		switch (sb->s_jnl_backup_type) {
++		case 1:
++			fprintf(f, "inode blocks\n");
++			break;
++		default:
++			fprintf(f, "type %u\n", sb->s_jnl_backup_type);
++		}
++	}
++}
++
++void list_super (struct ext2_super_block * s)
++{
++	list_super2(s, stdout);
++}
++
+diff --git a/util-linux/e2p/mntopts.c b/util-linux/e2p/mntopts.c
+new file mode 100644
+index 000000000..6d0eca0ae
+--- /dev/null
++++ b/util-linux/e2p/mntopts.c
+@@ -0,0 +1,136 @@
++/*
++ * mountopts.c --- convert between default mount options and strings
++ * 
++ * Copyright (C) 2002  Theodore Ts'o <tytso@mit.edu>
++ * 
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ * 
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <errno.h>
++
++#include "e2p.h"
++
++struct mntopt {
++	unsigned int	mask;
++	const char	*string;
++};
++
++static struct mntopt mntopt_list[] = {
++	{ EXT2_DEFM_DEBUG,	"debug" },
++	{ EXT2_DEFM_BSDGROUPS,	"bsdgroups" },
++	{ EXT2_DEFM_XATTR_USER,	"user_xattr" },
++	{ EXT2_DEFM_ACL,	"acl" },
++	{ EXT2_DEFM_UID16,	"uid16" },
++	{ EXT3_DEFM_JMODE_DATA, "journal_data" },
++	{ EXT3_DEFM_JMODE_ORDERED, "journal_data_ordered" },
++	{ EXT3_DEFM_JMODE_WBACK, "journal_data_writeback" },
++	{ 0, 0 },
++};
++
++const char *e2p_mntopt2string(unsigned int mask)
++{
++	struct mntopt  *f;
++	static char buf[20];
++	int	fnum;
++
++	for (f = mntopt_list; f->string; f++) {
++		if (mask == f->mask)
++			return f->string;
++	}
++	for (fnum = 0; mask >>= 1; fnum++);
++	sprintf(buf, "MNTOPT_%d", fnum);
++	return buf;
++}
++
++int e2p_string2mntopt(char *string, unsigned int *mask)
++{
++	struct mntopt  *f;
++	char		*eptr;
++	int		num;
++
++	for (f = mntopt_list; f->string; f++) {
++		if (!strcasecmp(string, f->string)) {
++			*mask = f->mask;
++			return 0;
++		}
++	}
++	if (strncasecmp(string, "MNTOPT_", 8))
++		return 1;
++
++	if (string[8] == 0)
++		return 1;
++	num = strtol(string+8, &eptr, 10);
++	if (num > 32 || num < 0)
++		return 1;
++	if (*eptr)
++		return 1;
++	*mask = 1 << num;
++	return 0;
++}
++
++static char *skip_over_blanks(char *cp)
++{
++	while (*cp && isspace(*cp))
++		cp++;
++	return cp;
++}
++
++static char *skip_over_word(char *cp)
++{
++	while (*cp && !isspace(*cp) && *cp != ',')
++		cp++;
++	return cp;
++}
++
++/*
++ * Edit a mntopt set array as requested by the user.  The ok
++ * parameter, if non-zero, allows the application to limit what
++ * mntopts the user is allowed to set or clear using this function.
++ */
++int e2p_edit_mntopts(const char *str, __u32 *mntopts, __u32 ok)
++{
++	char	*cp, *buf, *next;
++	int	neg;
++	unsigned int	mask;
++
++	buf = malloc(strlen(str)+1);
++	if (!buf)
++		return 1;
++	strcpy(buf, str);
++	cp = buf;
++	while (cp && *cp) {
++		neg = 0;
++		cp = skip_over_blanks(cp);
++		next = skip_over_word(cp);
++		if (*next == 0)
++			next = 0;
++		else
++			*next = 0;
++		switch (*cp) {
++		case '-':
++		case '^':
++			neg++;
++		case '+':
++			cp++;
++			break;
++		}
++		if (e2p_string2mntopt(cp, &mask))
++			return 1;
++		if (ok && !(ok & mask))
++			return 1;
++		if (mask & EXT3_DEFM_JMODE)
++			*mntopts &= ~EXT3_DEFM_JMODE;
++		if (neg)
++			*mntopts &= ~mask;
++		else
++			*mntopts |= mask;
++		cp = next ? next+1 : 0;
++	}
++	return 0;
++}
+diff --git a/util-linux/e2p/ostype.c b/util-linux/e2p/ostype.c
+new file mode 100644
+index 000000000..fe6597dd5
+--- /dev/null
++++ b/util-linux/e2p/ostype.c
+@@ -0,0 +1,73 @@
++/*
++ * getostype.c          - Get the Filesystem OS type
++ *
++ * Copyright (C) 2004,2005  Theodore Ts'o <tytso@mit.edu>
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++#include "e2p.h"
++#include <string.h>
++
++const char *os_tab[] =
++	{ "Linux", 
++	  "Hurd", 
++	  "Masix", 
++	  "FreeBSD", 
++	  "Lites",
++	  0 };
++
++/*
++ * Convert an os_type to a string
++ */
++char *e2p_os2string(int os_type)
++{
++        const char	*os;
++	char 		*ret;
++
++	if (os_type <= EXT2_OS_LITES)
++		os = os_tab[os_type];
++	else
++		os = "(unknown os)";
++
++        ret = malloc(strlen(os)+1);
++        strcpy(ret, os);
++        return ret;
++}
++
++/*
++ * Convert an os_type to a string
++ */
++int e2p_string2os(char *str)
++{
++	const char	**cpp;
++	int		i = 0;
++
++	for (cpp = os_tab; *cpp; cpp++, i++) {
++		if (!strcasecmp(str, *cpp))
++			return i;
++	}
++	return -1;
++}
++
++#ifdef TEST_PROGRAM
++int main(int argc, char **argv)
++{
++	char 	*s;
++	int	i, os;
++
++	for (i=0; i <= EXT2_OS_LITES; i++) {
++		s = e2p_os2string(i);
++		os = e2p_string2os(s);
++		printf("%d: %s (%d)\n", i, s, os);
++		if (i != os) {
++			fprintf(stderr, "Failure!\n");
++			exit(1);
++		}
++	}
++	exit(0);
++}
++#endif
++
++
+diff --git a/util-linux/e2p/parse_num.c b/util-linux/e2p/parse_num.c
+new file mode 100644
+index 000000000..3910e70de
+--- /dev/null
++++ b/util-linux/e2p/parse_num.c
+@@ -0,0 +1,64 @@
++/*
++ * parse_num.c		- Parse the number of blocks 
++ *
++ * Copyright (C) 2004,2005  Theodore Ts'o <tytso@mit.edu>
++ * 
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++#include "e2p.h"
++
++#include <stdlib.h>
++
++unsigned long parse_num_blocks(const char *arg, int log_block_size)
++{
++	char *p;
++	unsigned long long num;
++
++	num = strtoull(arg, &p, 0);
++
++	if (p[0] && p[1]) 
++		return 0;
++
++	switch (*p) {		/* Using fall-through logic */
++	case 'T': case 't': 
++		num <<= 10;
++	case 'G': case 'g': 
++		num <<= 10;
++	case 'M': case 'm': 
++		num <<= 10;
++	case 'K': case 'k': 
++		num >>= log_block_size; 
++		break;
++	case 's': 
++		num >>= 1;
++		break;
++	case '\0':
++		break;
++	default: 
++		return 0;
++	}
++	return num;
++}
++
++#ifdef DEBUG
++#include <unistd.h>
++#include <stdio.h>
++
++main(int argc, char **argv)
++{
++	unsigned long num;
++	int log_block_size = 0;
++
++	if (argc != 2) {
++		fprintf(stderr, "Usage: %s arg\n", argv[0]);
++		exit(1);
++	}
++
++	num = parse_num_blocks(argv[1], log_block_size);
++
++	printf("Parsed number: %lu\n", num);
++	exit(0);
++}
++#endif
+diff --git a/util-linux/e2p/pe.c b/util-linux/e2p/pe.c
+new file mode 100644
+index 000000000..4cce69117
+--- /dev/null
++++ b/util-linux/e2p/pe.c
+@@ -0,0 +1,37 @@
++/*
++ * pe.c			- Print a second extended filesystem errors behavior
++ *
++ * Copyright (C) 1992, 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                                 Laboratoire MASI, Institut Blaise Pascal
++ *                                 Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 94/01/09	- Creation
++ */
++
++#include <stdio.h>
++
++#include "e2p.h"
++
++void print_fs_errors (FILE * f, unsigned short errors)
++{
++	switch (errors)
++	{
++		case EXT2_ERRORS_CONTINUE:
++			fprintf (f, "Continue");
++			break;
++		case EXT2_ERRORS_RO:
++			fprintf (f, "Remount read-only");
++			break;
++		case EXT2_ERRORS_PANIC:
++			fprintf (f, "Panic");
++			break;
++		default:
++			fprintf (f, "Unknown (continue)");
++	}
++}
+diff --git a/util-linux/e2p/pf.c b/util-linux/e2p/pf.c
+new file mode 100644
+index 000000000..48d75a9ae
+--- /dev/null
++++ b/util-linux/e2p/pf.c
+@@ -0,0 +1,74 @@
++/*
++ * pf.c			- Print file attributes on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#include <stdio.h>
++
++#include "e2p.h"
++
++struct flags_name {
++	unsigned long	flag;
++	const char	*short_name;
++	const char	*long_name;
++};
++
++static struct flags_name flags_array[] = {
++	{ EXT2_SECRM_FL, "s", "Secure_Deletion" },
++	{ EXT2_UNRM_FL, "u" , "Undelete" },
++	{ EXT2_SYNC_FL, "S", "Synchronous_Updates" },
++	{ EXT2_DIRSYNC_FL, "D", "Synchronous_Directory_Updates" },
++	{ EXT2_IMMUTABLE_FL, "i", "Immutable" },
++	{ EXT2_APPEND_FL, "a", "Append_Only" },
++	{ EXT2_NODUMP_FL, "d", "No_Dump" },
++	{ EXT2_NOATIME_FL, "A", "No_Atime" },
++	{ EXT2_COMPR_FL, "c", "Compression_Requested" },
++#ifdef ENABLE_COMPRESSION
++	{ EXT2_COMPRBLK_FL, "B", "Compressed_File" },
++	{ EXT2_DIRTY_FL, "Z", "Compressed_Dirty_File" },
++	{ EXT2_NOCOMPR_FL, "X", "Compression_Raw_Access" },
++	{ EXT2_ECOMPR_FL, "E", "Compression_Error" },
++#endif
++	{ EXT3_JOURNAL_DATA_FL, "j", "Journaled_Data" },
++	{ EXT2_INDEX_FL, "I", "Indexed_direcctory" }, 
++	{ EXT2_NOTAIL_FL, "t", "No_Tailmerging" },
++	{ EXT2_TOPDIR_FL, "T", "Top_of_Directory_Hierarchies" },
++	{ 0, NULL, NULL }
++};
++
++void print_flags (FILE * f, unsigned long flags, unsigned options)
++{
++	int long_opt = (options & PFOPT_LONG);
++	struct flags_name *fp;
++	int	first = 1;
++
++	for (fp = flags_array; fp->flag != 0; fp++) {
++		if (flags & fp->flag) {
++			if (long_opt) {
++				if (first)
++					first = 0;
++				else
++					fputs(", ", f);
++				fputs(fp->long_name, f);
++			} else
++				fputs(fp->short_name, f);
++		} else {
++			if (!long_opt)
++				fputs("-", f);
++		}
++	}
++	if (long_opt && first)
++		fputs("---", f);
++}
++
+diff --git a/util-linux/e2p/ps.c b/util-linux/e2p/ps.c
+new file mode 100644
+index 000000000..bec8b4195
+--- /dev/null
++++ b/util-linux/e2p/ps.c
+@@ -0,0 +1,29 @@
++/*
++ * ps.c			- Print filesystem state
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/12/22	- Creation
++ */
++
++#include <stdio.h>
++
++#include "e2p.h"
++
++void print_fs_state (FILE * f, unsigned short state)
++{
++	if (state & EXT2_VALID_FS)
++		fprintf (f, " clean");
++	else
++		fprintf (f, " not clean");
++	if (state & EXT2_ERROR_FS)
++		fprintf (f, " with errors");
++}
+diff --git a/util-linux/e2p/setflags.c b/util-linux/e2p/setflags.c
+new file mode 100644
+index 000000000..47c52a7ad
+--- /dev/null
++++ b/util-linux/e2p/setflags.c
+@@ -0,0 +1,72 @@
++/*
++ * setflags.c		- Set a file flags on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#include <sys/types.h>
++#include <sys/stat.h>
++#if HAVE_EXT2_IOCTLS
++#include <sys/ioctl.h>
++#endif
++
++#include "e2p.h"
++
++/* 
++ * Deal with lame glibc's that define this function without actually 
++ * implementing it.  Can you say "attractive nuisance", boys and girls?
++ * I knew you could!
++ */
++#ifdef __linux__
++#undef HAVE_CHFLAGS
++#endif
++
++int setflags (int fd, unsigned long flags)
++{
++	struct stat buf;
++#if HAVE_CHFLAGS
++	unsigned long bsd_flags = 0;
++
++#ifdef UF_IMMUTABLE
++	if (flags & EXT2_IMMUTABLE_FL)
++		bsd_flags |= UF_IMMUTABLE;
++#endif
++#ifdef UF_APPEND
++	if (flags & EXT2_APPEND_FL)
++		bsd_flags |= UF_APPEND;
++#endif
++#ifdef UF_NODUMP
++	if (flags & EXT2_NODUMP_FL)
++		bsd_flags |= UF_NODUMP;
++#endif
++
++	return fchflags (fd, bsd_flags);
++#else
++#if HAVE_EXT2_IOCTLS
++	int	f;
++
++	if (!fstat(fd, &buf) &&
++	    !S_ISREG(buf.st_mode) && !S_ISDIR(buf.st_mode)) {
++		errno = EOPNOTSUPP;
++		return -1;
++	}
++	f = (int) flags;
++	return ioctl (fd, EXT2_IOC_SETFLAGS, &f);
++#endif /* HAVE_EXT2_IOCTLS */
++#endif
++	errno = EOPNOTSUPP;
++	return -1;
++}
+diff --git a/util-linux/e2p/setversion.c b/util-linux/e2p/setversion.c
+new file mode 100644
+index 000000000..bd00df668
+--- /dev/null
++++ b/util-linux/e2p/setversion.c
+@@ -0,0 +1,36 @@
++/*
++ * setversion.c		- Set a file version on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU Library General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ */
++
++#if HAVE_ERRNO_H
++#include <errno.h>
++#endif
++#include <sys/ioctl.h>
++
++#include "e2p.h"
++
++int setversion (int fd, unsigned long version)
++{
++#if HAVE_EXT2_IOCTLS
++	int ver;
++
++	ver = (int) version;
++	return ioctl (fd, EXT2_IOC_SETVERSION, &ver);
++#else /* ! HAVE_EXT2_IOCTLS */
++	extern int errno;
++	errno = EOPNOTSUPP;
++	return -1;
++#endif /* ! HAVE_EXT2_IOCTLS */
++}
+diff --git a/util-linux/e2p/uuid.c b/util-linux/e2p/uuid.c
+new file mode 100644
+index 000000000..fef3b91e7
+--- /dev/null
++++ b/util-linux/e2p/uuid.c
+@@ -0,0 +1,79 @@
++/*
++ * uuid.c -- utility routines for manipulating UUID's.
++ */
++
++#include <stdio.h>
++#include <string.h>
++#include <ext2fs/ext2_types.h>
++
++#include "e2p.h"
++
++struct uuid {
++	__u32	time_low;
++	__u16	time_mid;
++	__u16	time_hi_and_version;
++	__u16	clock_seq;
++	__u8	node[6];
++};
++
++/* Returns 1 if the uuid is the NULL uuid */
++int e2p_is_null_uuid(void *uu)
++{
++	__u8 	*cp;
++	int	i;
++
++	for (i=0, cp = uu; i < 16; i++)
++		if (*cp)
++			return 0;
++	return 1;
++}
++
++static void e2p_unpack_uuid(void *in, struct uuid *uu)
++{
++	__u8	*ptr = in;
++	__u32	tmp;
++
++	tmp = *ptr++;
++	tmp = (tmp << 8) | *ptr++;
++	tmp = (tmp << 8) | *ptr++;
++	tmp = (tmp << 8) | *ptr++;
++	uu->time_low = tmp;
++
++	tmp = *ptr++;
++	tmp = (tmp << 8) | *ptr++;
++	uu->time_mid = tmp;
++	
++	tmp = *ptr++;
++	tmp = (tmp << 8) | *ptr++;
++	uu->time_hi_and_version = tmp;
++
++	tmp = *ptr++;
++	tmp = (tmp << 8) | *ptr++;
++	uu->clock_seq = tmp;
++
++	memcpy(uu->node, ptr, 6);
++}
++
++void e2p_uuid_to_str(void *uu, char *out)
++{
++	struct uuid uuid;
++
++	e2p_unpack_uuid(uu, &uuid);
++	sprintf(out,
++		"%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
++		uuid.time_low, uuid.time_mid, uuid.time_hi_and_version,
++		uuid.clock_seq >> 8, uuid.clock_seq & 0xFF,
++		uuid.node[0], uuid.node[1], uuid.node[2],
++		uuid.node[3], uuid.node[4], uuid.node[5]);
++}
++
++const char *e2p_uuid2str(void *uu)
++{
++	static char buf[80];
++
++	if (e2p_is_null_uuid(uu))
++		return "<none>";
++	e2p_uuid_to_str(uu, buf);
++	return buf;
++}
++
+diff --git a/util-linux/ext2_fs.h b/util-linux/ext2_fs.h
+new file mode 100644
+index 000000000..ff615c4bd
+--- /dev/null
++++ b/util-linux/ext2_fs.h
+@@ -0,0 +1,644 @@
++/*
++ *  linux/include/linux/ext2_fs.h
++ *
++ * Copyright (C) 1992, 1993, 1994, 1995
++ * Remy Card (card@masi.ibp.fr)
++ * Laboratoire MASI - Institut Blaise Pascal
++ * Universite Pierre et Marie Curie (Paris VI)
++ *
++ *  from
++ *
++ *  linux/include/linux/minix_fs.h
++ *
++ *  Copyright (C) 1991, 1992  Linus Torvalds
++ */
++
++#ifndef _LINUX_EXT2_FS_H
++#define _LINUX_EXT2_FS_H
++
++#include <ext2fs/ext2_types.h>		/* Changed from linux/types.h */
++
++/*
++ * The second extended filesystem constants/structures
++ */
++
++/*
++ * Define EXT2FS_DEBUG to produce debug messages
++ */
++#undef EXT2FS_DEBUG
++
++/*
++ * Define EXT2_PREALLOCATE to preallocate data blocks for expanding files
++ */
++#define EXT2_PREALLOCATE
++#define EXT2_DEFAULT_PREALLOC_BLOCKS	8
++
++/*
++ * The second extended file system version
++ */
++#define EXT2FS_DATE		"95/08/09"
++#define EXT2FS_VERSION		"0.5b"
++
++/*
++ * Special inode numbers
++ */
++#define EXT2_BAD_INO		 1	/* Bad blocks inode */
++#define EXT2_ROOT_INO		 2	/* Root inode */
++#define EXT2_ACL_IDX_INO	 3	/* ACL inode */
++#define EXT2_ACL_DATA_INO	 4	/* ACL inode */
++#define EXT2_BOOT_LOADER_INO	 5	/* Boot loader inode */
++#define EXT2_UNDEL_DIR_INO	 6	/* Undelete directory inode */
++#define EXT2_RESIZE_INO		 7	/* Reserved group descriptors inode */
++#define EXT2_JOURNAL_INO	 8	/* Journal inode */
++
++/* First non-reserved inode for old ext2 filesystems */
++#define EXT2_GOOD_OLD_FIRST_INO	11
++
++/*
++ * The second extended file system magic number
++ */
++#define EXT2_SUPER_MAGIC	0xEF53
++
++#ifdef __KERNEL__
++#define EXT2_SB(sb)	(&((sb)->u.ext2_sb))
++#else
++/* Assume that user mode programs are passing in an ext2fs superblock, not
++ * a kernel struct super_block.  This will allow us to call the feature-test
++ * macros from user land. */
++#define EXT2_SB(sb)	(sb)
++#endif
++
++/*
++ * Maximal count of links to a file
++ */
++#define EXT2_LINK_MAX		32000
++
++/*
++ * Macro-instructions used to manage several block sizes
++ */
++#define EXT2_MIN_BLOCK_LOG_SIZE		10	/* 1024 */
++#define EXT2_MAX_BLOCK_LOG_SIZE		16	/* 65536 */
++#define EXT2_MIN_BLOCK_SIZE	(1 << EXT2_MIN_BLOCK_LOG_SIZE)
++#define EXT2_MAX_BLOCK_SIZE	(1 << EXT2_MAX_BLOCK_LOG_SIZE)
++#ifdef __KERNEL__
++#define EXT2_BLOCK_SIZE(s)	((s)->s_blocksize)
++#define EXT2_BLOCK_SIZE_BITS(s)	((s)->s_blocksize_bits)
++#define EXT2_ADDR_PER_BLOCK_BITS(s)	(EXT2_SB(s)->addr_per_block_bits)
++#define EXT2_INODE_SIZE(s)	(EXT2_SB(s)->s_inode_size)
++#define EXT2_FIRST_INO(s)	(EXT2_SB(s)->s_first_ino)
++#else
++#define EXT2_BLOCK_SIZE(s)	(EXT2_MIN_BLOCK_SIZE << (s)->s_log_block_size)
++#define EXT2_BLOCK_SIZE_BITS(s)	((s)->s_log_block_size + 10)
++#define EXT2_INODE_SIZE(s)	(((s)->s_rev_level == EXT2_GOOD_OLD_REV) ? \
++				 EXT2_GOOD_OLD_INODE_SIZE : (s)->s_inode_size)
++#define EXT2_FIRST_INO(s)	(((s)->s_rev_level == EXT2_GOOD_OLD_REV) ? \
++				 EXT2_GOOD_OLD_FIRST_INO : (s)->s_first_ino)
++#endif
++#define EXT2_ADDR_PER_BLOCK(s)	(EXT2_BLOCK_SIZE(s) / sizeof(__u32))
++
++/*
++ * Macro-instructions used to manage fragments
++ */
++#define EXT2_MIN_FRAG_SIZE		EXT2_MIN_BLOCK_SIZE
++#define EXT2_MAX_FRAG_SIZE		EXT2_MAX_BLOCK_SIZE
++#define EXT2_MIN_FRAG_LOG_SIZE		EXT2_MIN_BLOCK_LOG_SIZE
++#ifdef __KERNEL__
++# define EXT2_FRAG_SIZE(s)		(EXT2_SB(s)->s_frag_size)
++# define EXT2_FRAGS_PER_BLOCK(s)	(EXT2_SB(s)->s_frags_per_block)
++#else
++# define EXT2_FRAG_SIZE(s)		(EXT2_MIN_FRAG_SIZE << (s)->s_log_frag_size)
++# define EXT2_FRAGS_PER_BLOCK(s)	(EXT2_BLOCK_SIZE(s) / EXT2_FRAG_SIZE(s))
++#endif
++
++/*
++ * ACL structures
++ */
++struct ext2_acl_header	/* Header of Access Control Lists */
++{
++	__u32	aclh_size;
++	__u32	aclh_file_count;
++	__u32	aclh_acle_count;
++	__u32	aclh_first_acle;
++};
++
++struct ext2_acl_entry	/* Access Control List Entry */
++{
++	__u32	acle_size;
++	__u16	acle_perms;	/* Access permissions */
++	__u16	acle_type;	/* Type of entry */
++	__u16	acle_tag;	/* User or group identity */
++	__u16	acle_pad1;
++	__u32	acle_next;	/* Pointer on next entry for the */
++					/* same inode or on next free entry */
++};
++
++/*
++ * Structure of a blocks group descriptor
++ */
++struct ext2_group_desc
++{
++	__u32	bg_block_bitmap;		/* Blocks bitmap block */
++	__u32	bg_inode_bitmap;		/* Inodes bitmap block */
++	__u32	bg_inode_table;		/* Inodes table block */
++	__u16	bg_free_blocks_count;	/* Free blocks count */
++	__u16	bg_free_inodes_count;	/* Free inodes count */
++	__u16	bg_used_dirs_count;	/* Directories count */
++	__u16	bg_pad;
++	__u32	bg_reserved[3];
++};
++
++/*
++ * Data structures used by the directory indexing feature
++ *
++ * Note: all of the multibyte integer fields are little endian.
++ */
++
++/*
++ * Note: dx_root_info is laid out so that if it should somehow get
++ * overlaid by a dirent the two low bits of the hash version will be
++ * zero.  Therefore, the hash version mod 4 should never be 0.
++ * Sincerely, the paranoia department.
++ */
++struct ext2_dx_root_info {
++	__u32 reserved_zero;
++	__u8 hash_version; /* 0 now, 1 at release */
++	__u8 info_length; /* 8 */
++	__u8 indirect_levels;
++	__u8 unused_flags;
++};
++
++#define EXT2_HASH_LEGACY	0
++#define EXT2_HASH_HALF_MD4	1
++#define EXT2_HASH_TEA		2
++
++#define EXT2_HASH_FLAG_INCOMPAT	0x1
++
++struct ext2_dx_entry {
++	__u32 hash;
++	__u32 block;
++};
++
++struct ext2_dx_countlimit {
++	__u16 limit;
++	__u16 count;
++};
++
++
++/*
++ * Macro-instructions used to manage group descriptors
++ */
++#define EXT2_BLOCKS_PER_GROUP(s)	(EXT2_SB(s)->s_blocks_per_group)
++#define EXT2_INODES_PER_GROUP(s)	(EXT2_SB(s)->s_inodes_per_group)
++#define EXT2_INODES_PER_BLOCK(s)	(EXT2_BLOCK_SIZE(s)/EXT2_INODE_SIZE(s))
++/* limits imposed by 16-bit value gd_free_{blocks,inode}_count */
++#define EXT2_MAX_BLOCKS_PER_GROUP(s)	((1 << 16) - 8)
++#define EXT2_MAX_INODES_PER_GROUP(s)	((1 << 16) - EXT2_INODES_PER_BLOCK(s))
++#ifdef __KERNEL__
++#define EXT2_DESC_PER_BLOCK(s)		(EXT2_SB(s)->s_desc_per_block)
++#define EXT2_DESC_PER_BLOCK_BITS(s)	(EXT2_SB(s)->s_desc_per_block_bits)
++#else
++#define EXT2_DESC_PER_BLOCK(s)		(EXT2_BLOCK_SIZE(s) / sizeof (struct ext2_group_desc))
++#endif
++
++/*
++ * Constants relative to the data blocks
++ */
++#define EXT2_NDIR_BLOCKS		12
++#define EXT2_IND_BLOCK			EXT2_NDIR_BLOCKS
++#define EXT2_DIND_BLOCK			(EXT2_IND_BLOCK + 1)
++#define EXT2_TIND_BLOCK			(EXT2_DIND_BLOCK + 1)
++#define EXT2_N_BLOCKS			(EXT2_TIND_BLOCK + 1)
++
++/*
++ * Inode flags
++ */
++#define EXT2_SECRM_FL			0x00000001 /* Secure deletion */
++#define EXT2_UNRM_FL			0x00000002 /* Undelete */
++#define EXT2_COMPR_FL			0x00000004 /* Compress file */
++#define EXT2_SYNC_FL			0x00000008 /* Synchronous updates */
++#define EXT2_IMMUTABLE_FL		0x00000010 /* Immutable file */
++#define EXT2_APPEND_FL			0x00000020 /* writes to file may only append */
++#define EXT2_NODUMP_FL			0x00000040 /* do not dump file */
++#define EXT2_NOATIME_FL			0x00000080 /* do not update atime */
++/* Reserved for compression usage... */
++#define EXT2_DIRTY_FL			0x00000100
++#define EXT2_COMPRBLK_FL		0x00000200 /* One or more compressed clusters */
++#define EXT2_NOCOMPR_FL			0x00000400 /* Access raw compressed data */
++#define EXT2_ECOMPR_FL			0x00000800 /* Compression error */
++/* End compression flags --- maybe not all used */
++#define EXT2_BTREE_FL			0x00001000 /* btree format dir */
++#define EXT2_INDEX_FL			0x00001000 /* hash-indexed directory */
++#define EXT2_IMAGIC_FL			0x00002000
++#define EXT3_JOURNAL_DATA_FL		0x00004000 /* file data should be journaled */
++#define EXT2_NOTAIL_FL			0x00008000 /* file tail should not be merged */
++#define EXT2_DIRSYNC_FL 		0x00010000 /* Synchronous directory modifications */
++#define EXT2_TOPDIR_FL			0x00020000 /* Top of directory hierarchies*/
++#define EXT3_EXTENTS_FL 		0x00080000 /* Inode uses extents */
++#define EXT2_RESERVED_FL		0x80000000 /* reserved for ext2 lib */
++
++#define EXT2_FL_USER_VISIBLE		0x0003DFFF /* User visible flags */
++#define EXT2_FL_USER_MODIFIABLE		0x000080FF /* User modifiable flags */
++
++/*
++ * ioctl commands
++ */
++#define EXT2_IOC_GETFLAGS		_IOR('f', 1, long)
++#define EXT2_IOC_SETFLAGS		_IOW('f', 2, long)
++#define EXT2_IOC_GETVERSION		_IOR('v', 1, long)
++#define EXT2_IOC_SETVERSION		_IOW('v', 2, long)
++
++/*
++ * Structure of an inode on the disk
++ */
++struct ext2_inode {
++	__u16	i_mode;		/* File mode */
++	__u16	i_uid;		/* Low 16 bits of Owner Uid */
++	__u32	i_size;		/* Size in bytes */
++	__u32	i_atime;	/* Access time */
++	__u32	i_ctime;	/* Creation time */
++	__u32	i_mtime;	/* Modification time */
++	__u32	i_dtime;	/* Deletion Time */
++	__u16	i_gid;		/* Low 16 bits of Group Id */
++	__u16	i_links_count;	/* Links count */
++	__u32	i_blocks;	/* Blocks count */
++	__u32	i_flags;	/* File flags */
++	union {
++		struct {
++			__u32  l_i_reserved1;
++		} linux1;
++		struct {
++			__u32  h_i_translator;
++		} hurd1;
++		struct {
++			__u32  m_i_reserved1;
++		} masix1;
++	} osd1;				/* OS dependent 1 */
++	__u32	i_block[EXT2_N_BLOCKS];/* Pointers to blocks */
++	__u32	i_generation;	/* File version (for NFS) */
++	__u32	i_file_acl;	/* File ACL */
++	__u32	i_dir_acl;	/* Directory ACL */
++	__u32	i_faddr;	/* Fragment address */
++	union {
++		struct {
++			__u8	l_i_frag;	/* Fragment number */
++			__u8	l_i_fsize;	/* Fragment size */
++			__u16	i_pad1;
++			__u16	l_i_uid_high;	/* these 2 fields    */
++			__u16	l_i_gid_high;	/* were reserved2[0] */
++			__u32	l_i_reserved2;
++		} linux2;
++		struct {
++			__u8	h_i_frag;	/* Fragment number */
++			__u8	h_i_fsize;	/* Fragment size */
++			__u16	h_i_mode_high;
++			__u16	h_i_uid_high;
++			__u16	h_i_gid_high;
++			__u32	h_i_author;
++		} hurd2;
++		struct {
++			__u8	m_i_frag;	/* Fragment number */
++			__u8	m_i_fsize;	/* Fragment size */
++			__u16	m_pad1;
++			__u32	m_i_reserved2[2];
++		} masix2;
++	} osd2;				/* OS dependent 2 */
++};
++
++/*
++ * Permanent part of an large inode on the disk
++ */
++struct ext2_inode_large {
++	__u16	i_mode;		/* File mode */
++	__u16	i_uid;		/* Low 16 bits of Owner Uid */
++	__u32	i_size;		/* Size in bytes */
++	__u32	i_atime;	/* Access time */
++	__u32	i_ctime;	/* Creation time */
++	__u32	i_mtime;	/* Modification time */
++	__u32	i_dtime;	/* Deletion Time */
++	__u16	i_gid;		/* Low 16 bits of Group Id */
++	__u16	i_links_count;	/* Links count */
++	__u32	i_blocks;	/* Blocks count */
++	__u32	i_flags;	/* File flags */
++	union {
++		struct {
++			__u32  l_i_reserved1;
++		} linux1;
++		struct {
++			__u32  h_i_translator;
++		} hurd1;
++		struct {
++			__u32  m_i_reserved1;
++		} masix1;
++	} osd1;				/* OS dependent 1 */
++	__u32	i_block[EXT2_N_BLOCKS];/* Pointers to blocks */
++	__u32	i_generation;	/* File version (for NFS) */
++	__u32	i_file_acl;	/* File ACL */
++	__u32	i_dir_acl;	/* Directory ACL */
++	__u32	i_faddr;	/* Fragment address */
++	union {
++		struct {
++			__u8	l_i_frag;	/* Fragment number */
++			__u8	l_i_fsize;	/* Fragment size */
++			__u16	i_pad1;
++			__u16	l_i_uid_high;	/* these 2 fields    */
++			__u16	l_i_gid_high;	/* were reserved2[0] */
++			__u32	l_i_reserved2;
++		} linux2;
++		struct {
++			__u8	h_i_frag;	/* Fragment number */
++			__u8	h_i_fsize;	/* Fragment size */
++			__u16	h_i_mode_high;
++			__u16	h_i_uid_high;
++			__u16	h_i_gid_high;
++			__u32	h_i_author;
++		} hurd2;
++		struct {
++			__u8	m_i_frag;	/* Fragment number */
++			__u8	m_i_fsize;	/* Fragment size */
++			__u16	m_pad1;
++			__u32	m_i_reserved2[2];
++		} masix2;
++	} osd2;				/* OS dependent 2 */
++	__u16	i_extra_isize;
++	__u16	i_pad1;
++};
++
++#define i_size_high	i_dir_acl
++
++#if defined(__KERNEL__) || defined(__linux__)
++#define i_reserved1	osd1.linux1.l_i_reserved1
++#define i_frag		osd2.linux2.l_i_frag
++#define i_fsize		osd2.linux2.l_i_fsize
++#define i_uid_low	i_uid
++#define i_gid_low	i_gid
++#define i_uid_high	osd2.linux2.l_i_uid_high
++#define i_gid_high	osd2.linux2.l_i_gid_high
++#define i_reserved2	osd2.linux2.l_i_reserved2
++
++#else
++#if defined(__GNU__)
++
++#define i_translator	osd1.hurd1.h_i_translator
++#define i_frag		osd2.hurd2.h_i_frag;
++#define i_fsize		osd2.hurd2.h_i_fsize;
++#define i_uid_high	osd2.hurd2.h_i_uid_high
++#define i_gid_high	osd2.hurd2.h_i_gid_high
++#define i_author	osd2.hurd2.h_i_author
++
++#else
++#if defined(__masix__)
++
++#define i_reserved1	osd1.masix1.m_i_reserved1
++#define i_frag		osd2.masix2.m_i_frag
++#define i_fsize		osd2.masix2.m_i_fsize
++#define i_reserved2	osd2.masix2.m_i_reserved2
++
++#endif  /* __masix__ */
++#endif  /* __GNU__ */
++#endif	/* defined(__KERNEL__) || defined(__linux__) */
++
++/*
++ * File system states
++ */
++#define EXT2_VALID_FS			0x0001	/* Unmounted cleanly */
++#define EXT2_ERROR_FS			0x0002	/* Errors detected */
++
++/*
++ * Mount flags
++ */
++#define EXT2_MOUNT_CHECK		0x0001	/* Do mount-time checks */
++#define EXT2_MOUNT_GRPID		0x0004	/* Create files with directory's group */
++#define EXT2_MOUNT_DEBUG		0x0008	/* Some debugging messages */
++#define EXT2_MOUNT_ERRORS_CONT		0x0010	/* Continue on errors */
++#define EXT2_MOUNT_ERRORS_RO		0x0020	/* Remount fs ro on errors */
++#define EXT2_MOUNT_ERRORS_PANIC		0x0040	/* Panic on errors */
++#define EXT2_MOUNT_MINIX_DF		0x0080	/* Mimics the Minix statfs */
++#define EXT2_MOUNT_NO_UID32		0x0200  /* Disable 32-bit UIDs */
++
++#define clear_opt(o, opt)		o &= ~EXT2_MOUNT_##opt
++#define set_opt(o, opt)			o |= EXT2_MOUNT_##opt
++#define test_opt(sb, opt)		(EXT2_SB(sb)->s_mount_opt & \
++					 EXT2_MOUNT_##opt)
++/*
++ * Maximal mount counts between two filesystem checks
++ */
++#define EXT2_DFL_MAX_MNT_COUNT		20	/* Allow 20 mounts */
++#define EXT2_DFL_CHECKINTERVAL		0	/* Don't use interval check */
++
++/*
++ * Behaviour when detecting errors
++ */
++#define EXT2_ERRORS_CONTINUE		1	/* Continue execution */
++#define EXT2_ERRORS_RO			2	/* Remount fs read-only */
++#define EXT2_ERRORS_PANIC		3	/* Panic */
++#define EXT2_ERRORS_DEFAULT		EXT2_ERRORS_CONTINUE
++
++/*
++ * Structure of the super block
++ */
++struct ext2_super_block {
++	__u32	s_inodes_count;		/* Inodes count */
++	__u32	s_blocks_count;		/* Blocks count */
++	__u32	s_r_blocks_count;	/* Reserved blocks count */
++	__u32	s_free_blocks_count;	/* Free blocks count */
++	__u32	s_free_inodes_count;	/* Free inodes count */
++	__u32	s_first_data_block;	/* First Data Block */
++	__u32	s_log_block_size;	/* Block size */
++	__s32	s_log_frag_size;	/* Fragment size */
++	__u32	s_blocks_per_group;	/* # Blocks per group */
++	__u32	s_frags_per_group;	/* # Fragments per group */
++	__u32	s_inodes_per_group;	/* # Inodes per group */
++	__u32	s_mtime;		/* Mount time */
++	__u32	s_wtime;		/* Write time */
++	__u16	s_mnt_count;		/* Mount count */
++	__s16	s_max_mnt_count;	/* Maximal mount count */
++	__u16	s_magic;		/* Magic signature */
++	__u16	s_state;		/* File system state */
++	__u16	s_errors;		/* Behaviour when detecting errors */
++	__u16	s_minor_rev_level;	/* minor revision level */
++	__u32	s_lastcheck;		/* time of last check */
++	__u32	s_checkinterval;	/* max. time between checks */
++	__u32	s_creator_os;		/* OS */
++	__u32	s_rev_level;		/* Revision level */
++	__u16	s_def_resuid;		/* Default uid for reserved blocks */
++	__u16	s_def_resgid;		/* Default gid for reserved blocks */
++	/*
++	 * These fields are for EXT2_DYNAMIC_REV superblocks only.
++	 *
++	 * Note: the difference between the compatible feature set and
++	 * the incompatible feature set is that if there is a bit set
++	 * in the incompatible feature set that the kernel doesn't
++	 * know about, it should refuse to mount the filesystem.
++	 *
++	 * e2fsck's requirements are more strict; if it doesn't know
++	 * about a feature in either the compatible or incompatible
++	 * feature set, it must abort and not try to meddle with
++	 * things it doesn't understand...
++	 */
++	__u32	s_first_ino;		/* First non-reserved inode */
++	__u16   s_inode_size;		/* size of inode structure */
++	__u16	s_block_group_nr;	/* block group # of this superblock */
++	__u32	s_feature_compat;	/* compatible feature set */
++	__u32	s_feature_incompat;	/* incompatible feature set */
++	__u32	s_feature_ro_compat;	/* readonly-compatible feature set */
++	__u8	s_uuid[16];		/* 128-bit uuid for volume */
++	char	s_volume_name[16];	/* volume name */
++	char	s_last_mounted[64];	/* directory where last mounted */
++	__u32	s_algorithm_usage_bitmap; /* For compression */
++	/*
++	 * Performance hints.  Directory preallocation should only
++	 * happen if the EXT2_FEATURE_COMPAT_DIR_PREALLOC flag is on.
++	 */
++	__u8	s_prealloc_blocks;	/* Nr of blocks to try to preallocate*/
++	__u8	s_prealloc_dir_blocks;	/* Nr to preallocate for dirs */
++	__u16	s_reserved_gdt_blocks;	/* Per group table for online growth */
++	/*
++	 * Journaling support valid if EXT2_FEATURE_COMPAT_HAS_JOURNAL set.
++	 */
++	__u8	s_journal_uuid[16];	/* uuid of journal superblock */
++	__u32	s_journal_inum;		/* inode number of journal file */
++	__u32	s_journal_dev;		/* device number of journal file */
++	__u32	s_last_orphan;		/* start of list of inodes to delete */
++	__u32	s_hash_seed[4];		/* HTREE hash seed */
++	__u8	s_def_hash_version;	/* Default hash version to use */
++	__u8	s_jnl_backup_type; 	/* Default type of journal backup */
++	__u16	s_reserved_word_pad;
++	__u32	s_default_mount_opts;
++	__u32	s_first_meta_bg;	/* First metablock group */
++	__u32	s_mkfs_time;		/* When the filesystem was created */
++	__u32	s_jnl_blocks[17]; 	/* Backup of the journal inode */
++	__u32	s_reserved[172];	/* Padding to the end of the block */
++};
++
++/*
++ * Codes for operating systems
++ */
++#define EXT2_OS_LINUX		0
++#define EXT2_OS_HURD		1
++#define EXT2_OS_MASIX		2
++#define EXT2_OS_FREEBSD		3
++#define EXT2_OS_LITES		4
++
++/*
++ * Revision levels
++ */
++#define EXT2_GOOD_OLD_REV	0	/* The good old (original) format */
++#define EXT2_DYNAMIC_REV	1	/* V2 format w/ dynamic inode sizes */
++
++#define EXT2_CURRENT_REV	EXT2_GOOD_OLD_REV
++#define EXT2_MAX_SUPP_REV	EXT2_DYNAMIC_REV
++
++#define EXT2_GOOD_OLD_INODE_SIZE 128
++
++/*
++ * Journal inode backup types
++ */
++#define EXT3_JNL_BACKUP_BLOCKS	1
++
++/*
++ * Feature set definitions
++ */
++
++#define EXT2_HAS_COMPAT_FEATURE(sb,mask)			\
++	( EXT2_SB(sb)->s_feature_compat & (mask) )
++#define EXT2_HAS_RO_COMPAT_FEATURE(sb,mask)			\
++	( EXT2_SB(sb)->s_feature_ro_compat & (mask) )
++#define EXT2_HAS_INCOMPAT_FEATURE(sb,mask)			\
++	( EXT2_SB(sb)->s_feature_incompat & (mask) )
++
++#define EXT2_FEATURE_COMPAT_DIR_PREALLOC	0x0001
++#define EXT2_FEATURE_COMPAT_IMAGIC_INODES	0x0002
++#define EXT3_FEATURE_COMPAT_HAS_JOURNAL		0x0004
++#define EXT2_FEATURE_COMPAT_EXT_ATTR		0x0008
++#define EXT2_FEATURE_COMPAT_RESIZE_INODE	0x0010
++#define EXT2_FEATURE_COMPAT_DIR_INDEX		0x0020
++
++#define EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER	0x0001
++#define EXT2_FEATURE_RO_COMPAT_LARGE_FILE	0x0002
++/* #define EXT2_FEATURE_RO_COMPAT_BTREE_DIR	0x0004 not used */
++
++#define EXT2_FEATURE_INCOMPAT_COMPRESSION	0x0001
++#define EXT2_FEATURE_INCOMPAT_FILETYPE		0x0002
++#define EXT3_FEATURE_INCOMPAT_RECOVER		0x0004 /* Needs recovery */
++#define EXT3_FEATURE_INCOMPAT_JOURNAL_DEV	0x0008 /* Journal device */
++#define EXT2_FEATURE_INCOMPAT_META_BG		0x0010
++#define EXT3_FEATURE_INCOMPAT_EXTENTS		0x0040
++
++
++#define EXT2_FEATURE_COMPAT_SUPP	0
++#define EXT2_FEATURE_INCOMPAT_SUPP	(EXT2_FEATURE_INCOMPAT_FILETYPE)
++#define EXT2_FEATURE_RO_COMPAT_SUPP	(EXT2_FEATURE_RO_COMPAT_SPARSE_SUPER| \
++					 EXT2_FEATURE_RO_COMPAT_LARGE_FILE| \
++					 EXT2_FEATURE_RO_COMPAT_BTREE_DIR)
++
++/*
++ * Default values for user and/or group using reserved blocks
++ */
++#define EXT2_DEF_RESUID		0
++#define EXT2_DEF_RESGID		0
++
++/*
++ * Default mount options
++ */
++#define EXT2_DEFM_DEBUG		0x0001
++#define EXT2_DEFM_BSDGROUPS	0x0002
++#define EXT2_DEFM_XATTR_USER	0x0004
++#define EXT2_DEFM_ACL		0x0008
++#define EXT2_DEFM_UID16		0x0010
++#define EXT3_DEFM_JMODE		0x0060 
++#define EXT3_DEFM_JMODE_DATA	0x0020
++#define EXT3_DEFM_JMODE_ORDERED	0x0040
++#define EXT3_DEFM_JMODE_WBACK	0x0060
++
++/*
++ * Structure of a directory entry
++ */
++#define EXT2_NAME_LEN 255
++
++struct ext2_dir_entry {
++	__u32	inode;			/* Inode number */
++	__u16	rec_len;		/* Directory entry length */
++	__u16	name_len;		/* Name length */
++	char	name[EXT2_NAME_LEN];	/* File name */
++};
++
++/*
++ * The new version of the directory entry.  Since EXT2 structures are
++ * stored in intel byte order, and the name_len field could never be
++ * bigger than 255 chars, it's safe to reclaim the extra byte for the
++ * file_type field.
++ */
++struct ext2_dir_entry_2 {
++	__u32	inode;			/* Inode number */
++	__u16	rec_len;		/* Directory entry length */
++	__u8	name_len;		/* Name length */
++	__u8	file_type;
++	char	name[EXT2_NAME_LEN];	/* File name */
++};
++
++/*
++ * Ext2 directory file types.  Only the low 3 bits are used.  The
++ * other bits are reserved for now.
++ */
++#define EXT2_FT_UNKNOWN		0
++#define EXT2_FT_REG_FILE	1
++#define EXT2_FT_DIR		2
++#define EXT2_FT_CHRDEV		3
++#define EXT2_FT_BLKDEV		4
++#define EXT2_FT_FIFO		5
++#define EXT2_FT_SOCK		6
++#define EXT2_FT_SYMLINK		7
++
++#define EXT2_FT_MAX		8
++
++/*
++ * EXT2_DIR_PAD defines the directory entries boundaries
++ *
++ * NOTE: It must be a multiple of 4
++ */
++#define EXT2_DIR_PAD			4
++#define EXT2_DIR_ROUND			(EXT2_DIR_PAD - 1)
++#define EXT2_DIR_REC_LEN(name_len)	(((name_len) + 8 + EXT2_DIR_ROUND) & \
++					 ~EXT2_DIR_ROUND)
++
++#endif	/* _LINUX_EXT2_FS_H */
+diff --git a/util-linux/lsattr.c b/util-linux/lsattr.c
+new file mode 100644
+index 000000000..ca523c821
+--- /dev/null
++++ b/util-linux/lsattr.c
+@@ -0,0 +1,195 @@
++/*
++ * lsattr.c		- List file attributes on an ext2 file system
++ *
++ * Copyright (C) 1993, 1994  Remy Card <card@masi.ibp.fr>
++ *                           Laboratoire MASI, Institut Blaise Pascal
++ *                           Universite Pierre et Marie Curie (Paris VI)
++ *
++ * This file can be redistributed under the terms of the GNU General
++ * Public License
++ */
++
++/*
++ * History:
++ * 93/10/30	- Creation
++ * 93/11/13	- Replace stat() calls by lstat() to avoid loops
++ * 94/02/27	- Integrated in Ted's distribution
++ * 98/12/29	- Display version info only when -V specified (G M Sipe)
++ */
++
++#include <sys/types.h>
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <getopt.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/param.h>
++#include <sys/stat.h>
++
++#include "ext2_fs.h"
++#include "e2fsbb.h"
++#include "e2p/e2p.h"
++
++#define main lsattr_main
++
++#ifdef __GNUC__
++#define EXT2FS_ATTR(x) __attribute__(x)
++#else
++#define EXT2FS_ATTR(x)
++#endif
++
++static int all;
++static int dirs_opt;
++static unsigned pf_options;
++static int recursive;
++static int verbose;
++static int generation_opt;
++
++#ifdef _LFS64_LARGEFILE
++#define LSTAT		lstat64
++#define STRUCT_STAT	struct stat64
++#else
++#define LSTAT		lstat
++#define STRUCT_STAT	struct stat
++#endif
++
++#if 0
++static void usage(void)
++{
++	fprintf(stderr, _("Usage: %s [-RVadlv] [files...]\n"), program_name);
++	exit(1);
++}
++#endif
++
++static void list_attributes (const char * name)
++{
++	unsigned long flags;
++	unsigned long generation;
++
++	if (fgetflags (name, &flags) == -1) {
++		com_err (program_name, errno, _("While reading flags on %s"),
++			 name);
++		return;
++	}
++	if (generation_opt) {
++		if (fgetversion (name, &generation) == -1) {
++			com_err (program_name, errno,
++				 _("While reading version on %s"),
++				 name);
++			return;
++		}
++		printf ("%5lu ", generation);
++	}
++	if (pf_options & PFOPT_LONG) {
++		printf("%-28s ", name);
++		print_flags(stdout, flags, pf_options);
++		fputc('\n', stdout);
++	} else {
++		print_flags(stdout, flags, pf_options);
++		printf(" %s\n", name);
++	}
++}
++
++static int lsattr_dir_proc (const char *, struct dirent *, void *);
++
++static void lsattr_args (const char * name)
++{
++	STRUCT_STAT	st;
++
++	if (LSTAT (name, &st) == -1)
++		com_err (program_name, errno, _("while trying to stat %s"),
++			 name);
++	else {
++		if (S_ISDIR(st.st_mode) && !dirs_opt)
++			iterate_on_dir (name, lsattr_dir_proc, NULL);
++		else
++			list_attributes (name);
++	}
++}
++
++static int lsattr_dir_proc (const char * dir_name, struct dirent * de, 
++			    void * private EXT2FS_ATTR((unused)))
++{
++	STRUCT_STAT	st;
++	char *path;
++	int dir_len = strlen(dir_name);
++
++	path = malloc(dir_len + strlen (de->d_name) + 2);
++
++	if (dir_len && dir_name[dir_len-1] == '/')
++		sprintf (path, "%s%s", dir_name, de->d_name);
++	else
++		sprintf (path, "%s/%s", dir_name, de->d_name);
++	if (LSTAT (path, &st) == -1)
++		perror (path);
++	else {
++		if (de->d_name[0] != '.' || all) {
++			list_attributes (path);
++			if (S_ISDIR(st.st_mode) && recursive &&
++			    strcmp(de->d_name, ".") &&
++			    strcmp(de->d_name, "..")) {
++				printf ("\n%s:\n", path);
++				iterate_on_dir (path, lsattr_dir_proc, NULL);
++				printf ("\n");
++			}
++		}
++	}
++	free(path);
++	return 0;
++}
++
++int main (int argc, char ** argv)
++{
++	int c;
++	int i;
++
++#ifdef ENABLE_NLS
++	setlocale(LC_MESSAGES, "");
++	setlocale(LC_CTYPE, "");
++	bindtextdomain(NLS_CAT_NAME, LOCALEDIR);
++	textdomain(NLS_CAT_NAME);
++#endif
++#if 0
++	if (argc && *argv)
++		program_name = *argv;
++#endif
++	while ((c = getopt (argc, argv, "Radlv")) != EOF)
++		switch (c)
++		{
++			case 'R':
++				recursive = 1;
++				break;
++			case 'V':
++				verbose = 1;
++				break;
++			case 'a':
++				all = 1;
++				break;
++			case 'd':
++				dirs_opt = 1;
++				break;
++			case 'l':
++				pf_options = PFOPT_LONG;
++				break;
++			case 'v':
++				generation_opt = 1;
++				break;
++			default:
++				usage();
++		}
++
++#if 0
++	if (verbose)
++		fprintf (stderr, "lsattr %s (%s)\n",
++			 E2FSPROGS_VERSION, E2FSPROGS_DATE);
++#endif
++	if (optind > argc - 1)
++		lsattr_args (".");
++	else
++		for (i = optind; i < argc; i++)
++			lsattr_args (argv[i]);
++	exit(0);
++}

@@ -1,0 +1,427 @@
+"2004-10-03 07:53:52 +0000"
+diff --git a/Rules.mak b/Rules.mak
+index 61e32bfd5..20fa6ed03 100644
+--- a/Rules.mak
++++ b/Rules.mak
+@@ -247,7 +247,6 @@ ifneq ($(DOASSERTS),y)
+ endif
+ 
+ ifeq ($(HAVE_SHARED),y)
+-    LIBRARY_CACHE:=#-DUSE_CACHE
+     ifeq ($(BUILD_UCLIBC_LDSO),y)
+ 	LDSO:=$(TOPDIR)lib/$(UCLIBC_LDSO)
+ 	DYNAMIC_LINKER:=$(SHARED_LIB_LOADER_PREFIX)/$(UCLIBC_LDSO)
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index d0933722e..51caa36ce 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -200,6 +200,7 @@ config FORCE_SHAREABLE_TEXT_SEGMENTS
+ 
+ config UCLIBC_PIE_SUPPORT
+ 	bool "Support ET_DYN in shared library loader"
++	depends on BUILD_UCLIBC_LDSO
+ 	select FORCE_SHAREABLE_TEXT_SEGMENTS
+ 	default n
+ 	help
+@@ -223,6 +224,30 @@ config LDSO_LDD_SUPPORT
+ 	  application to function.  Disabling this option will makes uClibc's
+ 	  shared library loader a little bit smaller.  Most people will answer Y.
+ 
++config LDSO_CACHE_SUPPORT
++	bool "Enable shared library loader cache"
++	depends on BUILD_UCLIBC_LDSO
++	default y
++	help
++	  Enable this to make use of /etc/ld.so.conf, the shared library loader
++	  cache configuration file to support for non-standard library paths.
++	  After updating this file, it is necessary to run 'ldconfig' to update
++	  the /etc/ld.so.cache shared library loader cache file.
++
++config LDSO_BASE_FILENAME
++	string "Shared library loader cache naming prefix"
++	depends on LDSO_CACHE_SUPPORT
++	default "ld.so"
++	help
++	  If you wish to support both uClibc and glibc on the same system, it
++	  is necessary to set this to something other than "ld.so" to avoid
++	  conflicts with glibc, which also uses "ld.so".  This prevents both
++	  libraries from using the same /etc/ld.so.cache file.  If you wish to
++	  support both uClibc and glibc on the same system then you should set
++	  this to "ld-uClibc.so".
++
++	  Most people will leave this set to the default of "ld.so".
++
+ config UCLIBC_CTOR_DTOR
+ 	bool "Support global constructors and destructors"
+ 	default y
+diff --git a/ldso/include/dl-elf.h b/ldso/include/dl-elf.h
+index f1213d1b3..5a6e56c80 100644
+--- a/ldso/include/dl-elf.h
++++ b/ldso/include/dl-elf.h
+@@ -5,15 +5,10 @@
+ #include <elf.h>
+ #include <link.h>
+ 
+-#ifdef DEBUG
+-#  define LDSO_CONF  "../util/ld.so.conf"
+-#  define LDSO_CACHE "../util/ld.so.cache"
+-#  define LDSO_PRELOAD "../util/ld.so.preload"
+-#else
+-#  define LDSO_CONF  UCLIBC_RUNTIME_PREFIX "etc/ld.so.conf"
+-#  define LDSO_CACHE UCLIBC_RUNTIME_PREFIX "etc/ld.so.cache"
+-#  define LDSO_PRELOAD UCLIBC_RUNTIME_PREFIX "etc/ld.so.preload"
+-#endif
++#define LDSO_BASE_PATH UCLIBC_RUNTIME_PREFIX "etc/" __LDSO_BASE_FILENAME__
++#define LDSO_CONF    LDSO_BASE_PATH ".conf"
++#define LDSO_CACHE   LDSO_BASE_PATH ".cache"
++#define LDSO_PRELOAD LDSO_BASE_PATH ".preload"
+ 
+ 
+ #define LIB_ANY	     -1
+@@ -30,7 +25,7 @@ struct elf_resolve;
+ 
+ 
+ /* Definitions and prototypes for cache stuff */
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ extern int _dl_map_cache(void);
+ extern int _dl_unmap_cache(void);
+ 
+diff --git a/ldso/ldso/Makefile b/ldso/ldso/Makefile
+index 90f44baa8..4196748f9 100644
+--- a/ldso/ldso/Makefile
++++ b/ldso/ldso/Makefile
+@@ -23,7 +23,7 @@ LDSO_FULLNAME=ld-uClibc-$(MAJOR_VERSION).$(MINOR_VERSION).$(SUBLEVEL).so
+ 
+ SSPFLAGS=$(call check_gcc,-fno-stack-protector,)
+ 
+-XXFLAGS=$(XWARNINGS) $(LIBRARY_CACHE) $(SSPFLAGS)
++XXFLAGS=$(XWARNINGS) $(SSPFLAGS)
+ ifeq ($(DODEBUG),y)
+ # Not really much point in including debugging info, since gdb
+ # can't really debug ldso, since gdb requires help from ldso to
+diff --git a/ldso/ldso/dl-elf.c b/ldso/ldso/dl-elf.c
+index 019acaac8..0719680e9 100644
+--- a/ldso/ldso/dl-elf.c
++++ b/ldso/ldso/dl-elf.c
+@@ -32,7 +32,7 @@
+ 
+ #include "ldso.h"
+ 
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ 
+ static caddr_t _dl_cache_addr = NULL;
+ static size_t _dl_cache_size = 0;
+@@ -317,7 +317,7 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	 * ABI, so we have some flexibility here.  For now, search it before
+ 	 * the hard coded paths that follow (i.e before /lib and /usr/lib).
+ 	 */
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ 	if (_dl_cache_addr != NULL && _dl_cache_addr != (caddr_t) - 1) {
+ 		int i;
+ 		header_t *header = (header_t *) _dl_cache_addr;
+@@ -358,6 +358,9 @@ struct elf_resolve *_dl_load_shared_library(int secure, struct dyn_elf **rpnt,
+ 	if ((tpnt1 = search_for_named_library(libname, secure,
+ 					UCLIBC_RUNTIME_PREFIX "lib:"
+ 					UCLIBC_RUNTIME_PREFIX "usr/lib"
++#if !defined (__LDSO_CACHE_SUPPORT__)
++					":" UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib"
++#endif
+ 					, rpnt)
+ 		) != NULL)
+ 	{
+diff --git a/ldso/libdl/Makefile b/ldso/libdl/Makefile
+index 3d1c2ebe4..2da54e0a7 100644
+--- a/ldso/libdl/Makefile
++++ b/ldso/libdl/Makefile
+@@ -21,7 +21,7 @@
+ TOPDIR=../../
+ include $(TOPDIR)Rules.mak
+ 
+-XXFLAGS=$(XWARNINGS) $(LIBRARY_CACHE)
++XXFLAGS=$(XWARNINGS)
+ ifeq ($(DODEBUG),y)
+ XXFLAGS+=-O0 -g3
+ else
+diff --git a/ldso/libdl/libdl.c b/ldso/libdl/libdl.c
+index 3992163ae..aa19e81cc 100644
+--- a/ldso/libdl/libdl.c
++++ b/ldso/libdl/libdl.c
+@@ -54,7 +54,7 @@ extern struct elf_resolve *_dl_loaded_modules __attribute__ ((__weak__));
+ extern struct r_debug *_dl_debug_addr __attribute__ ((__weak__));
+ extern unsigned long _dl_error_number __attribute__ ((__weak__));
+ extern void *(*_dl_malloc_function)(size_t) __attribute__ ((__weak__));
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ int _dl_map_cache(void) __attribute__ ((__weak__));
+ int _dl_unmap_cache(void) __attribute__ ((__weak__));
+ #endif
+diff --git a/utils/Makefile b/utils/Makefile
+index 52308d09f..14b78762b 100644
+--- a/utils/Makefile
++++ b/utils/Makefile
+@@ -29,7 +29,7 @@ else
+ TARGET_ICONV =
+ endif
+ 
+-XXFLAGS=$(LIBRARY_CACHE)
++XXFLAGS=
+ ifeq ($(strip $(LDSO_LDD_SUPPORT)),y)
+ XXFLAGS+= -D__LDSO_LDD_SUPPORT
+ endif
+diff --git a/utils/dl-cache.h b/utils/dl-cache.h
+new file mode 100644
+index 000000000..ba7cd3f28
+--- /dev/null
++++ b/utils/dl-cache.h
+@@ -0,0 +1,34 @@
++#define LDSO_BASE_PATH UCLIBC_RUNTIME_PREFIX "etc/" __LDSO_BASE_FILENAME__
++#define LDSO_CONF    LDSO_BASE_PATH ".conf"
++#define LDSO_CACHE   LDSO_BASE_PATH ".cache"
++#define LDSO_PRELOAD LDSO_BASE_PATH ".preload"
++
++#define LIB_ANY	     -1
++#define LIB_DLL       0
++#define LIB_ELF       1
++#define LIB_ELF64     0x80
++#define LIB_ELF_LIBC5 2
++#define LIB_ELF_LIBC6 3
++#define LIB_ELF_LIBC0 4
++
++/* Definitions and prototypes for cache stuff */
++#ifdef __LDSO_CACHE_SUPPORT__
++
++#define LDSO_CACHE_MAGIC "ld.so-"
++#define LDSO_CACHE_MAGIC_LEN (sizeof LDSO_CACHE_MAGIC -1)
++#define LDSO_CACHE_VER "1.7.0"
++#define LDSO_CACHE_VER_LEN (sizeof LDSO_CACHE_VER -1)
++
++typedef struct {
++	char magic   [LDSO_CACHE_MAGIC_LEN];
++	char version [LDSO_CACHE_VER_LEN];
++	int nlibs;
++} header_t;
++
++typedef struct {
++	int flags;
++	int sooffset;
++	int liboffset;
++} libentry_t;
++
++#endif
+diff --git a/utils/ldconfig.c b/utils/ldconfig.c
+index acb78a2ff..e466a42fb 100644
+--- a/utils/ldconfig.c
++++ b/utils/ldconfig.c
+@@ -503,7 +503,7 @@ void scan_dir(const char *rawname)
+     {
+ 	if (!lp->islink)
+ 	    link_shlib(name, lp->name, lp->so);
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ 	if (!nocache)
+ 	    cache_dolib(name, lp->so, lp->libtype);
+ #endif
+@@ -553,7 +553,7 @@ char *get_extpath(void)
+     return res;
+ }
+ 
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ typedef struct liblist
+ {
+     int flags;
+@@ -876,6 +876,9 @@ int main(int argc, char **argv)
+ 	{
+ 	    scan_dir(UCLIBC_RUNTIME_PREFIX "lib");
+ 	    scan_dir(UCLIBC_RUNTIME_PREFIX "usr/lib");
++#if !defined (__LDSO_CACHE_SUPPORT__)
++	    scan_dir(UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib");
++#endif
+ 
+ 	    /* I guess the defaults aren't good enough */
+ 	    if ((extpath = get_extpath()))
+@@ -886,8 +889,12 @@ int main(int argc, char **argv)
+ 			if (len) 
+ 				while (cp[--len] == '/' && len)
+ 					cp[len] = 0;
+-			if (strcmp(UCLIBC_RUNTIME_PREFIX "lib", cp) == 0 ||
+-			    strcmp(UCLIBC_RUNTIME_PREFIX "usr/lib", cp) == 0) {
++			if (strcmp(UCLIBC_RUNTIME_PREFIX "lib", cp) == 0
++			    || strcmp(UCLIBC_RUNTIME_PREFIX "usr/lib", cp) == 0
++#if !defined (__LDSO_CACHE_SUPPORT__)
++			    || strcmp(UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib", cp) == 0
++#endif
++			    ) {
+ 				if (verbose >= 0)
+ 					warnx("Path `%s' given more than once\n", cp);
+ 				continue;
+@@ -898,7 +905,7 @@ int main(int argc, char **argv)
+ 	    }
+ 	}
+ 
+-#ifdef USE_CACHE
++#ifdef __LDSO_CACHE_SUPPORT__
+ 	if (!nocache)
+ 	    cache_write();
+ #endif
+diff --git a/utils/ldd.c b/utils/ldd.c
+index 48022cd8b..55433b601 100644
+--- a/utils/ldd.c
++++ b/utils/ldd.c
+@@ -45,6 +45,7 @@
+ #else
+ #include "elf.h"
+ #endif
++#include "dl-cache.h"
+ 
+ #ifdef DMALLOC
+ #include <dmalloc.h>
+@@ -229,6 +230,89 @@ int check_elf_header(Elf32_Ehdr *const ehdr)
+ 	return 0;
+ }
+ 
++#ifdef __LDSO_CACHE_SUPPORT__
++static caddr_t cache_addr = NULL;
++static size_t cache_size = 0;
++
++int map_cache(void)
++{
++	int fd;
++	struct stat st;
++	header_t *header;
++	libentry_t *libent;
++	int i, strtabsize;
++
++	if (cache_addr == (caddr_t) - 1)
++		return -1;
++	else if (cache_addr != NULL)
++		return 0;
++
++	if (stat(LDSO_CACHE, &st)
++			|| (fd = open(LDSO_CACHE, O_RDONLY, 0)) < 0) {
++		dprintf(2, "ldd: can't open cache '%s'\n", LDSO_CACHE);
++		cache_addr = (caddr_t) - 1;	/* so we won't try again */
++		return -1;
++	}
++
++	cache_size = st.st_size;
++	cache_addr = (caddr_t) mmap(0, cache_size, PROT_READ, MAP_SHARED, fd, 0);
++	close(fd);
++	if (cache_addr == MAP_FAILED) {
++		dprintf(2, "ldd: can't map cache '%s'\n", LDSO_CACHE);
++		return -1;
++	}
++
++	header = (header_t *) cache_addr;
++
++	if (cache_size < sizeof(header_t) ||
++			memcmp(header->magic, LDSO_CACHE_MAGIC, LDSO_CACHE_MAGIC_LEN)
++			|| memcmp(header->version, LDSO_CACHE_VER, LDSO_CACHE_VER_LEN)
++			|| cache_size <
++			(sizeof(header_t) + header->nlibs * sizeof(libentry_t))
++			|| cache_addr[cache_size - 1] != '\0')
++	{
++		dprintf(2, "ldd: cache '%s' is corrupt\n", LDSO_CACHE);
++		goto fail;
++	}
++
++	strtabsize = cache_size - sizeof(header_t) -
++		header->nlibs * sizeof(libentry_t);
++	libent = (libentry_t *) & header[1];
++
++	for (i = 0; i < header->nlibs; i++) {
++		if (libent[i].sooffset >= strtabsize ||
++				libent[i].liboffset >= strtabsize)
++		{
++			dprintf(2, "ldd: cache '%s' is corrupt\n", LDSO_CACHE);
++			goto fail;
++		}
++	}
++
++	return 0;
++
++fail:
++	munmap(cache_addr, cache_size);
++	cache_addr = (caddr_t) - 1;
++	return -1;
++}
++
++int unmap_cache(void)
++{
++	if (cache_addr == NULL || cache_addr == (caddr_t) - 1)
++		return -1;
++
++#if 1
++	munmap(cache_addr, cache_size);
++	cache_addr = NULL;
++#endif
++
++	return 0;
++}
++#else
++static inline void map_cache(void) { }
++static inline void unmap_cache(void) { }
++#endif
++
+ /* This function's behavior must exactly match that
+  * in uClibc/ldso/ldso/dl-elf.c */
+ static void search_for_named_library(char *name, char *result, const char *path_list)
+@@ -320,8 +404,23 @@ void locate_library_file(Elf32_Ehdr* ehdr, Elf32_Dyn* dynamic, int is_suid, stru
+ 		}
+ 	}
+ 
+-#ifdef USE_CACHE
+-	/* FIXME -- add code to check the Cache here */
++#ifdef __LDSO_CACHE_SUPPORT__
++	if (cache_addr != NULL && cache_addr != (caddr_t) - 1) {
++		int i;
++		header_t *header = (header_t *) cache_addr;
++		libentry_t *libent = (libentry_t *) & header[1];
++		char *strs = (char *) &libent[header->nlibs];
++
++		for (i = 0; i < header->nlibs; i++) {
++			if ((libent[i].flags == LIB_ELF ||
++			    libent[i].flags == LIB_ELF_LIBC0 ||
++			    libent[i].flags == LIB_ELF_LIBC5) &&
++			    strcmp(lib->name, strs + libent[i].sooffset) == 0) {
++				lib->path = strdup(strs + libent[i].liboffset);
++				return;
++			}
++		}
++	}
+ #endif
+ 
+ 
+@@ -339,7 +438,11 @@ void locate_library_file(Elf32_Ehdr* ehdr, Elf32_Dyn* dynamic, int is_suid, stru
+ 	/* Lastly, search the standard list of paths for the library.
+ 	   This list must exactly match the list in uClibc/ldso/ldso/dl-elf.c */
+ 	path =	UCLIBC_RUNTIME_PREFIX "lib:"
+-		UCLIBC_RUNTIME_PREFIX "usr/lib";
++		UCLIBC_RUNTIME_PREFIX "usr/lib"
++#if !defined (__LDSO_CACHE_SUPPORT__)
++		":" UCLIBC_RUNTIME_PREFIX "usr/X11R6/lib"
++#endif
++		;
+ 	search_for_named_library(lib->name, buf, path);
+ 	if (*buf != '\0') {
+ 		lib->path = buf;
+@@ -644,6 +747,8 @@ int main( int argc, char** argv)
+ 			printf("%s:\n", *argv);
+ 		}
+ 
++		map_cache();
++
+ 		if (find_dependancies(filename)!=0)
+ 			continue;
+ 
+@@ -660,6 +765,7 @@ int main( int argc, char** argv)
+ 			}
+ 		}
+ 
++		unmap_cache();
+ 
+ 		/* Print the list */
+ 		got_em_all=0;

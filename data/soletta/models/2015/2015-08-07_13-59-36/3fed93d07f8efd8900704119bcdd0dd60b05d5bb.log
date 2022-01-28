@@ -1,0 +1,189 @@
+"2015-08-07 13:59:36 -0300"
+diff --git a/src/lib/common/sol-mainloop.c b/src/lib/common/sol-mainloop.c
+index 51e26b98..1bb7f775 100644
+--- a/src/lib/common/sol-mainloop.c
++++ b/src/lib/common/sol-mainloop.c
+@@ -76,7 +76,7 @@ extern void sol_blob_shutdown(void);
+ extern int sol_flow_init(void);
+ extern void sol_flow_shutdown(void);
+ #endif
+-#ifdef COMMS
++#ifdef NETWORK
+ extern int sol_comms_init(void);
+ extern void sol_comms_shutdown(void);
+ #endif
+@@ -124,7 +124,7 @@ sol_init(void)
+         goto flow_error;
+ #endif
+ 
+-#ifdef COMMS
++#ifdef NETWORK
+     r = sol_comms_init();
+     if (r < 0)
+         goto comms_error;
+@@ -134,7 +134,7 @@ sol_init(void)
+ 
+     return 0;
+ 
+-#ifdef COMMS
++#ifdef NETWORK
+ comms_error:
+ #endif
+ #ifdef FLOW
+@@ -209,7 +209,7 @@ sol_shutdown(void)
+         return;
+ 
+     SOL_DBG("shutdown");
+-#ifdef COMMS
++#ifdef NETWORK
+     sol_comms_shutdown();
+ #endif
+ #ifdef FLOW
+diff --git a/src/lib/comms/Kconfig b/src/lib/comms/Kconfig
+index eb8945c2..1c139c89 100644
+--- a/src/lib/comms/Kconfig
++++ b/src/lib/comms/Kconfig
+@@ -1,14 +1,6 @@
+-config COMMS
+-	bool "Comms"
+-	default y
+-	help
+-            Network connectivity modules. Includes CoAP, OIC
+-            (client/server), HTTP (client), basic network link management.
+-
+ config NETWORK
+ 	bool "Network"
+ 	default y
+-	depends on COMMS
+ 	help
+             Network library provides a way to handle network link interfaces,
+             making it possible to observe events, to inquire available links
+@@ -62,6 +54,6 @@ config OIC
+ config HTTP_CLIENT
+ 	bool "HTTP Client"
+ 	default y
+-	depends on HAVE_LIBCURL && COMMS
++	depends on HAVE_LIBCURL && NETWORK
+ 	help
+             Client API for both HTTP and HTTPS.
+diff --git a/src/lib/comms/Makefile b/src/lib/comms/Makefile
+index f8d6b6ec..6905818e 100644
+--- a/src/lib/comms/Makefile
++++ b/src/lib/comms/Makefile
+@@ -1,50 +1,49 @@
+-obj-$(COMMS) += comms.mod
++obj-$(NETWORK) += networking.mod
+ 
+-obj-comms-$(COMMS) := \
++obj-networking-$(NETWORK) := \
+     sol-comms.o
+ 
+-ifeq (y,$(NETWORK))
+-    ifeq (y,$(PLATFORM_RIOTOS))
+-    obj-comms-$(COMMS) += \
+-        sol-network-riot.o
+-    endif
+-
+-    ifeq (y,$(PLATFORM_LINUX))
+-    obj-comms-$(COMMS) += \
+-        sol-network-linux.o \
+-        sol-socket-linux.o
+-    endif
++ifeq (y,$(PLATFORM_RIOTOS))
++obj-networking-$(NETWORK) += \
++    sol-network-riot.o
++endif
++
++ifeq (y,$(PLATFORM_LINUX))
++obj-networking-$(NETWORK) += \
++    sol-network-linux.o \
++    sol-socket-linux.o
+ endif
+ 
+ ifeq (y,$(COAP))
+-obj-comms-$(COMMS) += \
++obj-networking-$(NETWORK) += \
+     coap.o \
+     sol-coap.o
+ endif
+ 
+ ifeq (y,$(OIC))
+-obj-comms-$(COMMS) += \
++obj-networking-$(NETWORK) += \
+     sol-oic-client.o \
+     sol-oic-server.o
+ endif
+ 
+-headers-comms-$(NETWORK) += \
++headers-networking-$(NETWORK) += \
+     include/sol-network.h
+ 
+-headers-comms-$(COAP) += \
++headers-networking-$(COAP) += \
+     include/sol-coap.h
+ 
+-headers-comms-$(OIC) += \
++headers-networking-$(OIC) += \
+     include/sol-oic-client.h \
+     include/sol-oic-server.h
+ 
+ ifeq (y,$(HTTP_CLIENT))
+-obj-comms-$(COMMS) += \
++obj-networking-$(NETWORK) += \
+     sol-http-client-impl-curl.o
+ 
+-obj-comms-$(COMMS)-extra-ldflags += \
++obj-networking-$(NETWORK)-extra-ldflags += \
+     $(LIBCURL_LDFLAGS)
++
+ endif
+ 
+-headers-comms-$(HTTP_CLIENT) += \
++headers-networking-$(HTTP_CLIENT) += \
+     include/sol-http-client.h
+diff --git a/src/lib/comms/sol-comms.c b/src/lib/comms/sol-comms.c
+index 0fed4bd8..638ee45f 100644
+--- a/src/lib/comms/sol-comms.c
++++ b/src/lib/comms/sol-comms.c
+@@ -34,10 +34,8 @@
+ extern int sol_http_client_init(void);
+ extern void sol_http_client_shutdown(void);
+ #endif
+-#ifdef NETWORK
+ extern int sol_network_init(void);
+ extern void sol_network_shutdown(void);
+-#endif
+ 
+ int sol_comms_init(void);
+ void sol_comms_shutdown(void);
+@@ -47,11 +45,9 @@ sol_comms_init(void)
+ {
+     int r;
+ 
+-#ifdef NETWORK
+     r = sol_network_init();
+     if (r < 0)
+         goto network_error;
+-#endif
+ 
+ #ifdef HTTP_CLIENT
+     r = sol_http_client_init();
+@@ -64,10 +60,8 @@ sol_comms_init(void)
+ #ifdef HTTP_CLIENT
+ http_error:
+ #endif
+-#ifdef NETWORK
+     sol_network_shutdown();
+ network_error:
+-#endif
+     return -1;
+ }
+ 
+@@ -77,7 +71,5 @@ sol_comms_shutdown(void)
+ #ifdef HTTP_CLIENT
+     sol_http_client_shutdown();
+ #endif
+-#ifdef NETWORK
+     sol_network_shutdown();
+-#endif
+ }

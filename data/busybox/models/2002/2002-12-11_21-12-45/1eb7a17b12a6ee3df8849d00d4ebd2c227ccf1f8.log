@@ -1,0 +1,309 @@
+"2002-12-11 21:12:45 +0000"
+diff --git a/networking/udhcp/Config.in b/networking/udhcp/Config.in
+index 674470a39..5baaa6a49 100644
+--- a/networking/udhcp/Config.in
++++ b/networking/udhcp/Config.in
+@@ -38,14 +38,5 @@ config CONFIG_FEATURE_UDHCP_DEBUG
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
+-config CONFIG_FEATURE_UDHCPC_IP
+-	bool "  Compile udhcpc with ip support"
+-	default n
+-	depends on CONFIG_UDHCPC
+-	help
+-	  Say yes if you are using the ip command instead of route and ifconfig
+-	  in your scripts to bring up the interface.
+-	  This is needed as ip wants the subnet as a bitprefix not an ip value.
+-
+ endmenu
+ 
+diff --git a/networking/udhcp/README.udhcpc b/networking/udhcp/README.udhcpc
+index d94908650..8aee9814b 100644
+--- a/networking/udhcp/README.udhcpc
++++ b/networking/udhcp/README.udhcpc
+@@ -69,6 +69,7 @@ The paramaters for enviromental variables are as follows:
+ 	$1		- What action the script should perform
+ 	interface	- The interface this was obtained on
+ 	ip		- The obtained IP
++	mask		- The number of bits in the netmask (ie: 24)
+ 	siaddr		- The bootp next server option
+ 	sname		- The bootp server name option
+ 	boot_file	- The bootp boot file option
+diff --git a/networking/udhcp/dhcpc.c b/networking/udhcp/dhcpc.c
+index c55ebbb09..740daaffb 100644
+--- a/networking/udhcp/dhcpc.c
++++ b/networking/udhcp/dhcpc.c
+@@ -248,7 +248,7 @@ int main(int argc, char *argv[])
+ 		switch (c) {
+ 		case 'c':
+ 			len = strlen(optarg) > 255 ? 255 : strlen(optarg);
+-			free(client_config.clientid);
++			if (client_config.clientid) free(client_config.clientid);
+ 			client_config.clientid = xmalloc(len + 2);
+ 			client_config.clientid[OPT_CODE] = DHCP_CLIENT_ID;
+ 			client_config.clientid[OPT_LEN] = len;
+@@ -264,7 +264,7 @@ int main(int argc, char *argv[])
+ 		case 'h':
+ 		case 'H':
+ 			len = strlen(optarg) > 255 ? 255 : strlen(optarg);
+-			free(client_config.hostname);
++			if (client_config.hostname) free(client_config.hostname);
+ 			client_config.hostname = xmalloc(len + 2);
+ 			client_config.hostname[OPT_CODE] = DHCP_HOST_NAME;
+ 			client_config.hostname[OPT_LEN] = len;
+diff --git a/networking/udhcp/dumpleases.c b/networking/udhcp/dumpleases.c
+index 32ee24b94..2b19d9768 100644
+--- a/networking/udhcp/dumpleases.c
++++ b/networking/udhcp/dumpleases.c
+@@ -28,7 +28,7 @@ struct lease_t {
+ 	u_int32_t expires;
+ };
+ 
+-#ifdef COMBINED_BINARY	
++#ifdef BB_VER
+ int dumpleases_main(int argc, char *argv[])
+ #else
+ int main(int argc, char *argv[])
+diff --git a/networking/udhcp/files.c b/networking/udhcp/files.c
+index cf72de1a8..842e0f2db 100644
+--- a/networking/udhcp/files.c
++++ b/networking/udhcp/files.c
+@@ -38,7 +38,7 @@ static int read_str(char *line, void *arg)
+ {
+ 	char **dest = arg;
+ 	
+-	free(*dest);
++	if (*dest) free(*dest);
+ 	*dest = strdup(line);
+ 	
+ 	return 1;
+diff --git a/networking/udhcp/options.c b/networking/udhcp/options.c
+index 3f3a38963..58144728e 100644
+--- a/networking/udhcp/options.c
++++ b/networking/udhcp/options.c
+@@ -13,16 +13,11 @@
+ #include "options.h"
+ #include "leases.h"
+ 
+-#include "config.h"
+ 
+ /* supported options are easily added here */
+ struct dhcp_option options[] = {
+ 	/* name[10]	flags					code */
+-#ifdef CONFIG_FEATURE_UDHCPC_IP
+-	{"subnet",	OPTION_IP | OPTION_REQ | OPTION_PREFIX,	0x01},
+-#else
+- 	{"subnet",	OPTION_IP | OPTION_REQ,			0x01},
+-#endif
++	{"subnet",	OPTION_IP | OPTION_REQ,			0x01},
+ 	{"timezone",	OPTION_S32,				0x02},
+ 	{"router",	OPTION_IP | OPTION_LIST | OPTION_REQ,	0x03},
+ 	{"timesvr",	OPTION_IP | OPTION_LIST,		0x04},
+diff --git a/networking/udhcp/options.h b/networking/udhcp/options.h
+index dccaa2af9..1fded2ef4 100644
+--- a/networking/udhcp/options.h
++++ b/networking/udhcp/options.h
+@@ -4,8 +4,6 @@
+ 
+ #include "packet.h"
+ 
+-#include "config.h"
+-
+ #define TYPE_MASK	0x0F
+ 
+ enum {
+@@ -22,7 +20,6 @@ enum {
+ 
+ #define OPTION_REQ	0x10 /* have the client request this option */
+ #define OPTION_LIST	0x20 /* There can be a list of 1 or more of these */
+-#define OPTION_PREFIX	0x40 /* ip wants a prefix instead of a ip for subnet */
+ 
+ struct dhcp_option {
+ 	char name[10];
+diff --git a/networking/udhcp/script.c b/networking/udhcp/script.c
+index 1c6f1bd33..2eb4459dd 100644
+--- a/networking/udhcp/script.c
++++ b/networking/udhcp/script.c
+@@ -37,8 +37,6 @@
+ #include "options.h"
+ #include "debug.h"
+ 
+-#include "config.h"
+-
+ /* get a rough idea of how long an option will be (rounding up...) */
+ static int max_option_length[] = {
+ 	[OPTION_IP] =		sizeof("255.255.255.255 "),
+@@ -60,41 +58,22 @@ static int upper_length(int length, struct dhcp_option *option)
+ }
+ 
+ 
+-static int sprintip(char *dest, char *pre, unsigned char *ip) {
+-	return sprintf(dest, "%s%d.%d.%d.%d ", pre, ip[0], ip[1], ip[2], ip[3]);
+-}
+-
+-#ifdef CONFIG_FEATURE_UDHCPC_IP
+-/* convert a netmask (255.255.255.0) into the length (24) */
+-static int inet_ntom (const char *src, short *dst)
++static int sprintip(char *dest, char *pre, unsigned char *ip)
+ {
+-	in_addr_t mask, num;
+-
+-	mask = ntohl(*(unsigned int *)src);
+-
+-	for (num = mask; num & 1; num >>= 1);
+-
+-	if (num != 0 && mask != 0)
+-	{
+-		for (num = ~mask; num & 1; num >>= 1);
+-		if (num)
+-			return 0;
+-	}
+-
+-	for (num = 0; mask; mask <<= 1)
+-		num++;
++	return sprintf(dest, "%s%d.%d.%d.%d", pre, ip[0], ip[1], ip[2], ip[3]);
++}
+ 
+-	*dst = num;
+ 
+-	return 1;
++/* really simple implementation, just count the bits */
++static int mton(struct in_addr *mask)
++{
++	int i;
++	/* note: mask will always be in network byte order, so
++	 * there are no endian issues */
++	for (i = 31; i >= 0 && !((mask->s_addr >> i) & 1); i--);
++	return i + 1;
+ }
+ 
+-static int sprintprefix(char *dest, char *pre, unsigned char *ip) {
+-	short sdest = 0;
+-	inet_ntom(ip, &sdest);
+-	return sprintf(dest, "%s%hd ", pre, sdest);
+-}
+-#endif
+ 
+ /* Fill dest with the text of option 'option'. */
+ static void fill_options(char *dest, unsigned char *option, struct dhcp_option *type_p)
+@@ -117,41 +96,30 @@ static void fill_options(char *dest, unsigned char *option, struct dhcp_option *
+ 			*(dest++) = '/';
+ 			option += 4;
+ 			optlen = 4;
+-#ifndef CONFIG_FEATURE_UDHCPC_IP
+ 		case OPTION_IP:	/* Works regardless of host byte order. */
+-#endif
+ 			dest += sprintip(dest, "", option);
+  			break;
+-#ifdef CONFIG_FEATURE_UDHCPC_IP
+- 		case OPTION_IP:	/* Works regardless of host byte order. */
+-			if (type_p->flags & OPTION_PREFIX) {
+-				dest += sprintprefix(dest, "", option);
+-			} else {
+-				dest += sprintip(dest, "", option);
+-			}
+- 			break;
+-#endif
+ 		case OPTION_BOOLEAN:
+-			dest += sprintf(dest, *option ? "yes " : "no ");
++			dest += sprintf(dest, *option ? "yes" : "no");
+ 			break;
+ 		case OPTION_U8:
+-			dest += sprintf(dest, "%u ", *option);
++			dest += sprintf(dest, "%u", *option);
+ 			break;
+ 		case OPTION_U16:
+ 			memcpy(&val_u16, option, 2);
+-			dest += sprintf(dest, "%u ", ntohs(val_u16));
++			dest += sprintf(dest, "%u", ntohs(val_u16));
+ 			break;
+ 		case OPTION_S16:
+ 			memcpy(&val_s16, option, 2);
+-			dest += sprintf(dest, "%d ", ntohs(val_s16));
++			dest += sprintf(dest, "%d", ntohs(val_s16));
+ 			break;
+ 		case OPTION_U32:
+ 			memcpy(&val_u32, option, 4);
+-			dest += sprintf(dest, "%lu ", (unsigned long) ntohl(val_u32));
++			dest += sprintf(dest, "%lu", (unsigned long) ntohl(val_u32));
+ 			break;
+ 		case OPTION_S32:
+ 			memcpy(&val_s32, option, 4);
+-			dest += sprintf(dest, "%ld ", (long) ntohl(val_s32));
++			dest += sprintf(dest, "%ld", (long) ntohl(val_s32));
+ 			break;
+ 		case OPTION_STRING:
+ 			memcpy(dest, option, len);
+@@ -161,6 +129,7 @@ static void fill_options(char *dest, unsigned char *option, struct dhcp_option *
+ 		option += optlen;
+ 		len -= optlen;
+ 		if (len <= 0) break;
++		dest += sprintf(dest, " ");
+ 	}
+ }
+ 
+@@ -186,6 +155,7 @@ static char **fill_envp(struct dhcpMessage *packet)
+ 	int i, j;
+ 	char **envp;
+ 	unsigned char *temp;
++	struct in_addr subnet;
+ 	char over = 0;
+ 
+ 	if (packet == NULL)
+@@ -202,23 +172,32 @@ static char **fill_envp(struct dhcpMessage *packet)
+ 	}
+ 	
+ 	envp = xmalloc((num_options + 5) * sizeof(char *));
+-	envp[0] = xmalloc(sizeof("interface=") + strlen(client_config.interface));
++	j = 0;
++	envp[j++] = xmalloc(sizeof("interface=") + strlen(client_config.interface));
+ 	sprintf(envp[0], "interface=%s", client_config.interface);
+-	envp[1] = find_env("PATH", "PATH=/bin:/usr/bin:/sbin:/usr/sbin");
+-	envp[2] = find_env("HOME", "HOME=/");
++	envp[j++] = find_env("PATH", "PATH=/bin:/usr/bin:/sbin:/usr/sbin");
++	envp[j++] = find_env("HOME", "HOME=/");
+ 
+ 	if (packet == NULL) {
+-		envp[3] = NULL;
++		envp[j++] = NULL;
+ 		return envp;
+ 	}
+ 
+-	envp[3] = xmalloc(sizeof("ip=255.255.255.255"));
+-	sprintip(envp[3], "ip=", (unsigned char *) &packet->yiaddr);
+-	for (i = 0, j = 4; options[i].code; i++) {
+-		if ((temp = get_option(packet, options[i].code))) {
+-			envp[j] = xmalloc(upper_length(temp[OPT_LEN - 2], &options[i]) + strlen(options[i].name) + 2);
+-			fill_options(envp[j], temp, &options[i]);
+-			j++;
++	envp[j] = xmalloc(sizeof("ip=255.255.255.255"));
++	sprintip(envp[j++], "ip=", (unsigned char *) &packet->yiaddr);
++
++
++	for (i = 0; options[i].code; i++) {
++		if (!(temp = get_option(packet, options[i].code)))
++			continue;
++		envp[j] = xmalloc(upper_length(temp[OPT_LEN - 2], &options[i]) + strlen(options[i].name) + 2);
++		fill_options(envp[j++], temp, &options[i]);
++
++		/* Fill in a subnet bits option for things like /24 */
++		if (options[i].code == DHCP_SUBNET) {
++			envp[j] = xmalloc(sizeof("mask=32"));
++			memcpy(&subnet, temp, 4);
++			sprintf(envp[j++], "mask=%d", mton(&subnet));
+ 		}
+ 	}
+ 	if (packet->siaddr) {
+diff --git a/networking/udhcp/version.h b/networking/udhcp/version.h
+index 07b1db163..3862539f5 100644
+--- a/networking/udhcp/version.h
++++ b/networking/udhcp/version.h
+@@ -1,6 +1,6 @@
+ #ifndef _UDHCP_VERSION_H
+ #define _UDHCP_VERSION_H
+ 
+-#define VERSION "0.9.8"
++#define VERSION "0.9.9-pre"
+ 
+ #endif

@@ -1,0 +1,110 @@
+"2012-11-21 20:38:29 +0100"
+diff --git a/Config.in b/Config.in
+index 835e703b..73ab01e6 100644
+--- a/Config.in
++++ b/Config.in
+@@ -32,6 +32,12 @@ config TOYBOX_FLOAT
+ 	  Include floating point support infrastructure and commands that
+ 	  require it.
+ 
++config TOYBOX_I18N
++	bool "Internalization support"
++	default y
++	help
++	  Add support for locales in commands.
++
+ config TOYBOX_FREE
+ 	bool "Free memory unnecessarily"
+ 	default n
+diff --git a/main.c b/main.c
+index 4a9795ca..2b04d135 100644
+--- a/main.c
++++ b/main.c
+@@ -101,6 +101,9 @@ void toy_exec(char *argv[])
+   which = toy_find(argv[0]);
+   if (!which) return;
+   toy_init(which, argv);
++#ifdef CFG_TOYBOX_I18N
++  setlocale(LC_ALL, "");
++#endif
+   toys.which->toy_main();
+   exit(toys.exitval);
+ }
+diff --git a/scripts/test/wc.test b/scripts/test/wc.test
+index 801cd713..40891323 100755
+--- a/scripts/test/wc.test
++++ b/scripts/test/wc.test
+@@ -21,6 +21,8 @@ testing "wc format" "wc file1" "4 5 26 file1\n" "" ""
+ testing "wc multiple files" "wc input - file1" \
+         "1 2 3 input\n0 2 3 -\n4 5 26 file1\n5 9 32 total\n" "a\nb" "a b"
+ 
++optional TOYBOX_I18N
++
+ #Tests for wc -m
+ if printf "%s" "$LANG" | grep -q UTF-8
+ then
+diff --git a/toys.h b/toys.h
+index 55256efe..69876f23 100644
+--- a/toys.h
++++ b/toys.h
+@@ -15,7 +15,6 @@
+ #include <inttypes.h>
+ #include <limits.h>
+ #include <libgen.h>
+-#include <locale.h>
+ #include <math.h>
+ #include <pty.h>
+ #include <pwd.h>
+@@ -47,8 +46,12 @@
+ #include <unistd.h>
+ #include <utime.h>
+ #include <utmpx.h>
++
++#ifdef CFG_TOYBOX_I18N
++#include <locale.h>
+ #include <wchar.h>
+ #include <wctype.h>
++#endif
+ 
+ #include "lib/lib.h"
+ #include "toys/e2fs.h"
+diff --git a/toys/posix/wc.c b/toys/posix/wc.c
+index 19ba4b8b..63128d67 100644
+--- a/toys/posix/wc.c
++++ b/toys/posix/wc.c
+@@ -48,7 +48,6 @@ static void show_lengths(unsigned long *lengths, char *name)
+ static void do_wc(int fd, char *name)
+ {
+   int i, len, clen=1, space;
+-  wchar_t wchar;
+   unsigned long word=0, lengths[]={0,0,0};
+ 
+   for (;;) {
+@@ -59,6 +58,8 @@ static void do_wc(int fd, char *name)
+     }
+     if (len<1) break;
+     for (i=0; i<len; i+=clen) {
++#ifdef CFG_TOYBOX_I18N
++      wchar_t wchar;
+       if(toys.optflags&8) {
+         clen = mbrtowc(&wchar, toybuf+i, len-i, 0);
+         if(clen==(size_t)(-1)) {
+@@ -70,7 +71,9 @@ static void do_wc(int fd, char *name)
+         if(clen==(size_t)(-2)) break;
+         if(clen==0) clen=1;
+         space = iswspace(wchar);
+-      } else space = isspace(toybuf[i]);
++      } else
++#endif
++             space = isspace(toybuf[i]);
+ 
+       if (toybuf[i]==10) lengths[0]++;
+       if (space) word=0;
+@@ -87,7 +90,6 @@ static void do_wc(int fd, char *name)
+ 
+ void wc_main(void)
+ {
+-  setlocale(LC_ALL, "");
+   toys.optflags |= (toys.optflags&8)>>1;
+   loopfiles(toys.optargs, do_wc);
+   if (toys.optc>1) show_lengths(TT.totals, "total");

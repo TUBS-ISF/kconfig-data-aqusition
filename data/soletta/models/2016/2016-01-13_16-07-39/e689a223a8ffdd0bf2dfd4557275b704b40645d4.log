@@ -1,0 +1,1154 @@
+"2016-01-13 16:07:39 -0200"
+diff --git a/src/lib/common/include/sol-mainloop.h b/src/lib/common/include/sol-mainloop.h
+index e9bc6e40..119a64c8 100644
+--- a/src/lib/common/include/sol-mainloop.h
++++ b/src/lib/common/include/sol-mainloop.h
+@@ -252,6 +252,19 @@ struct sol_idle *sol_idle_add(bool (*cb)(void *data), const void *data);
+  */
+ bool sol_idle_del(struct sol_idle *handle);
+ 
++/**
++ * @def SOL_MAINLOOP_FD_ENABLED
++ *
++ * This macro is defined by Soletta at build time and will state if
++ * file descriptor (fd) functionality is available, this is common in
++ * Linux/UNIX environments.
++ */
++#ifndef SOL_MAINLOOP_FD_ENABLED
++/* keep doxygen happy */
++#define SOL_MAINLOOP_FD_ENABLED
++#undef SOL_MAINLOOP_FD_ENABLED
++#endif
++
+ #ifdef SOL_MAINLOOP_FD_ENABLED
+ /**
+  * @brief Flags to be used with file descriptor watchers.
+@@ -359,6 +372,20 @@ bool sol_fd_unset_flags(struct sol_fd *handle, uint32_t flags);
+ uint32_t sol_fd_get_flags(const struct sol_fd *handle);
+ #endif
+ 
++
++/**
++ * @def SOL_MAINLOOP_FORK_WATCH_ENABLED
++ *
++ * This macro is defined by Soletta at build time and will state if
++ * monitoring (watch) of child process functionality is available,
++ * this is common in Linux/UNIX environments.
++ */
++#ifndef SOL_MAINLOOP_FORK_WATCH_ENABLED
++/* keep doxygen happy */
++#define SOL_MAINLOOP_FORK_WATCH_ENABLED
++#undef SOL_MAINLOOP_FORK_WATCH_ENABLED
++#endif
++
+ #ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
+ 
+ /**
+@@ -402,6 +429,47 @@ struct sol_child_watch *sol_child_watch_add(uint64_t pid, void (*cb)(void *data,
+ bool sol_child_watch_del(struct sol_child_watch *handle);
+ #endif
+ 
++/**
++ * @def SOL_NO_API_VERSION
++ *
++ * This macro is defined by Soletta at build time and will state if
++ * @c api_version structure members and related defines shouldn't be
++ * used.
++ *
++ * API Version is used when dynamic libraries are available so we can
++ * check in runtime if the structures match expectations. However in
++ * static builds such as those in Small OSes it's guaranteed at build
++ * time and the space and checks can be saved.
++ *
++ * Users can rely on macros SOL_SET_API_VERSION() to set these members
++ * in a conditional way.
++ */
++#ifndef SOL_NO_API_VERSION
++/* keep doxygen happy */
++#define SOL_NO_API_VERSION
++#undef SOL_NO_API_VERSION
++#endif
++
++/**
++ * @def SOL_SET_API_VERSION
++ *
++ * This macro will cope with #SOL_NO_API_VERSION and allows easy
++ * declaration of @c api_version fields.
++ *
++ * @code
++ * struct sol_mainloop_source_type mytype = {
++ *     SOL_SET_API_VERSION(.api_version = SOL_MAINLOOP_SOURCE_TYPE_API_VERSION,)
++ *     .prepare = my_prepare,
++ *     // ...
++ * };
++ * @endcode
++ */
++#ifndef SOL_SET_API_VERSION
++/* keep doxygen happy */
++#define SOL_SET_API_VERSION(x)
++#undef SOL_SET_API_VERSION
++#endif
++
+ /**
+  * @brief Structure representing the type of a source of mainloop events.
+  */
+@@ -579,6 +647,369 @@ void sol_mainloop_source_del(struct sol_mainloop_source *handle);
+  */
+ void *sol_mainloop_source_get_data(const struct sol_mainloop_source *handle);
+ 
++/**
++ * @brief Structure representing a mainloop implementation (hooks).
++ */
++struct sol_mainloop_implementation {
++#ifndef SOL_NO_API_VERSION
++#define SOL_MAINLOOP_IMPLEMENTATION_API_VERSION (1)  /**< compile time API version to be checked during runtime */
++    /**
++     * must match #SOL_MAINLOOP_IMPLEMENTATION_API_VERSION at runtime.
++     */
++    uint16_t api_version;
++#endif
++
++    /**
++     * Function to be called to initialize the mainloop implementation.
++     *
++     * This function will be called whenever sol_init() is called.
++     *
++     * Must not be NULL.
++     */
++    int (*init)(void);
++
++    /**
++     * Function to be called to shutdown (cleanup) the mainloop implementation.
++     *
++     * This function will be called whenever sol_shutdown() is called.
++     *
++     * Must not be NULL.
++     */
++    void (*shutdown)(void);
++
++    /**
++     * Function to be called to run the mainloop.
++     *
++     * This function will be called whenever sol_run() is called and
++     * it should block until its sibling @c quit is called.
++     *
++     * Must not be NULL.
++     */
++    void (*run)(void);
++
++    /**
++     * Function to be called to quit the mainloop.
++     *
++     * This function will be called whenever sol_quit() or
++     * sol_quit_with_code() are called and it should stop the blocking
++     * event loop executed by its sibling @c run.
++     *
++     * Do not cleanup resources here, but in the @c shutdown callback.
++     *
++     * Must not be NULL.
++     */
++    void (*quit)(void);
++
++    /**
++     * Function to be called to register a timeout to be dispatched.
++     *
++     * This function receives the number of milliseconds since the
++     * current time it should wait before calling the given pointer @c
++     * cb with the context @c data.
++     *
++     * After calling @c cb, if it returns @c true, then the timeout is
++     * renewed, otherwise it's automatically cancelled and @c
++     * timeout_del may not be called. Please note that calling
++     * sol_timeout_del() (and thus @c timeout_del) from the callback
++     * @c cb and returning @c false @b is a valid case and must be
++     * supported (guard against double-free).
++     *
++     * This function must return an internal handle that will
++     * represent the timeout. It will be given to sol_timeout_del() in
++     * order to cancel it before it fires.
++     *
++     * This function will be called whenever sol_timeout_add() is called.
++     *
++     * Must not be NULL.
++     */
++    void *(*timeout_add)(uint32_t timeout_ms, bool (*cb)(void *data), const void *data);
++
++    /**
++     * Function to be called to remove a timeout to be dispatched.
++     *
++     * This function receives the handle returned by sol_timeout_add()
++     * (and thus @c timeout_add), deleting it so the registered
++     * callback is not called anymore.
++     *
++     * This function returns true if timeout was successfully deleted.
++     *
++     * This function will be called whenever sol_timeout_del() is called.
++     *
++     * Must not be NULL.
++     */
++    bool (*timeout_del)(void *handle);
++
++    /**
++     * Function to be called to register an idler to be dispatched.
++     *
++     * This function will register an entry so the pointer @c cb will
++     * be called with the context @c data when there is nothing else
++     * to do. This prevents the mainloop from sleeping, as it will
++     * keep calling all registered idlers in sequence.
++     *
++     * After calling @c cb, if it returns @c true, then the idle is
++     * renewed, otherwise it's automatically cancelled and @c idle_del
++     * may not be called. Please note that calling sol_idle_del() (and
++     * thus @c idle_del) from the callback @c cb and returning @c
++     * false @b is a valid case and must be supported (guard against
++     * double-free).
++     *
++     * Should exist more than one idle entry, they are executed only
++     * once in the order they are registered. At the end it wraps back
++     * to the first element and continues.
++     *
++     * This function must return an internal handle that will
++     * represent the idle. It will be given to sol_idle_del() in
++     * order to cancel it before it fires.
++     *
++     * This function will be called whenever sol_idle_add() is called.
++     *
++     * Must not be NULL.
++     */
++    void *(*idle_add)(bool (*cb)(void *data), const void *data);
++
++    /**
++     * Function to be called to remove an idler to be dispatched.
++     *
++     * This function receives the handle returned by sol_idle_add()
++     * (and thus @c idle_add), deleting it so the registered
++     * callback is not called anymore.
++     *
++     * This function returns true if idle was successfully deleted.
++     *
++     * This function will be called whenever sol_idle_del() is called.
++     *
++     * Must not be NULL.
++     */
++    bool (*idle_del)(void *handle);
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    /**
++     * Function to be called to register an fd watcher.
++     *
++     * This function will register a file descriptor (@c fd) to be
++     * monitored for events defined in @c flags, whenever one of these
++     * events happen, @c cb is called providing the context as @c
++     * data, the @c fd and the active event flags @c active_flags.
++     *
++     * After calling @c cb, if it returns @c true, then the fd watcher
++     * is renewed, otherwise it's automatically cancelled and @c
++     * fd_del may not be called. Please note that calling sol_fd_del()
++     * (and thus @c fd_del) from the callback @c cb and returning @c
++     * false @b is a valid case and must be supported (guard against
++     * double-free).
++     *
++     * This function must return an internal handle that will
++     * represent the fd watcher. It will be given to sol_fd_del() in
++     * order to cancel it before it fires.
++     *
++     * This function will be called whenever sol_fd_add() is called.
++     *
++     * Must not be NULL.
++     *
++     * @note the existence of this pointer is conditional to
++     * #SOL_MAINLOOP_FD_ENABLED, which is defined when soletta is
++     * configured and built.
++     */
++    void *(*fd_add)(int fd, uint32_t flags, bool (*cb)(void *data, int fd, uint32_t active_flags), const void *data);
++
++    /**
++     * Function to be called to remove an fd watcher.
++     *
++     * This function receives the handle returned by sol_fd_add()
++     * (and thus @c fd_add), deleting it so the registered
++     * callback is not called anymore.
++     *
++     * This function returns true if fd watcher was successfully
++     * deleted.
++     *
++     * This function will be called whenever sol_fd_del() is called.
++     *
++     * Must not be NULL.
++     *
++     * @note the existence of this pointer is conditional to
++     * #SOL_MAINLOOP_FD_ENABLED, which is defined when soletta is
++     * configured and built.
++     */
++    bool (*fd_del)(void *handle);
++
++    /**
++     * Function to be called to change the events of fd watcher.
++     *
++     * This function will change the events @c flags that an existing
++     * fd watcher will use.
++     *
++     * This function will be called whenever sol_fd_set_flags() is
++     * called.
++     *
++     * Must not be NULL.
++     *
++     * @note the existence of this pointer is conditional to
++     * #SOL_MAINLOOP_FD_ENABLED, which is defined when soletta is
++     * configured and built.
++     */
++    bool (*fd_set_flags)(void *handle, uint32_t flags);
++
++    /**
++     * Function to be called to retrieve the events of fd watcher.
++     *
++     * This function will query the events @c flags that an existing
++     * fd watcher will use.
++     *
++     * This function will be called whenever sol_fd_get_flags() is
++     * called.
++     *
++     * Must not be NULL.
++     *
++     * @note the existence of this pointer is conditional to
++     * #SOL_MAINLOOP_FD_ENABLED, which is defined when soletta is
++     * configured and built.
++     */
++    uint32_t (*fd_get_flags)(const void *handle);
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    /**
++     * Function to be called to register an child process watcher.
++     *
++     * This function will register a child process identifier (@c pid)
++     * to be monitored. Whenever this process exits, then @c cb is
++     * called with the given context @c data.
++     *
++     * This function must return an internal handle that will
++     * represent the child monitor. It will be given to
++     * sol_child_watch_del() in order to cancel it before it fires.
++     *
++     * This function will be called whenever sol_child_watch_add() is
++     * called.
++     *
++     * Must not be NULL.
++     *
++     * @note the existence of this pointer is conditional to
++     * #SOL_MAINLOOP_FORK_WATCH_ENABLED, which is defined when soletta is
++     * configured and built.
++     */
++    void *(*child_watch_add)(uint64_t pid, void (*cb)(void *data, uint64_t pid, int status), const void *data);
++
++    /**
++     * Function to be called to remove an child process watcher.
++     *
++     * This function receives the handle returned by
++     * sol_child_watch_add() (and thus @c child_watch_add), deleting
++     * it so the registered callback is not called anymore.
++     *
++     * This function returns true if child watch was successfully deleted.
++     *
++     * This function will be called whenever sol_child_watch_del() is called.
++     *
++     * Must not be NULL.
++     *
++     * @note the existence of this pointer is conditional to
++     * #SOL_MAINLOOP_FORK_WATCH_ENABLED, which is defined when soletta is
++     * configured and built.
++     */
++    bool (*child_watch_del)(void *handle);
++#endif
++
++    /**
++     * Function to be called to register a mainloop event source.
++     *
++     * This function will register an event source that will be called
++     * during the mainloop execution, allowing different mainloops to
++     * be integrated. The actual functions to be called are defined in
++     * @c type.
++     *
++     * This function must return an internal handle that will
++     * represent the source. It will be given to
++     * sol_mainloop_source_del() in order to remove it.
++     *
++     * This function will be called whenever sol_mainloop_source_add()
++     * is called.
++     *
++     * Must not be NULL.
++     */
++    void *(*source_add)(const struct sol_mainloop_source_type *type, const void *data);
++
++    /**
++     * Function to be called to remove mainloop event source.
++     *
++     * This function receives the handle returned by
++     * sol_mainloop_source_add() (and thus @c source_add), deleting
++     * it so it is not used anymore.
++     *
++     * This function will be called whenever sol_mainloop_source_del() is called.
++     *
++     * Must not be NULL.
++     */
++    void (*source_del)(void *handle);
++
++    /**
++     * Function to be called to retrieve mainloop event source internal data.
++     *
++     * This function returns the @c data given to @c source_add.
++     *
++     * This function will be called whenever
++     * sol_mainloop_source_get_data() is called.
++     *
++     * Must not be NULL.
++     */
++    void *(*source_get_data)(const void *handle);
++};
++
++/**
++ * Pointer to Soletta's internal mainloop implementation, that is the
++ * default to be used if no other is set.
++ */
++extern const struct sol_mainloop_implementation *SOL_MAINLOOP_IMPLEMENTATION_DEFAULT;
++
++/**
++ * @brief Returns the current mainloop implementation in use.
++ *
++ * By default it is #SOL_MAINLOOP_IMPLEMENTATION_DEFAULT, but can be
++ * changed by sol_mainloop_set_implementation().
++ *
++ * Before accessing the members of the returned pointer check if your
++ * known #SOL_MAINLOOP_IMPLEMENTATION_API_VERSION matches its @c
++ * api_version field (which is conditional to #SOL_NO_API_VERSION).
++ *
++ * @return the pointer to the current implementation, always non-null.
++ */
++const struct sol_mainloop_implementation *sol_mainloop_get_implementation(void);
++
++/**
++ * @brief Changes the mainloop implementation.
++ *
++ * By setting the mainloop implementation one can override the Soletta
++ * behavior, this is often useful if libsoletta is being used as a
++ * guest library in some system that already hosts one, such as a
++ * Node.JS application. In this case we want to forward requests to
++ * that mainloop and be as lean as possible.
++ *
++ * This is an alternative to sol_mainloop_source_add(), in that case
++ * Soletta would be the host and other main loops can be the guest,
++ * see sol-glib-integration.h for one example.
++ *
++ * @note Primitives such as sol_idle_add(), sol_idle_del(),
++ *       sol_timeout_add(), sol_timeout_del(), sol_fd_add(),
++ *       sol_fd_del(), sol_fd_set_flags(), sol_fd_get_flags(),
++ *       sol_child_watch_add() and sol_child_watch_del(),
++ *       sol_mainloop_source_add(), sol_mainloop_source_del() and
++ *       sol_mainloop_source_get_data() may be called from threads,
++ *       then handle these as such.
++ *
++ * @note this function must be called @b before sol_init() is called
++ *       the first time, otherwise it will refuse and will return
++ *       error.
++ *
++ * @param impl a valid handle, this means @c api_version field must
++ *        match #SOL_MAINLOOP_IMPLEMENTATION_API_VERSION and all
++ *        pointers are non-NULL. It is not copied, so the pointer must
++ *        be valid until a new one is set to replace it.
++ *
++ * @return true on success or false on failure.
++ */
++bool sol_mainloop_set_implementation(const struct sol_mainloop_implementation *impl);
++
+ /**
+  * @brief Gets the argument count the application was launched with, if any.
+  *
+diff --git a/src/lib/common/sol-mainloop.c b/src/lib/common/sol-mainloop.c
+index 08fdadca..52dbb597 100644
+--- a/src/lib/common/sol-mainloop.c
++++ b/src/lib/common/sol-mainloop.c
+@@ -91,11 +91,43 @@ extern int sol_update_init(void);
+ extern void sol_update_shutdown(void);
+ #endif
+ 
++static const struct sol_mainloop_implementation _sol_mainloop_implementation_default = {
++    SOL_SET_API_VERSION(.api_version = SOL_MAINLOOP_IMPLEMENTATION_API_VERSION, )
++    .init = sol_mainloop_impl_init,
++    .shutdown =  sol_mainloop_impl_shutdown,
++    .run =  sol_mainloop_impl_run,
++    .quit =  sol_mainloop_impl_quit,
++    .timeout_add =  sol_mainloop_impl_timeout_add,
++    .timeout_del =  sol_mainloop_impl_timeout_del,
++    .idle_add =  sol_mainloop_impl_idle_add,
++    .idle_del =  sol_mainloop_impl_idle_del,
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    .fd_add =  sol_mainloop_impl_fd_add,
++    .fd_del =  sol_mainloop_impl_fd_del,
++    .fd_set_flags =  sol_mainloop_impl_fd_set_flags,
++    .fd_get_flags =  sol_mainloop_impl_fd_get_flags,
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    .child_watch_add =  sol_mainloop_impl_child_watch_add,
++    .child_watch_del =  sol_mainloop_impl_child_watch_del,
++#endif
++
++    .source_add =  sol_mainloop_impl_source_add,
++    .source_del =  sol_mainloop_impl_source_del,
++    .source_get_data =  sol_mainloop_impl_source_get_data,
++};
++
+ static int _init_count;
+ static bool mainloop_running;
+ static int mainloop_return_code;
+ static int _argc;
+ static char **_argv;
++static const struct sol_mainloop_implementation *mainloop_impl = &_sol_mainloop_implementation_default;
++
++SOL_API const struct sol_mainloop_implementation *SOL_MAINLOOP_IMPLEMENTATION_DEFAULT = &_sol_mainloop_implementation_default;
++
+ 
+ SOL_API int
+ sol_init(void)
+@@ -112,7 +144,7 @@ sol_init(void)
+ 
+     sol_log_domain_init_level(SOL_LOG_DOMAIN);
+ 
+-    r = sol_mainloop_impl_init();
++    r = mainloop_impl->init();
+     if (r < 0)
+         goto impl_error;
+ 
+@@ -174,7 +206,7 @@ blob_error:
+ pin_mux_error:
+     sol_platform_shutdown();
+ platform_error:
+-    sol_mainloop_impl_shutdown();
++    mainloop_impl->shutdown();
+ impl_error:
+     sol_log_shutdown();
+ log_error:
+@@ -196,7 +228,7 @@ sol_run(void)
+ 
+     SOL_DBG("run");
+     mainloop_running = true;
+-    sol_mainloop_impl_run();
++    mainloop_impl->run();
+     return mainloop_return_code;
+ }
+ 
+@@ -221,7 +253,7 @@ sol_quit_with_code(int return_code)
+     SOL_DBG("quit with code %d", return_code);
+     mainloop_return_code = return_code;
+     mainloop_running = false;
+-    sol_mainloop_impl_quit();
++    mainloop_impl->quit();
+ }
+ 
+ SOL_API void
+@@ -246,7 +278,7 @@ sol_shutdown(void)
+     sol_blob_shutdown();
+     sol_pin_mux_shutdown();
+     sol_platform_shutdown();
+-    sol_mainloop_impl_shutdown();
++    mainloop_impl->shutdown();
+     sol_modules_clear_cache();
+ #ifdef USE_UPDATE
+     sol_update_shutdown();
+@@ -259,28 +291,28 @@ SOL_API struct sol_timeout *
+ sol_timeout_add(uint32_t timeout_ms, bool (*cb)(void *data), const void *data)
+ {
+     SOL_NULL_CHECK(cb, NULL);
+-    return sol_mainloop_impl_timeout_add(timeout_ms, cb, data);
++    return mainloop_impl->timeout_add(timeout_ms, cb, data);
+ }
+ 
+ SOL_API bool
+ sol_timeout_del(struct sol_timeout *handle)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_timeout_del(handle);
++    return mainloop_impl->timeout_del(handle);
+ }
+ 
+ SOL_API struct sol_idle *
+ sol_idle_add(bool (*cb)(void *data), const void *data)
+ {
+     SOL_NULL_CHECK(cb, NULL);
+-    return sol_mainloop_impl_idle_add(cb, data);
++    return mainloop_impl->idle_add(cb, data);
+ }
+ 
+ SOL_API bool
+ sol_idle_del(struct sol_idle *handle)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_idle_del(handle);
++    return mainloop_impl->idle_del(handle);
+ }
+ 
+ #ifdef SOL_MAINLOOP_FD_ENABLED
+@@ -288,35 +320,35 @@ SOL_API struct sol_fd *
+ sol_fd_add(int fd, uint32_t flags, bool (*cb)(void *data, int fd, uint32_t active_flags), const void *data)
+ {
+     SOL_NULL_CHECK(cb, NULL);
+-    return sol_mainloop_impl_fd_add(fd, flags, cb, data);
++    return mainloop_impl->fd_add(fd, flags, cb, data);
+ }
+ 
+ SOL_API bool
+ sol_fd_del(struct sol_fd *handle)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_fd_del(handle);
++    return mainloop_impl->fd_del(handle);
+ }
+ 
+ SOL_API bool
+ sol_fd_set_flags(struct sol_fd *handle, uint32_t flags)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_fd_set_flags(handle, flags);
++    return mainloop_impl->fd_set_flags(handle, flags);
+ }
+ 
+ SOL_API uint32_t
+ sol_fd_get_flags(const struct sol_fd *handle)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_fd_get_flags(handle);
++    return mainloop_impl->fd_get_flags(handle);
+ }
+ 
+ SOL_API bool
+ sol_fd_unset_flags(struct sol_fd *handle, uint32_t flags)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_fd_set_flags(handle, sol_mainloop_impl_fd_get_flags(handle) & ~flags);
++    return mainloop_impl->fd_set_flags(handle, mainloop_impl->fd_get_flags(handle) & ~flags);
+ }
+ #endif
+ 
+@@ -326,14 +358,14 @@ sol_child_watch_add(uint64_t pid, void (*cb)(void *data, uint64_t pid, int statu
+ {
+     SOL_INT_CHECK(pid, < 1, NULL);
+     SOL_NULL_CHECK(cb, NULL);
+-    return sol_mainloop_impl_child_watch_add(pid, cb, data);
++    return mainloop_impl->child_watch_add(pid, cb, data);
+ }
+ 
+ SOL_API bool
+ sol_child_watch_del(struct sol_child_watch *handle)
+ {
+     SOL_NULL_CHECK(handle, false);
+-    return sol_mainloop_impl_child_watch_del(handle);
++    return mainloop_impl->child_watch_del(handle);
+ }
+ #endif
+ 
+@@ -355,21 +387,73 @@ sol_mainloop_source_add(const struct sol_mainloop_source_type *type, const void
+     SOL_NULL_CHECK(type->check, NULL);
+     SOL_NULL_CHECK(type->dispatch, NULL);
+ 
+-    return sol_mainloop_impl_source_add(type, data);
++    return mainloop_impl->source_add(type, data);
+ }
+ 
+ SOL_API void
+ sol_mainloop_source_del(struct sol_mainloop_source *handle)
+ {
+     SOL_NULL_CHECK(handle);
+-    sol_mainloop_impl_source_del(handle);
++    mainloop_impl->source_del(handle);
+ }
+ 
+ SOL_API void *
+ sol_mainloop_source_get_data(const struct sol_mainloop_source *handle)
+ {
+     SOL_NULL_CHECK(handle, NULL);
+-    return sol_mainloop_impl_source_get_data(handle);
++    return mainloop_impl->source_get_data(handle);
++}
++
++SOL_API const struct sol_mainloop_implementation *
++sol_mainloop_get_implementation(void)
++{
++    return mainloop_impl;
++}
++
++SOL_API bool
++sol_mainloop_set_implementation(const struct sol_mainloop_implementation *impl)
++{
++    SOL_NULL_CHECK(impl, false);
++
++#ifndef SOL_NO_API_VERSION
++    if (impl->api_version != SOL_MAINLOOP_IMPLEMENTATION_API_VERSION) {
++        SOL_WRN("impl(%p)->api_version(%hu) != "
++            "SOL_MAINLOOP_IMPLEMENTATION_API_VERSION(%hu)",
++            impl, impl->api_version,
++            SOL_MAINLOOP_IMPLEMENTATION_API_VERSION);
++        return false;
++    }
++#endif
++
++    SOL_NULL_CHECK(impl->init, false);
++    SOL_NULL_CHECK(impl->shutdown, false);
++    SOL_NULL_CHECK(impl->run, false);
++    SOL_NULL_CHECK(impl->quit, false);
++    SOL_NULL_CHECK(impl->timeout_add, false);
++    SOL_NULL_CHECK(impl->timeout_del, false);
++    SOL_NULL_CHECK(impl->idle_add, false);
++    SOL_NULL_CHECK(impl->idle_del, false);
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    SOL_NULL_CHECK(impl->fd_add, false);
++    SOL_NULL_CHECK(impl->fd_del, false);
++    SOL_NULL_CHECK(impl->fd_set_flags, false);
++    SOL_NULL_CHECK(impl->fd_get_flags, false);
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    SOL_NULL_CHECK(impl->child_watch_add, false);
++    SOL_NULL_CHECK(impl->child_watch_del, false);
++#endif
++
++    SOL_NULL_CHECK(impl->source_add, false);
++    SOL_NULL_CHECK(impl->source_del, false);
++    SOL_NULL_CHECK(impl->source_get_data, false);
++
++    SOL_INT_CHECK(_init_count, > 0, false);
++
++    mainloop_impl = impl;
++    return true;
+ }
+ 
+ SOL_API int
+diff --git a/src/test/Kconfig b/src/test/Kconfig
+index 2eec4ac1..fdc0066f 100644
+--- a/src/test/Kconfig
++++ b/src/test/Kconfig
+@@ -50,6 +50,10 @@ config TEST_MAINLOOP_LINUX
+ 	depends on PLATFORM_LINUX
+ 	default y
+ 
++config TEST_MAINLOOP_IMPLEMENTATION
++	bool "mainloop implementation"
++	default y
++
+ config TEST_MAINLOOP_THREADS
+ 	bool "mainloop threads"
+ 	depends on PTHREAD && MAINLOOP_POSIX
+diff --git a/src/test/Makefile b/src/test/Makefile
+index 249ff9ac..15a1a6fc 100644
+--- a/src/test/Makefile
++++ b/src/test/Makefile
+@@ -45,6 +45,9 @@ test-test-mainloop-glib-integration-$(TEST_MAINLOOP_GLIB_INTEGRATION) := test-ma
+ test-test-mainloop-glib-integration-$(TEST_MAINLOOP_GLIB_INTEGRATION)-extra-cflags += $(GLIB_CFLAGS)
+ test-test-mainloop-glib-integration-$(TEST_MAINLOOP_GLIB_INTEGRATION)-extra-ldflags += $(GLIB_LDFLAGS)
+ 
++test-$(TEST_MAINLOOP_IMPLEMENTATION) += test-mainloop-implementation
++test-test-mainloop-implementation-$(TEST_MAINLOOP_IMPLEMENTATION) := test-mainloop-implementation.c
++
+ test-$(TEST_MONITORS) += test-monitors
+ test-test-monitors-$(TEST_MONITORS) := test.c test-monitors.c
+ 
+diff --git a/src/test/test-mainloop-implementation.c b/src/test/test-mainloop-implementation.c
+new file mode 100644
+index 00000000..8a1892e0
+--- /dev/null
++++ b/src/test/test-mainloop-implementation.c
+@@ -0,0 +1,341 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdbool.h>
++
++#include "sol-mainloop.h"
++
++#include "test.h"
++
++#define TEST_MAINLOOP_MAIN_FN test_mainloop_main
++int TEST_MAINLOOP_MAIN_FN(int argc, char *argv[]);
++#include "test-mainloop.c"
++
++#ifdef SOL_PLATFORM_LINUX
++#define TEST_MAINLOOP_LINUX_MAIN_FN test_mainloop_linux_main
++int TEST_MAINLOOP_LINUX_MAIN_FN(int argc, char *argv[]);
++#include "test-mainloop-linux.c"
++#endif
++
++/* implementations may create timers, fds and others internally */
++#ifdef SOL_PLATFORM_LINUX
++/* sol-network-impl-linux.c adds netlink socket fd */
++/* sol-mainloop-impl-posix.c adds pipe to notify main thread */
++#ifdef MAINLOOP_POSIX
++#define BASE_CALL_COUNT_FD_ADD 2
++#define BASE_CALL_COUNT_FD_DEL 2
++#else
++#define BASE_CALL_COUNT_FD_ADD 1
++#define BASE_CALL_COUNT_FD_DEL 1
++#endif
++#else
++#define BASE_CALL_COUNT_FD_DEL 0
++#endif
++
++static int _call_count_init;
++static int _call_count_shutdown;
++static int _call_count_run;
++static int _call_count_quit;
++static int _call_count_timeout_add;
++static int _call_count_timeout_del;
++static int _call_count_idle_add;
++static int _call_count_idle_del;
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++static int _call_count_fd_add;
++static int _call_count_fd_del;
++static int _call_count_fd_set_flags;
++static int _call_count_fd_get_flags;
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++static int _call_count_child_watch_add;
++static int _call_count_child_watch_del;
++#endif
++
++static int _call_count_source_add;
++static int _call_count_source_del;
++static int _call_count_source_get_data;
++
++static void
++call_count_reset(void)
++{
++    _call_count_init = 0;
++    _call_count_shutdown = 0;
++    _call_count_run = 0;
++    _call_count_quit = 0;
++    _call_count_timeout_add = 0;
++    _call_count_timeout_del = 0;
++    _call_count_idle_add = 0;
++    _call_count_idle_del = 0;
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    _call_count_fd_add = 0;
++    _call_count_fd_del = 0;
++    _call_count_fd_set_flags = 0;
++    _call_count_fd_get_flags = 0;
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    _call_count_child_watch_add = 0;
++    _call_count_child_watch_del = 0;
++#endif
++
++    _call_count_source_add = 0;
++    _call_count_source_del = 0;
++    _call_count_source_get_data = 0;
++}
++
++static int
++wrapper_ml_init(void)
++{
++    _call_count_init++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->init();
++}
++
++static void
++wrapper_ml_shutdown(void)
++{
++    _call_count_shutdown++;
++    SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->shutdown();
++}
++
++static void
++wrapper_ml_run(void)
++{
++    _call_count_run++;
++    SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->run();
++}
++
++static void
++wrapper_ml_quit(void)
++{
++    _call_count_quit++;
++    SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->quit();
++}
++
++static void *
++wrapper_ml_timeout_add(uint32_t timeout_ms, bool (*cb)(void *data), const void *data)
++{
++    _call_count_timeout_add++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->timeout_add(timeout_ms, cb, data);
++}
++
++static bool
++wrapper_ml_timeout_del(void *handle)
++{
++    _call_count_timeout_del++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->timeout_del(handle);
++}
++
++static void *
++wrapper_ml_idle_add(bool (*cb)(void *data), const void *data)
++{
++    _call_count_idle_add++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->idle_add(cb, data);
++}
++
++static bool
++wrapper_ml_idle_del(void *handle)
++{
++    _call_count_idle_del++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->idle_del(handle);
++}
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++static void *
++wrapper_ml_fd_add(int fd, uint32_t flags, bool (*cb)(void *data, int fd, uint32_t active_flags), const void *data)
++{
++    _call_count_fd_add++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->fd_add(fd, flags, cb, data);
++}
++
++static bool
++wrapper_ml_fd_del(void *handle)
++{
++    _call_count_fd_del++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->fd_del(handle);
++}
++
++static bool
++wrapper_ml_fd_set_flags(void *handle, uint32_t flags)
++{
++    _call_count_fd_set_flags++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->fd_set_flags(handle, flags);
++}
++
++static uint32_t
++wrapper_ml_fd_get_flags(const void *handle)
++{
++    _call_count_fd_get_flags++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->fd_get_flags(handle);
++}
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++static void *
++wrapper_ml_child_watch_add(uint64_t pid, void (*cb)(void *data, uint64_t pid, int status), const void *data)
++{
++    _call_count_child_watch_add++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->child_watch_add(pid, cb, data);
++}
++
++static bool
++wrapper_ml_child_watch_del(void *handle)
++{
++    _call_count_child_watch_del++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->child_watch_del(handle);
++}
++#endif
++
++static void *
++wrapper_ml_source_add(const struct sol_mainloop_source_type *type, const void *data)
++{
++    _call_count_source_add++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->source_add(type, data);
++}
++
++static void
++wrapper_ml_source_del(void *handle)
++{
++    _call_count_source_del++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->source_del(handle);
++}
++
++static void *
++wrapper_ml_source_get_data(const void *handle)
++{
++    _call_count_source_get_data++;
++    return SOL_MAINLOOP_IMPLEMENTATION_DEFAULT->source_get_data(handle);
++}
++
++static const struct sol_mainloop_implementation wrapper_ml = {
++    SOL_SET_API_VERSION(.api_version = SOL_MAINLOOP_IMPLEMENTATION_API_VERSION, )
++    .init = wrapper_ml_init,
++    .shutdown =  wrapper_ml_shutdown,
++    .run =  wrapper_ml_run,
++    .quit =  wrapper_ml_quit,
++    .timeout_add =  wrapper_ml_timeout_add,
++    .timeout_del =  wrapper_ml_timeout_del,
++    .idle_add =  wrapper_ml_idle_add,
++    .idle_del =  wrapper_ml_idle_del,
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    .fd_add =  wrapper_ml_fd_add,
++    .fd_del =  wrapper_ml_fd_del,
++    .fd_set_flags =  wrapper_ml_fd_set_flags,
++    .fd_get_flags =  wrapper_ml_fd_get_flags,
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    .child_watch_add =  wrapper_ml_child_watch_add,
++    .child_watch_del =  wrapper_ml_child_watch_del,
++#endif
++
++    .source_add =  wrapper_ml_source_add,
++    .source_del =  wrapper_ml_source_del,
++    .source_get_data =  wrapper_ml_source_get_data,
++};
++
++int
++main(int argc, char *argv[])
++{
++    int r;
++
++    ASSERT(sol_mainloop_set_implementation(&wrapper_ml));
++
++    /* test-mainloop.c */
++    call_count_reset();
++
++    r = test_mainloop_main(argc, argv);
++    ASSERT_INT_EQ(r, 0);
++
++    ASSERT_INT_EQ(_call_count_init, 1);
++    ASSERT_INT_EQ(_call_count_shutdown, 1);
++    ASSERT_INT_EQ(_call_count_run, 1);
++    ASSERT_INT_EQ(_call_count_quit, 1);
++    ASSERT_INT_EQ(_call_count_timeout_add, 5);
++    ASSERT_INT_EQ(_call_count_timeout_del, 1);
++    ASSERT_INT_EQ(_call_count_idle_add, 13);
++    ASSERT_INT_EQ(_call_count_idle_del, 1);
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    ASSERT_INT_EQ(_call_count_fd_add, 0 + BASE_CALL_COUNT_FD_ADD);
++    ASSERT_INT_EQ(_call_count_fd_del, 0 + BASE_CALL_COUNT_FD_DEL);
++    ASSERT_INT_EQ(_call_count_fd_set_flags, 0);
++    ASSERT_INT_EQ(_call_count_fd_get_flags, 0);
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    ASSERT_INT_EQ(_call_count_child_watch_add, 0);
++    ASSERT_INT_EQ(_call_count_child_watch_del, 0);
++#endif
++
++    ASSERT_INT_EQ(_call_count_source_add, 0);
++    ASSERT_INT_EQ(_call_count_source_del, 0);
++    ASSERT_INT_EQ(_call_count_source_get_data, 0);
++
++    /* test-mainloop-linux.c */
++#ifdef SOL_PLATFORM_LINUX
++    call_count_reset();
++
++    r = test_mainloop_linux_main(argc, argv);
++    ASSERT_INT_EQ(r, 0);
++
++    ASSERT_INT_EQ(_call_count_init, 1);
++    ASSERT_INT_EQ(_call_count_shutdown, 1);
++    ASSERT_INT_EQ(_call_count_run, 1);
++    ASSERT_INT_EQ(_call_count_quit, 1);
++    ASSERT_INT_EQ(_call_count_timeout_add, 2);
++    ASSERT_INT_EQ(_call_count_timeout_del, 0);
++    ASSERT_INT_EQ(_call_count_idle_add, 2);
++    ASSERT_INT_EQ(_call_count_idle_del, 0);
++
++#ifdef SOL_MAINLOOP_FD_ENABLED
++    ASSERT_INT_EQ(_call_count_fd_add, 1 + BASE_CALL_COUNT_FD_ADD);
++    ASSERT_INT_EQ(_call_count_fd_del, 0 + BASE_CALL_COUNT_FD_DEL);
++    ASSERT_INT_EQ(_call_count_fd_set_flags, 0);
++    ASSERT_INT_EQ(_call_count_fd_get_flags, 0);
++#endif
++
++#ifdef SOL_MAINLOOP_FORK_WATCH_ENABLED
++    ASSERT_INT_EQ(_call_count_child_watch_add, 0);
++    ASSERT_INT_EQ(_call_count_child_watch_del, 0);
++#endif
++
++    ASSERT_INT_EQ(_call_count_source_add, 0);
++    ASSERT_INT_EQ(_call_count_source_del, 0);
++    ASSERT_INT_EQ(_call_count_source_get_data, 0);
++#endif
++
++    return 0;
++}
+diff --git a/src/test/test-mainloop-linux.c b/src/test/test-mainloop-linux.c
+index ea664652..ad104d69 100644
+--- a/src/test/test-mainloop-linux.c
++++ b/src/test/test-mainloop-linux.c
+@@ -70,7 +70,7 @@ on_idle_renew_twice(void *data)
+ }
+ 
+ static bool
+-on_timeout_renew_twice(void *data)
++linux_on_timeout_renew_twice(void *data)
+ {
+     timeout_count++;
+     if (timeout_count == 1)
+@@ -105,8 +105,12 @@ on_fd(void *data, int fd, uint32_t active_flags)
+     return true;
+ }
+ 
++#ifndef TEST_MAINLOOP_LINUX_MAIN_FN
++#define TEST_MAINLOOP_LINUX_MAIN_FN main
++#endif
++
+ int
+-main(int argc, char *argv[])
++TEST_MAINLOOP_LINUX_MAIN_FN(int argc, char *argv[])
+ {
+     int err, fds[2];
+     pid_t pid;
+@@ -152,7 +156,7 @@ main(int argc, char *argv[])
+     ASSERT_INT_EQ(err, 0);
+ 
+     sol_fd_add(fds[0], SOL_FD_FLAGS_IN, on_fd, NULL);
+-    sol_timeout_add(1, on_timeout_renew_twice, NULL);
++    sol_timeout_add(1, linux_on_timeout_renew_twice, NULL);
+     sol_timeout_add(10000, watchdog, NULL);
+     sol_idle_add(on_idle_renew_twice, &idler_count1);
+     sol_run();
+diff --git a/src/test/test-mainloop.c b/src/test/test-mainloop.c
+index 5e2767a9..bf0764fe 100644
+--- a/src/test/test-mainloop.c
++++ b/src/test/test-mainloop.c
+@@ -121,8 +121,11 @@ on_idler_renew_twice(void *data)
+     return idler_renewed < 2;
+ }
+ 
++#ifndef TEST_MAINLOOP_MAIN_FN
++#define TEST_MAINLOOP_MAIN_FN main
++#endif
+ int
+-main(int argc, char *argv[])
++TEST_MAINLOOP_MAIN_FN(int argc, char *argv[])
+ {
+     int err, i;
+     struct sol_timeout *timeout_to_del;

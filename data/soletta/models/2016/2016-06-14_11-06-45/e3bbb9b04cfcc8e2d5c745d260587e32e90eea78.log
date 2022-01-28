@@ -1,0 +1,144 @@
+"2016-06-14 11:06:45 -0300"
+diff --git a/src/shared/include/sol-util-file.h b/src/shared/include/sol-util-file.h
+index 64fb120b..707ea79c 100644
+--- a/src/shared/include/sol-util-file.h
++++ b/src/shared/include/sol-util-file.h
+@@ -325,6 +325,18 @@ int sol_util_move_file(const char *old_path, const char *new_path, mode_t mode);
+  */
+ bool sol_util_busy_wait_file(const char *path, uint64_t nanoseconds);
+ 
++/**
++ * @brief Get the basename of a path.
++ *
++ * Get basename of file. It doesn't modify content of the string.
++ *
++ * @param path A path to get the basename.
++ *
++ * @return A pointer to a portion of the original string containing the basename
++ * of the @a path. Return will be an empty string if @a path is empty.
++ */
++struct sol_str_slice sol_util_file_get_basename(struct sol_str_slice path);
++
+ /**
+  * @}
+  */
+diff --git a/src/shared/sol-util-file.c b/src/shared/sol-util-file.c
+index 899f83dc..63582a3a 100644
+--- a/src/shared/sol-util-file.c
++++ b/src/shared/sol-util-file.c
+@@ -593,3 +593,25 @@ sol_util_busy_wait_file(const char *path, uint64_t nanoseconds)
+ 
+     return true;
+ }
++
++SOL_API struct sol_str_slice
++sol_util_file_get_basename(struct sol_str_slice path)
++{
++    struct sol_str_slice basename;
++
++    while (path.len > 1 && path.data[path.len - 1] == '/')
++        path.len--;
++
++    if (path.len == 0 || path.len == 1)
++        return path;
++
++    basename.data = memrchr(path.data, '/', path.len);
++    if (basename.data == NULL)
++        return path;
++    basename.len = path.len - (basename.data - path.data);
++
++    basename.data += 1;
++    basename.len -= 1;
++
++    return basename;
++}
+diff --git a/src/test/Kconfig b/src/test/Kconfig
+index 1bad230c..993eea06 100644
+--- a/src/test/Kconfig
++++ b/src/test/Kconfig
+@@ -105,6 +105,11 @@ config TEST_UTIL
+ 	bool "util"
+ 	default y
+ 
++config TEST_UTIL_FILE
++       bool "util-file"
++       depends on FEATURE_FILESYSTEM
++       default y
++
+ config TEST_COMPOSED_TYPE
+ 	bool "composed-type"
+ 	depends on USE_FLOW
+diff --git a/src/test/Makefile b/src/test/Makefile
+index 12275fa1..c83f1fb9 100644
+--- a/src/test/Makefile
++++ b/src/test/Makefile
+@@ -78,6 +78,9 @@ test-test-json-$(TEST_JSON) := test.c test-json.c
+ test-$(TEST_UTIL) += test-util
+ test-test-util-$(TEST_UTIL) := test.c test-util.c
+ 
++test-$(TEST_UTIL_FILE) += test-util-file
++test-test-util-file-$(TEST_UTIL_FILE) := test.c test-util-file.c
++
+ test-$(TEST_COMPOSED_TYPE) += test-composed-type
+ test-test-composed-type-$(TEST_COMPOSED_TYPE) := test.c test-composed-type.c
+ 
+diff --git a/src/test/test-util-file.c b/src/test/test-util-file.c
+new file mode 100644
+index 00000000..c61c7add
+--- /dev/null
++++ b/src/test/test-util-file.c
+@@ -0,0 +1,54 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#include <libgen.h>
++#include <errno.h>
++#include <limits.h>
++#include <stdbool.h>
++#include <float.h>
++#ifdef HAVE_LOCALE
++#include <locale.h>
++#endif
++
++#include "sol-util-internal.h"
++#include "sol-log.h"
++
++#include "test.h"
++
++DEFINE_TEST(test_basename);
++
++static void
++test_basename(void)
++{
++    const char *path[] = { "/", "../test1", "test2", "/test3/",
++                           "////foo////bar///test4////", "/a", "b/" };
++    char *tmp;
++    unsigned int i;
++    bool b;
++    struct sol_str_slice base;
++
++    for (i = 0; i < sizeof(path) / sizeof(char *); i++) {
++        tmp = strdup(path[i]);
++        base = sol_util_file_get_basename(sol_str_slice_from_str(path[i]));
++        b = sol_str_slice_str_eq(base, basename(tmp));
++        free(tmp);
++        ASSERT(b);
++    }
++}
++
++TEST_MAIN();

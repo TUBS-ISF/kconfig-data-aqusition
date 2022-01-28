@@ -1,0 +1,678 @@
+"2003-05-26 14:07:50 +0000"
+diff --git a/coreutils/du.c b/coreutils/du.c
+index 702a9aa14..1c16cfbd4 100644
+--- a/coreutils/du.c
++++ b/coreutils/du.c
+@@ -144,10 +144,9 @@ static long du(char *filename)
+ 		while ((entry = readdir(dir))) {
+ 			char *name = entry->d_name;
+ 
+-			if ((name[0] == '.') && (!name[1] || (name[1] == '.' && !name[2]))) {
++			newfile = concat_subpath_file(filename, name);
++			if(newfile == NULL)
+ 				continue;
+-			}
+-			newfile = concat_path_file(filename, name);
+ 			++du_depth;
+ 			sum += du(newfile);
+ 			--du_depth;
+diff --git a/include/libbb.h b/include/libbb.h
+index f79def321..a54ab4d5c 100644
+--- a/include/libbb.h
++++ b/include/libbb.h
+@@ -272,6 +272,7 @@ int klogctl(int type, char * b, int len);
+ char *xgetcwd(char *cwd);
+ char *xreadlink(const char *path);
+ char *concat_path_file(const char *path, const char *filename);
++char *concat_subpath_file(const char *path, const char *filename);
+ char *last_char_is(const char *s, int c);
+ 
+ extern long arith (const char *startbuf, int *errcode);
+diff --git a/libbb/Makefile.in b/libbb/Makefile.in
+index 06daf232c..98b0c66e2 100644
+--- a/libbb/Makefile.in
++++ b/libbb/Makefile.in
+@@ -48,7 +48,7 @@ LIBBB_SRC:= \
+ 	fclose_nonstdin.c fflush_stdout_and_exit.c getopt_ulflags.c \
+ 	default_error_retval.c wfopen_input.c speed_table.c \
+ 	perror_nomsg_and_die.c perror_nomsg.c skip_whitespace.c \
+-	warn_ignoring_args.c
++	warn_ignoring_args.c concat_subpath_file.c
+ 
+ LIBBB_OBJS=$(patsubst %.c,$(LIBBB_DIR)%.o, $(LIBBB_SRC))
+ 
+diff --git a/libbb/concat_subpath_file.c b/libbb/concat_subpath_file.c
+new file mode 100644
+index 000000000..6d86f5e8c
+--- /dev/null
++++ b/libbb/concat_subpath_file.c
+@@ -0,0 +1,36 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * Utility routines.
++ *
++ * Copyright (C) (C) 2003  Vladimir Oleynik  <dzo@simtreas.ru>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
++ * USA
++ */
++
++/*
++   This function make special for recursive actions with usage
++   concat_path_file(path, filename)
++   and skiping "." and ".." directory entries
++*/
++
++#include "libbb.h"
++
++extern char *concat_subpath_file(const char *path, const char *f)
++{
++	if(f && *f == '.' && (!f[1] || (f[1] == '.' && !f[2])))
++		return NULL;
++	return concat_path_file(path, f);
++}
+diff --git a/libbb/copy_file.c b/libbb/copy_file.c
+index 81c547479..5808ca48c 100644
+--- a/libbb/copy_file.c
++++ b/libbb/copy_file.c
+@@ -105,11 +105,9 @@ int copy_file(const char *source, const char *dest, int flags)
+ 		while ((d = readdir(dp)) != NULL) {
+ 			char *new_source, *new_dest;
+ 
+-			if (strcmp(d->d_name, ".") == 0 ||
+-					strcmp(d->d_name, "..") == 0)
++			new_source = concat_subpath_file(source, d->d_name);
++			if(new_source == NULL)
+ 				continue;
+-
+-			new_source = concat_path_file(source, d->d_name);
+ 			new_dest = concat_path_file(dest, d->d_name);
+ 			if (copy_file(new_source, new_dest, flags) < 0)
+ 				status = -1;
+diff --git a/libbb/find_root_device.c b/libbb/find_root_device.c
+index 763ac7519..b12d392a2 100644
+--- a/libbb/find_root_device.c
++++ b/libbb/find_root_device.c
+@@ -49,13 +49,10 @@ extern char *find_real_root_device_name(const char* name)
+ 		else {
+ 			while((entry = readdir(dir)) != NULL) {
+ 
+-				/* Must skip ".." since that is "/", and so we 
+-				 * would get a false positive on ".."  */
+-				if (strcmp(entry->d_name, "..") == 0)
++				fileName = concat_subpath_file("/dev", entry->d_name);
++				if(fileName == NULL)
+ 					continue;
+ 
+-				fileName = concat_path_file("/dev", entry->d_name);
+-
+ 				/* Some char devices have the same dev_t as block
+ 				 * devices, so make sure this is a block device */
+ 				if (stat(fileName, &statBuf) == 0 && 
+diff --git a/libbb/isdirectory.c b/libbb/isdirectory.c
+index e8ef2df14..e9b106aa3 100644
+--- a/libbb/isdirectory.c
++++ b/libbb/isdirectory.c
+@@ -20,8 +20,6 @@
+  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+  */
+ 
+-#include <stdio.h>
+-#include <stdlib.h>
+ #include <sys/stat.h>
+ #include "libbb.h"
+ 
+@@ -32,11 +30,11 @@
+ int is_directory(const char *fileName, const int followLinks, struct stat *statBuf)
+ {
+ 	int status;
+-	int didMalloc = 0;
++	struct stat astatBuf;
+ 
+ 	if (statBuf == NULL) {
+-	    statBuf = (struct stat *)xmalloc(sizeof(struct stat));
+-	    ++didMalloc;
++	    /* set from auto stack buffer */
++	    statBuf = &astatBuf;
+ 	}
+ 
+ 	if (followLinks)
+@@ -49,10 +47,6 @@ int is_directory(const char *fileName, const int followLinks, struct stat *statB
+ 	}
+ 	else status = TRUE;
+ 
+-	if (didMalloc) {
+-	    free(statBuf);
+-	    statBuf = NULL;
+-	}
+ 	return status;
+ }
+ 
+diff --git a/libbb/login.c b/libbb/login.c
+index bd8035f41..67636e6b5 100644
+--- a/libbb/login.c
++++ b/libbb/login.c
+@@ -17,26 +17,28 @@
+  * along with this program; if not, write to the Free Software
+  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+  *
+- * $Id: login.c,v 1.3 2003/05/13 13:28:25 bug1 Exp $
++ * Optimize and correcting OCRNL by Vladimir Oleynik <dzo@simtreas.ru>
+  */
+ 
++#include <sys/param.h>  /* MAXHOSTNAMELEN */
+ #include <stdio.h>
+ #include <unistd.h>
+-#include "busybox.h"
++#include "libbb.h"
+ 
+ #include <sys/utsname.h>
+ #include <time.h>
+ 
+ #define LOGIN " login: "
+ 
+-static char fmtstr_d[] = { "%A, %d %B %Y" };
+-static char fmtstr_t[] = { "%H:%M:%S" };
++static const char fmtstr_d[] = "%A, %d %B %Y";
++static const char fmtstr_t[] = "%H:%M:%S";
+ 
+ void print_login_issue(const char *issue_file, const char *tty)
+ {
+ 	FILE *fd;
+ 	int c;
+ 	char buf[256];
++	const char *outbuf;
+ 	time_t t;
+ 	struct utsname uts;
+ 
+@@ -47,73 +49,75 @@ void print_login_issue(const char *issue_file, const char *tty)
+ 
+ 	if ((fd = fopen(issue_file, "r"))) {
+ 		while ((c = fgetc(fd)) != EOF) {
++			outbuf = buf;
++			buf[0] = c;
++			if(c == '\n') {
++				buf[1] = '\r';
++				buf[2] = 0;
++			} else {
++				buf[1] = 0;
++			}
+ 			if (c == '\\' || c == '%') {
+ 				c = fgetc(fd);
+-
+ 				switch (c) {
+ 					case 's':
+-						fputs(uts.sysname, stdout);
++						outbuf = uts.sysname;
+ 						break;
+ 
+ 					case 'n':
+-						fputs(uts.nodename, stdout);
++						outbuf = uts.nodename;
+ 						break;
+ 
+ 					case 'r':
+-						fputs(uts.release, stdout);
++						outbuf = uts.release;
+ 						break;
+ 
+ 					case 'v':
+-						fputs(uts.version, stdout);
++						outbuf = uts.version;
+ 						break;
+ 
+ 					case 'm':
+-						fputs(uts.machine, stdout);
++						outbuf = uts.machine;
+ 						break;
+ 
+ 					case 'D':
+ 					case 'o':
+ 						getdomainname(buf, sizeof(buf));
+ 						buf[sizeof(buf) - 1] = '\0';
+-						fputs(buf, stdout);
+ 						break;
+ 
+ 					case 'd':
+ 						strftime(buf, sizeof(buf), fmtstr_d, localtime(&t));
+-						fputs(buf, stdout);
+ 						break;
+ 
+ 					case 't':
+ 						strftime(buf, sizeof(buf), fmtstr_t, localtime(&t));
+-						fputs(buf, stdout);
+ 						break;
+ 
+ 					case 'h':
+-						gethostname(buf, sizeof(buf));
+-						fputs(buf, stdout);
++						gethostname(buf, sizeof(buf) - 1);
+ 						break;
+ 
+ 					case 'l':
+-						printf("%s", tty);
++						outbuf = tty;
+ 						break;
+ 
+ 					default:
+-						putchar(c);
++						buf[0] = c;
+ 				}
+-			} else
+-				putchar(c);
+ 		}
+-
+-		puts("");	/* start a new line */
+-		fflush(stdout);
++			fputs(outbuf, stdout);
++		}
+ 
+ 		fclose(fd);
++
++		fflush(stdout);
+ 	}
+ }
+ 
+ void print_login_prompt(void)
+ {
+-	char buf[MAXHOSTNAMELEN];
++	char buf[MAXHOSTNAMELEN+1];
+ 
+ 	gethostname(buf, MAXHOSTNAMELEN);
+ 	fputs(buf, stdout);
+diff --git a/libbb/pw_encrypt.c b/libbb/pw_encrypt.c
+index 0e4eb9f8a..ac79f839f 100644
+--- a/libbb/pw_encrypt.c
++++ b/libbb/pw_encrypt.c
+@@ -39,10 +39,7 @@ extern char *pw_encrypt(const char *clear, const char *salt)
+ 	/* if crypt (a nonstandard crypt) returns a string too large,
+ 	   truncate it so we don't overrun buffers and hope there is
+ 	   enough security in what's left */
+-	if (strlen(cp) > sizeof(cipher)-1) {
+-		cp[sizeof(cipher)-1] = 0;
+-	}
+-	strcpy(cipher, cp);
++	safe_strncpy(cipher, cp, sizeof(cipher));
+ 	return cipher;
+ }
+ 
+diff --git a/libbb/recursive_action.c b/libbb/recursive_action.c
+index a4a4a7be3..3ea107ca9 100644
+--- a/libbb/recursive_action.c
++++ b/libbb/recursive_action.c
+@@ -103,11 +103,9 @@ int recursive_action(const char *fileName,
+ 		while ((next = readdir(dir)) != NULL) {
+ 			char *nextFile;
+ 
+-			if ((strcmp(next->d_name, "..") == 0)
+-					|| (strcmp(next->d_name, ".") == 0)) {
++			nextFile = concat_subpath_file(fileName, next->d_name);
++			if(nextFile == NULL)
+ 				continue;
+-			}
+-			nextFile = concat_path_file(fileName, next->d_name);
+ 			if (! recursive_action(nextFile, TRUE, followLinks, depthFirst,
+ 						fileAction, dirAction, userData)) {
+ 				status = FALSE;
+diff --git a/libbb/remove_file.c b/libbb/remove_file.c
+index 65708a252..8b45c58b8 100644
+--- a/libbb/remove_file.c
++++ b/libbb/remove_file.c
+@@ -79,11 +79,9 @@ extern int remove_file(const char *path, int flags)
+ 		while ((d = readdir(dp)) != NULL) {
+ 			char *new_path;
+ 
+-			if (strcmp(d->d_name, ".") == 0 ||
+-					strcmp(d->d_name, "..") == 0)
++			new_path = concat_subpath_file(path, d->d_name);
++			if(new_path == NULL)
+ 				continue;
+-
+-			new_path = concat_path_file(path, d->d_name);
+ 			if (remove_file(new_path, flags) < 0)
+ 				status = -1;
+ 			free(new_path);
+diff --git a/libbb/run_shell.c b/libbb/run_shell.c
+index d154b9852..49e8a76c2 100644
+--- a/libbb/run_shell.c
++++ b/libbb/run_shell.c
+@@ -52,10 +52,7 @@ void run_shell ( const char *shell, int loginshell, const char *command, const c
+ 	for ( args = additional_args; args && *args; args++ )
+ 		additional_args_cnt++;
+ 
+-	if ( additional_args )
+ 		args = (const char **) xmalloc (sizeof (char *) * ( 4  + additional_args_cnt ));
+-	else
+-		args = (const char **) xmalloc (sizeof (char *) * 4 );
+ 		
+ 	args [0] = bb_get_last_path_component ( bb_xstrdup ( shell ));
+ 	
+@@ -77,4 +74,3 @@ void run_shell ( const char *shell, int loginshell, const char *command, const c
+ 	execv ( shell, (char **) args );
+ 	bb_perror_msg_and_die ( "cannot run %s", shell );
+ }
+-
+diff --git a/libbb/setup_environment.c b/libbb/setup_environment.c
+index 30d317cea..b18f8967e 100644
+--- a/libbb/setup_environment.c
++++ b/libbb/setup_environment.c
+@@ -45,13 +45,13 @@
+ static void xsetenv ( const char *key, const char *value )
+ {
+ 	    if ( setenv ( key, value, 1 ))
+-			        bb_error_msg_and_die ( "out of memory" );
++				bb_error_msg_and_die (bb_msg_memory_exhausted);
+ }
+ 
+ void setup_environment ( const char *shell, int loginshell, int changeenv, const struct passwd *pw )
+ {
+ 	if ( loginshell ) {
+-		char *term;
++		const char *term;
+ 	
+ 		/* Change the current working directory to be the home directory
+ 		 * of the user.  It is a fatal error for this process to be unable
+diff --git a/libbb/xgetcwd.c b/libbb/xgetcwd.c
+index 85a5c4125..1fcdba198 100644
+--- a/libbb/xgetcwd.c
++++ b/libbb/xgetcwd.c
+@@ -3,7 +3,7 @@
+  * Copyright (C) 1992, 1996 Free Software Foundation, Inc.
+  * Written by David MacKenzie <djm@gnu.ai.mit.edu>.
+  *
+- * Special function for busybox written by Vladimir Oleynik <vodz@usa.net>
++ * Special function for busybox written by Vladimir Oleynik <dzo@simtreas.ru>
+ */
+ 
+ #include <stdlib.h>
+diff --git a/networking/Config.in b/networking/Config.in
+index 3a0d3e9d9..2b2de28ec 100644
+--- a/networking/Config.in
++++ b/networking/Config.in
+@@ -58,6 +58,7 @@ config CONFIG_FEATURE_HTTPD_BASIC_AUTH
+ 	  authentication on a per url basis.
+ 
+ 
++if !CONFIG_FEATURE_HTTPD_USAGE_FROM_INETD_ONLY
+ config CONFIG_FEATURE_HTTPD_RELOAD_CONFIG_SIGHUP
+ 	bool "  Enable support reload global config file after hup signaled"
+ 	default n
+@@ -75,6 +76,7 @@ config CONFIG_FEATURE_HTTPD_SETUID
+ 	  rather than defaulting to the user that starts the server.
+ 	  Use of this option requires special privilegies to change to a
+ 	  different user.
++endif
+ 
+ config CONFIG_FEATURE_HTTPD_CONFIG_WITH_MIME_TYPES
+ 	bool "  Enable support load from config file mime types"
+@@ -91,6 +93,7 @@ config CONFIG_FEATURE_HTTPD_CGI
+ 	help
+ 	  This option allows scripts and executables to be invoked
+   	  when specific urls are requested.
++
+ config CONFIG_FEATURE_HTTPD_SET_REMOTE_PORT_TO_ENV
+ 	bool "  Enable support set eviroment REMOTE_PORT variable for CGI"
+ 	default n
+@@ -111,15 +114,6 @@ config CONFIG_FEATURE_HTTPD_SET_CGI_VARS_TO_ENV
+ 	  to 'bar'.  In addition, this option sets a variable that
+ 	  lists all the argument names.  e.g. CGI_VARNAMES_="name1 name2".
+ 
+-config CONFIG_FEATURE_HTTPD_DECODE_URL_STR
+-	bool "  Enable the -d option for shell script CGI simplification"
+-	default y
+-	depends on CONFIG_HTTPD
+-	help
+-	  After set,  this option enables support for decoding of
+-	  url-encoded form arguments via the -d option.  Output goes to
+-	  stdout. For example, httpd -d "Hello%20World" produces "Hello World".
+-
+ config CONFIG_FEATURE_HTTPD_ENCODE_URL_STR
+ 	bool "  Enable the -e option for shell script CGI simplification."
+ 	default y
+@@ -474,7 +468,7 @@ config CONFIG_FEATURE_TFTP_BLOCKSIZE
+ 
+ config CONFIG_FEATURE_TFTP_DEBUG
+ 	bool "  Enable debug"
+-	default y
++	default n
+ 	depends on CONFIG_TFTP
+ 	help
+ 	  Please submit a patch to add help text for this item.
+@@ -487,14 +481,14 @@ config CONFIG_TRACEROUTE
+ 
+ config CONFIG_FEATURE_TRACEROUTE_VERBOSE
+ 	bool "  Enable verbose output"
+-	default y
++	default n
+ 	depends on CONFIG_TRACEROUTE
+ 	help
+ 	  Please submit a patch to add help text for this item.
+ 
+ config CONFIG_FEATURE_TRACEROUTE_SO_DEBUG
+ 	bool "  Enable SO_DEBUG option"
+-	default y
++	default n
+ 	depends on CONFIG_TRACEROUTE
+ 	help
+ 	  Please submit a patch to add help text for this item.
+diff --git a/networking/httpd.c b/networking/httpd.c
+index e9f4c15bc..ef8263b99 100644
+--- a/networking/httpd.c
++++ b/networking/httpd.c
+@@ -60,8 +60,7 @@
+  * .au:audio/basic   # additional mime type for audio.au files
+  * 
+  * A/D may be as a/d or allow/deny - first char case unsensitive
+- * Deny IP rules take precedence over allow rules.  Any IP rules after D:* are
+- * ignored.
++ * Deny IP rules take precedence over allow rules.
+  * 
+  * 
+  * The Deny/Allow IP logic:
+@@ -123,7 +122,7 @@
+ #include "busybox.h"
+ 
+ 
+-static const char httpdVersion[] = "busybox httpd/1.26 18-May-2003";
++static const char httpdVersion[] = "busybox httpd/1.27 25-May-2003";
+ static const char default_path_httpd_conf[] = "/etc";
+ static const char httpd_conf[] = "httpd.conf";
+ static const char home[] = "./";
+@@ -234,6 +233,7 @@ typedef struct
+   time_t last_mod;
+ 
+   Htaccess *ip_a_d;             /* config allow/deny lines */
++  int flg_deny_all;
+ #ifdef CONFIG_FEATURE_HTTPD_BASIC_AUTH
+   Htaccess *auth;               /* config user:password lines */
+ #endif
+@@ -452,16 +452,21 @@ static void parse_conf(const char *path, int flag)
+ 	/* test for empty or strange line */
+ 	if (c == NULL || *c == 0)
+ 	    continue;
+-	if(*c == '*')
+-	    *c = 0;   /* Allow all */
+ 	p0 = buf;
+-	if((*p0 == 'i') || (*p0 == 'I'))
+-		*p0 = 'A'; // version 1.1/1.2 compatibility for ip:
+-	if(*p0 == 'a')
+-	    *p0 = 'A';
+ 	if(*p0 == 'd')
+ 	    *p0 = 'D';
+-	if(*p0 != 'A' && *p0 != 'D'
++	if(*c == '*') {
++	    if(*p0 == 'D') {
++		/* memorize deny all */
++		config->flg_deny_all++;
++	    }
++	    /* skip default other "word:*" config lines */
++	    continue;
++	}
++
++	if(*p0 == 'a')
++	    *p0 = 'A';
++	else if(*p0 != 'D'
+ #ifdef CONFIG_FEATURE_HTTPD_BASIC_AUTH
+ 	   && *p0 != '/'
+ #endif
+@@ -471,17 +476,8 @@ static void parse_conf(const char *path, int flag)
+ 	  )
+ 	       continue;
+ 
+-	if(*p0 == 'A' && *c == 0) {
+-	    /* skip default A:* */
+-	    continue;
+-	}
+-	p0 = buf;
+ #ifdef CONFIG_FEATURE_HTTPD_BASIC_AUTH
+ 	if(*p0 == '/') {
+-	    if(*c == 0) {
+-		/* skip /path:* */
+-		continue;
+-	    }
+ 	    /* make full path from httpd root / curent_path / config_line_path */
+ 	    cf = flag == SUBDIR_PARSE ? path : "";
+ 	    p0 = malloc(strlen(cf) + (c - buf) + 2 + strlen(c));
+@@ -532,12 +528,12 @@ static void parse_conf(const char *path, int flag)
+ 		free(p0);
+ #endif
+ 	    if(*cf == 'A' || *cf == 'D') {
+-		if(*cf == 'D' && *c) {
++		if(*cf == 'D') {
+ 			/* Deny:form_IP move top */
+ 			cur->next = config->ip_a_d;
+ 			config->ip_a_d = cur;
+ 		} else {
+-			/* add to bottom current IP config line */
++			/* add to bottom A:form_IP config line */
+ 			Htaccess *prev_IP = config->ip_a_d;
+ 
+ 			if(prev_IP == NULL) {
+@@ -573,12 +569,11 @@ static void parse_conf(const char *path, int flag)
+ 			cur->next = hti;
+ 			if(prev_hti != hti) {
+ 			    prev_hti->next = cur;
+-			    break;
+ 			} else {
+ 			    /* insert as top */
+ 			    config->auth = cur;
+-			    break;
+ 			}
++			break;
+ 		    }
+ 		    if(prev_hti != hti)
+ 			    prev_hti = prev_hti->next;
+@@ -695,18 +690,16 @@ static void addEnv(const char *name_before_underline,
+ 			const char *name_after_underline, const char *value)
+ {
+   char *s;
++  const char *underline;
+ 
+   if (config->envCount >= ENVSIZE)
+ 	return;
+   if (!value)
+ 	value = "";
+-  s = malloc(strlen(name_before_underline) + strlen(name_after_underline) +
+-			strlen(value) + 3);
+-  if (s) {
+-    const char *underline = *name_after_underline ? "_" : "";
+-
+-    sprintf(s,"%s%s%s=%s", name_before_underline, underline,
++  underline = *name_after_underline ? "_" : "";
++  asprintf(&s, "%s%s%s=%s", name_before_underline, underline,
+ 					name_after_underline, value);
++  if(s) {
+     config->envp[config->envCount++] = s;
+     config->envp[config->envCount] = 0;
+   }
+@@ -764,11 +757,11 @@ static void addEnvCgi(const char *pargs)
+ 	*args++ = 0;
+     addEnv("CGI", name, decodeString(value, 1));
+     if (*namelist) strcat(namelist, " ");
+-    strcat(namelist,name);
++    strcat(namelist, name);
+   }
+   free(memargs);
+   if (namelist) {
+-    addEnv("CGI","ARGLIST_",namelist);
++    addEnv("CGI", "ARGLIST_", namelist);
+     free(namelist);
+   }
+ }
+@@ -1337,6 +1330,8 @@ static int checkPerm(const char *path, const char *request)
+ 	}
+     }   /* for */
+ 
++    if(ipaddr)
++	return config->flg_deny_all;
+     return prev == NULL;
+ }
+ 
+@@ -1359,7 +1354,7 @@ static int checkPermIP(const char *request)
+     }
+ 
+     /* if uncofigured, return 1 - access from all */
+-    return 1;
++    return config->flg_deny_all;
+ }
+ #define checkPerm(null, request) checkPermIP(request)
+ #endif  /* CONFIG_FEATURE_HTTPD_BASIC_AUTH */
+@@ -1788,9 +1783,7 @@ int httpd_main(int argc, char *argv[])
+       config->debugHttpd = 1;
+       break;
+     case 'p':
+-      config->port = atoi(optarg);
+-      if(config->port <= 0 || config->port > 0xffff)
+-	bb_error_msg_and_die("invalid %s for -p", optarg);
++      config->port = bb_xgetlarg(optarg, 10, 1, 0xffff);
+       break;
+ #endif
+     case 'd':
+@@ -1854,10 +1847,11 @@ int httpd_main(int argc, char *argv[])
+ #ifdef TEST
+   if (numTestArgs)
+   {
+-	  if (strcmp(testArgs[0],"ip") == 0) testArgs[0] = 0;
++	  int result;
++	  if (strcmp(testArgs[0], "ip") == 0) testArgs[0] = 0;
+ 	  if (numTestArgs > 2)
+ 	    parse_conf(testArgs[2], SUBDIR_PARSE);
+-	  int result = printf("%d\n",checkPerm(testArgs[0],testArgs[1]));
++	  result = printf("%d\n", checkPerm(testArgs[0], testArgs[1]));
+ 	  return result;
+   }
+ #endif
+diff --git a/networking/ifconfig.c b/networking/ifconfig.c
+index c09c48c58..37cba235a 100644
+--- a/networking/ifconfig.c
++++ b/networking/ifconfig.c
+@@ -15,7 +15,7 @@
+  * Foundation;  either  version 2 of the License, or  (at
+  * your option) any later version.
+  *
+- * $Id: ifconfig.c,v 1.23 2003/03/19 09:12:38 mjn3 Exp $
++ * $Id: ifconfig.c,v 1.24 2003/05/26 14:06:01 bug1 Exp $
+  *
+  */
+ 
+@@ -296,7 +296,7 @@ int ifconfig_main(int argc, char **argv)
+ #ifdef CONFIG_FEATURE_IFCONFIG_BROADCAST_PLUS
+ 	unsigned int mask;
+ 	unsigned int did_flags;
+-	in_addr_t sai_hostname, sai_netmask;
++	unsigned int sai_hostname, sai_netmask;
+ #else
+ 	unsigned char mask;
+ 	unsigned char did_flags;

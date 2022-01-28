@@ -1,0 +1,67 @@
+"2006-03-20 02:20:18 +0000"
+diff --git a/util-linux/Config.in b/util-linux/Config.in
+index 28292bd40..b91eb69c7 100644
+--- a/util-linux/Config.in
++++ b/util-linux/Config.in
+@@ -354,9 +354,19 @@ config CONFIG_READPROFILE
+ 	help
+ 	  This allows you to parse /proc/profile for basic profiling.
+ 
++config CONFIG_LINUX32
++	default n
++	depends on CONFIG_SETARCH
++
++config CONFIG_LINUX64
++	default n
++	depends on CONFIG_SETARCH
++
+ config CONFIG_SETARCH
+ 	bool "setarch"
+ 	default n
++	select CONFIG_LINUX32
++	select CONFIG_LINUX64
+ 	help
+ 	  The linux32 utility is used to create a 32bit environment for the
+ 	  specified program (usually a shell).  It only makes sense to have
+diff --git a/util-linux/setarch.c b/util-linux/setarch.c
+index 33588e4ee..d7e1c0917 100644
+--- a/util-linux/setarch.c
++++ b/util-linux/setarch.c
+@@ -16,7 +16,7 @@
+ 
+ #include "busybox.h"
+ 
+-int setarch_main(int argc, char **argv)
++int setarch_main(int ATTRIBUTE_UNUSED argc, char **argv)
+ {
+ 	int pers = -1;
+ 
+@@ -26,9 +26,9 @@ int setarch_main(int argc, char **argv)
+ 	 * argv[0]         -> "personality"
+ 	 */
+ retry:
+-	if (!strcmp(argv[0], "linux64"))
++	if (argv[0][5] == '6') /* linux64 */
+ 		pers = PER_LINUX;
+-	else if (!strcmp(argv[0], "linux32"))
++	else if (argv[0][5] == '3') /* linux32 */
+ 		pers = PER_LINUX32;
+ 	else if (pers == -1 && argv[1] != NULL) {
+ 		pers = PER_LINUX32;
+@@ -42,12 +42,11 @@ retry:
+ 		bb_show_usage();
+ 
+ 	/* Try to set personality */
+-	if (personality(pers) < 0)
+-		goto failure;
++	if (personality(pers) >= 0) {
+ 
+-	/* Try to execute the program */
+-	execvp(argv[0], argv);
++		/* Try to execute the program */
++		execvp(argv[0], argv);
++	}
+ 
+-failure:
+ 	bb_perror_msg_and_die("%s", argv[0]);
+ }

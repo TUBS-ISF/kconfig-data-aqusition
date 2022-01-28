@@ -1,0 +1,143 @@
+"2006-12-19 00:20:20 +0000"
+diff --git a/libbb/restricted_shell.c b/libbb/restricted_shell.c
+index 74a64140f..dc4cfb458 100644
+--- a/libbb/restricted_shell.c
++++ b/libbb/restricted_shell.c
+@@ -28,30 +28,19 @@
+  * SUCH DAMAGE.
+  */
+ 
+-#include <stdio.h>
+-#include <errno.h>
+-#include <unistd.h>
+-#include <string.h>
+-#include <stdlib.h>
+-#include <syslog.h>
+-#include <ctype.h>
+ #include "libbb.h"
+ 
+-
+-
+ /* Return 1 if SHELL is a restricted shell (one not returned by
+    getusershell), else 0, meaning it is a standard shell.  */
+-
+-int restricted_shell ( const char *shell )
++int restricted_shell(const char *shell)
+ {
+ 	char *line;
+ 
+-	setusershell ( );
+-	while (( line = getusershell ( ))) {
+-		if (( *line != '#' ) && ( strcmp ( line, shell ) == 0 ))
+-			break;
++	setusershell();
++	while ((line = getusershell())) {
++		if (*line != '#' && strcmp(line, shell) == 0)
++			return 0;
+ 	}
+-	endusershell ( );
+-	return line ? 0 : 1;
++	endusershell();
++	return 1;
+ }
+-
+diff --git a/loginutils/Config.in b/loginutils/Config.in
+index 2ad141511..3628c49af 100644
+--- a/loginutils/Config.in
++++ b/loginutils/Config.in
+@@ -155,11 +155,14 @@ config SU
+ 	  work properly.
+ 
+ config SU_SYSLOG
+-	bool "Support for syslog in su"
++	bool "Enable su to write to syslog"
+ 	default y
+ 	depends on SU
+-	help
+-	  Enables support for syslog in su.
++
++config FEATURE_SU_CHECKS_SHELLS
++	bool "Enable su to check user's shell to be listed in /etc/shells"
++	depends on SU
++	default y
+ 
+ config SULOGIN
+ 	bool "sulogin"
+diff --git a/loginutils/su.c b/loginutils/su.c
+index 046457b6f..25b85920a 100644
+--- a/loginutils/su.c
++++ b/loginutils/su.c
+@@ -10,7 +10,7 @@
+ 
+ int su_main(int argc, char **argv)
+ {
+-	unsigned long flags;
++	unsigned flags;
+ 	char *opt_shell = 0;
+ 	char *opt_command = 0;
+ 	char *opt_username = "root";
+@@ -49,19 +49,23 @@ int su_main(int argc, char **argv)
+ 	}
+ 
+ 	pw = getpwnam(opt_username);
+-	if (!pw) bb_error_msg_and_die("unknown id: %s", opt_username);
++	if (!pw)	
++		bb_error_msg_and_die("unknown id: %s", opt_username);
+ 
+ 	/* Make sure pw->pw_shell is non-NULL.  It may be NULL when NEW_USER
+ 	   is a username that is retrieved via NIS (YP), but that doesn't have
+ 	   a default shell listed.  */
+-	if (!pw->pw_shell || !pw->pw_shell[0]) pw->pw_shell = (char *)DEFAULT_SHELL;
++	if (!pw->pw_shell || !pw->pw_shell[0])
++		pw->pw_shell = (char *)DEFAULT_SHELL;
+ 
+ 	if ((cur_uid == 0) || correct_password(pw)) {
+ 		if (ENABLE_SU_SYSLOG)
+-			syslog(LOG_NOTICE, "+ %s %s:%s", tty, old_user, opt_username);
++			syslog(LOG_NOTICE, "%c %s %s:%s",
++				'+', tty, old_user, opt_username);
+ 	} else {
+ 		if (ENABLE_SU_SYSLOG)
+-			syslog(LOG_NOTICE, "- %s %s:%s", tty, old_user, opt_username);
++			syslog(LOG_NOTICE, "%c %s %s:%s",
++				'-', tty, old_user, opt_username);
+ 		bb_error_msg_and_die("incorrect password");
+ 	}
+ 
+@@ -70,8 +74,10 @@ int su_main(int argc, char **argv)
+ 		free(old_user);
+ 	}
+ 
+-	if (!opt_shell && (flags & SU_OPT_mp)) opt_shell = getenv("SHELL");
++	if (!opt_shell && (flags & SU_OPT_mp))
++		opt_shell = getenv("SHELL");
+ 
++#if ENABLE_FEATURE_SU_CHECKS_SHELLS
+ 	if (opt_shell && cur_uid && restricted_shell(pw->pw_shell)) {
+ 		/* The user being su'd to has a nonstandard shell, and so is
+ 		   probably a uucp account or has restricted access.  Don't
+@@ -80,8 +86,9 @@ int su_main(int argc, char **argv)
+ 		bb_error_msg("using restricted shell");
+ 		opt_shell = 0;
+ 	}
+-
+-	if (!opt_shell) opt_shell = pw->pw_shell;
++#endif
++	if (!opt_shell)
++		opt_shell = pw->pw_shell;
+ 
+ 	change_identity(pw);
+ 	setup_environment(opt_shell, flags & SU_OPT_l, !(flags & SU_OPT_mp), pw);
+diff --git a/shell/ash.c b/shell/ash.c
+index ae5182ad1..97f0d6bef 100644
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -12014,7 +12014,7 @@ setvar(const char *name, const char *val, int flags)
+ 		vallen = strlen(val);
+ 	}
+ 	INTOFF;
+-	nameeq = ckmalloc(namelen + vallen + 2)
++	nameeq = ckmalloc(namelen + vallen + 2);
+ 	p = memcpy(nameeq, name, namelen) + namelen;
+ 	if (val) {
+ 		*p++ = '=';

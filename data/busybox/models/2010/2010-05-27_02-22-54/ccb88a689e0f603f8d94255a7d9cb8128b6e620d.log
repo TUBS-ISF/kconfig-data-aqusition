@@ -1,0 +1,269 @@
+"2010-05-27 02:22:54 +0200"
+diff --git a/archival/Config.in b/archival/Config.in
+index deacc2822..428398377 100644
+--- a/archival/Config.in
++++ b/archival/Config.in
+@@ -327,6 +327,14 @@ config FEATURE_LZMA_FAST
+ 	  This option reduces decompression time by about 25% at the cost of
+ 	  a 1K bigger binary.
+ 
++config FEATURE_LZMA_ALIAS
++	bool "Provide lzma alias which supports only unpacking"
++	default n
++	depends on UNLZMA
++	help
++	  Enable this option if you want commands like "lzma -d" to work.
++	  IOW: you'll get lzma applet, but it will always require -d option.
++
+ config UNZIP
+ 	bool "unzip"
+ 	default n
+diff --git a/archival/bbunzip.c b/archival/bbunzip.c
+index df674bc6c..1e775f425 100644
+--- a/archival/bbunzip.c
++++ b/archival/bbunzip.c
+@@ -9,12 +9,12 @@
+ #include "unarchive.h"
+ 
+ enum {
+-	OPT_STDOUT = 0x1,
+-	OPT_FORCE = 0x2,
+-/* gunzip and bunzip2 only: */
+-	OPT_VERBOSE = 0x4,
+-	OPT_DECOMPRESS = 0x8,
+-	OPT_TEST = 0x10,
++	OPT_STDOUT     = 1 << 0,
++	OPT_FORCE      = 1 << 1,
++	/* only some decompressors: */
++	OPT_VERBOSE    = 1 << 2,
++	OPT_DECOMPRESS = 1 << 3,
++	OPT_TEST       = 1 << 4,
+ };
+ 
+ static
+@@ -333,12 +333,17 @@ IF_DESKTOP(long long) int unpack_unlzma(unpack_info_t *info UNUSED_PARAM)
+ int unlzma_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
+ int unlzma_main(int argc UNUSED_PARAM, char **argv)
+ {
+-	getopt32(argv, "cf");
+-	argv += optind;
+-	/* lzmacat? */
+-	if (applet_name[4] == 'c')
++	int opts = getopt32(argv, "cfvdt");
++# if ENABLE_FEATURE_LZMA_ALIAS
++	/* lzma without -d or -t? */
++	if (applet_name[2] == 'm' && !(opts & (OPT_DECOMPRESS|OPT_TEST)))
++		bb_show_usage();
++# endif
++	/* lzcat? */
++	if (applet_name[2] == 'c')
+ 		option_mask32 |= OPT_STDOUT;
+ 
++	argv += optind;
+ 	return bbunpack(argv, make_new_name_unlzma, unpack_unlzma);
+ }
+ 
+@@ -346,7 +351,7 @@ int unlzma_main(int argc UNUSED_PARAM, char **argv)
+ 
+ 
+ /*
+- *	Uncompress applet for busybox (c) 2002 Glenn McGrath
++ * Uncompress applet for busybox (c) 2002 Glenn McGrath
+  *
+  * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+  */
+diff --git a/archival/libunarchive/decompress_uncompress.c b/archival/libunarchive/decompress_uncompress.c
+index 2877c8981..1ff89ce3c 100644
+--- a/archival/libunarchive/decompress_uncompress.c
++++ b/archival/libunarchive/decompress_uncompress.c
+@@ -229,7 +229,7 @@ unpack_Z_stream(int fd_in, int fd_out)
+ 						("insize:%d posbits:%d inbuf:%02X %02X %02X %02X %02X (%d)",
+ 						 insize, posbits, p[-1], p[0], p[1], p[2], p[3],
+ 						 (posbits & 07));
+-					bb_error_msg("uncompress: corrupt input");
++					bb_error_msg("corrupted data");
+ 					goto err;
+ 				}
+ 
+diff --git a/archival/lzop.c b/archival/lzop.c
+index 0a15c51aa..d6cf6f4f5 100644
+--- a/archival/lzop.c
++++ b/archival/lzop.c
+@@ -738,12 +738,12 @@ static NOINLINE smallint lzo_decompress(const header_t *h)
+ 			bb_error_msg_and_die("this file is a split lzop file");
+ 
+ 		if (dst_len > MAX_BLOCK_SIZE)
+-			bb_error_msg_and_die("lzop file corrupted");
++			bb_error_msg_and_die("corrupted data");
+ 
+ 		/* read compressed block size */
+ 		src_len = read32();
+ 		if (src_len <= 0 || src_len > dst_len)
+-			bb_error_msg_and_die("lzop file corrupted");
++			bb_error_msg_and_die("corrupted data");
+ 
+ 		if (dst_len > block_size) {
+ 			if (b2) {
+@@ -797,7 +797,7 @@ static NOINLINE smallint lzo_decompress(const header_t *h)
+ 				r = lzo1x_decompress_safe(b1, src_len, b2, &d, NULL);
+ 
+ 			if (r != 0 /*LZO_E_OK*/ || dst_len != d) {
+-				bb_error_msg_and_die("corrupted compressed data");
++				bb_error_msg_and_die("corrupted data");
+ 			}
+ 			dst = b2;
+ 		} else {
+diff --git a/include/applets.h b/include/applets.h
+index 33c3c2555..4d8ba0a6b 100644
+--- a/include/applets.h
++++ b/include/applets.h
+@@ -253,7 +253,8 @@ IF_LSMOD(APPLET(lsmod, _BB_DIR_SBIN, _BB_SUID_DROP))
+ IF_MODPROBE_SMALL(APPLET_ODDNAME(lsmod, modprobe, _BB_DIR_SBIN, _BB_SUID_DROP, modprobe))
+ IF_LSPCI(APPLET(lspci, _BB_DIR_USR_BIN, _BB_SUID_DROP))
+ IF_LSUSB(APPLET(lsusb, _BB_DIR_USR_BIN, _BB_SUID_DROP))
+-IF_UNLZMA(APPLET_ODDNAME(lzmacat, unlzma, _BB_DIR_USR_BIN, _BB_SUID_DROP, lzmacat))
++IF_UNLZMA(APPLET_ODDNAME(lzcat, unlzma, _BB_DIR_USR_BIN, _BB_SUID_DROP, lzcat))
++IF_FEATURE_LZMA_ALIAS(APPLET_ODDNAME(lzma, unlzma, _BB_DIR_USR_BIN, _BB_SUID_DROP, lzma))
+ IF_LZOP(APPLET(lzop, _BB_DIR_BIN, _BB_SUID_DROP))
+ IF_LZOP(APPLET_ODDNAME(lzopcat, lzop, _BB_DIR_USR_BIN, _BB_SUID_DROP, lzopcat))
+ IF_MAKEDEVS(APPLET(makedevs, _BB_DIR_SBIN, _BB_SUID_DROP))
+diff --git a/include/usage.h b/include/usage.h
+index 8b8bd2c78..3b03228ee 100644
+--- a/include/usage.h
++++ b/include/usage.h
+@@ -197,7 +197,7 @@
+ #define bunzip2_trivial_usage \
+        "[OPTIONS] [FILE]..."
+ #define bunzip2_full_usage "\n\n" \
+-       "Uncompress FILEs (or stdin)\n" \
++       "Decompress FILEs (or stdin)\n" \
+      "\nOptions:" \
+      "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+@@ -207,10 +207,10 @@
+ #define bzip2_full_usage "\n\n" \
+        "Compress FILEs (or stdin) with bzip2 algorithm\n" \
+      "\nOptions:" \
+-     "\n	-c	Write to stdout" \
++     "\n	-1..9	Compression level" \
+      "\n	-d	Decompress" \
++     "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+-     "\n	-1..-9	Compression level" \
+ 
+ #define busybox_notes_usage \
+        "Hello world!\n"
+@@ -218,13 +218,14 @@
+ #define lzop_trivial_usage \
+        "[-cfvd123456789CF] [FILE]..."
+ #define lzop_full_usage "\n\n" \
+-       "	-c	Write to stdout" \
++       "Options:" \
++     "\n	-1..9	Compression level" \
++     "\n	-d	Decompress" \
++     "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+      "\n	-v	Verbose" \
+-     "\n	-d	Decompress" \
+      "\n	-F	Don't store or verify checksum" \
+      "\n	-C	Also write checksum of compressed block" \
+-     "\n	-1..9	Compression level" \
+ 
+ #define lzopcat_trivial_usage \
+        "[-vCF] [FILE]..."
+@@ -235,7 +236,8 @@
+ #define unlzop_trivial_usage \
+        "[-cfvCF] [FILE]..."
+ #define unlzop_full_usage "\n\n" \
+-       "	-c	Write to stdout" \
++       "Options:" \
++     "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+      "\n	-v	Verbose" \
+      "\n	-F	Don't store or verify checksum" \
+@@ -243,20 +245,29 @@
+ #define bzcat_trivial_usage \
+        "FILE"
+ #define bzcat_full_usage "\n\n" \
+-       "Uncompress to stdout"
++       "Decompress to stdout"
+ 
+ #define unlzma_trivial_usage \
+        "[OPTIONS] [FILE]..."
+ #define unlzma_full_usage "\n\n" \
+-       "Uncompress FILE (or stdin)\n" \
++       "Decompress FILE (or stdin)\n" \
++     "\nOptions:" \
++     "\n	-c	Write to stdout" \
++     "\n	-f	Force" \
++
++#define lzma_trivial_usage \
++       "-d [OPTIONS] [FILE]..."
++#define lzma_full_usage "\n\n" \
++       "Decompress FILE (or stdin)\n" \
+      "\nOptions:" \
++     "\n	-d	Decompress" \
+      "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+ 
+-#define lzmacat_trivial_usage \
++#define lzcat_trivial_usage \
+        "FILE"
+-#define lzmacat_full_usage "\n\n" \
+-       "Uncompress to stdout"
++#define lzcat_full_usage "\n\n" \
++       "Decompress to stdout"
+ 
+ #define cal_trivial_usage \
+        "[-jy] [[MONTH] YEAR]"
+@@ -267,11 +278,9 @@
+      "\n	-y	Display the entire year" \
+ 
+ #define cat_trivial_usage \
+-       "[-u] [FILE]..."
++       "[FILE]..."
+ #define cat_full_usage "\n\n" \
+-       "Concatenate FILEs and print them to stdout\n" \
+-     "\nOptions:" \
+-     "\n	-u	Use unbuffered i/o (ignored)" \
++       "Concatenate FILEs and print them to stdout" \
+ 
+ #define cat_example_usage \
+        "$ cat /proc/uptime\n" \
+@@ -1610,7 +1619,7 @@
+ #define gunzip_trivial_usage \
+        "[OPTIONS] [FILE]..."
+ #define gunzip_full_usage "\n\n" \
+-       "Uncompress FILEs (or stdin)\n" \
++       "Decompress FILEs (or stdin)\n" \
+      "\nOptions:" \
+      "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+@@ -1628,8 +1637,8 @@
+ #define gzip_full_usage "\n\n" \
+        "Compress FILEs (or stdin)\n" \
+      "\nOptions:" \
+-     "\n	-c	Write to stdout" \
+      "\n	-d	Decompress" \
++     "\n	-c	Write to stdout" \
+      "\n	-f	Force" \
+ 
+ #define gzip_example_usage \
+@@ -4977,7 +4986,7 @@
+ #define uncompress_trivial_usage \
+        "[-cf] [FILE]..."
+ #define uncompress_full_usage "\n\n" \
+-       "Uncompress .Z file[s]\n" \
++       "Decompress .Z file[s]\n" \
+      "\nOptions:" \
+      "\n	-c	Extract to stdout" \
+      "\n	-f	Overwrite an existing file" \
+@@ -5224,7 +5233,7 @@
+ #define zcat_trivial_usage \
+        "FILE"
+ #define zcat_full_usage "\n\n" \
+-       "Uncompress to stdout"
++       "Decompress to stdout"
+ 
+ #define zcip_trivial_usage \
+        "[OPTIONS] IFACE SCRIPT"

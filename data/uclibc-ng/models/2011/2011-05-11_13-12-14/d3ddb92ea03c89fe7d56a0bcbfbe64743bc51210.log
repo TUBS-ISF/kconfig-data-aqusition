@@ -1,0 +1,119 @@
+"2011-05-11 13:12:14 +0200"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 147a316e6..7dffdeab9 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -915,7 +915,8 @@ config UCLIBC_LINUX_SPECIFIC
+ 	default y
+ 	help
+ 	  capget(), capset(), fstatfs(), inotify_*(), ioperm(), iopl(),
+-	  madvise(), modify_ldt(), personality(), prctl()/arch_prctl(),
++	  madvise(), modify_ldt(), pipe2(), personality(),
++	  prctl()/arch_prctl(),
+ 	  ppoll(), readahead(), reboot(), remap_file_pages(),
+ 	  sched_getaffinity(), sched_setaffinity(), sendfile(),
+ 	  setfsgid(), setfsuid(), setresuid(),
+diff --git a/include/unistd.h b/include/unistd.h
+index c421cb308..6b614dd05 100644
+--- a/include/unistd.h
++++ b/include/unistd.h
+@@ -389,6 +389,13 @@ extern ssize_t pwrite64 (int __fd, __const void *__buf, size_t __n,
+ extern int pipe (int __pipedes[2]) __THROW __wur;
+ libc_hidden_proto(pipe)
+ 
++#ifdef __USE_GNU
++/* Same as pipe but apply flags passed in FLAGS to the new file
++   descriptors.  */
++extern int pipe2 (int __pipedes[2], int __flags) __THROW __wur;
++libc_hidden_proto(pipe2)
++#endif
++
+ /* Schedule an alarm.  In SECONDS seconds, the process will get a SIGALRM.
+    If SECONDS is zero, any currently scheduled alarm will be cancelled.
+    The function returns the number of seconds remaining until the last
+diff --git a/libc/sysdeps/linux/common/Makefile.in b/libc/sysdeps/linux/common/Makefile.in
+index 8811268d0..d97c73dcb 100644
+--- a/libc/sysdeps/linux/common/Makefile.in
++++ b/libc/sysdeps/linux/common/Makefile.in
+@@ -19,7 +19,8 @@ CSRC-$(UCLIBC_LINUX_MODULE_24) += create_module.c query_module.c \
+ 	get_kernel_syms.c
+ # we need these internally: fstatfs.c statfs.c
+ CSRC-$(UCLIBC_LINUX_SPECIFIC) += capget.c capset.c inotify.c ioperm.c iopl.c \
+-	madvise.c modify_ldt.c personality.c ppoll.c prctl.c readahead.c reboot.c \
++	madvise.c modify_ldt.c pipe2.c personality.c ppoll.c prctl.c \
++	readahead.c reboot.c \
+ 	remap_file_pages.c sched_getaffinity.c sched_setaffinity.c \
+ 	sendfile64.c sendfile.c setfsgid.c setfsuid.c setresuid.c \
+ 	splice.c vmsplice.c tee.c signalfd.c swapoff.c swapon.c \
+diff --git a/libc/sysdeps/linux/common/bits/kernel-features.h b/libc/sysdeps/linux/common/bits/kernel-features.h
+index b338e0770..6bf554457 100644
+--- a/libc/sysdeps/linux/common/bits/kernel-features.h
++++ b/libc/sysdeps/linux/common/bits/kernel-features.h
+@@ -309,6 +309,19 @@
+ # define __ASSUME_O_CLOEXEC 1
+ #endif
+ 
++/* Support for various CLOEXEC and NONBLOCK flags was added for x86,
++ *    x86-64, PPC, IA-64, and SPARC in 2.6.27.  */
++#if __LINUX_KERNEL_VERSION >= 0x02061b \
++    && (defined __i386__ || defined __x86_64__ || defined __powerpc__ \
++        || defined __ia64__ || defined __sparc__ || defined __s390__)
++/* # define __ASSUME_SOCK_CLOEXEC  1 */
++/* # define __ASSUME_IN_NONBLOCK   1 */
++# define __ASSUME_PIPE2         1
++/* # define __ASSUME_EVENTFD2      1 */
++/* # define __ASSUME_SIGNALFD4     1 */
++#endif
++
++
+ /* These features were surely available with 2.4.12.  */
+ #if __LINUX_KERNEL_VERSION >= 132108 && defined __mc68000__
+ # define __ASSUME_MMAP2_SYSCALL		1
+diff --git a/libc/sysdeps/linux/common/pipe2.c b/libc/sysdeps/linux/common/pipe2.c
+new file mode 100644
+index 000000000..0a3686d81
+--- /dev/null
++++ b/libc/sysdeps/linux/common/pipe2.c
+@@ -0,0 +1,16 @@
++/* vi: set sw=4 ts=4: */
++/*
++ * pipe2() for uClibc
++ *
++ * Copyright (C) 2011 Bernhard Reutner-Fischer <uclibc@uclibc.org>
++ *
++ * Licensed under the LGPL v2.1, see the file COPYING.LIB in this tarball.
++ */
++
++#include <sys/syscall.h>
++#include <unistd.h>
++
++#ifdef __NR_pipe2
++_syscall2(int, pipe2, int *, filedes, int, flags)
++libc_hidden_def(pipe2)
++#endif
+diff --git a/libc/sysdeps/linux/common/stubs.c b/libc/sysdeps/linux/common/stubs.c
+index 1aa07de36..f7c6dc5c5 100644
+--- a/libc/sysdeps/linux/common/stubs.c
++++ b/libc/sysdeps/linux/common/stubs.c
+@@ -31,6 +31,10 @@ static int enosys_stub(void)
+ # undef __NR_sync_file_range
+ #endif
+ 
++#ifndef __UCLIBC_LINUX_SPECIFIC__
++# undef __NR_pipe2
++#endif
++
+ #ifndef __UCLIBC_HAS_SOCKET__
+ # undef __NR_accept
+ # undef __NR_accept4
+@@ -177,6 +181,10 @@ make_stub(lremovexattr)
+ make_stub(lsetxattr)
+ #endif
+ 
++#ifndef __NR_pipe2
++make_stub(pipe2)
++#endif
++
+ #ifndef __NR_pivot_root
+ make_stub(pivot_root)
+ #endif

@@ -1,0 +1,792 @@
+"2015-08-06 11:13:11 -0300"
+diff --git a/src/lib/common/Kconfig b/src/lib/common/Kconfig
+index 7b9991bc..f4c7323f 100644
+--- a/src/lib/common/Kconfig
++++ b/src/lib/common/Kconfig
+@@ -310,6 +310,10 @@ config SOL_BUS
+ 	default n
+ 
+ menu "Hardware Options"
++config USE_AIO
++	bool "Analog I/O (AIO) Support"
++	default y
++
+ config USE_PWM
+ 	bool "PWM Support"
+ 	default y
+diff --git a/src/lib/io/Makefile b/src/lib/io/Makefile
+index c2c7dad0..ea6fbe5b 100644
+--- a/src/lib/io/Makefile
++++ b/src/lib/io/Makefile
+@@ -1,5 +1,10 @@
+ obj-$(IO) += io.mod
+ 
++ifeq (y, $(USE_AIO))
++obj-io-$(IO) += \
++    sol-aio-common.o
++endif
++
+ ifeq (y, $(USE_GPIO))
+ obj-io-$(IO) += \
+     sol-gpio-common.o
+@@ -16,6 +21,11 @@ obj-io-$(IO) += \
+ endif
+ 
+ ifeq (y,$(PLATFORM_RIOTOS))
++ifeq (y, $(USE_AIO))
++obj-io-$(IO) += \
++    sol-aio-riot.o
++endif # USE_AIO
++
+ ifeq (y, $(USE_GPIO))
+ obj-io-$(IO) += \
+     sol-gpio-riot.o
+@@ -50,6 +60,11 @@ endif # USE_GPIO
+ endif # PLATFORM_CONTIKI
+ 
+ ifeq (y,$(SOL_PLATFORM_LINUX))
++ifeq (y, $(USE_AIO))
++obj-io-$(IO) += \
++    sol-aio-linux.o
++endif # USE_AIO
++
+ ifeq (y, $(USE_GPIO))
+ obj-io-$(IO) += \
+     sol-gpio-linux.o
+@@ -76,6 +91,11 @@ obj-io-$(IO) += \
+ endif # USE_I2C
+ endif # PLATFORM_LINUX
+ 
++ifeq (y, $(USE_AIO))
++headers-$(IO) += \
++    include/sol-aio.h
++endif
++
+ ifeq (y, $(USE_GPIO))
+ headers-$(IO) += \
+     include/sol-gpio.h
+diff --git a/src/lib/io/include/sol-aio.h b/src/lib/io/include/sol-aio.h
+new file mode 100644
+index 00000000..36524a27
+--- /dev/null
++++ b/src/lib/io/include/sol-aio.h
+@@ -0,0 +1,81 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#pragma once
++
++#include <stdint.h>
++
++struct sol_aio; /**< Structure of the AIO handler */
++
++/**
++ * Open the given Analog I/O 'pin' on 'device' to be used.
++ *
++ * This function also applies any Pin Multiplexer rules needed if a multiplexer for
++ * the current platform was previously loaded.
++ *
++ * @param device The AIO device number.
++ * @param device The AIO pin on device.
++ * @param precision The number of valid bits on the data received from the analog to digital converter.
++ * @return A new AIO handler
++ *
++ * @see sol_aio_open_raw
++ */
++struct sol_aio *sol_aio_open(const int device, const int pin, const unsigned int precision);
++
++/**
++ * Open the given Analog I/O 'pin' on 'device' to be used.
++ *
++ * 'precision' is used to filter the valid bits from the data received from hardware
++ * (which is manufacturer dependent), therefore should not be used as a way to change
++ * the output range because is applied to the least significant bits.
++ *
++ * @param device The AIO device number
++ * @param device The AIO pin on device
++ * @param precision The number of valid bits on the data received from the analog to digital converter.
++ * @return A new AIO handler
++ */
++struct sol_aio *sol_aio_open_raw(const int device, const int pin, const unsigned int precision);
++
++/**
++ * Close the given AIO handler.
++ *
++ * @param aio AIO handler to be closed.
++ */
++void sol_aio_close(struct sol_aio *aio);
++
++/**
++ * Read the value of AIO 'pin' on 'device'.
++ *
++ * @param aio A valid AIO handler for the desired 'device'/'pin' pair.
++ * @return The value read. -1 in case of error.
++ */
++int32_t sol_aio_get_value(const struct sol_aio *aio);
+diff --git a/src/lib/io/sol-aio-common.c b/src/lib/io/sol-aio-common.c
+new file mode 100644
+index 00000000..d92952cf
+--- /dev/null
++++ b/src/lib/io/sol-aio-common.c
+@@ -0,0 +1,60 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdlib.h>
++
++#define SOL_LOG_DOMAIN &_log_domain
++#include "sol-log-internal.h"
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "aio");
++
++#include "sol-aio.h"
++#include "sol-pin-mux.h"
++
++struct sol_aio *
++sol_aio_open(const int device, const int pin, const unsigned int precision)
++{
++    struct sol_aio *aio;
++
++    SOL_LOG_INTERNAL_INIT_ONCE;
++
++    aio = sol_aio_open_raw(device, pin, precision);
++#ifdef HAVE_PIN_MUX
++    if (aio && sol_pin_mux_setup_aio(device, pin)) {
++        SOL_WRN("Pin Multiplexer Recipe for aio device=%d pin=%d found, "
++            "but couldn't be applied.", device, pin);
++        sol_aio_close(aio);
++        aio = NULL;
++    }
++#endif
++
++    return aio;
++}
+diff --git a/src/lib/io/sol-aio-linux.c b/src/lib/io/sol-aio-linux.c
+new file mode 100644
+index 00000000..48464fb9
+--- /dev/null
++++ b/src/lib/io/sol-aio-linux.c
+@@ -0,0 +1,150 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <limits.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++
++#define SOL_LOG_DOMAIN &_log_domain
++#include "sol-log-internal.h"
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "aio");
++
++#include "sol-aio.h"
++
++#define AIO_BASE_PATH "/sys/bus/iio/devices"
++
++#define AIO_PATH(dst, device, pin) \
++    ({ \
++        int _tmp = snprintf(dst, sizeof(dst), AIO_BASE_PATH "/iio:device%d/in_voltage%d_raw", \
++            device, pin); \
++        (_tmp > 0 && _tmp < PATH_MAX); \
++    })
++
++#define AIO_DEV_PATH(dst, device) \
++    ({ \
++        int _tmp = snprintf(dst, sizeof(dst), AIO_BASE_PATH "/iio:device%d", device); \
++        (_tmp > 0 && _tmp < PATH_MAX); \
++    })
++
++struct sol_aio {
++    FILE *fp;
++    int device;
++    int pin;
++    unsigned int mask;
++};
++
++static bool
++_aio_open_fp(struct sol_aio *aio)
++{
++    char path[PATH_MAX];
++
++    if (!AIO_PATH(path, aio->device, aio->pin))
++        return false;
++
++    aio->fp = fopen(path, "re");
++    if (!aio->fp)
++        return false;
++    setvbuf(aio->fp, NULL, _IONBF, 0);
++
++    return true;
++}
++
++struct sol_aio *
++sol_aio_open_raw(const int device, const int pin, const unsigned int precision)
++{
++    char path[PATH_MAX];
++    struct stat st;
++    struct sol_aio *aio;
++
++    SOL_LOG_INTERNAL_INIT_ONCE;
++
++    if (!precision) {
++        SOL_WRN("aio #%d,%d: Invalid precision value=%d. Precision needs to be different of zero.",
++            device, pin, precision);
++        return NULL;
++    }
++
++    aio = calloc(1, sizeof(*aio));
++    if (!aio) {
++        SOL_WRN("aio #%d,%d: could not allocate aio context", device, pin);
++        return NULL;
++    }
++
++    aio->device = device;
++    aio->pin = pin;
++    aio->mask = (0x01 << precision) - 1;
++
++    if (!_aio_open_fp((struct sol_aio *)aio)) {
++        if (!AIO_DEV_PATH(path, device) || stat(path, &st))
++            SOL_WRN("aio #%d,%d: aio device %d does not exist", device, pin, device);
++        else
++            SOL_WRN("aio #%d,%d: Couldn't open pin %d on device %d", device, pin, pin, device);
++
++        free(aio);
++        return NULL;
++    }
++
++    return aio;
++}
++
++void
++sol_aio_close(struct sol_aio *aio)
++{
++    SOL_NULL_CHECK(aio);
++
++    if (aio->fp)
++        fclose(aio->fp);
++
++    free(aio);
++}
++
++int32_t
++sol_aio_get_value(const struct sol_aio *aio)
++{
++    unsigned int val;
++
++    SOL_NULL_CHECK(aio, -1);
++    SOL_NULL_CHECK(aio->fp, -1);
++
++    rewind(aio->fp);
++
++    if (fscanf(aio->fp, "%u", &val) < 1) {
++        SOL_WRN("aio #%d,%d: Could not read value.", aio->device, aio->pin);
++        return -1;
++    }
++
++    return (int32_t)(val & aio->mask);
++}
+diff --git a/src/lib/io/sol-aio-riot.c b/src/lib/io/sol-aio-riot.c
+new file mode 100644
+index 00000000..fb6ebbc8
+--- /dev/null
++++ b/src/lib/io/sol-aio-riot.c
+@@ -0,0 +1,181 @@
++/*
++ * This file is part of the Soletta Project
++ *
++ * Copyright (C) 2015 Intel Corporation. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ *   * Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ *   * Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in
++ *     the documentation and/or other materials provided with the
++ *     distribution.
++ *   * Neither the name of Intel Corporation nor the names of its
++ *     contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define SOL_LOG_DOMAIN &_log_domain
++#include "sol-log-internal.h"
++SOL_LOG_INTERNAL_DECLARE_STATIC(_log_domain, "aio");
++
++#include "sol-aio.h"
++#include "sol-vector.h"
++
++#include "periph/adc.h"
++
++struct dev_ref {
++    uint16_t device;
++    uint16_t ref;
++};
++
++static struct sol_vector _dev_ref = SOL_VECTOR_INIT(struct dev_ref);
++
++struct sol_aio {
++    int device;
++    int pin;
++};
++
++static bool
++_check_precision(const unsigned int precision, adc_precision_t *output)
++{
++    switch (precision) {
++    case 6:
++        *output = ADC_RES_6BIT;
++        break;
++    case 8:
++        *output = ADC_RES_8BIT;
++        break;
++    case 10:
++        *output = ADC_RES_10BIT;
++        break;
++    case 12:
++        *output = ADC_RES_12BIT;
++        break;
++    case 14:
++        *output = ADC_RES_14BIT;
++        break;
++    case 16:
++        *output = ADC_RES_16BIT;
++        break;
++    default:
++        return false;
++    }
++
++    return true;
++}
++
++static void
++_power_on(const int device)
++{
++    uint16_t i;
++    struct dev_ref *ref;
++
++    SOL_VECTOR_FOREACH_IDX (&_dev_ref, ref, i) {
++        if (ref->device == device) {
++            ref->ref++;
++            return;
++        }
++    }
++
++    ref = sol_vector_append(&_dev_ref);
++    ref->device = device;
++    ref->ref = 1;
++    adc_poweron(device);
++}
++
++static void
++_power_off(const int device)
++{
++    uint16_t i;
++    struct dev_ref *ref;
++
++    SOL_VECTOR_FOREACH_IDX (&_dev_ref, ref, i) {
++        if (ref->device == device) {
++            if (!--ref->ref) {
++                sol_vector_del(&_dev_ref, i);
++                adc_poweroff(device);
++            }
++            return;
++        }
++    }
++
++    SOL_DBG("aio: Trying to power off device %d, but reference was not found.", device);
++}
++
++struct sol_aio *
++sol_aio_open_raw(const int device, const int pin, const unsigned int precision)
++{
++    struct sol_aio *aio;
++    adc_precision_t prec;
++
++    SOL_LOG_INTERNAL_INIT_ONCE;
++
++    if (!_check_precision(precision, &prec)) {
++        SOL_WRN("aio #%d,%d: Invalid precision=%d. \
++            See 'adc_precision_t' for valid values on riot.",
++            device, pin, precision);
++        return NULL;
++    }
++
++    aio = calloc(1, sizeof(*aio));
++    if (!aio) {
++        SOL_WRN("aio #%d,%d: could not allocate aio context", device, pin);
++        return NULL;
++    }
++
++    aio->device = device;
++    aio->pin = pin;
++
++    _power_on(device);
++
++    if (adc_init(device, prec)) {
++        SOL_WRN("aio #%d,%d: Couldn't initialize aio device with given precision=%d.",
++            device, pin, precision);
++        goto error;
++    }
++
++    return aio;
++
++error:
++    _power_off(device);
++    free(aio);
++    return NULL;
++}
++
++void
++sol_aio_close(struct sol_aio *aio)
++{
++    SOL_NULL_CHECK(aio);
++    _power_off(aio->device);
++    free(aio);
++}
++
++int32_t
++sol_aio_get_value(const struct sol_aio *aio)
++{
++    SOL_NULL_CHECK(aio, -1);
++
++    return (int32_t)adc_sample(aio->device, aio->pin);
++}
+diff --git a/src/modules/flow/aio/Kconfig b/src/modules/flow/aio/Kconfig
+index 3ce81237..b0473152 100644
+--- a/src/modules/flow/aio/Kconfig
++++ b/src/modules/flow/aio/Kconfig
+@@ -1,4 +1,4 @@
+ config FLOW_NODE_TYPE_AIO
+ 	tristate "Node type: aio"
+-	depends on FLOW
++	depends on FLOW && USE_AIO
+ 	default y
+diff --git a/src/modules/flow/aio/aio.c b/src/modules/flow/aio/aio.c
+index dd167020..c42aab6c 100644
+--- a/src/modules/flow/aio/aio.c
++++ b/src/modules/flow/aio/aio.c
+@@ -32,6 +32,7 @@
+ 
+ #include "aio-gen.h"
+ 
++#include "sol-aio.h"
+ #include "sol-flow-internal.h"
+ #include "sol-flow.h"
+ #include "sol-mainloop.h"
+@@ -43,36 +44,17 @@
+ #include <sys/stat.h>
+ #include <limits.h>
+ 
+-#define AIO_BASE_PATH "/sys/bus/iio/devices/iio:device0/in_voltage%d_raw"
+-
+ struct aio_data {
+     struct sol_flow_node *node;
+     struct sol_timeout *timer;
+-    FILE *fp;
++    struct sol_aio *aio;
++    int device;
+     int pin;
+     int mask;
+     int last_value;
+     bool is_first;
+ };
+ 
+-static bool
+-_aio_open_fd(struct aio_data *mdata)
+-{
+-    char path[PATH_MAX];
+-    int len;
+-
+-    len = snprintf(path, sizeof(path), AIO_BASE_PATH, mdata->pin);
+-    if (len < 0 || len > PATH_MAX)
+-        return false;
+-
+-    mdata->fp = fopen(path, "re");
+-    if (!mdata->fp)
+-        return false;
+-    setvbuf(mdata->fp, NULL, _IONBF, 0);
+-
+-    return true;
+-}
+-
+ static void
+ aio_close(struct sol_flow_node *node, void *data)
+ {
+@@ -80,8 +62,8 @@ aio_close(struct sol_flow_node *node, void *data)
+ 
+     SOL_NULL_CHECK(mdata);
+ 
+-    if (mdata->fp)
+-        fclose(mdata->fp);
++    if (mdata->aio)
++        sol_aio_close(mdata->aio);
+     if (mdata->timer)
+         sol_timeout_del(mdata->timer);
+ }
+@@ -98,22 +80,12 @@ _on_reader_timeout(void *data)
+ 
+     SOL_NULL_CHECK(data, true);
+ 
+-    if (!mdata->fp) {
+-        if (!_aio_open_fd(mdata)) {
+-            SOL_WRN("aio #%d: Could not open file.", mdata->pin);
+-            return false;
+-        }
+-    }
+-
+-    rewind(mdata->fp);
+-
+-    if (fscanf(mdata->fp, "%d", &i.val) < 1) {
+-        SOL_WRN("aio #%d: Could not read value.", mdata->pin);
++    i.val = sol_aio_get_value(mdata->aio);
++    if (i.val < 0) {
++        SOL_WRN("aio #%d,%d: Could not read value.", mdata->device, mdata->pin);
+         return false;
+     }
+ 
+-    i.val &= mdata->mask;
+-
+     if (mdata->is_first || i.val != mdata->last_value) {
+         mdata->is_first = false;
+         mdata->last_value = i.val;
+@@ -130,8 +102,6 @@ _on_reader_timeout(void *data)
+ static int
+ aio_reader_open(struct sol_flow_node *node, void *data, const struct sol_flow_node_options *options)
+ {
+-    char path[PATH_MAX];
+-    struct stat st;
+     struct aio_data *mdata = data;
+     const struct sol_flow_node_type_aio_reader_options *opts =
+         (const struct sol_flow_node_type_aio_reader_options *)options;
+@@ -140,24 +110,24 @@ aio_reader_open(struct sol_flow_node *node, void *data, const struct sol_flow_no
+ 
+     mdata->is_first = true;
+     mdata->node = node;
+-    mdata->pin = opts->pin.val;
+ 
+-    snprintf(path, sizeof(path), AIO_BASE_PATH, mdata->pin);
+-    if (stat(path, &st) == -1) {
+-        SOL_WRN("aio #%d: Couldn't open pin.", mdata->pin);
++    if (opts->mask.val <= 0) {
++        SOL_WRN("aio #%d,%d: Invalid bit mask value=%" PRId32 ".", opts->device.val, opts->pin.val,
++            opts->mask.val);
+         return -EINVAL;
+     }
+ 
+-    if (opts->poll_timeout.val <= 0) {
+-        SOL_WRN("aio #%d: Invalid polling time=%" PRId32 ".", mdata->pin, opts->poll_timeout.val);
+-        return -EINVAL;
+-    }
++    mdata->aio = sol_aio_open(opts->device.val, opts->pin.val, opts->mask.val);
++    SOL_NULL_CHECK(mdata->aio, -EINVAL);
+ 
+-    if (opts->mask.val == 0) {
+-        SOL_WRN("aio #%d: Invalid bit mask value=%" PRId32 ".", mdata->pin, opts->mask.val);
++    if (opts->poll_timeout.val <= 0) {
++        SOL_WRN("aio #%d,%d: Invalid polling time=%" PRId32 ".", opts->device.val, opts->pin.val,
++            opts->poll_timeout.val);
+         return -EINVAL;
+     }
+ 
++    mdata->device = opts->device.val;
++    mdata->pin = opts->pin.val;
+     mdata->mask = (0x01 << opts->mask.val) - 1;
+     mdata->timer = sol_timeout_add(opts->poll_timeout.val, _on_reader_timeout, mdata);
+ 
+diff --git a/src/modules/flow/aio/aio.json b/src/modules/flow/aio/aio.json
+index b62bfd2d..f66105b9 100644
+--- a/src/modules/flow/aio/aio.json
++++ b/src/modules/flow/aio/aio.json
+@@ -17,6 +17,11 @@
+       "name": "aio/reader",
+       "options": {
+         "members": [
++          {
++            "data_type": "int",
++            "description": "Device number on platform.",
++            "name": "device"
++          },
+           {
+             "data_type": "int",
+             "description": "Pin",
+diff --git a/src/modules/flow/grove/grove.c b/src/modules/flow/grove/grove.c
+index 169a6eb9..b9180d59 100644
+--- a/src/modules/flow/grove/grove.c
++++ b/src/modules/flow/grove/grove.c
+@@ -67,6 +67,7 @@ rotary_child_opts_set(const struct sol_flow_node_type *type, uint16_t child_inde
+         converter_opts->input_range_mask = container_opts->mask;
+     } else if (child_index == ROTARY_AIO_READER_NODE_IDX) {
+         struct sol_flow_node_type_aio_reader_options *reader_opts = (struct sol_flow_node_type_aio_reader_options *)child_opts;
++        reader_opts->device = container_opts->device;
+         reader_opts->pin = container_opts->pin;
+         reader_opts->mask = container_opts->mask;
+         reader_opts->poll_timeout = container_opts->poll_timeout;
+@@ -186,6 +187,7 @@ light_child_opts_set(const struct sol_flow_node_type *type, uint16_t child_index
+         converter_opts->input_range_mask = container_opts->mask;
+     } else if (child_index == LIGHT_AIO_READER_NODE_IDX) {
+         struct sol_flow_node_type_aio_reader_options *reader_opts = (struct sol_flow_node_type_aio_reader_options *)child_opts;
++        reader_opts->device = container_opts->device;
+         reader_opts->pin = container_opts->pin;
+         reader_opts->mask = container_opts->mask;
+         reader_opts->poll_timeout = container_opts->poll_timeout;
+@@ -364,6 +366,7 @@ temperature_child_opts_set(const struct sol_flow_node_type *type, uint16_t child
+         converter_opts->thermistor_resistance = container_opts->thermistor_resistance;
+     } else if (child_index == TEMPERATURE_AIO_READER_NODE_IDX) {
+         struct sol_flow_node_type_aio_reader_options *reader_opts = (struct sol_flow_node_type_aio_reader_options *)child_opts;
++        reader_opts->device = container_opts->device;
+         reader_opts->pin = container_opts->pin;
+         reader_opts->mask = container_opts->mask;
+         reader_opts->poll_timeout = container_opts->poll_timeout;
+diff --git a/src/modules/flow/grove/grove.json b/src/modules/flow/grove/grove.json
+index 13eccd9a..7199bd15 100644
+--- a/src/modules/flow/grove/grove.json
++++ b/src/modules/flow/grove/grove.json
+@@ -87,6 +87,12 @@
+       "name": "grove/temperature-sensor",
+       "options": {
+         "members": [
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "Device number",
++            "name": "device"
++          },
+           {
+             "data_type": "int",
+             "default": 2,
+@@ -205,6 +211,12 @@
+       "name": "grove/light-sensor",
+       "options": {
+         "members": [
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "Device number",
++            "name": "device"
++          },
+           {
+             "data_type": "int",
+             "default": 1,
+@@ -299,6 +311,12 @@
+       "name": "grove/rotary-sensor",
+       "options": {
+         "members": [
++          {
++            "data_type": "int",
++            "default": 0,
++            "description": "Device number",
++            "name": "device"
++          },
+           {
+             "data_type": "int",
+             "default": 0,

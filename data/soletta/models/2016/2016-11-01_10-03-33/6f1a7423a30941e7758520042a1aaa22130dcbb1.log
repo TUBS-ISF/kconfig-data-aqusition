@@ -1,0 +1,173 @@
+"2016-11-01 10:03:33 -0200"
+diff --git a/Kconfig b/Kconfig
+index 54366b64..8f0274ee 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -230,6 +230,7 @@ source "src/samples/flow/semaphore-monitor/Kconfig"
+ source "src/samples/flow/trash-disposer/Kconfig"
+ source "src/samples/flow/unix-socket/Kconfig"
+ source "src/samples/flow/webservices/Kconfig"
++source "src/samples/flow/iio+network/Kconfig"
+ 
+ endmenu
+ 
+diff --git a/src/samples/flow/iio+network/Kconfig b/src/samples/flow/iio+network/Kconfig
+new file mode 100644
+index 00000000..24479ebb
+--- /dev/null
++++ b/src/samples/flow/iio+network/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_IIO_NETWORK_SAMPLE
++	bool
++	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_IIO && FLOW_NODE_TYPE_TIMER && FLOW_NODE_TYPE_CONSOLE && FLOW_NODE_TYPE_MQTT && FLOW_NODE_TYPE_STRING && FLOW_NODE_TYPE_CONVERTER
++	default y
+diff --git a/src/samples/flow/iio+network/Makefile b/src/samples/flow/iio+network/Makefile
+new file mode 100644
+index 00000000..7cb9b99e
+--- /dev/null
++++ b/src/samples/flow/iio+network/Makefile
+@@ -0,0 +1,7 @@
++sample-$(FLOW_IIO_NETWORK_SAMPLE) += ambient-light-and-proximity-console
++sample-ambient-light-and-proximity-console-$(FLOW_IIO_NETWORK_SAMPLE) := ambient-light-and-proximity-console.fbp
++sample-ambient-light-and-proximity-console-$(FLOW_IIO_NETWORK_SAMPLE)-conffile := sol-flow-SoFIA-3GR.json
++
++sample-$(FLOW_IIO_NETWORK_SAMPLE) += ambient-light-and-proximity-mqtt
++sample-ambient-light-and-proximity-mqtt-$(FLOW_IIO_NETWORK_SAMPLE) := ambient-light-and-proximity-mqtt.fbp
++sample-ambient-light-and-proximity-mqtt-$(FLOW_IIO_NETWORK_SAMPLE)-conffile := sol-flow-SoFIA-3GR.json
+diff --git a/src/samples/flow/iio+network/ambient-light-and-proximity-console.fbp b/src/samples/flow/iio+network/ambient-light-and-proximity-console.fbp
+new file mode 100755
+index 00000000..75a13ead
+--- /dev/null
++++ b/src/samples/flow/iio+network/ambient-light-and-proximity-console.fbp
+@@ -0,0 +1,26 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2016 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Print IIO ambient light luminance and proximity reading in console
++
++DECLARE=ambient-light-and-proximity:fbp:ambient-light-and-proximity.fbp
++amb_prox(ambient-light-and-proximity:interval=1000)
++
++amb_prox LUX -> IN _(console:prefix="Lux: ")
++amb_prox PROXIMITY -> IN _(console:prefix="Proximity: ")
++
+diff --git a/src/samples/flow/iio+network/ambient-light-and-proximity-mqtt.fbp b/src/samples/flow/iio+network/ambient-light-and-proximity-mqtt.fbp
+new file mode 100755
+index 00000000..b8a1ce19
+--- /dev/null
++++ b/src/samples/flow/iio+network/ambient-light-and-proximity-mqtt.fbp
+@@ -0,0 +1,30 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2016 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Publish IIO ambient light luminance and proximity reading through MQTT
++
++DECLARE=ambient-light-and-proximity:fbp:ambient-light-and-proximity.fbp
++amb_prox(ambient-light-and-proximity:interval=1000)
++
++# publish
++pub(mqtt/client:host="127.0.0.1",topic="soletta/mqtt/sensor_data")
++
++amb_prox SENSOR_STRING -> IN convert(converter/string-to-blob) OUT -> DATA pub
++
++convert OUT -> PUBLISH pub
++
+diff --git a/src/samples/flow/iio+network/ambient-light-and-proximity.fbp b/src/samples/flow/iio+network/ambient-light-and-proximity.fbp
+new file mode 100755
+index 00000000..9e0e4015
+--- /dev/null
++++ b/src/samples/flow/iio+network/ambient-light-and-proximity.fbp
+@@ -0,0 +1,36 @@
++#!/usr/bin/env sol-fbp-runner
++
++# This file is part of the Soletta (TM) Project
++#
++# Copyright (C) 2016 Intel Corporation. All rights reserved.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# IIO ambient light luminance and proximity reading
++
++light(MyLight)
++proximity(MyProximity)
++
++# timer trigger sensor reading every seconds
++timer(timer:interval=1000)
++
++timer OUT -> TICK light OUT -> IN lux(converter/float-to-string:format_prefix="Lux: ")
++timer OUT -> TICK proximity OUT -> IN distance(converter/float-to-string:format_prefix="Proximity: ")
++
++lux OUT -> IN[0] concat(string/concatenate:separator=" ")
++distance OUT -> IN[1] concat
++
++OPTION=timer.interval:interval
++OUTPORT=light.OUT:LUX
++OUTPORT=proximity.OUT:PROXIMITY
++OUTPORT=concat.OUT:SENSOR_STRING
+diff --git a/src/samples/flow/iio+network/sol-flow-SoFIA-3GR.json b/src/samples/flow/iio+network/sol-flow-SoFIA-3GR.json
+new file mode 100644
+index 00000000..8c2c4d8e
+--- /dev/null
++++ b/src/samples/flow/iio+network/sol-flow-SoFIA-3GR.json
+@@ -0,0 +1,21 @@
++{
++  "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++  "nodetypes": [
++    {
++      "name": "MyLight",
++      "type": "iio/light-sensor",
++      "options": {
++        "iio_device": "apds99X0",
++        "buffer_size": -1
++      }
++    },
++    {
++      "name": "MyProximity",
++      "type": "iio/proximity-sensor",
++      "options": {
++        "iio_device": "apds99X0",
++        "buffer_size": -1
++      }
++    }
++  ]
++}

@@ -1,0 +1,543 @@
+"2006-03-23 17:19:42 +0000"
+diff --git a/extra/Configs/Config.in b/extra/Configs/Config.in
+index 374f8da86..4861b8d57 100644
+--- a/extra/Configs/Config.in
++++ b/extra/Configs/Config.in
+@@ -455,6 +455,15 @@ config COMPAT_ATEXIT
+ 	  Enable this option if you want to update from 0.9.28 to svn/0.9.29, else
+ 	  you will be missing atexit() until you rebuild all apps.
+ 
++config UCLIBC_SUSV3_LEGACY
++	bool "Enable SuSv3 LEGACY functions"
++	default n
++	help
++	  Enable this option if you want to have SuSv3 LEGACY functions
++	  in the library, else they are replaced by SuSv3 proposed macros.
++	  Currently applies to bcopy/bzero/bcmp/index/rindex.
++	  WARNING! ABI incompatibility.
++
+ config HAS_SHADOW
+ 	bool "Shadow Password Support"
+ 	default y
+diff --git a/include/string.h b/include/string.h
+index a98248c96..dd5f23f2b 100644
+--- a/include/string.h
++++ b/include/string.h
+@@ -301,6 +301,7 @@ extern void __bzero (void *__s, size_t __n) __THROW __nonnull ((1));
+ #endif
+ 
+ #ifdef __USE_BSD
++# ifdef __UCLIBC_SUSV3_LEGACY__
+ /* Copy N bytes of SRC to DEST (like memmove, but args reversed).  */
+ extern void bcopy (__const void *__src, void *__dest, size_t __n)
+      __THROW __nonnull ((1, 2));
+@@ -319,6 +320,17 @@ extern char *index (__const char *__s, int __c)
+ /* Find the last occurrence of C in S (same as strrchr).  */
+ extern char *rindex (__const char *__s, int __c)
+      __THROW __attribute_pure__ __nonnull ((1));
++# else
++/* bcopy/bzero/bcmp/index/rindex are marked LEGACY in SuSv3.
++ * They are replaced as proposed by SuSv3. Don't sync this part 
++ * with glibc and keep it in sync with strings.h.  */
++
++#  define bcopy(src,dest,n) (memmove((dest), (src), (n)), (void) 0)
++#  define bzero(s,n) (memset((s), '\0', (n)), (void) 0)
++#  define bcmp(s1,s2,n) memcmp((s1), (s2), (size_t)(n))
++#  define index(s,c) strchr((s), (c))
++#  define rindex(s,c) strrchr((s), (c))
++# endif
+ 
+ /* Return the position of the first bit set in I, or 0 if none are set.
+    The least-significant bit is position 1, the most-significant 32.  */
+diff --git a/include/strings.h b/include/strings.h
+index 0b310e1c5..fe089d960 100644
+--- a/include/strings.h
++++ b/include/strings.h
+@@ -33,6 +33,7 @@
+ 
+ __BEGIN_DECLS
+ 
++# ifdef __UCLIBC_SUSV3_LEGACY__
+ /* Copy N bytes of SRC to DEST (like memmove, but args reversed).  */
+ extern void bcopy (__const void *__src, void *__dest, size_t __n)
+      __THROW __nonnull ((1, 2));
+@@ -51,6 +52,17 @@ extern char *index (__const char *__s, int __c)
+ /* Find the last occurrence of C in S (same as strrchr).  */
+ extern char *rindex (__const char *__s, int __c)
+      __THROW __attribute_pure__ __nonnull ((1));
++# else
++/* bcopy/bzero/bcmp/index/rindex are marked LEGACY in SuSv3.
++ * They are replaced as proposed by SuSv3. Don't sync this part 
++ * with glibc and keep it in sync with string.h.  */
++
++#  define bcopy(src,dest,n) (memmove((dest), (src), (n)), (void) 0)
++#  define bzero(s,n) (memset((s), '\0', (n)), (void) 0)
++#  define bcmp(s1,s2,n) memcmp((s1), (s2), (size_t)(n))
++#  define index(s,c) strchr((s), (c))
++#  define rindex(s,c) strrchr((s), (c))
++# endif
+ 
+ /* Return the position of the first bit set in I, or 0 if none are set.
+    The least-significant bit is position 1, the most-significant 32.  */
+diff --git a/libc/string/arm/bcopy.S b/libc/string/arm/bcopy.S
+index 0e559225f..db3c9e6c1 100644
+--- a/libc/string/arm/bcopy.S
++++ b/libc/string/arm/bcopy.S
+@@ -41,6 +41,8 @@
+ 
+ #include <features.h>
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
++
+ .text
+ .global bcopy
+ .type bcopy,%function
+@@ -54,3 +56,5 @@ bcopy:
+ 	b	_memcpy /* (PLT) */
+ 	
+ .size bcopy,.-bcopy
++
++#endif
+diff --git a/libc/string/arm/bzero.S b/libc/string/arm/bzero.S
+index c1eb93323..ee49cf560 100644
+--- a/libc/string/arm/bzero.S
++++ b/libc/string/arm/bzero.S
+@@ -39,6 +39,8 @@
+ 
+ #include <features.h>
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
++
+ .text
+ .global bzero
+ .type bzero,%function
+@@ -50,3 +52,5 @@ bzero:
+ 	b	HIDDEN_JUMPTARGET(memset)
+ 
+ .size bzero,.-bzero
++
++#endif
+diff --git a/libc/string/arm/memcmp.S b/libc/string/arm/memcmp.S
+index af1b876ed..4f78b5128 100644
+--- a/libc/string/arm/memcmp.S
++++ b/libc/string/arm/memcmp.S
+@@ -63,4 +63,6 @@ memcmp:
+ .size memcmp,.-memcmp
+ 
+ libc_hidden_def(memcmp)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(memcmp,bcmp)
++#endif
+diff --git a/libc/string/bcopy.c b/libc/string/bcopy.c
+index 11c3e8015..bd233cb9c 100644
+--- a/libc/string/bcopy.c
++++ b/libc/string/bcopy.c
+@@ -7,6 +7,8 @@
+ 
+ #include "_string.h"
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
++
+ libc_hidden_proto(memmove)
+ 
+ void bcopy(const void *s2, void *s1, size_t n)
+@@ -51,3 +53,4 @@ void bcopy(const void *s2, void *s1, size_t n)
+ #endif
+ #endif
+ }
++#endif
+diff --git a/libc/string/bzero.c b/libc/string/bzero.c
+index 30bdf5674..519695cab 100644
+--- a/libc/string/bzero.c
++++ b/libc/string/bzero.c
+@@ -7,6 +7,8 @@
+ 
+ #include "_string.h"
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
++
+ libc_hidden_proto(memset)
+ 
+ void bzero(void *s, size_t n)
+@@ -29,3 +31,4 @@ void bzero(void *s, size_t n)
+ #endif
+ }
+ #undef np
++#endif
+diff --git a/libc/string/generic/memcmp.c b/libc/string/generic/memcmp.c
+index 41f15369d..b754a5195 100644
+--- a/libc/string/generic/memcmp.c
++++ b/libc/string/generic/memcmp.c
+@@ -331,4 +331,6 @@ memcmp (const __ptr_t s1, const __ptr_t s2, size_t len)
+   return 0;
+ }
+ libc_hidden_def(memcmp)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(memcmp,bcmp)
++#endif
+diff --git a/libc/string/generic/strchr.c b/libc/string/generic/strchr.c
+index b1ffc7538..1663adde6 100644
+--- a/libc/string/generic/strchr.c
++++ b/libc/string/generic/strchr.c
+@@ -182,4 +182,6 @@ char *strchr (const char *s, int c_in)
+   return NULL;
+ }
+ libc_hidden_def(strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strchr,index)
++#endif
+diff --git a/libc/string/generic/strrchr.c b/libc/string/generic/strrchr.c
+index b67e369fd..97192da95 100644
+--- a/libc/string/generic/strrchr.c
++++ b/libc/string/generic/strrchr.c
+@@ -43,4 +43,6 @@ char *strrchr (const char *s, int c)
+   return (char *) found;
+ }
+ libc_hidden_def(strrchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strrchr,rindex)
++#endif
+diff --git a/libc/string/i386/strchr.c b/libc/string/i386/strchr.c
+index 5ed87e816..7568d48db 100644
+--- a/libc/string/i386/strchr.c
++++ b/libc/string/i386/strchr.c
+@@ -51,4 +51,6 @@ char *strchr(const char *s, int c)
+     return __res;
+ }
+ libc_hidden_def(strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strchr,index)
++#endif
+diff --git a/libc/string/i386/strrchr.c b/libc/string/i386/strrchr.c
+index 7af990bd7..e3b2df6fb 100644
+--- a/libc/string/i386/strrchr.c
++++ b/libc/string/i386/strrchr.c
+@@ -49,4 +49,6 @@ char *strrchr(const char *s, int c)
+     return __res;
+ }
+ libc_hidden_def(strrchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strrchr,rindex)
++#endif
+diff --git a/libc/string/ia64/bcopy.S b/libc/string/ia64/bcopy.S
+index c4eb22b1f..c5637c369 100644
+--- a/libc/string/ia64/bcopy.S
++++ b/libc/string/ia64/bcopy.S
+@@ -1,5 +1,7 @@
+ #include "sysdep.h"
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
++
+ ENTRY(bcopy)
+ 	.regstk 3, 0, 0, 0
+ 	mov r8 = in0
+@@ -8,3 +10,5 @@ ENTRY(bcopy)
+ 	mov in1 = r8
+ 	br.cond.sptk.many HIDDEN_JUMPTARGET(memmove)
+ END(bcopy)
++
++#endif
+diff --git a/libc/string/ia64/bzero.S b/libc/string/ia64/bzero.S
+index 0e2ff09cc..d390838a6 100644
+--- a/libc/string/ia64/bzero.S
++++ b/libc/string/ia64/bzero.S
+@@ -33,6 +33,9 @@
+    to get peak speed.  */
+ 
+ #include "sysdep.h"
++
++#ifdef __UCLIBC_SUSV3_LEGACY__
++
+ #undef ret
+ 
+ #define dest		in0
+@@ -313,3 +316,5 @@ ENTRY(bzero)
+ 	br.ret.sptk.many rp
+ ;; }
+ END(bzero)
++
++#endif
+diff --git a/libc/string/ia64/memcmp.S b/libc/string/ia64/memcmp.S
+index c6ea7529b..8b0c096ce 100644
+--- a/libc/string/ia64/memcmp.S
++++ b/libc/string/ia64/memcmp.S
+@@ -160,6 +160,7 @@ ENTRY(memcmp)
+ 	mov 	ar.lc = saved_lc	// restore the loop counter
+ 	br.ret.sptk.many b0
+ END(memcmp)
+-
+-weak_alias (memcmp, bcmp)
+ libc_hidden_def (memcmp)
++#ifdef __UCLIBC_SUSV3_LEGACY__
++strong_alias (memcmp, bcmp)
++#endif
+diff --git a/libc/string/ia64/strchr.S b/libc/string/ia64/strchr.S
+index 7d1a0834e..401a07941 100644
+--- a/libc/string/ia64/strchr.S
++++ b/libc/string/ia64/strchr.S
+@@ -107,6 +107,7 @@ ENTRY(strchr)
+ 	ld8	val2 = [ret0], 8	// bomb out here
+ 	br.cond.sptk	.back
+ END(strchr)
+-
+-weak_alias (strchr, index)
+ libc_hidden_def (strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
++strong_alias (strchr, index)
++#endif
+diff --git a/libc/string/memcmp.c b/libc/string/memcmp.c
+index 9de28c234..377a8d692 100644
+--- a/libc/string/memcmp.c
++++ b/libc/string/memcmp.c
+@@ -38,5 +38,7 @@ int Wmemcmp(const Wvoid *s1, const Wvoid *s2, size_t n)
+ 
+ #ifndef WANT_WIDE
+ libc_hidden_def(memcmp)
++# ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(memcmp,bcmp)
++# endif
+ #endif
+diff --git a/libc/string/sparc/sparc32/memcpy.S b/libc/string/sparc/sparc32/memcpy.S
+index fb79a601a..25a48844d 100644
+--- a/libc/string/sparc/sparc32/memcpy.S
++++ b/libc/string/sparc/sparc32/memcpy.S
+@@ -21,6 +21,8 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <features.h>
++
+ /* Both these macros have to start with exactly the same insn */
+ #define MOVE_BIGCHUNK(src, dst, offset, t0, t1, t2, t3, t4, t5, t6, t7) 				\
+ 	ldd	[%src + offset + 0x00], %t0; 								\
+@@ -161,11 +163,13 @@
+ 	b		3f
+ 	 sub		%o0, 2, %o0
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ ENTRY(bcopy)
+ 	mov		%o0, %o3
+ 	mov		%o1, %o0
+ 	mov		%o3, %o1
+ END(bcopy)
++#endif
+ 
+ ENTRY(memmove)
+ 	cmp		%o0, %o1
+diff --git a/libc/string/sparc/sparc32/memset.S b/libc/string/sparc/sparc32/memset.S
+index d5e1350f2..358fe496a 100644
+--- a/libc/string/sparc/sparc32/memset.S
++++ b/libc/string/sparc/sparc32/memset.S
+@@ -20,6 +20,8 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <features.h>
++
+ 	/* Store 64 bytes at (BASE + OFFSET) using value SOURCE. */
+ #define ZERO_BIG_BLOCK(base, offset, source)    	\
+ 	std		source, [base + offset + 0x00]; \
+@@ -43,6 +45,7 @@
+ 
+ 	.text
+ 	.align 4
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ ENTRY(bzero)
+ 	b		1f
+ 	 mov		%g0, %g3
+@@ -61,6 +64,7 @@ ENTRY(bzero)
+ 	b		4f
+ 	 sub		%o0, %o2, %o0
+ END(bzero)
++#endif
+ 
+ ENTRY(memset)
+ 	and		%o1, 0xff, %g3
+diff --git a/libc/string/sparc/sparc32/strchr.S b/libc/string/sparc/sparc32/strchr.S
+index d06bbe3cc..16710d4e8 100644
+--- a/libc/string/sparc/sparc32/strchr.S
++++ b/libc/string/sparc/sparc32/strchr.S
+@@ -35,6 +35,8 @@
+ 	   in these days for an average user.
+ 	 */
+ 
++#include <features.h>
++
+ 	.text
+ 	.align		4
+ 10:	ldub		[%o0], %g4
+@@ -217,7 +219,9 @@ ENTRY(strchr)
+ 	 ld		[%o0], %g4
+ END(strchr)
+ libc_hidden_def(strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strchr,index)
++#endif
+ 
+ ENTRY(strrchr)
+ 	andcc		%o1, 0xff, %o1
+@@ -278,4 +282,6 @@ ENTRY(strrchr)
+ 	 mov		%o5, %o0
+ END(strrchr)
+ libc_hidden_def(strrchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strrchr,rindex)
++#endif
+diff --git a/libc/string/sparc/sparc64/memcpy.S b/libc/string/sparc/sparc64/memcpy.S
+index 2fdff7b52..db63d1da2 100644
+--- a/libc/string/sparc/sparc64/memcpy.S
++++ b/libc/string/sparc/sparc64/memcpy.S
+@@ -20,6 +20,7 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <features.h>
+ #include <asm/asi.h>
+ #ifndef XCC
+ #define USE_BPR
+@@ -191,6 +192,7 @@
+ 	.text
+ 	.align		32
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ ENTRY(bcopy)
+ 	sub		%o1, %o0, %o4			/* IEU0		Group		*/
+ 	mov		%o0, %g3			/* IEU1				*/
+@@ -206,6 +208,7 @@ ENTRY(bcopy)
+ 	retl
+ 	 nop
+ END(bcopy)
++#endif
+ 
+ 	.align		32
+ 200:	be,pt		%xcc, 201f			/* CTI				*/
+diff --git a/libc/string/sparc/sparc64/memset.S b/libc/string/sparc/sparc64/memset.S
+index 284713556..79c1d74b6 100644
+--- a/libc/string/sparc/sparc64/memset.S
++++ b/libc/string/sparc/sparc64/memset.S
+@@ -20,6 +20,7 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <features.h>
+ #include <asm/asi.h>
+ #ifndef XCC
+ #define XCC xcc
+@@ -191,6 +192,7 @@ libc_hidden_def(memset)
+ 
+ 	.text
+ 	.align		32
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ ENTRY(bzero)
+ #ifndef USE_BPR
+ 	srl		%o1, 0, %o1
+@@ -310,3 +312,4 @@ ENTRY(bzero)
+ 0:	retl
+ 	 mov		%o5, %o0
+ END(bzero)
++#endif
+diff --git a/libc/string/sparc/sparc64/sparcv9b/memcpy.S b/libc/string/sparc/sparc64/sparcv9b/memcpy.S
+index b49c9cde9..64f6a92e0 100644
+--- a/libc/string/sparc/sparc64/sparcv9b/memcpy.S
++++ b/libc/string/sparc/sparc64/sparcv9b/memcpy.S
+@@ -19,6 +19,8 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <features.h>
++
+ #define ASI_BLK_P 0xf0
+ #define FPRS_FEF  0x04
+ #define VISEntryHalf rd %fprs, %o5; wr %g0, FPRS_FEF, %fprs
+@@ -36,6 +38,7 @@
+ 	.text
+ 	.align	32
+ 
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ ENTRY(bcopy)
+ 	sub		%o1, %o0, %o4
+ 	mov		%o0, %g4
+@@ -51,6 +54,7 @@ ENTRY(bcopy)
+ 	retl
+ 	 nop
+ END(bcopy)
++#endif
+ 
+ 	/* Special/non-trivial issues of this code:
+ 	 *
+diff --git a/libc/string/sparc/sparc64/strchr.S b/libc/string/sparc/sparc64/strchr.S
+index 6a371352a..da26d1f9c 100644
+--- a/libc/string/sparc/sparc64/strchr.S
++++ b/libc/string/sparc/sparc64/strchr.S
+@@ -20,6 +20,7 @@
+    Software Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+    02111-1307 USA.  */
+ 
++#include <features.h>
+ #include <asm/asi.h>
+ #ifndef XCC
+ #define XCC xcc
+@@ -329,7 +330,9 @@ ENTRY(strchr)
+ 	 add		%o0, -1, %o0			/* IEU0				*/
+ END(strchr)
+ libc_hidden_def(strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strchr,index)
++#endif
+ 
+ 	.align		32
+ ENTRY(strrchr)
+@@ -478,4 +481,6 @@ ENTRY(strrchr)
+ 	 ldx		[%o0], %o3			/* Load				*/
+ END(strrchr)
+ libc_hidden_def(strrchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strrchr,rindex)
++#endif
+diff --git a/libc/string/strchr.c b/libc/string/strchr.c
+index 6bfd2077d..0ce552438 100644
+--- a/libc/string/strchr.c
++++ b/libc/string/strchr.c
+@@ -27,6 +27,6 @@ Wchar *Wstrchr(register const Wchar *s, Wint c)
+ }
+ libc_hidden_def(Wstrchr)
+ 
+-#ifndef WANT_WIDE
++#if !defined WANT_WIDE && defined __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strchr,index)
+ #endif
+diff --git a/libc/string/strrchr.c b/libc/string/strrchr.c
+index 8a9184f9f..67cafb75a 100644
+--- a/libc/string/strrchr.c
++++ b/libc/string/strrchr.c
+@@ -29,5 +29,7 @@ Wchar *Wstrrchr(register const  Wchar *s, Wint c)
+ }
+ #ifndef WANT_WIDE
+ libc_hidden_def(strrchr)
++# ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias(strrchr,rindex)
++# endif
+ #endif
+diff --git a/libc/string/x86_64/bzero.S b/libc/string/x86_64/bzero.S
+index b6e41fb0f..4d179ec4e 100644
+--- a/libc/string/x86_64/bzero.S
++++ b/libc/string/x86_64/bzero.S
+@@ -1,2 +1,5 @@
+-#define memset bzero
+-#include "memset.S"
++#include <features.h>
++#ifdef __UCLIBC_SUSV3_LEGACY__
++# define memset bzero
++# include "memset.S"
++#endif
+diff --git a/libc/string/x86_64/strchr.S b/libc/string/x86_64/strchr.S
+index 6f6635a39..8e59c4c19 100644
+--- a/libc/string/x86_64/strchr.S
++++ b/libc/string/x86_64/strchr.S
+@@ -285,4 +285,6 @@ ENTRY (BP_SYM (strchr))
+ END (BP_SYM (strchr))
+ 
+ libc_hidden_def(strchr)
++#ifdef __UCLIBC_SUSV3_LEGACY__
+ strong_alias (BP_SYM (strchr), BP_SYM (index))
++#endif

@@ -1,0 +1,344 @@
+"2015-11-18 16:37:18 -0200"
+diff --git a/Kconfig b/Kconfig
+index ceef6d0e..c579583b 100644
+--- a/Kconfig
++++ b/Kconfig
+@@ -196,6 +196,7 @@ source "src/samples/flow/led-strip/Kconfig"
+ source "src/samples/flow/minnow-calamari/Kconfig"
+ source "src/samples/flow/misc/Kconfig"
+ source "src/samples/flow/oic/Kconfig"
++source "src/samples/flow/power-supply/Kconfig"
+ source "src/samples/flow/trash-disposer/Kconfig"
+ source "src/samples/flow/unix-socket/Kconfig"
+ source "src/samples/flow/semaphore-monitor/Kconfig"
+diff --git a/src/samples/flow/power-supply/Kconfig b/src/samples/flow/power-supply/Kconfig
+new file mode 100644
+index 00000000..f8416670
+--- /dev/null
++++ b/src/samples/flow/power-supply/Kconfig
+@@ -0,0 +1,4 @@
++config FLOW_POWER_SUPPLY_SAMPLE
++	bool
++	depends on FLOW_FBP_GENERATOR_SAMPLES && FLOW_NODE_TYPE_POWER_SUPPLY
++	default y
+diff --git a/src/samples/flow/power-supply/Makefile b/src/samples/flow/power-supply/Makefile
+new file mode 100644
+index 00000000..b5fbdc49
+--- /dev/null
++++ b/src/samples/flow/power-supply/Makefile
+@@ -0,0 +1,31 @@
++sample-$(FLOW_POWER_SUPPLY_SAMPLE) += \
++	battery-capacity \
++	power-supplies-list \
++	power-supply-info
++
++# capacity
++
++sample-battery-capacity-$(FLOW_POWER_SUPPLY_SAMPLE) := \
++	battery-capacity.fbp
++
++sample-battery-capacity-$(FLOW_POWER_SUPPLY_SAMPLE)-deps := \
++	flow/power-supply.mod
++
++sample-battery-capacity-$(FLOW_POWER_SUPPLY_SAMPLE)-conffile := \
++	sol-flow.json
++
++# list
++
++sample-power-supplies-list-$(FLOW_POWER_SUPPLY_SAMPLE) := \
++	power-supplies-list.fbp
++
++sample-power-supply-list-$(FLOW_POWER_SUPPLY_SAMPLE)-deps := \
++	flow/power-supply.mod
++
++# info
++
++sample-power-supply-info-$(FLOW_POWER_SUPPLY_SAMPLE) := \
++	power-supply-info.fbp
++
++sample-power-supply-info-$(FLOW_POWER_SUPPLY_SAMPLE)-deps := \
++	flow/power-supply.mod
+diff --git a/src/samples/flow/power-supply/battery-capacity.fbp b/src/samples/flow/power-supply/battery-capacity.fbp
+new file mode 100755
+index 00000000..33d0a6c1
+--- /dev/null
++++ b/src/samples/flow/power-supply/battery-capacity.fbp
+@@ -0,0 +1,114 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# This program will display in a display (gtk window) the current
++# capacity level of a battery defined in the first parameter.
++# When level is low a led will turn on, and if critical level is reached
++# it will start to blink.
++#
++# Names can be found running:
++#   $ ./power-supplies-list.fbp Battery
++#
++# Example:
++#   $ ./battery-capacity.fbp BAT0
++#
++# IO node types are resolved by sol-flow.json, using gtk backend, or
++# sol-flow-intel-edison-rev-c.json, where an LCD is connected to I2C port,
++# and a LED to IO8.
++
++name(app/argv:index=1)
++error-msg(converter/empty-to-string:output_value="Power supply name is mandatory")
++Error(console)
++quit(app/quit)
++
++false(constant/boolean:value=false)
++name_sep(constant/string:value=": ")
++cap_sep(constant/string:value=" (")
++cap_end(constant/string:value="%)")
++low(constant/string:value="Low")
++critical(constant/string:value="Critical")
++
++battery(power-supply/get-capacity)
++polling_timer(timer:interval=5000)
++blink_timer(timer:interval=2000)
++strcat(string/concatenate)
++is_low(string/compare)
++is_critical(string/compare)
++good(boolean/and)
++toggle(boolean/toggle)
++
++display(Display)
++led(LED)
++
++# check if name was provided
++
++name ERROR -> IN error-msg OUT -> IN Error
++battery ERROR -> ERROR quit
++
++# get information about battery
++
++name OUT -> NAME battery
++false OUT -> TRIGGER battery
++polling_timer OUT -> TRIGGER battery
++
++# print info on display
++
++name OUT -> IN[0] strcat
++name_sep OUT -> IN[1] strcat
++battery CAPACITY_LEVEL -> IN[2] strcat
++cap_sep OUT -> IN[3] strcat
++battery CAPACITY -> IN _(converter/int-to-string) OUT -> IN[4] strcat
++cap_end OUT -> IN[5] strcat
++
++strcat OUT -> IN display
++
++# control LED to turn it off in capacity is better than 'low', turn it on
++# if 'low', or blink it if 'critical'.
++
++false OUT -> IN led
++
++# turn on
++low OUT -> IN[0] is_low
++battery CAPACITY_LEVEL -> IN[1] is_low
++is_low EQUAL -> IN _(boolean/filter) TRUE -> IN led
++
++# blink
++false OUT -> ENABLED blink_timer
++critical OUT -> IN[0] is_critical
++battery CAPACITY_LEVEL -> IN[1] is_critical
++is_critical EQUAL -> ENABLED blink_timer
++blink_timer OUT -> IN toggle
++toggle OUT -> IN led
++
++# turn off
++is_low EQUAL -> IN _(boolean/not) OUT -> IN[0] good
++is_critical EQUAL -> IN _(boolean/not) OUT -> IN[1] good
++good OUT -> IN _(boolean/filter) TRUE -> IN _(boolean/not) OUT -> IN led
+diff --git a/src/samples/flow/power-supply/power-supplies-list.fbp b/src/samples/flow/power-supply/power-supplies-list.fbp
+new file mode 100755
+index 00000000..f0fbadc1
+--- /dev/null
++++ b/src/samples/flow/power-supply/power-supplies-list.fbp
+@@ -0,0 +1,50 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# This program will print to console a list of all power supplies attached to
++# board or only supplies that match to type specified by first parameter.
++#
++# Examples:
++#  * list all power supplies
++#    $ ./power-supplies-list.fbp
++#
++#  * list only batteries
++#    $ ./power-supplies-list.fbp Battery
++
++type(app/argv:index=1)
++list(power-supply/get-list)
++tick(constant/empty)
++
++type OUT -> TYPE list
++tick OUT -> TRIGGER list
++list OUT -> IN Name(console)
++
++type ERROR -> IN _(converter/empty-to-string:output_value="Getting list of all types") OUT -> IN Info(console)
+diff --git a/src/samples/flow/power-supply/power-supply-info.fbp b/src/samples/flow/power-supply/power-supply-info.fbp
+new file mode 100755
+index 00000000..4d25436e
+--- /dev/null
++++ b/src/samples/flow/power-supply/power-supply-info.fbp
+@@ -0,0 +1,53 @@
++#!/usr/bin/env sol-fbp-runner
++# This file is part of the Soletta Project
++#
++# Copyright (C) 2015 Intel Corporation. All rights reserved.
++#
++# Redistribution and use in source and binary forms, with or without
++# modification, are permitted provided that the following conditions
++# are met:
++#
++#   * Redistributions of source code must retain the above copyright
++#     notice, this list of conditions and the following disclaimer.
++#   * Redistributions in binary form must reproduce the above copyright
++#     notice, this list of conditions and the following disclaimer in
++#     the documentation and/or other materials provided with the
++#     distribution.
++#   * Neither the name of Intel Corporation nor the names of its
++#     contributors may be used to endorse or promote products derived
++#     from this software without specific prior written permission.
++#
++# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++# This program will print power supply information:
++# model name, manufacturer and serial number.
++#
++# Example:
++#    $ ./power-supply-info.fbp BAT0
++
++name(app/argv:index=1)
++error-msg(converter/empty-to-string:output_value="Power supply name is mandatory")
++Error(console)
++quit(app/quit)
++info(power-supply/get-info)
++tick(constant/empty)
++
++name ERROR -> IN error-msg OUT -> IN Error
++info ERROR -> ERROR quit
++
++name OUT -> NAME info
++tick OUT -> TRIGGER info
++
++info MODEL -> IN ModelName(console)
++info MANUFACTURER -> IN Manufacturer(console)
++info SERIAL -> IN SerialNumber(console)
+diff --git a/src/samples/flow/power-supply/sol-flow-intel-edison-rev-c.json b/src/samples/flow/power-supply/sol-flow-intel-edison-rev-c.json
+new file mode 100644
+index 00000000..440c3088
+--- /dev/null
++++ b/src/samples/flow/power-supply/sol-flow-intel-edison-rev-c.json
+@@ -0,0 +1,21 @@
++{
++ "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++ "nodetypes": [
++  {
++   "name": "Display",
++   "options": {
++    "bus": 6
++   },
++   "type": "grove/lcd-string"
++  },
++  {
++   "name": "LED",
++   "options":
++   {
++    "active_low": false,
++    "pin": "8"
++   },
++   "type": "gpio/writer"
++  }
++ ]
++}
+diff --git a/src/samples/flow/power-supply/sol-flow.json b/src/samples/flow/power-supply/sol-flow.json
+new file mode 100644
+index 00000000..025c87bc
+--- /dev/null
++++ b/src/samples/flow/power-supply/sol-flow.json
+@@ -0,0 +1,16 @@
++{
++ "$schema": "http://solettaproject.github.io/soletta/schemas/config.schema",
++ "nodetypes": [
++  {
++   "name": "Display",
++   "type": "gtk/label"
++  },
++  {
++   "name": "LED",
++   "options": {
++    "rgb": "255|0|0"
++   },
++   "type": "gtk/led"
++  }
++ ]
++}
